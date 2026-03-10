@@ -2,8 +2,10 @@ import * as cdk from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -261,5 +263,149 @@ export class NeptuneEtlStack extends cdk.Stack {
     cdk.Tags.of(this).add('Project', 'graph-dp');
     cdk.Tags.of(this).add('Phase', 'exploration');
     cdk.Tags.of(this).add('CreatedBy', 'openclaw-agent');
+
+    // =========================================================
+    // Lambda 4: neptune-etl-trigger（事件驱动，AWS 基础设施变更触发）
+    // =========================================================
+
+    // 给共享 Role 补充 InvokeFunction 权限（触发 etl_aws）
+    lambdaRole.addToPolicy(new iam.PolicyStatement({
+      sid: 'InvokeAwsEtlLambda',
+      effect: iam.Effect.ALLOW,
+      actions: ['lambda:InvokeFunction'],
+      resources: [awsEtlFn.functionArn],
+    }));
+
+    // SQS DLQ（失败消息保留 7 天）
+    const etlTriggerDlq = new sqs.Queue(this, 'EtlTriggerDlq', {
+      queueName: 'neptune-etl-trigger-dlq',
+      retentionPeriod: cdk.Duration.days(7),
+    });
+
+    // SQS 去重缓冲队列
+    // visibilityTimeout 必须 >= Lambda timeout（90s），取 300s 留余量
+    const etlTriggerQueue = new sqs.Queue(this, 'EtlTriggerQueue', {
+      queueName: 'neptune-etl-trigger-queue',
+      visibilityTimeout: cdk.Duration.seconds(300),
+      deadLetterQueue: {
+        queue: etlTriggerDlq,
+        maxReceiveCount: 2,
+      },
+    });
+
+    // 允许 EventBridge 向 SQS 发送消息
+    etlTriggerQueue.addToResourcePolicy(new iam.PolicyStatement({
+      sid: 'AllowEventBridgeSend',
+      effect: iam.Effect.ALLOW,
+      principals: [new iam.ServicePrincipal('events.amazonaws.com')],
+      actions: ['sqs:SendMessage'],
+      resources: [etlTriggerQueue.queueArn],
+    }));
+
+    // 触发器 Lambda（不在 VPC 内，不需访问 Neptune）
+    const etlTriggerFn = new lambda.Function(this, 'NeptuneEtlTrigger', {
+      functionName: 'neptune-etl-trigger',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'neptune_etl_trigger.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/etl_trigger')),
+      timeout: cdk.Duration.seconds(90),       // 30s 延迟 + invoke 开销
+      memorySize: 128,
+      role: lambdaRole,
+      reservedConcurrentExecutions: 1,         // 防止并发写入 Neptune
+      environment: {
+        ETL_FUNCTION_NAME: 'neptune-etl-from-aws',
+        TRIGGER_DELAY_SECONDS: '30',
+        REGION: awsRegion,
+      },
+      description: 'Event-driven trigger: AWS infra change → 30s delay → neptune-etl-from-aws',
+    });
+
+    // SQS → Lambda 事件源
+    // maxBatchingWindow=30s：批量收集同一波变更的多个事件，避免触发多次 ETL
+    etlTriggerFn.addEventSource(new lambdaEventSources.SqsEventSource(etlTriggerQueue, {
+      batchSize: 10,
+      maxBatchingWindow: cdk.Duration.seconds(30),
+    }));
+
+    // ---- EventBridge Rules → SQS ----
+
+    // Rule 1: RDS 实例/集群事件（failover、修改等）
+    new events.Rule(this, 'EtlTriggerRdsEvents', {
+      ruleName: 'neptune-etl-trigger-rds',
+      description: 'Trigger ETL on RDS DB instance/cluster events (failover, modification)',
+      eventPattern: {
+        source: ['aws.rds'],
+        detailType: ['RDS DB Instance Event', 'RDS DB Cluster Event'],
+      },
+      targets: [new targets.SqsQueue(etlTriggerQueue)],
+    });
+
+    // Rule 2: EC2 实例状态变更
+    new events.Rule(this, 'EtlTriggerEc2Events', {
+      ruleName: 'neptune-etl-trigger-ec2',
+      description: 'Trigger ETL on EC2 instance state change',
+      eventPattern: {
+        source: ['aws.ec2'],
+        detailType: ['EC2 Instance State-change Notification'],
+        detail: {
+          state: ['running', 'terminated', 'stopped'],
+        },
+      },
+      targets: [new targets.SqsQueue(etlTriggerQueue)],
+    });
+
+    // Rule 3: EKS 托管节点组状态变更（扩缩容）
+    new events.Rule(this, 'EtlTriggerEksEvents', {
+      ruleName: 'neptune-etl-trigger-eks',
+      description: 'Trigger ETL on EKS managed node group status change',
+      eventPattern: {
+        source: ['aws.eks'],
+        detailType: ['EKS Managed Node Group Status Change'],
+      },
+      targets: [new targets.SqsQueue(etlTriggerQueue)],
+    });
+
+    // Rule 4: ElastiCache 节点替换/重启事件
+    new events.Rule(this, 'EtlTriggerElastiCacheEvents', {
+      ruleName: 'neptune-etl-trigger-elasticache',
+      description: 'Trigger ETL on ElastiCache node replacement / reboot',
+      eventPattern: {
+        source: ['aws.elasticache'],
+        detailType: [
+          'ElastiCache Replication Group Events',
+          'ElastiCache Cache Cluster Events',
+        ],
+      },
+      targets: [new targets.SqsQueue(etlTriggerQueue)],
+    });
+
+    // Rule 5: ALB Target Group 变更（通过 CloudTrail API 事件）
+    new events.Rule(this, 'EtlTriggerAlbEvents', {
+      ruleName: 'neptune-etl-trigger-alb',
+      description: 'Trigger ETL on ALB target group register/deregister (via CloudTrail)',
+      eventPattern: {
+        source: ['aws.elasticloadbalancing'],
+        detailType: ['AWS API Call via CloudTrail'],
+        detail: {
+          eventSource: ['elasticloadbalancing.amazonaws.com'],
+          eventName: [
+            'RegisterTargets',
+            'DeregisterTargets',
+            'CreateTargetGroup',
+            'DeleteTargetGroup',
+          ],
+        },
+      },
+      targets: [new targets.SqsQueue(etlTriggerQueue)],
+    });
+
+    new cdk.CfnOutput(this, 'EtlTriggerFunctionArn', {
+      value: etlTriggerFn.functionArn,
+      description: 'neptune-etl-trigger Lambda ARN',
+    });
+    new cdk.CfnOutput(this, 'EtlTriggerQueueUrl', {
+      value: etlTriggerQueue.queueUrl,
+      description: 'neptune-etl-trigger SQS queue URL',
+    });
   }
 }
