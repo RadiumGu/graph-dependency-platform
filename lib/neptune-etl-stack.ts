@@ -268,8 +268,15 @@ export class NeptuneEtlStack extends cdk.Stack {
     // Lambda 4: neptune-etl-trigger（事件驱动，AWS 基础设施变更触发）
     // =========================================================
 
-    // 给共享 Role 补充 InvokeFunction 权限（触发 etl_aws）
-    lambdaRole.addToPolicy(new iam.PolicyStatement({
+    // 独立 Role（避免与共享 lambdaRole 形成 CFN 循环依赖）
+    const etlTriggerRole = new iam.Role(this, 'NeptuneEtlTriggerRole', {
+      roleName: 'NeptuneEtlTriggerRole',
+      assumedBy: new iam.ServicePrincipal('lambda.amazonaws.com'),
+      managedPolicies: [
+        iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AWSLambdaBasicExecutionRole'),
+      ],
+    });
+    etlTriggerRole.addToPolicy(new iam.PolicyStatement({
       sid: 'InvokeAwsEtlLambda',
       effect: iam.Effect.ALLOW,
       actions: ['lambda:InvokeFunction'],
@@ -310,7 +317,7 @@ export class NeptuneEtlStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/etl_trigger')),
       timeout: cdk.Duration.seconds(90),       // 30s 延迟 + invoke 开销
       memorySize: 128,
-      role: lambdaRole,
+      role: etlTriggerRole,
       reservedConcurrentExecutions: 1,         // 防止并发写入 Neptune
       environment: {
         ETL_FUNCTION_NAME: 'neptune-etl-from-aws',
