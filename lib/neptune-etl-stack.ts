@@ -17,16 +17,21 @@ export class NeptuneEtlStack extends cdk.Stack {
     // 引用已有资源（不重建）
     // =========================================================
 
+    const vpcId = this.node.tryGetContext('vpcId') as string;
+    const lambdaSgId = this.node.tryGetContext('lambdaSgId') as string;
+    const neptuneEtlPolicyArn = this.node.tryGetContext('neptuneEtlPolicyArn') as string
+      || `arn:aws:iam::${this.account}:policy/NeptuneETLPolicy`;
+
     // VPC（引用已有）
     const vpc = ec2.Vpc.fromLookup(this, 'ExistingVpc', {
-      vpcId: 'vpc-010ab37a3f9f74725',
+      vpcId,
     });
 
     // Lambda 安全组（已有 neptune-lambda-sg）
     const lambdaSg = ec2.SecurityGroup.fromSecurityGroupId(
       this,
       'NeptuneLambdaSg',
-      'sg-078f24929b25f09cd',
+      lambdaSgId,
       { allowAllOutbound: true },
     );
 
@@ -34,7 +39,7 @@ export class NeptuneEtlStack extends cdk.Stack {
     const neptuneEtlPolicy = iam.ManagedPolicy.fromManagedPolicyArn(
       this,
       'NeptuneETLPolicy',
-      'arn:aws:iam::926093770964:policy/NeptuneETLPolicy',
+      neptuneEtlPolicyArn,
     );
 
     // =========================================================
@@ -92,6 +97,25 @@ export class NeptuneEtlStack extends cdk.Stack {
         'autoscaling:DescribeAutoScalingGroups',
         // STS（EKS token）
         'sts:GetCallerIdentity',
+        // RDS / Aurora / Neptune
+        'rds:DescribeDBInstances',
+        'rds:DescribeDBClusters',
+        'rds:ListTagsForResource',
+        // S3
+        's3:ListAllMyBuckets',
+        's3:GetBucketLocation',
+        's3:GetBucketTagging',
+        // SQS
+        'sqs:ListQueues',
+        'sqs:GetQueueAttributes',
+        'sqs:ListQueueTags',
+        // SNS
+        'sns:ListTopics',
+        'sns:GetTopicAttributes',
+        'sns:ListTagsForResource',
+        // ECR
+        'ecr:DescribeRepositories',
+        'ecr:ListTagsForResource',
         // CloudWatch（EC2/Lambda 性能指标）
         'cloudwatch:GetMetricStatistics',
         'cloudwatch:GetMetricData',
@@ -109,15 +133,28 @@ export class NeptuneEtlStack extends cdk.Stack {
     // =========================================================
     // 公共配置
     // =========================================================
-    const neptuneEndpoint = 'petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com';
-    const neptunePort = '8182';
-    const awsRegion = 'ap-northeast-1';
+    const neptuneEndpoint = this.node.tryGetContext('neptuneEndpoint') as string || 'YOUR_NEPTUNE_ENDPOINT';
+    const neptunePort = this.node.tryGetContext('neptunePort') as string || '8182';
+    const awsRegion = this.region;
+    const clickhouseHost = this.node.tryGetContext('clickhouseHost') as string || 'YOUR_CLICKHOUSE_HOST';
+    const eksClusterName = this.node.tryGetContext('eksClusterName') as string || 'YOUR_EKS_CLUSTER_NAME';
+    const cfnStackNames = this.node.tryGetContext('cfnStackNames') as string || 'YOUR_CFN_STACK1,YOUR_CFN_STACK2';
 
     // VPC 私有子网选择（通过已有 neptune-lambda-sg 所在子网，使用 subnetType=PRIVATE_WITH_EGRESS）
     // VPC.fromLookup 会在 synth 时从 context 读取，部署时从实际 VPC 读取私有子网
     const vpcSubnets: ec2.SubnetSelection = {
       subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
     };
+
+    // =========================================================
+    // Shared Lambda Layer: neptune-client-base
+    // =========================================================
+    const neptuneClientLayer = new lambda.LayerVersion(this, 'NeptuneClientBaseLayer', {
+      layerVersionName: 'neptune-client-base',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/shared')),
+      compatibleRuntimes: [lambda.Runtime.PYTHON_3_12],
+      description: 'Shared Neptune Gremlin client utilities (neptune_query, safe_str, extract_value)',
+    });
 
     // =========================================================
     // Lambda 1: neptune-etl-from-deepflow（每5分钟）
@@ -137,13 +174,14 @@ export class NeptuneEtlStack extends cdk.Stack {
         NEPTUNE_ENDPOINT: neptuneEndpoint,
         NEPTUNE_PORT: neptunePort,
         REGION: awsRegion,
-        CLICKHOUSE_HOST: '11.0.2.30',
+        CLICKHOUSE_HOST: clickhouseHost,
         CLICKHOUSE_PORT: '8123',
-        CH_HOST: '11.0.2.30',
+        CH_HOST: clickhouseHost,
         CH_PORT: '8123',
         INTERVAL_MIN: '6',
-        EKS_CLUSTER_ARN: `arn:aws:eks:${awsRegion}:926093770964:cluster/PetSite`,
+        EKS_CLUSTER_ARN: `arn:aws:eks:${this.region}:${this.account}:cluster/${eksClusterName}`,
       },
+      layers: [neptuneClientLayer],
       description: 'ETL: ClickHouse L7 flow_log → Neptune Calls/HasMetrics edges + perf metrics (every 5min)',
     });
 
@@ -160,7 +198,7 @@ export class NeptuneEtlStack extends cdk.Stack {
     const awsEtlFn = new lambda.Function(this, 'NeptuneEtlFromAws', {
       functionName: 'neptune-etl-from-aws',
       runtime: lambda.Runtime.PYTHON_3_12,
-      handler: 'neptune_etl_aws.handler',
+      handler: 'handler.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/etl_aws')),
       timeout: cdk.Duration.minutes(5),
       memorySize: 256,
@@ -172,8 +210,9 @@ export class NeptuneEtlStack extends cdk.Stack {
         NEPTUNE_ENDPOINT: neptuneEndpoint,
         NEPTUNE_PORT: neptunePort,
         REGION: awsRegion,
-        EKS_CLUSTER_NAME: 'PetSite',
+        EKS_CLUSTER_NAME: eksClusterName,
       },
+      layers: [neptuneClientLayer],
       description: 'ETL: AWS API static topology → Neptune nodes/edges (every 15min)',
     });
 
@@ -202,8 +241,9 @@ export class NeptuneEtlStack extends cdk.Stack {
         NEPTUNE_ENDPOINT: neptuneEndpoint,
         NEPTUNE_PORT: neptunePort,
         REGION: awsRegion,
-        CFN_STACK_NAMES: 'ServicesEks2,Applications',
+        CFN_STACK_NAMES: cfnStackNames,
       },
+      layers: [neptuneClientLayer],
       description: 'ETL: CFN template declared deps → Neptune DependsOn edges (on deploy + daily)',
     });
 
@@ -218,14 +258,9 @@ export class NeptuneEtlStack extends cdk.Stack {
           'status-details': {
             status: ['UPDATE_COMPLETE', 'CREATE_COMPLETE'],
           },
-          'stack-id': [
-            {
-              prefix: 'arn:aws:cloudformation:ap-northeast-1:926093770964:stack/ServicesEks2/',
-            },
-            {
-              prefix: 'arn:aws:cloudformation:ap-northeast-1:926093770964:stack/Applications/',
-            },
-          ],
+          'stack-id': cfnStackNames.split(',').map(name => ({
+            prefix: `arn:aws:cloudformation:${this.region}:${this.account}:stack/${name.trim()}/`,
+          })),
         },
       },
       targets: [new targets.LambdaFunction(cfnEtlFn)],
@@ -320,7 +355,7 @@ export class NeptuneEtlStack extends cdk.Stack {
       role: etlTriggerRole,
       reservedConcurrentExecutions: 1,         // 防止并发写入 Neptune
       environment: {
-        ETL_FUNCTION_NAME: 'neptune-etl-from-aws',
+        ETL_FUNCTION_NAME: awsEtlFn.functionName,
         TRIGGER_DELAY_SECONDS: '30',
         REGION: awsRegion,
       },

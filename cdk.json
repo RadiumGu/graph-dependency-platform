@@ -17,6 +17,13 @@
   "context": {
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,
-    "@aws-cdk/core:target-partitions": ["aws", "aws-cn"]
+    "@aws-cdk/core:target-partitions": ["aws", "aws-cn"],
+    "vpcId": "YOUR_VPC_ID",
+    "lambdaSgId": "YOUR_LAMBDA_SG_ID",
+    "neptuneEndpoint": "YOUR_NEPTUNE_CLUSTER_ENDPOINT",
+    "neptunePort": "8182",
+    "clickhouseHost": "YOUR_CLICKHOUSE_HOST_IP",
+    "eksClusterName": "YOUR_EKS_CLUSTER_NAME",
+    "cfnStackNames": "YOUR_CFN_STACK1,YOUR_CFN_STACK2"
   }
 }

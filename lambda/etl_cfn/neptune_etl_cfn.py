@@ -21,21 +21,14 @@ import json
 import time
 import logging
 import boto3
-import urllib3
 from typing import Optional
-from botocore.auth import SigV4Auth
-from botocore.awsrequest import AWSRequest
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from neptune_client_base import neptune_query, safe_str, extract_value, REGION  # noqa: F401
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 # ===== 配置 =====
-NEPTUNE_ENDPOINT = os.environ.get('NEPTUNE_ENDPOINT',
-    'petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com')
-NEPTUNE_PORT = int(os.environ.get('NEPTUNE_PORT', '8182'))
-REGION = os.environ.get('REGION', 'ap-northeast-1')
 CFN_STACK_NAMES = os.environ.get('CFN_STACK_NAMES', 'ServicesEks2,Applications').split(',')
 
 # 只处理这些类型之间的语义依赖（过滤部署顺序约束）
@@ -69,48 +62,7 @@ TYPE_TO_LABEL = {
 
 # ===== Neptune 工具函数 =====
 
-_frozen_creds = None
-_http_session = None
 _vid_cache = {}  # (label, name) → vertex_id
-
-def _get_creds():
-    global _frozen_creds
-    if _frozen_creds is None:
-        _frozen_creds = boto3.Session(region_name=REGION).get_credentials().get_frozen_credentials()
-    return _frozen_creds
-
-def _get_http_session():
-    global _http_session
-    if _http_session is None:
-        import requests as req_lib
-        _http_session = req_lib.Session()
-    return _http_session
-
-def neptune_query(gremlin: str) -> dict:
-    creds = _get_creds()
-    url = f"https://{NEPTUNE_ENDPOINT}:{NEPTUNE_PORT}/gremlin"
-    data = json.dumps({"gremlin": gremlin})
-    headers = {
-        "Content-Type": "application/json",
-        "host": f"{NEPTUNE_ENDPOINT}:{NEPTUNE_PORT}",
-    }
-    aws_req = AWSRequest(method="POST", url=url, data=data, headers=headers)
-    SigV4Auth(creds, "neptune-db", REGION).add_auth(aws_req)
-    r = _get_http_session().post(url, headers=dict(aws_req.headers), data=data, verify=False, timeout=20)
-    if r.status_code != 200:
-        raise Exception(f"Neptune error {r.status_code}: {r.text[:300]}")
-    return r.json()
-
-def safe_str(s) -> str:
-    return str(s).replace("'", "\\'").replace('"', '\\"')[:256]
-
-def extract_value(val):
-    if isinstance(val, dict) and '@value' in val:
-        v = val['@value']
-        if isinstance(v, list) and len(v) > 0:
-            return extract_value(v[0])
-        return v
-    return val
 
 def get_or_create_vertex(label: str, physical_id: str, stack_name: str):
     """mergeV upsert 顶点，返回 vertex ID，结果写入 _vid_cache"""

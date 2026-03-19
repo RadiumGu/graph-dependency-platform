@@ -1,0 +1,13 @@
+[
+  {
+    "service": "example-deployment",
+    "namespace": "default",
+    "db_cluster_id": "your-db-cluster-id",
+    "db_endpoint": "your-db-cluster.cluster-xxxx.region.rds.amazonaws.com",
+    "dbname": "your_database",
+    "engine": "postgres",
+    "source": "secrets_manager",
+    "secret_arn": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:YourSecret-XXXXXX",
+    "db_cluster_arn": "arn:aws:rds:REGION:ACCOUNT_ID:cluster:your-db-cluster-id"
+  }
+]

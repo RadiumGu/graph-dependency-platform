@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """fix_neptune_data.py - 修复 Neptune 图中的已知脏数据"""
-import sys, time, boto3
-sys.path.insert(0, '/home/ubuntu/tech/graph-dp-cdk/lambda/etl_aws')
-from neptune_etl_aws import neptune_query, safe_str, extract_value
+import sys, time, boto3, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'lambda', 'etl_aws'))
+from neptune_client import neptune_query, safe_str, extract_value
 
 def fix_petfood_priority():
     print("Fix 1: petfood recovery_priority Tier2→Tier1")

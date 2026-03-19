@@ -4,39 +4,53 @@ neptune_etl_deepflow.py - ClickHouse L7 flow_log → Neptune 服务调用图
 Lambda: neptune-etl-from-deepflow
 触发频率: 每5分钟
 优化: 批量写入 + 合并查询，~700次请求降至~20-30次
+
+─────────────────────────────────────────────────────────────────────────────
+Neptune 边属性命名约定（Field Naming Convention）
+─────────────────────────────────────────────────────────────────────────────
+本 ETL 写入的所有字段均为"系统观测/静态配置"类属性，无特殊前缀：
+  call_type, error_rate, p99_latency_ms, strength, ...
+
+混沌工程实验（chaos-automation）写入的字段统一使用 chaos_ 前缀：
+  chaos_dependency_type    ← 实验实测的依赖强弱（strong/weak/none/unverified）
+  chaos_degradation_rate   ← 实验期间上游成功率下降幅度（%）
+  chaos_recovery_time_seconds ← 下游恢复后上游恢复正常所需时间（秒）
+  chaos_last_verified      ← 最近一次混沌验证时间 ISO8601
+  chaos_verified_by        ← 验证该属性的实验 ID
+
+规则：
+  - ETL 只写非 chaos_ 字段，不覆盖 chaos_* 字段
+  - chaos-automation 只写 chaos_* 字段，不覆盖 ETL 字段
+  - 两套字段并存，允许对比"ETL 静态判断"vs"实验实测结论"
+  - 若 DependsOn.strength=strong 但 chaos_dependency_type=weak/none，说明 ETL 判断偏保守，需人工复核
+
+详细设计见: docs/chaos-tdd.md § 4.3（本地参考）
+─────────────────────────────────────────────────────────────────────────────
 """
 
 import os
-import json
 import time
 import logging
 import base64
 import boto3
-import urllib3
-from botocore.auth import SigV4Auth
-from botocore.awsrequest import AWSRequest
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+from neptune_client_base import neptune_query, extract_value, REGION  # noqa: F401
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 # ===== 配置 =====
-NEPTUNE_ENDPOINT = os.environ.get('NEPTUNE_ENDPOINT',
-    'petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com')
-NEPTUNE_PORT = int(os.environ.get('NEPTUNE_PORT', '8182'))
-REGION = os.environ.get('REGION', 'ap-northeast-1')
-CH_HOST = os.environ.get('CLICKHOUSE_HOST', os.environ.get('CH_HOST', '11.0.2.30'))
+CH_HOST = os.environ.get('CLICKHOUSE_HOST', os.environ.get('CH_HOST', 'YOUR_CLICKHOUSE_HOST'))
 CH_PORT = int(os.environ.get('CLICKHOUSE_PORT', os.environ.get('CH_PORT', '8123')))
 INTERVAL_MIN = int(os.environ.get('INTERVAL_MIN', '6'))
 EKS_CLUSTER_ARN = os.environ.get('EKS_CLUSTER_ARN',
-    'arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite')
+    'arn:aws:eks:YOUR_REGION:YOUR_ACCOUNT_ID:cluster/YOUR_EKS_CLUSTER_NAME')
 BATCH_SIZE = int(os.environ.get('BATCH_SIZE', '20'))
 ENVIRONMENT = os.environ.get('ENVIRONMENT', 'prod')
 
 # 只采集这些 namespace 的 pod（PetSite 业务 namespace）
 # deepflow、kube-system 等监控/基础设施 namespace 不纳入图，避免形成孤立分量
-INCLUDED_NAMESPACES = {'default'}
+INCLUDED_NAMESPACES = {'default', 'awesomeshop'}
 # ===== PetSite 服务恢复优先级（基于代码分析）=====
 # Tier0: 核心收益路径，宕机直接影响用户无法领养宠物
 # Tier1: 重要功能，宕机导致体验降级但主流程仍可运行
@@ -48,9 +62,10 @@ MICROSERVICE_RECOVERY_PRIORITY = {
     'payforadoption':    'Tier0',
     # Tier1 - 重要但非阻塞
     'petlistadoptions':  'Tier1',
-    'petadoptionshistory': 'Tier1',
+    'pethistory':        'Tier1',   # petadoptionshistory-py 实际部署为 pethistory-service
     'petstatusupdater':  'Tier1',
-    'petfood':           'Tier1',
+    # petadoptionshistory — 已移除，K8s 无此服务
+    # petfood             — 已移除，后端服务未部署
     # Tier2 - 辅助
     'trafficgenerator':  'Tier2',
 }
@@ -67,49 +82,8 @@ K8S_SERVICE_ALIAS = {
 }
 
 
-# ===== Neptune 请求（复用 session）=====
-
-_http_session = None
-
-def _get_http_session():
-    global _http_session
-    if _http_session is None:
-        import requests
-        _http_session = requests.Session()
-    return _http_session
-
-_frozen_creds = None
-def _get_creds():
-    global _frozen_creds
-    if _frozen_creds is None:
-        _frozen_creds = boto3.Session(region_name=REGION).get_credentials().get_frozen_credentials()
-    return _frozen_creds
-
 def get_aws_session():
     return boto3.Session(region_name=REGION)
-
-def neptune_query(gremlin: str) -> dict:
-    creds = _get_creds()
-    url = f"https://{NEPTUNE_ENDPOINT}:{NEPTUNE_PORT}/gremlin"
-    data = json.dumps({"gremlin": gremlin})
-    headers = {
-        "Content-Type": "application/json",
-        "host": f"{NEPTUNE_ENDPOINT}:{NEPTUNE_PORT}",
-    }
-    req = AWSRequest(method="POST", url=url, data=data, headers=headers)
-    SigV4Auth(creds, "neptune-db", REGION).add_auth(req)
-    r = _get_http_session().post(url, headers=dict(req.headers), data=data, verify=False, timeout=30)
-    if r.status_code != 200:
-        raise Exception(f"Neptune error {r.status_code}: {r.text[:300]}")
-    return r.json()
-
-def extract_value(val):
-    if isinstance(val, dict) and '@value' in val:
-        v = val['@value']
-        if isinstance(v, list) and len(v) > 0:
-            return extract_value(v[0])
-        return v
-    return val
 
 # ===== ClickHouse 查询 =====
 
@@ -240,6 +214,212 @@ GROUP BY server_ip
     except Exception as e:
         logger.error(f"fetch_active_connections failed: {e}")
     return result
+
+
+# ===== T13a: DNS/TCP 连接级漂移检测 =====
+# 原理：EKS pod 访问 AWS 托管服务前必然有 DNS 查询 (*.amazonaws.com)
+# DeepFlow l7_flow_log 中 l7_protocol_str='DNS' 记录了这些查询
+# 对比 Neptune 中代码声明的 AccessesData/PublishesTo/InvokesVia 边，写入 drift_status
+
+# infra 类型 → (Neptune 标签, name_contains, [dns_keywords_any_match])
+# 一组 dns_keywords 中任意一个出现在 observed DNS 里，即认为 runtime_verified
+INFRA_DRIFT_RULES = {
+    'dynamodb': {
+        'label': 'DynamoDBTable',
+        'nc': 'ddbpetadoption',
+        'dns_keywords': ['dynamodb', '.ddb.'],  # {account}.ddb.{region}.amazonaws.com 或 dynamodb.*
+    },
+    'sqs': {
+        'label': 'SQSQueue',
+        'nc': 'sqspetadoption',
+        'dns_keywords': ['.sqs.'],
+    },
+    'sns': {
+        'label': 'SNSTopic',
+        'nc': 'topicpetadoption',
+        'dns_keywords': ['.sns.'],
+    },
+    'rds': {
+        'label': 'RDSCluster',
+        'nc': 'databaseb269d8bb',
+        'dns_keywords': ['rds.', 'aurora'],
+    },
+    's3': {
+        'label': 'S3Bucket',
+        'nc': 's3bucketpetadoption',
+        'dns_keywords': ['.s3.', 's3.amazon'],
+    },
+    'stepfunction': {
+        'label': 'StepFunction',
+        'nc': 'StepFnStateMachine',
+        'dns_keywords': ['states.'],
+    },
+}
+
+# 旧结构保留兼容（fetch_dns_connections 用这个做 keyword→infra_type 映射）
+DNS_TO_INFRA = {}
+for _itype, _rule in INFRA_DRIFT_RULES.items():
+    for _kw in _rule['dns_keywords']:
+        DNS_TO_INFRA[_kw] = (_rule['label'], [_rule['nc']], _itype)
+
+
+def fetch_dns_connections(ip_map: dict) -> dict:
+    """
+    查询 DeepFlow DNS 流量，返回各服务实际连接的 AWS 服务类型集合
+    返回：{svc_name: {'dynamodb', 'sqs', 'rds', ...}}
+    """
+    # ip_map 格式: {pod_ip: {'name': svc_name, 'namespace': ..., ...}}
+    # 注意：name 可能是 K8s 原名（pay-for-adoption），需过 alias 转换为 Neptune 名（payforadoption）
+    ip_to_svc = {
+        ip: K8S_SERVICE_ALIAS.get(info.get('name',''), info.get('name',''))
+        for ip, info in ip_map.items() if info.get('name')
+    }
+
+    if not ip_to_svc:
+        logger.info("DNS drift: empty ip_map, skipping")
+        return {}
+
+    # 查询最近 5 分钟内来自 EKS pod 的 DNS 请求（l7_protocol_str=DNS）
+    # request_domain 字段包含 DNS 查询的域名
+    # 用 position() 代替 LIKE（避免 ClickHouse 的 % 转义问题）
+    sql = """
+SELECT IPv4NumToString(ip4_0) AS src_ip,
+       request_domain,
+       count() AS query_count
+FROM flow_log.l7_flow_log
+WHERE toUnixTimestamp(time) > toUnixTimestamp(now()) - 1800
+  AND l7_protocol_str = 'DNS'
+  AND ip4_0 != 0
+  AND (position(request_domain, 'dynamodb') > 0
+    OR position(request_domain, '.ddb.') > 0
+    OR position(request_domain, '.sqs.') > 0
+    OR position(request_domain, '.sns.') > 0
+    OR position(request_domain, '.s3.') > 0
+    OR position(request_domain, 'rds.') > 0
+    OR position(request_domain, 'aurora') > 0
+    OR position(request_domain, 'states.') > 0)
+GROUP BY src_ip, request_domain
+HAVING query_count >= 1
+"""
+    result = {}
+    try:
+        import json as _json
+        data = ch_query_json(sql)
+        rows = data.get('data', [])
+        if not rows:
+            logger.info("DNS drift: no AWS DNS flows in last 5min")
+            return {}
+        for row in rows:
+            src_ip = row.get('src_ip', '')
+            domain = row.get('request_domain', '').lower()
+            svc = ip_to_svc.get(src_ip)
+            if not svc or not domain:
+                continue
+            if svc not in result:
+                result[svc] = set()
+            for _kw, (_lbl, _nc_list, _itype) in DNS_TO_INFRA.items():
+                if _kw in domain:
+                    result[svc].add(_kw)   # 保留原始 keyword（drift loop 用 any()）
+                    break
+        logger.info(f"DNS drift: {len(result)} services with AWS DNS queries: {dict((k,list(v)) for k,v in result.items())}")
+    except Exception as e:
+        logger.warning(f"fetch_dns_connections failed (non-fatal): {e}")
+    return result
+
+
+def run_drift_detection(service_names: list, ip_map: dict):
+    """
+    T13a: 对比代码声明边 vs DNS/TCP 运行时观测，写入 drift_status
+    - 代码声明了但没有 DNS → drift_status=declared_not_observed
+    - DNS 有但代码没声明 → drift_status=observed_not_declared（写新边）
+    - 两者都有 → runtime_verified=true, drift_status=ok
+    """
+    ts = int(time.time())
+    dns_obs = fetch_dns_connections(ip_map)
+
+    if not dns_obs:
+        logger.info("Drift detection: no DNS data, skipping")
+        return
+
+    drift_summary = {'ok': 0, 'declared_not_observed': 0, 'observed_not_declared': 0}
+
+    for svc_name in service_names:
+        observed_keywords = dns_obs.get(svc_name, set())
+
+        for infra_type, rule in INFRA_DRIFT_RULES.items():
+            infra_label = rule['label']
+            nc          = rule['nc']
+            # 任一关键词匹配即为 observed（多 DNS endpoint 格式兼容）
+            has_dns = any(kw in observed_keywords for kw in rule['dns_keywords'])
+
+            # 查 Neptune 中是否有代码声明边
+            try:
+                r = neptune_query(
+                    f"g.V().hasLabel('Microservice','LambdaFunction').has('name',containing('{svc_name}'))"
+                    f".outE('AccessesData','PublishesTo','InvokesVia','ConsumesFrom')"
+                    f".where(inV().hasLabel('{infra_label}').has('name',containing('{nc}')))"
+                    f".id().toList()"
+                )
+                edge_ids = r.get('result', {}).get('data', {}).get('@value', [])
+                has_declared = len(edge_ids) > 0
+            except Exception as e:
+                logger.warning(f"drift query {svc_name}->{infra_label}: {e}")
+                continue
+
+            if has_declared and has_dns:
+                # 两者一致：标记 runtime_verified=true, drift_status=ok
+                drift_status = 'ok'
+                for eid_raw in edge_ids:
+                    eid = eid_raw.get('@value', eid_raw) if isinstance(eid_raw, dict) else eid_raw
+                    try:
+                        neptune_query(
+                            f"g.E('{eid}')"
+                            f".property('runtime_verified',true)"
+                            f".property('drift_status','ok')"
+                            f".property('last_drift_check',{ts})"
+                        )
+                    except Exception as e:
+                        logger.warning(f"drift update edge {eid}: {e}")
+                drift_summary['ok'] += 1
+
+            elif has_declared and not has_dns:
+                # 代码声明了但运行时没有 DNS → 可能死代码/环境问题
+                drift_status = 'declared_not_observed'
+                for eid_raw in edge_ids:
+                    eid = eid_raw.get('@value', eid_raw) if isinstance(eid_raw, dict) else eid_raw
+                    try:
+                        neptune_query(
+                            f"g.E('{eid}')"
+                            f".property('runtime_verified',false)"
+                            f".property('drift_status','declared_not_observed')"
+                            f".property('last_drift_check',{ts})"
+                        )
+                    except Exception as e:
+                        logger.warning(f"drift mark {eid}: {e}")
+                drift_summary['declared_not_observed'] += 1
+                logger.warning(f"DRIFT: {svc_name} -declared-> {infra_label}({nc}) but no DNS observed")
+
+            elif not has_declared and has_dns:
+                # 运行时有 DNS 但代码没声明 → 影子依赖，写新边
+                drift_status = 'observed_not_declared'
+                try:
+                    r2 = neptune_query(
+                        f"g.V().hasLabel('Microservice','LambdaFunction').has('name',containing('{svc_name}')).as('src')"
+                        f".V().hasLabel('{infra_label}').has('name',containing('{nc}'))"
+                        f".coalesce("
+                        f"  __.inE('AccessesData').where(outV().has('name',containing('{svc_name}'))),"
+                        f"  __.addE('AccessesData').from('src')"
+                        f").property('source','deepflow-dns')"
+                        f".property('runtime_verified',true)"
+                        f".property('drift_status','observed_not_declared')"
+                        f".property('last_drift_check',{ts})"
+                    )
+                    drift_summary['observed_not_declared'] += 1
+                    logger.warning(f"DRIFT: {svc_name} -DNS-> {infra_label}({nc}) but NOT declared in code")
+                except Exception as e:
+                    logger.warning(f"drift new edge {svc_name}->{infra_label}: {e}")
+
+    logger.info(f"Drift detection complete: {drift_summary}")
 
 # ===== EKS Token & IP 映射 =====
 
@@ -681,6 +861,24 @@ ORDER BY calls DESC LIMIT 100 FORMAT TSV
         src_name, dst_name = src_info['name'], dst_info['name']
         if src_name == dst_name:
             continue
+
+        # 过滤基础设施 sidecar 和测试流量节点（避免假环路）
+        # xray-daemon / trafficgenerator 等产生的网络流量不代表真实业务依赖
+        EXCLUDED_SERVICES = {
+            'xray-daemon',           # AWS X-Ray trace sidecar
+            'trafficgenerator',      # 负载测试流量生成器
+            'traffic-generator',     # 别名
+            'aws-otel-collector',    # OTEL 遥测 sidecar
+            'fluentd',               # 日志采集 sidecar
+            'fluent-bit',            # 日志采集 sidecar
+            'datadog-agent',         # 监控 agent
+            'prometheus',            # 指标采集
+            'jaeger-agent',          # trace sidecar
+        }
+        if src_name in EXCLUDED_SERVICES or dst_name in EXCLUDED_SERVICES:
+            logger.debug(f"跳过基础设施/测试节点: {src_name} -> {dst_name}")
+            continue
+
         # 拦截 ARN 格式和 AWS TargetGroup 命名（belt-and-suspenders）
         def _is_valid_svc_name(n: str) -> bool:
             if n.startswith('arn:'):        return False  # ARN
@@ -757,11 +955,19 @@ ORDER BY calls DESC LIMIT 100 FORMAT TSV
     nfm_throttling = fetch_nfm_throttling(ip_map)
 
     # 8. 合并 dependency 查询 + metrics 更新（每服务 2 次请求，原来 5 次）
-    service_names = list(nodes_set.keys())
+    # T03 防复发: 过滤 xray-daemon 等噪音节点
+    DEEPFLOW_SKIP = {'xray-daemon', 'xray-service'}
+    service_names = [s for s in nodes_set.keys() if s not in DEEPFLOW_SKIP]
     logger.info(f"更新 {len(service_names)} 个服务的指标...")
     batch_fetch_dependency_and_update(service_names, l7_metrics, ip_map_by_name,
                                        replica_counts, resource_limits, active_connections_map,
                                        restart_map, nfm_throttling)
+
+    # 8b. T13a: DNS/TCP 漂移检测
+    try:
+        run_drift_detection(service_names, ip_map)
+    except Exception as e:
+        logger.warning(f"Drift detection failed (non-fatal): {e}")
 
     # 9. 验证
     try:
