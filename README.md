@@ -235,7 +235,7 @@ cat /tmp/rca-output.json | python3 -m json.tool
 
 ```bash
 # Run from parent directory (avoids filename/module shadowing)
-cd /home/ubuntu/tech
+cd <project-parent-dir>
 python3 -m unittest rca_engine.tests.test_rca -v
 
 # 17 tests: TestStep4Score(5) + TestFaultClassifier(5) + TestPlaybookMatch(7)

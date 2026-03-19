@@ -468,6 +468,6 @@ addE('Impacted').from(V('inc-...'))to(V('PetAdoptionFlow'))
 ---
 
 *参考：*
-- *Neptune 图谱设计：`/home/ubuntu/tech/tdd-dp.md`*
+- *Neptune 图谱设计：`see graph-dp-cdk repo`*
 - *ETL 代码：`graph-dp-cdk/lambda/etl_deepflow/` & `etl_aws/`*
 - *DeepFlow 查询：`docs/tech-notes.md`*

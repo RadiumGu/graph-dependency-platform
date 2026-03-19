@@ -22,7 +22,7 @@ from unittest.mock import MagicMock, patch
 # Add the PARENT of rca_engine/ to sys.path so that "import rca_engine"
 # resolves to the rca_engine/ *package* (via __init__.py), not rca_engine.py the file.
 #
-# Run from parent dir:  cd /home/ubuntu/tech && python3 -m unittest rca_engine.tests.test_rca -v
+# Run from parent dir:  cd <project-parent-dir> && python3 -m unittest rca_engine.tests.test_rca -v
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # rca_engine/
 PARENT_OF_REPO = os.path.dirname(REPO_ROOT)  # parent containing rca_engine/
 if PARENT_OF_REPO not in sys.path:
