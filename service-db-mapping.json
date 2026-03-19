@@ -2,12 +2,12 @@
   {
     "service": "pethistory-deployment",
     "namespace": "default",
-    "db_cluster_id": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
-    "db_endpoint": "serviceseks2-databaseb269d8bb-efjeyzicx2ak.cluster-czbjnsviioad.ap-northeast-1.rds.amazonaws.com",
+    "db_cluster_id": "<YOUR_DB_CLUSTER_ID>",
+    "db_endpoint": "<YOUR_DB_CLUSTER_ENDPOINT>",
     "dbname": "adoptions",
     "engine": "postgres",
     "source": "secrets_manager",
-    "secret_arn": "arn:aws:secretsmanager:ap-northeast-1:926093770964:secret:DatabaseSecret3B817195-VNRjDLU0sXke-PZeYnO",
-    "db_cluster_arn": "arn:aws:rds:ap-northeast-1:926093770964:cluster:serviceseks2-databaseb269d8bb-efjeyzicx2ak"
+    "secret_arn": "<YOUR_SECRET_ARN>",
+    "db_cluster_arn": "<YOUR_DB_CLUSTER_ARN>"
   }
 ]

@@ -16,7 +16,7 @@ def write_incident(classification: dict, rca_result: dict, resolution: str = '')
     将故障记录写入 Neptune Incident 节点，并更新调用边的因果权重
     返回 incident_id
     """
-    from . import neptune_client as nc
+    import neptune_client as nc
 
     incident_id = f"inc-{time.strftime('%Y-%m-%d')}-{uuid.uuid4().hex[:6]}"
     svc = classification['affected_service']
@@ -102,7 +102,7 @@ def _write_subgraph_pattern(incident_id: str, affected_service: str,
 
     注意：当前仅采集，不用于评分。待积累 30+ 真实 Incident 后启用 step3c_subgraph_match()。
     """
-    from . import neptune_client as nc
+    import neptune_client as nc
 
     # 从 rca_result 提取出错服务列表
     candidates = rca_result.get('all_candidates', []) if rca_result else []
@@ -148,7 +148,7 @@ def _update_causal_weights(affected_service: str, root_cause: str):
     注意：当前 Incident 数量较少（<100），权重仅作为数据采集用途，
          尚未纳入 step4_score() 评分，待积累 100+ 真实告警后启用。
     """
-    from . import neptune_client as nc
+    import neptune_client as nc
 
     upstream_edges = nc.results("""
     MATCH (upstream:Microservice)-[e:Calls]->(n:Microservice {name: $svc})
@@ -202,7 +202,7 @@ def _update_causal_weights(affected_service: str, root_cause: str):
 
 def resolve_incident(incident_id: str, resolution: str, mttr_seconds: int):
     """更新 Incident 节点为 resolved"""
-    from . import neptune_client as nc
+    import neptune_client as nc
     nc.results("""
     MATCH (inc:Incident {id: $id})
     SET inc.status = 'resolved',

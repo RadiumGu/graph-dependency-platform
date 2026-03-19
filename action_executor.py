@@ -22,22 +22,13 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 REGION = os.environ.get('REGION', 'ap-northeast-1')
-EKS_CLUSTER = os.environ.get('EKS_CLUSTER', 'PetSite')
+EKS_CLUSTER = os.environ.get('EKS_CLUSTER', '')
 K8S_NAMESPACE = os.environ.get('K8S_NAMESPACE', 'default')
-AUDIT_LOG_GROUP = '/petsite/rca/audit'
+AUDIT_LOG_GROUP = '/rca/audit'
 RATE_LIMIT_WINDOW = 1800  # 30分钟
 RATE_LIMIT_MAX = 3        # 最多3次
 
-# Neptune 服务名 → K8s Deployment 名映射
-SVC_TO_DEPLOYMENT = {
-    'petsite':            'petsite-deployment',
-    'petsearch':          'search-service',
-    'payforadoption':     'pay-for-adoption',
-    'petlistadoptions':   'list-adoptions',
-    'petadoptionshistory':'pethistory-deployment',
-    'petfood':            'petfood',
-    'trafficgenerator':   'traffic-generator',
-}
+from config import NEPTUNE_TO_DEPLOYMENT as SVC_TO_DEPLOYMENT
 
 
 _k8s_apps_v1 = None
@@ -47,57 +38,22 @@ def _get_k8s_client():
     global _k8s_apps_v1
     if _k8s_apps_v1:
         return _k8s_apps_v1
-    
-    from kubernetes import client as k8s_client, config as k8s_config
-    
-    # 获取 EKS cluster 信息
-    eks = boto3.client('eks', region_name=REGION)
-    cluster = eks.describe_cluster(name=EKS_CLUSTER)['cluster']
-    endpoint = cluster['endpoint']
-    ca_data = cluster['certificateAuthority']['data']
-    
-    # 获取 EKS token
-    sts = boto3.client('sts', region_name=REGION)
-    token = _get_eks_token()
-    
-    # 配置 kubernetes client
+
+    from kubernetes import client as k8s_client
+    from eks_auth import get_k8s_endpoint, get_eks_token, write_ca
+
+    endpoint, ca_data = get_k8s_endpoint(EKS_CLUSTER)
+    token = get_eks_token(EKS_CLUSTER)
+
     configuration = k8s_client.Configuration()
     configuration.host = endpoint
     configuration.verify_ssl = True
-    configuration.ssl_ca_cert = _write_ca(ca_data)
+    configuration.ssl_ca_cert = write_ca(ca_data)
     configuration.api_key = {'authorization': f'Bearer {token}'}
-    
+
     k8s_client.Configuration.set_default(configuration)
     _k8s_apps_v1 = k8s_client.AppsV1Api()
     return _k8s_apps_v1
-
-def _get_eks_token():
-    """生成 EKS token（等价于 aws eks get-token）"""
-    import base64, urllib.parse
-    from botocore.auth import SigV4Auth, SigV4QueryAuth
-    from botocore.awsrequest import AWSRequest
-    from botocore.credentials import Credentials
-    
-    session = boto3.Session()
-    creds = session.get_credentials().get_frozen_credentials()
-    
-    url = f'https://sts.{REGION}.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15'
-    headers = {'x-k8s-aws-id': EKS_CLUSTER}
-    request = AWSRequest(method='GET', url=url, headers=headers)
-    SigV4QueryAuth(creds, 'sts', REGION, expires=60).add_auth(request)
-    
-    presigned_url = request.url
-    token = 'k8s-aws-v1.' + base64.urlsafe_b64encode(presigned_url.encode()).decode().rstrip('=')
-    return token
-
-def _write_ca(ca_data: str) -> str:
-    """写 CA 证书到临时文件"""
-    import base64, tempfile
-    ca_bytes = base64.b64decode(ca_data)
-    f = tempfile.NamedTemporaryFile(delete=False, suffix='.crt')
-    f.write(ca_bytes)
-    f.close()
-    return f.name
 
 def _check_rate_limit(service: str) -> bool:
     """

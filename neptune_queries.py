@@ -1,7 +1,7 @@
 """
 neptune_queries.py - RCA 核心图谱查询（Q1/Q2/Q3）
 """
-from . import neptune_client as nc
+import neptune_client as nc
 
 def q1_blast_radius(failed_node: str) -> dict:
     """
@@ -108,6 +108,98 @@ def q7_db_connections(service_name: str) -> list:
            db.cpu_pct AS cpu_pct, db.engine AS engine
     """
     return nc.results(cypher, {"svc": service_name})
+
+
+def q9_service_infra_path(service_name: str) -> list:
+    """
+    Q9: 多层图遍历 — Service → Pod → EC2Instance
+    利用已有的 RunsOn 边，一次查询拿到完整基础设施链路。
+    返回 [{'pod_name':..., 'pod_status':..., 'ec2_name':..., 'ec2_id':..., 'ec2_state':..., 'az':...}]
+    """
+    cypher = """
+    MATCH (svc {name: $svc})-[:RunsOn]->(pod:Pod)-[:RunsOn]->(ec2:EC2Instance)
+    OPTIONAL MATCH (ec2)-[:LocatedIn]->(az:AvailabilityZone)
+    RETURN pod.name AS pod_name, pod.status AS pod_status,
+           pod.node_name AS node_name,
+           ec2.name AS ec2_name, ec2.instance_id AS ec2_id,
+           ec2.state AS ec2_state, ec2.health_status AS ec2_health,
+           az.name AS az
+    """
+    return nc.results(cypher, {"svc": service_name})
+
+
+def q10_infra_root_cause(affected_service: str) -> dict:
+    """
+    Q10: 基础设施层根因探测 — 查所有非 running 的 EC2 节点（EKS 或非 EKS），
+    再反向通过图遍历找受影响的所有服务。
+
+    不依赖 BelongsTo→EKSCluster（因为 ASG 会在 EC2 停止后踢出，导致边丢失），
+    而是直接查 EC2Instance label 中 state != 'running' 的节点。
+
+    返回 {
+        'unhealthy_ec2': [{'ec2_id':..., 'state':..., 'az':..., 'affected_pods': [...], 'affected_services': [...]}],
+        'az_impact': {az: {'total_pods': N, 'affected_pods': N}},
+        'has_infra_fault': bool
+    }
+    """
+    # 1) 所有非 running 的 EC2 节点，反向找 Pod 和 Service
+    cypher_unhealthy = """
+    MATCH (ec2:EC2Instance)
+    WHERE ec2.state IS NOT NULL AND ec2.state <> 'running'
+    OPTIONAL MATCH (ec2)-[:LocatedIn]->(az:AvailabilityZone)
+    OPTIONAL MATCH (pod:Pod)-[:RunsOn]->(ec2)
+    OPTIONAL MATCH (svc:Microservice)-[:RunsOn]->(pod)
+    RETURN ec2.instance_id AS ec2_id, ec2.name AS ec2_name,
+           ec2.state AS state, az.name AS az,
+           collect(DISTINCT pod.name) AS affected_pods,
+           collect(DISTINCT svc.name) AS affected_services
+    """
+    unhealthy_rows = nc.results(cypher_unhealthy)
+
+    # 2) AZ 维度：同一 AZ 下所有 Pod 数 vs 受影响 Pod 数
+    cypher_az = """
+    MATCH (svc {name: $svc})-[:RunsOn]->(pod:Pod)-[:LocatedIn]->(az:AvailabilityZone)
+    RETURN az.name AS az, count(pod) AS total_pods
+    """
+    az_rows = nc.results(cypher_az, {"svc": affected_service})
+    az_total = {r['az']: r['total_pods'] for r in az_rows if r.get('az')}
+
+    # 受影响 AZ 的 Pod 数
+    az_affected = {}
+    for row in unhealthy_rows:
+        az = row.get('az', '')
+        if az:
+            az_affected[az] = az_affected.get(az, 0) + len(row.get('affected_pods', []))
+
+    az_impact = {}
+    for az in set(list(az_total.keys()) + list(az_affected.keys())):
+        az_impact[az] = {
+            'total_pods': az_total.get(az, 0),
+            'affected_pods': az_affected.get(az, 0),
+        }
+
+    return {
+        'unhealthy_ec2': unhealthy_rows,
+        'az_impact': az_impact,
+        'has_infra_fault': len(unhealthy_rows) > 0,
+    }
+
+
+def q11_broader_impact(ec2_ids: list) -> list:
+    """
+    Q11: 给定故障 EC2 节点，反向查所有受影响的服务（不限于 affected_service）。
+    发现 blast radius 比 affected_service 更大的情况。
+
+    返回 [{'service':..., 'pod':..., 'ec2_id':...}]
+    """
+    if not ec2_ids:
+        return []
+    cypher = """
+    MATCH (svc:Microservice)-[:RunsOn]->(pod:Pod)-[:RunsOn]->(ec2:EC2Instance)
+    WHERE ec2.instance_id IN $ids
+    RETURN DISTINCT svc.name AS service, pod.name AS pod, ec2.instance_id AS ec2_id
+    """
+    return nc.results(cypher, {"ids": ec2_ids})
 
 
 def q8_log_source(service_name: str) -> str:

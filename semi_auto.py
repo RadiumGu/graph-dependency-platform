@@ -7,12 +7,12 @@ import urllib3
 logger = logging.getLogger(__name__)
 
 def _exec_db_connection(classification, playbook):
-    from . import action_executor as ae
+    import action_executor as ae
     svc = classification['affected_service']
     return ae.rollout_restart(svc)
 
 def _exec_single_az(classification, playbook):
-    from . import action_executor as ae
+    import action_executor as ae
     svc = classification['affected_service']
     current = classification.get('service_info', {}).get('replicas', 2) or 2
     target = max(int(current * 1.5), current + 1)
@@ -24,7 +24,7 @@ PLAYBOOK_ACTIONS = {
 }
 
 def execute(classification, playbook):
-    from . import slack_notifier
+    import slack_notifier
     severity = classification.get('severity', 'P2')
     pb_id = playbook.get('matched_playbook')
     risk = playbook.get('risk', 'UNKNOWN')

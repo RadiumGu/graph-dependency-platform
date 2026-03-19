@@ -1,5 +1,16 @@
 """
 handler.py - RCA Lambda 入口（Phase 3）
+
+Note on import structure
+------------------------
+All heavy module imports (rca_engine, fault_classifier, graph_rag_reporter,
+incident_writer, etc.) are deferred to inside lambda_handler() rather than
+placed at the module top level. This is a deliberate Lambda cold-start
+optimisation: the Python interpreter still has to load these modules on the
+first invocation, but subsequent invocations in the same container reuse the
+already-loaded modules via the module cache. Keeping top-level imports minimal
+also makes unit-testing the handler easier because heavyweight AWS dependencies
+are not imported until actually needed.
 """
 import os, json, logging
 
@@ -31,7 +42,7 @@ def _parse_cw_alarm(alarm):
     }
 
 def lambda_handler(event, context):
-    from rca_engine import fault_classifier, playbook_engine, semi_auto, rca_engine, slack_notifier
+    import fault_classifier, playbook_engine, semi_auto, rca_engine, slack_notifier
 
     logger.info(f"RCA triggered: {json.dumps(event)[:300]}")
 
@@ -54,7 +65,7 @@ def lambda_handler(event, context):
     # 支持 resolve 操作（由 Slack interaction 或手动调用）
     if signal.get('action') == 'resolve' and signal.get('incident_id'):
         try:
-            from rca_engine import incident_writer
+            import incident_writer
             incident_writer.resolve_incident(
                 signal['incident_id'],
                 signal.get('resolution', 'manual resolve'),
@@ -91,7 +102,7 @@ def lambda_handler(event, context):
             rca_result = rca_engine.analyze(affected_service, classification)
             # Graph RAG：用 Bedrock + Neptune + CloudWatch 生成报告
             try:
-                from rca_engine import graph_rag_reporter
+                import graph_rag_reporter
                 _log_samples = rca_result.get('log_samples', {})
                 rag_report = graph_rag_reporter.generate_rca_report(
                     affected_service, classification, rca_result,
@@ -118,7 +129,7 @@ def lambda_handler(event, context):
     incident_id = None
     if severity in ('P0', 'P1') and rca_result:
         try:
-            from rca_engine import incident_writer
+            import incident_writer
             incident_id = incident_writer.write_incident(classification, rca_result)
             logger.info(f"Incident created: {incident_id}")
         except Exception as e:
@@ -128,7 +139,7 @@ def lambda_handler(event, context):
     repeat_info = None
     if severity in ('P0', 'P1'):
         try:
-            from rca_engine import rca_engine as rca_mod
+            import rca_engine as rca_mod
             repeat_info = rca_mod.check_repeat_incidents(affected_service)
             if repeat_info.get('needs_deep_rca'):
                 _send_repeat_alert(affected_service, repeat_info, classification)

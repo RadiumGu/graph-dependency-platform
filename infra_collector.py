@@ -16,44 +16,37 @@ EKS_CLUSTER = os.environ.get('EKS_CLUSTER_NAME', 'PetSite')
 
 # ---- DB Mapping ----
 
-# 静态映射（由扫描脚本确认，写入代码避免文件路径问题）
-STATIC_DB_MAPPING = [
-    {
-        'service': 'pethistory-deployment',
-        'namespace': 'default',
-        'db_cluster_id': 'serviceseks2-databaseb269d8bb-efjeyzicx2ak',
-        'dbname': 'adoptions',
-        'engine': 'postgres',
-    }
-]
+_DB_MAPPING_PATH = os.path.join(os.path.dirname(__file__), 'service-db-mapping.json')
+_db_mapping_cache: list | None = None
+
+
+def _load_db_mapping() -> list:
+    global _db_mapping_cache
+    if _db_mapping_cache is None:
+        try:
+            with open(_DB_MAPPING_PATH, 'r') as f:
+                _db_mapping_cache = json.load(f)
+        except Exception as e:
+            logger.warning(f'Failed to load service-db-mapping.json: {e}')
+            _db_mapping_cache = []
+    return _db_mapping_cache
+
 
 def get_service_db(service_name):
-    return [m for m in STATIC_DB_MAPPING if service_name in m.get('service', '')]
+    return [m for m in _load_db_mapping() if service_name in m.get('service', '')]
 
 
 # ---- EKS Pod 状态 ----
 
 def _get_k8s_token():
     try:
-        eks = boto3.client('eks', region_name=REGION)
-        cluster = eks.describe_cluster(name=EKS_CLUSTER)['cluster']
-        endpoint = cluster['endpoint']
-        from botocore.auth import SigV4QueryAuth
-        from botocore.awsrequest import AWSRequest
-        from botocore.credentials import Credentials
-        creds = boto3.Session().get_credentials().get_frozen_credentials()
-        signer = SigV4QueryAuth(
-            credentials=Credentials(creds.access_key, creds.secret_key, creds.token),
-            service_name='sts', region_name=REGION, expires=60
-        )
-        url = f'https://sts.{REGION}.amazonaws.com/?Action=GetCallerIdentity&Version=2011-06-15'
-        req = AWSRequest(method='GET', url=url, headers={'x-k8s-aws-id': EKS_CLUSTER})
-        signer.add_auth(req)
-        token = 'k8s-aws-v1.' + base64.urlsafe_b64encode(req.url.encode()).decode().rstrip('=')
-        return endpoint, token
+        from eks_auth import get_k8s_endpoint, get_eks_token
+        endpoint, ca_data = get_k8s_endpoint(EKS_CLUSTER)
+        token = get_eks_token(EKS_CLUSTER)
+        return endpoint, token, ca_data
     except Exception as e:
         logger.warning(f'EKS token error: {e}')
-        return None, None
+        return None, None, None
 
 
 def _get_node_az_map(node_names: list) -> dict:
@@ -78,14 +71,23 @@ def _get_node_az_map(node_names: list) -> dict:
 
 
 def get_pods_for_service(service_name, namespace='default'):
-    endpoint, token = _get_k8s_token()
+    endpoint, token, ca_data = _get_k8s_token()
     if not endpoint:
         return []
-    # 尝试两种 label: app=<service> 和 app=<service去掉-deployment>
-    labels = [service_name, service_name.replace('-deployment', '')]
+    # 使用 config.py 的映射获取 K8s app label
+    # service_name 通常是 Neptune 服务名（如 payforadoption），需要转为 K8s label（如 pay-for-adoption）
+    from config import NEPTUNE_TO_K8S_LABEL
+    k8s_label = NEPTUNE_TO_K8S_LABEL.get(service_name, service_name)
+    # 尝试多种 label：精确映射 + 原始名 + 去掉 -deployment 后缀
+    labels = list(dict.fromkeys([k8s_label, service_name, service_name.replace('-deployment', '')]))
     ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    if ca_data:
+        from eks_auth import write_ca
+        ca_path = write_ca(ca_data)
+        ctx.load_verify_locations(ca_path)
+    else:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
 
     # 先收集所有 pod，再批量查 Node AZ（避免多次 API 调用）
     all_pods_raw = []

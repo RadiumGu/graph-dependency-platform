@@ -125,7 +125,7 @@ def _dynamic_suggest(classification: dict) -> dict:
     
     if severity == 'P0':
         steps.insert(0, '⚠️ P0 故障：先诊断，不要盲目重启')
-        steps.insert(1, '查 DeepFlow：`curl http://11.0.2.30:20416/...` 确认根因')
+        steps.insert(1, '查 DeepFlow（$CLICKHOUSE_HOST:20416）：确认调用链根因')
     
     return {
         'matched_playbook': None,

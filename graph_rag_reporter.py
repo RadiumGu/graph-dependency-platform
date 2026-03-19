@@ -11,13 +11,13 @@ import os
 import json
 import logging
 import boto3
-from . import infra_collector
+import infra_collector
 from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 REGION = os.environ.get('REGION', 'ap-northeast-1')
-BEDROCK_MODEL = 'global.anthropic.claude-sonnet-4-6'
-KB_ID = '0RWLEK153U'  # Bedrock Knowledge Base
+BEDROCK_MODEL = os.environ.get('BEDROCK_MODEL', 'global.anthropic.claude-sonnet-4-6')
+KB_ID = os.environ.get('BEDROCK_KB_ID', '')
 
 # DeepFlow 服务名 → CloudWatch namespace/dimension 映射
 SVC_TO_CW = {
@@ -32,9 +32,11 @@ SVC_TO_CW = {
 # ─── Step 1: Neptune 子图 ───────────────────────────────────────────────────
 
 def _get_neptune_subgraph(affected_service: str) -> str:
-    """提取受影响服务的 2 跳依赖子图，格式化为自然语言"""
+    """提取受影响服务的多层依赖子图，包括基础设施层"""
     try:
-        from . import neptune_client as nc
+        import neptune_client as nc
+        import neptune_queries as nq
+
         # 上游调用者
         callers = nc.results(
             "MATCH (u)-[:Calls|DependsOn]->(n {name:$s}) RETURN u.name AS name, u.tier AS tier",
@@ -59,6 +61,49 @@ def _get_neptune_subgraph(affected_service: str) -> str:
             lines.append(f"- {c.get('name','?')} --[:Calls]--> {affected_service}")
         for d in deps:
             lines.append(f"- {affected_service} --[:DependsOn]--> {d.get('name','?')}")
+
+        # 基础设施层：Service → Pod → EC2 → AZ（通过图遍历获取）
+        try:
+            infra_path = nq.q9_service_infra_path(affected_service)
+            if infra_path:
+                lines.append("")
+                lines.append("[基础设施层（图遍历 Service→Pod→EC2→AZ）]")
+                for row in infra_path:
+                    state = row.get('ec2_state') or 'unknown'
+                    state_marker = '⚠️' if state != 'running' else '✅'
+                    lines.append(
+                        f"- {affected_service} → Pod:{row.get('pod_name','?')}({row.get('pod_status','?')}) "
+                        f"→ EC2:{row.get('ec2_id','?')} {state_marker}state={state}, az={row.get('az','?')}"
+                    )
+
+            # 基础设施根因探测
+            infra_fault = nq.q10_infra_root_cause(affected_service)
+            if infra_fault.get('has_infra_fault'):
+                lines.append("")
+                lines.append("[⚠️ 基础设施层故障（图遍历发现）]")
+                for ec2 in infra_fault.get('unhealthy_ec2', []):
+                    lines.append(
+                        f"- EC2 {ec2.get('ec2_id','?')} state={ec2.get('state','?')} az={ec2.get('az','?')} "
+                        f"影响 Pod: {', '.join(ec2.get('affected_pods', []))}"
+                    )
+                # AZ 影响面
+                az_impact = infra_fault.get('az_impact', {})
+                if az_impact:
+                    lines.append("- AZ 影响分析:")
+                    for az, info in az_impact.items():
+                        lines.append(f"  - {az}: 总Pod={info['total_pods']}, 受影响={info['affected_pods']}")
+
+                # blast radius：故障 EC2 影响到的其他服务
+                ec2_ids = [ec2.get('ec2_id') for ec2 in infra_fault.get('unhealthy_ec2', []) if ec2.get('ec2_id')]
+                if ec2_ids:
+                    broader = nq.q11_broader_impact(ec2_ids)
+                    other_services = set(r.get('service') for r in broader if r.get('service') != affected_service)
+                    if other_services:
+                        lines.append(f"- 故障 EC2 还影响其他服务: {', '.join(other_services)}")
+
+        except Exception as e:
+            logger.warning(f"Neptune infra path failed: {e}")
+
         return '\n'.join(lines)
     except Exception as e:
         logger.warning(f"Neptune subgraph failed: {e}")
