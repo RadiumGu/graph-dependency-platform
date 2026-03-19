@@ -67,14 +67,82 @@ graph LR
 
 | Requirement | Notes |
 |-------------|-------|
-| AWS Account | With Neptune cluster, EKS cluster, and DeepFlow/ClickHouse deployed |
-| Amazon Neptune | IAM auth enabled; cluster in the same VPC as Lambda |
+| AWS Account | With VPC, EKS cluster, and DeepFlow/ClickHouse deployed |
+| Amazon Neptune | Created by `NeptuneClusterStack` (see below) — or bring your own |
 | EKS Cluster | Used by `etl_aws` to collect K8s service / pod topology |
 | ClickHouse (DeepFlow) | Accessible from Lambda via private IP; `flow_log.l7_flow_log` and `prometheus.samples` tables present |
 | Node.js ≥ 18 | For CDK CLI |
 | Python 3.12 | For Lambda runtime (not needed locally unless running tests) |
 | AWS CDK v2 | `npm install -g aws-cdk` |
-| IAM: `NeptuneETLPolicy` | Pre-existing managed policy with `neptune-db:connect` and related permissions |
+
+---
+
+## Creating the Neptune Cluster
+
+This project includes a CDK stack (`NeptuneClusterStack`) that creates the Neptune graph database. **Neptune is a schema-on-write graph database — no DDL or schema initialisation is required.** The ETL Lambda functions create all vertex labels, edge labels, and properties automatically on first run.
+
+### What the stack creates
+
+| Resource | Details |
+|----------|---------|
+| Neptune DB Cluster | `graph-dp-neptune`, engine 1.3.4.0, IAM auth enabled, encrypted |
+| Neptune DB Instance | `db.r6g.large`, single-AZ (writer only) |
+| DB Subnet Group | Uses VPC private subnets |
+| Neptune Security Group | Allows inbound TCP 8182 from Lambda SG |
+| Lambda Security Group | Outbound to Neptune + AWS APIs |
+| `NeptuneETLPolicy` | IAM managed policy for Lambda → Neptune access |
+
+### Deploy the cluster
+
+```bash
+# 1. Set your VPC ID in cdk.json (same VPC as EKS)
+#    "vpcId": "vpc-0abc..."
+
+# 2. Deploy the cluster stack only
+cdk deploy NeptuneClusterStack
+
+# 3. Note the outputs:
+#    NeptuneClusterEndpoint  → set as neptuneEndpoint in cdk.json
+#    LambdaSgId              → set as lambdaSgId in cdk.json
+#    NeptuneETLPolicyArn     → set as neptuneEtlPolicyArn in cdk.json (optional)
+
+# 4. Then deploy the ETL stack
+cdk deploy NeptuneEtlStack
+```
+
+### Instance sizing guide
+
+| Instance Type | Use Case | Approx. Graph Size |
+|---------------|----------|-------------------|
+| `db.r6g.medium` | Dev / test | < 10M edges |
+| **`db.r6g.large`** | **Small production (default)** | **10M – 100M edges** |
+| `db.r6g.xlarge` | Medium production | 100M – 500M edges |
+| `db.r6g.2xlarge` | Large graphs or high concurrency | 500M+ edges |
+
+To change the instance type, edit `lib/neptune-cluster-stack.ts` → `dbInstanceClass`.
+
+To add a read replica, duplicate the `CfnDBInstance` block with a different identifier and optionally a different AZ.
+
+> **Cost note:** A single `db.r6g.large` in ap-northeast-1 costs ~$0.348/hr (~$254/month).
+> For dev/test, consider `db.r6g.medium` (~$0.174/hr) or stopping the cluster when not in use.
+
+### Graph schema (auto-created by ETL)
+
+No manual schema setup is needed. For reference, the ETL creates these vertex and edge labels:
+
+<details>
+<summary>Vertex labels (22 types)</summary>
+
+`Region` `AvailabilityZone` `VPC` `Subnet` `EC2Instance` `EKSCluster` `K8sService` `Pod` `LoadBalancer` `TargetGroup` `ListenerRule` `LambdaFunction` `StepFunction` `DynamoDBTable` `RDSCluster` `RDSInstance` `NeptuneCluster` `NeptuneInstance` `Database` `S3Bucket` `SQSQueue` `SNSTopic` `ECRRepository` `SecurityGroup` `Microservice` `BusinessCapability`
+
+</details>
+
+<details>
+<summary>Edge labels (17 types)</summary>
+
+`LocatedIn` `BelongsTo` `Contains` `RunsOn` `RoutesTo` `ForwardsTo` `HasRule` `HasSG` `Invokes` `AccessesData` `ConnectsTo` `WritesTo` `PublishesTo` `TriggeredBy` `Calls` `DependsOn` `Implements`
+
+</details>
 
 ---
 
@@ -171,6 +239,7 @@ graph-dp-cdk/
 ├── bin/
 │   └── graph-dp.ts              # CDK app entry point
 ├── lib/
+│   ├── neptune-cluster-stack.ts # CDK stack: Neptune cluster + SG + IAM
 │   └── neptune-etl-stack.ts     # CDK stack: Lambda + EventBridge + SQS
 ├── lambda/
 │   ├── shared/                  # Shared Lambda layer (neptune_client_base)
