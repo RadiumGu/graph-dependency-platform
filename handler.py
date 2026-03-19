@@ -1,0 +1,222 @@
+"""
+handler.py - RCA Lambda 入口（Phase 3）
+"""
+import os, json, logging
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+CW_METRIC_MAP = {
+    'HTTPCode_Target_5XX_Count': 'error_rate',
+    'HTTPCode_Target_4XX_Count': 'error_rate',
+    'TargetResponseTime': 'latency_p99',
+}
+DEFAULT_AFFECTED_SERVICE = 'petsite'
+
+def _parse_cw_alarm(alarm):
+    if alarm.get('NewStateValue') != 'ALARM':
+        return None
+    trigger = alarm.get('Trigger', {})
+    description = alarm.get('AlarmDescription', '')
+    affected = DEFAULT_AFFECTED_SERVICE
+    for p in description.split():
+        if p.startswith('service:'):
+            affected = p.split(':', 1)[1]
+    return {
+        'source': 'cloudwatch_alarm',
+        'affected_resource': affected,
+        'metric': CW_METRIC_MAP.get(trigger.get('MetricName', ''), trigger.get('MetricName', '')),
+        'value': 0.5, 'threshold': 0.05,
+        'alarm_name': alarm.get('AlarmName', ''),
+    }
+
+def lambda_handler(event, context):
+    from rca_engine import fault_classifier, playbook_engine, semi_auto, rca_engine, slack_notifier
+
+    logger.info(f"RCA triggered: {json.dumps(event)[:300]}")
+
+    if 'Records' in event:
+        msg_str = event['Records'][0]['Sns']['Message']
+        try:
+            msg = json.loads(msg_str)
+        except:
+            return {'statusCode': 400, 'body': 'invalid SNS message'}
+        signal = _parse_cw_alarm(msg) if 'AlarmName' in msg else msg
+        if signal is None:
+            return {'statusCode': 200, 'body': 'skipped'}
+    else:
+        signal = event
+
+    affected_service = signal.get('affected_resource', '')
+    if not affected_service:
+        return {'statusCode': 400, 'body': 'missing affected_resource'}
+
+    # 支持 resolve 操作（由 Slack interaction 或手动调用）
+    if signal.get('action') == 'resolve' and signal.get('incident_id'):
+        try:
+            from rca_engine import incident_writer
+            incident_writer.resolve_incident(
+                signal['incident_id'],
+                signal.get('resolution', 'manual resolve'),
+                signal.get('mttr_seconds', 0)
+            )
+            return {'statusCode': 200, 'body': json.dumps({'resolved': signal['incident_id']})}
+        except Exception as e:
+            logger.error(f"Resolve failed: {e}")
+            return {'statusCode': 500, 'body': str(e)}
+
+    # 故障分类
+    try:
+        classification = fault_classifier.classify(affected_service, signal)
+    except Exception as e:
+        logger.error(f"Classification failed: {e}", exc_info=True)
+        classification = {
+            'severity': 'P1', 'strategy': 'Parallel',
+            'affected_service': affected_service,
+            'service_info': {}, 'affected_capabilities': [],
+            'affected_services': [], 'tier0_impact_count': 0,
+            'signal': signal,
+        }
+
+    severity = classification['severity']
+    
+    # Playbook 匹配 + 执行
+    playbook = playbook_engine.match(classification)
+    exec_result = semi_auto.execute(classification, playbook)
+
+    # Phase 3: P0/P1 场景同步执行 RCA 分析
+    rca_result = None
+    if severity in ('P0', 'P1'):
+        try:
+            rca_result = rca_engine.analyze(affected_service, classification)
+            # Graph RAG：用 Bedrock + Neptune + CloudWatch 生成报告
+            try:
+                from rca_engine import graph_rag_reporter
+                _log_samples = rca_result.get('log_samples', {})
+                rag_report = graph_rag_reporter.generate_rca_report(
+                    affected_service, classification, rca_result,
+                    log_samples=_log_samples,
+                )
+                rca_result['rag_report'] = rag_report
+                _send_rag_report(rag_report, classification)
+                logger.info(f"Graph RAG report sent: confidence={rag_report.get('confidence')}")
+            except Exception as rag_err:
+                logger.error(f"Graph RAG failed: {rag_err}", exc_info=True)
+                _send_rca_report(rca_result, classification, playbook)
+        except Exception as e:
+            logger.error(f"RCA analysis failed: {e}", exc_info=True)
+
+    result = {
+        'severity': severity,
+        'strategy': classification['strategy'],
+        'playbook': playbook.get('matched_playbook'),
+        'execution': exec_result,
+        'rca': rca_result,
+        'affected_capabilities': [c.get('name') for c in classification.get('affected_capabilities', [])],
+    }
+    # Phase 3: 写 Incident 节点
+    incident_id = None
+    if severity in ('P0', 'P1') and rca_result:
+        try:
+            from rca_engine import incident_writer
+            incident_id = incident_writer.write_incident(classification, rca_result)
+            logger.info(f"Incident created: {incident_id}")
+        except Exception as e:
+            logger.error(f"Incident write failed: {e}")
+
+    # Phase 4: 重复故障检测
+    repeat_info = None
+    if severity in ('P0', 'P1'):
+        try:
+            from rca_engine import rca_engine as rca_mod
+            repeat_info = rca_mod.check_repeat_incidents(affected_service)
+            if repeat_info.get('needs_deep_rca'):
+                _send_repeat_alert(affected_service, repeat_info, classification)
+        except Exception as e:
+            logger.warning(f"Repeat check failed: {e}")
+
+    result['incident_id'] = incident_id
+    result['repeat_info'] = repeat_info
+    return {'statusCode': 200, 'body': json.dumps(result, ensure_ascii=False)}
+
+def _send_rag_report(rag: dict, classification: dict):
+    """发送 Graph RAG 生成的 RCA 报告到 Slack"""
+    import urllib3
+    webhook = os.environ.get('SLACK_WEBHOOK_URL', '')
+    if not webhook:
+        return
+    svc = classification['affected_service']
+    severity = classification['severity']
+    conf = rag.get('confidence', 0)
+    root_cause = rag.get('root_cause', '未知')
+    action = rag.get('recommended_action', '人工处理')
+    reasoning = rag.get('reasoning', '')
+    evidence = rag.get('evidence', [])
+    source = rag.get('source', '')
+    source_tag = '🤖 AI分析' if 'bedrock' in source else '📐 规则引擎'
+
+    ev_text = '\n'.join(f'• {e}' for e in evidence[:3]) if evidence else '• 证据不足'
+    text = (
+        f"🔍 *[{severity}] RCA 报告：{svc}* {source_tag}\n\n"
+        f"*根因：* {root_cause}\n"
+        f"*置信度：* {conf}%\n"
+        f"*建议操作：* {action}\n\n"
+        f"*证据：*\n{ev_text}\n\n"
+        f"*推理：* {reasoning[:200]}"
+    )
+    http = urllib3.PoolManager()
+    http.request('POST', webhook, body=json.dumps({'text': text}).encode(),
+                 headers={'Content-Type': 'application/json'})
+
+def _send_repeat_alert(svc: str, repeat_info: dict, classification: dict):
+    """发送重复故障深度 RCA 告警"""
+    import urllib3
+    webhook = os.environ.get('SLACK_WEBHOOK_URL', '')
+    if not webhook:
+        return
+    count = repeat_info.get('count', 0)
+    text = (
+        f"🔁 *[重复故障警报] {svc}*\n"
+        f"过去 7 天内已发生 *{count}* 次故障，建议启动深度 RCA\n"
+        f"_请检查是否有未解决的根本原因（内存泄漏、配置缺陷等）_"
+    )
+    http = urllib3.PoolManager()
+    http.request('POST', webhook, body=json.dumps({'text': text}).encode(),
+                 headers={'Content-Type': 'application/json'})
+
+def _send_rca_report(rca_result: dict, classification: dict, playbook: dict):
+    """发送 RCA 分析报告到 Slack"""
+    import urllib3
+    webhook = os.environ.get('SLACK_WEBHOOK_URL', '')
+    if not webhook:
+        return
+    
+    svc = classification['affected_service']
+    severity = classification['severity']
+    elapsed = rca_result.get('analysis_time_sec', 0)
+    top = rca_result.get('top_candidate', {})
+    candidates = rca_result.get('root_cause_candidates', [])
+    changes = rca_result.get('recent_changes', [])
+    
+    # 根因候选列表
+    candidates_text = ''
+    for i, c in enumerate(candidates[:3]):
+        conf = int(c.get('confidence', 0) * 100)
+        evs = ' | '.join(c.get('evidence', []))[:80]
+        candidates_text += f"{i+1}. *{c['service']}* 置信度 {conf}% — {evs}\n"
+    
+    # 近期变更
+    changes_text = ''
+    for ch in changes[:3]:
+        changes_text += f"• `{ch['event']}` {ch['resource'][:30]} ({ch['time'][:16]})\n"
+    changes_text = changes_text or '无近期变更'
+    
+    text = (
+        f"🔍 *[{severity}] RCA 分析完成：{svc}* （{elapsed}s）\n\n"
+        f"*根因候选：*\n{candidates_text or '数据不足，无法确定根因'}\n"
+        f"*近期变更：*\n{changes_text}"
+    )
+    
+    http = urllib3.PoolManager()
+    http.request('POST', webhook, body=json.dumps({'text': text}).encode(),
+                 headers={'Content-Type': 'application/json'})
