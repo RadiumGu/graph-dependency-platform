@@ -337,14 +337,20 @@ class ExperimentRunner:
     def _phase0_preflight(self, exp: Experiment, result: ExperimentResult):
         logger.info(f"🔍 Phase 0: Pre-flight Check (backend={exp.backend})")
 
+        from .target_resolver import TargetResolver
+        resolver = TargetResolver()
+
         if exp.backend == "fis":
-            # FIS 后端：验证 FIS 服务可用
+            # 确保 ARN 已解析（load_experiment 可能已解析；这里确保最新，并写入审计）
+            resolver.resolve_experiment(exp)
             if not self.fis.preflight_check():
                 raise PrefightFailure("FIS 服务不可用（检查 IAM 权限和区域配置）")
             logger.info("✅ FIS Pre-flight 通过")
             return
 
-        # Chaos Mesh 后端：检查残留实验 + Pod 健康
+        # Chaos Mesh 后端：解析 Pod 目标写入审计记录，然后检查残留实验 + Pod 健康
+        resolver.resolve_chaosmesh_target(exp.target_service, exp.target_namespace)
+
         active = self.injector.list_experiments()
         if active:
             names = [e.get("name", "?") for e in active if isinstance(e, dict)]

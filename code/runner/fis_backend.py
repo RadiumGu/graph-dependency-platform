@@ -22,10 +22,9 @@ import boto3
 if TYPE_CHECKING:
     from .experiment import Experiment
 
-logger = logging.getLogger(__name__)
+from .config import REGION, ACCOUNT_ID, FIS_ROLE_ARN
 
-REGION = "ap-northeast-1"
-FIS_ROLE_ARN = "arn:aws:iam::926093770964:role/chaos-fis-experiment-role"
+logger = logging.getLogger(__name__)
 
 
 def _to_iso_duration(duration: str) -> str:
@@ -173,21 +172,32 @@ class FISClient:
                 "resourceType": "aws:ec2:instance",
                 "selectionMode": extra.get("selection_mode", "COUNT(1)"),
             }
-            if "instance_ids" in extra:
+            if "instance_arns" in extra:
+                arns = extra["instance_arns"]
+                target["resourceArns"] = [arns] if isinstance(arns, str) else arns
+            elif "instance_ids" in extra:
                 target["resourceArns"] = [
-                    f"arn:aws:ec2:{REGION}:926093770964:instance/{iid}"
+                    f"arn:aws:ec2:{REGION}:{ACCOUNT_ID}:instance/{iid}"
                     for iid in extra["instance_ids"]
                 ]
             else:
                 target["resourceTags"] = extra.get("tags", {"chaos-target": "true"})
             return target
         elif fault_type.startswith("fis_ebs"):
+            # volume_arns: 预解析的完整 ARN 列表（TargetResolver 写入）
+            # volume_ids:  旧格式 volume ID 列表（兜底）
+            if "volume_arns" in extra:
+                arns = extra["volume_arns"]
+                if isinstance(arns, str):
+                    arns = [arns]
+            else:
+                arns = [
+                    f"arn:aws:ec2:{REGION}:{ACCOUNT_ID}:volume/{vid}"
+                    for vid in extra.get("volume_ids", [])
+                ]
             return {
                 "resourceType": "aws:ebs:volume",
-                "resourceArns": [
-                    f"arn:aws:ec2:{REGION}:926093770964:volume/{vid}"
-                    for vid in extra.get("volume_ids", [])
-                ],
+                "resourceArns": arns,
                 "selectionMode": "ALL",
             }
         elif fault_type.startswith("fis_network") or fault_type.startswith("fis_vpc"):

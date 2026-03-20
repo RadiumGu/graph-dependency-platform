@@ -17,8 +17,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-TABLE_NAME = "chaos-experiments"
-REGION     = "ap-northeast-1"
+from .config import REGION, BEDROCK_REGION, BEDROCK_MODEL, DYNAMODB_TABLE
+
+TABLE_NAME = DYNAMODB_TABLE
 REPORT_DIR = "/home/ubuntu/tech/chaos/validation-results"
 
 
@@ -35,9 +36,6 @@ class Reporter:
 
     # ── Markdown 报告 ─────────────────────────────────────────────────────────
 
-    BEDROCK_MODEL = "us.anthropic.claude-sonnet-4-20250514"
-    BEDROCK_REGION = "us-east-1"
-
     def _generate_llm_analysis(self, result: "ExperimentResult") -> str:
         """
         调用 Bedrock Claude 生成实验分析结论。
@@ -50,7 +48,7 @@ class Reporter:
             return ""
 
         try:
-            bedrock = boto3.client("bedrock-runtime", region_name=self.BEDROCK_REGION)
+            bedrock = boto3.client("bedrock-runtime", region_name=BEDROCK_REGION)
         except Exception as e:
             logger.warning(f"Bedrock 客户端初始化失败，跳过 LLM 分析: {e}")
             return ""
@@ -111,7 +109,7 @@ class Reporter:
 
         try:
             resp = bedrock.invoke_model(
-                modelId=self.BEDROCK_MODEL,
+                modelId=BEDROCK_MODEL,
                 contentType="application/json",
                 accept="application/json",
                 body=json.dumps({

@@ -49,9 +49,16 @@ def _apply_yaml(manifest: dict) -> dict:
 
 
 def _selector_spec(service: str, namespace: str = "default") -> dict:
+    # 逻辑名 → K8s app label（与 target_resolver.SERVICE_TO_K8S_LABEL 同步）
+    _LABEL_MAP = {
+        "petsearch": "search-service",
+        "payforadoption": "pay-for-adoption",
+        "petlistadoptions": "list-adoptions",
+    }
+    k8s_label = _LABEL_MAP.get(service, service)
     return {
         "namespaces": [namespace],
-        "labelSelectors": {"app": service},
+        "labelSelectors": {"app": k8s_label},
     }
 
 
@@ -65,7 +72,17 @@ class ChaosMCPClient:
                duration: str, mode: str, value: str, **kwargs) -> dict:
         """
         注入故障，返回包含 metadata.name 的 manifest dict。
+        注入前验证 Pod 存在，并将目标信息写入 targets-chaosmesh.json 审计留底。
         """
+        # 目标验证：确认 Pod 存在，写入审计记录
+        from .target_resolver import TargetResolver
+        _target = TargetResolver().resolve_chaosmesh_target(service, namespace)
+        if not _target.get("pods"):
+            raise RuntimeError(
+                f"目标服务 {service}/{namespace} 无 Running Pods"
+                f"（label app={service}），注入中止"
+            )
+
         builders = {
             "pod_kill":          self._pod_chaos,
             "pod_failure":       self._pod_chaos,

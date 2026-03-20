@@ -10,6 +10,8 @@ target:
   service: petsite
   namespace: default
   tier: Tier0
+  resolve:
+    verify_pods: true
 
 fault:
   type: pod_kill

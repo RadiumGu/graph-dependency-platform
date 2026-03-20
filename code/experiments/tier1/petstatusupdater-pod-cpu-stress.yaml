@@ -1,13 +1,18 @@
 # 自动生成 by gen_template.py — 2026-03-12 09:56
 # Neptune 图谱上下文: tier=Tier1, callers=[], callees=[]
+# ⚠️  DISABLED: petstatusupdater 实际是 Lambda 函数（非 K8s Pod），
+# CPU Stress 应走 FIS Lambda 延迟注入，见 experiments/fis/lambda/
 
 name: petstatusupdater-pod-cpu-stress-tier1-20260312
-description: "Pod CPU Stress on petstatusupdater（Tier1）— 验证弹性与可观测性"
+description: "DISABLED - petstatusupdater is Lambda, not K8s Pod. Use FIS fis-lambda-delay instead."
+enabled: false
 
 target:
   service: petstatusupdater
   namespace: default
   tier: Tier1
+  resolve:
+    verify_pods: true
 
 fault:
   type: pod_cpu_stress

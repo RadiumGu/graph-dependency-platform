@@ -17,7 +17,9 @@ fault:
   value: "100"
   duration: "5m"
   extra_params:
-    function_arn: "arn:aws:lambda:ap-northeast-1:926093770964:function:ServicesEks2-statusupdaterservicelambdafn37242E00-0SHsIkrhwJ32"
+    service_name: "statusupdater"   # TargetResolver: 匹配 Lambda 函数名片段
+    resource_type: "lambda:function"
+    # function_arn: 由 TargetResolver 在运行时解析并写入
     delay_ms: 3000
     percentage: 100
 

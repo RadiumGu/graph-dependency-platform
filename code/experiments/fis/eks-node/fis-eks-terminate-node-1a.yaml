@@ -17,7 +17,9 @@ fault:
   value: "100"
   duration: "10m"
   extra_params:
-    nodegroup_arn: "arn:aws:eks:ap-northeast-1:926093770964:nodegroup/PetSite/petsiteNodegroupworkersBDBB-ZZmZ2mdebp38/a0ce37c9-6d95-2c85-5417-a08dce0a762e"
+    service_name: "PetSite"       # TargetResolver: EKS 集群名 → 第一个 nodegroup ARN
+    resource_type: "eks:nodegroup"
+    # nodegroup_arn: 由 TargetResolver 在运行时解析并写入
     selection_mode: "COUNT(1)"
 
 steady_state:

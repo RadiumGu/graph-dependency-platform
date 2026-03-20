@@ -29,8 +29,10 @@ from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
 
-REGION     = "ap-northeast-1"
-ACCOUNT_ID = "926093770964"
+import sys as _sys
+import os as _os
+_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".."))
+from runner.config import REGION, ACCOUNT_ID, FIS_S3_BUCKET as _FIS_S3_BUCKET_CFG
 
 # ─── FIS IAM Role ─────────────────────────────────────────────────────────────
 
@@ -211,7 +213,7 @@ STOP_CONDITION_ALARMS = [
 
 # ─── FIS Lambda Extension S3 Bucket ──────────────────────────────────────────
 
-FIS_S3_BUCKET = f"chaos-fis-config-{ACCOUNT_ID}"
+FIS_S3_BUCKET = _FIS_S3_BUCKET_CFG
 
 
 # ─── 核心函数 ─────────────────────────────────────────────────────────────────

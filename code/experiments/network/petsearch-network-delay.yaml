@@ -5,6 +5,8 @@ target:
   service: petsearch
   namespace: default
   tier: Tier0
+  resolve:
+    verify_pods: true
 
 fault:
   type: network_delay

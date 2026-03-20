@@ -28,9 +28,12 @@ from botocore.awsrequest import AWSRequest
 
 # ─── Neptune 客户端 ──────────────────────────────────────────────────────────
 
-NEPTUNE_HOST = "petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com"
-NEPTUNE_URL  = f"https://{NEPTUNE_HOST}:8182/openCypher"
-REGION       = "ap-northeast-1"
+import sys as _sys
+import os as _os
+_sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+from runner.config import REGION, NEPTUNE_HOST, NEPTUNE_ENDPOINT
+
+NEPTUNE_URL = f"{NEPTUNE_ENDPOINT}/openCypher"
 
 _ssl_ctx = ssl.create_default_context()
 _ssl_ctx.check_hostname = False

@@ -10,6 +10,8 @@ target:
   service: pethistory
   namespace: default
   tier: Tier1
+  resolve:
+    verify_pods: true
 
 fault:
   type: network_delay

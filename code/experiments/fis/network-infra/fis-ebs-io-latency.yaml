@@ -17,8 +17,9 @@ fault:
   value: "100"
   duration: "5m"
   extra_params:
-    volume_ids:
-      - "vol-08091286e45064c00"  # EKS node i-0e50f1961902ade69 (ap-northeast-1a)
+    service_name: "ap-northeast-1a"  # TargetResolver: AZ 名 → EKS 节点 EBS 卷 ARN
+    resource_type: "ec2:volume"
+    # volume_arns: 由 TargetResolver 在运行时解析并写入（列表）
 
 steady_state:
   before:

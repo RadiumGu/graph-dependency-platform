@@ -23,8 +23,9 @@ from boto3.dynamodb.conditions import Key
 
 logger = logging.getLogger(__name__)
 
-TABLE_NAME = os.environ.get("DYNAMODB_TABLE", "chaos-experiments")
-REGION     = "ap-northeast-1"
+from .config import REGION, DYNAMODB_TABLE as _TABLE_DEFAULT
+
+TABLE_NAME = os.environ.get("DYNAMODB_TABLE", _TABLE_DEFAULT)
 UTC        = timezone.utc
 
 

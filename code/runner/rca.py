@@ -21,8 +21,9 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+from .config import REGION
+
 LAMBDA_NAME = "petsite-rca-engine"
-REGION = "ap-northeast-1"
 
 
 @dataclass

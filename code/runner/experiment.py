@@ -143,6 +143,7 @@ class Experiment:
     rca: RcaSpec = field(default_factory=RcaSpec)
     graph_feedback: GraphFeedbackSpec = field(default_factory=GraphFeedbackSpec)
     backend: str = "chaosmesh"        # "chaosmesh" | "fis"
+    enabled: bool = True              # False → 跳过执行（YAML 中 enabled: false）
     max_duration: str = "10m"
     save_to_bedrock_kb: bool = False
     yaml_source: str = ""
@@ -218,8 +219,21 @@ def load_experiment(path: str) -> Experiment:
             edges=gf_d.get('edges', ['Calls']),
         ),
         backend=d.get('backend', 'chaosmesh'),
+        enabled=d.get('enabled', True),
         max_duration=opts.get('max_duration', '10m'),
         save_to_bedrock_kb=opts.get('save_to_bedrock_kb', False),
         yaml_source=path,
     )
+
+    # FIS 实验：运行时解析 ARN（service_name + resource_type → 真实 ARN）
+    if exp.backend == "fis" and exp.enabled:
+        try:
+            from .target_resolver import TargetResolver
+            TargetResolver().resolve_experiment(exp)
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(
+                f"实验 {exp.name}: ARN 解析跳过（{e}）"
+            )
+
     return exp

@@ -19,7 +19,9 @@ fault:
   value: "100"
   duration: "3m"
   extra_params:
-    function_arn: "N/A - petadoptionshistory is EKS deployment pethistory-deployment, not Lambda"
+    service_name: "petadoptionshistory"
+    resource_type: "lambda:function"
+    # ARN 解析在 enabled:false 时跳过（此实验已禁用）
     percentage: 80
 
 steady_state:
