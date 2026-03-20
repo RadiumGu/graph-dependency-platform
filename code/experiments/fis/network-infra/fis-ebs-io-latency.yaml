@@ -39,7 +39,7 @@ stop_conditions:
     threshold: "< 57%"
     window: "30s"
     action: abort
-    cloudwatch_alarm_arn: "arn:aws:cloudwatch:ap-northeast-1:926093770964:alarm:chaos-eks-sr-critical"
+    cloudwatch_alarm_arn: "arn:aws:cloudwatch:${REGION}:${ACCOUNT_ID}:alarm:chaos-eks-sr-critical"
   - metric: latency_p99
     threshold: "> 8000ms"
     window: "30s"
