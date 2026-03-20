@@ -1,1 +1,0 @@
-{"tool":"health_check","params":{},"result":{"server":"healthy","kubernetes":"healthy","chaos_mesh":"healthy","chaos_mesh_controllers":7},"status":"success","error":"","cleanup":"na"}
