@@ -1,0 +1,55 @@
+# 自动生成 by gen_template.py — 2026-03-12 09:56
+# Neptune 图谱上下文: tier=Tier1, callers=[], callees=[]
+
+name: petstatusupdater-pod-cpu-stress-tier1-20260312
+description: "Pod CPU Stress on petstatusupdater（Tier1）— 验证弹性与可观测性"
+
+target:
+  service: petstatusupdater
+  namespace: default
+  tier: Tier1
+
+fault:
+  type: pod_cpu_stress
+  mode: all
+  value: ""
+  duration: "5m"
+  workers: 2
+  load: 80
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 8000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 72%"
+    window: "30s"
+    action: abort
+  - metric: latency_p99
+    threshold: "> 15000ms"
+    window: "30s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: petstatusupdater
+
+graph_feedback:
+  enabled: true
+  edges:
+    - Calls
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

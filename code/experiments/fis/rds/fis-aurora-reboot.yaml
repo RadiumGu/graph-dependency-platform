@@ -1,0 +1,54 @@
+# FIS 实验：Aurora MySQL 实例重启
+# 验证数据库实例重启（约 60s 不可用）时应用层的错误处理和重试机制
+# backend: fis — 通过 AWS FIS aws:rds:reboot-db-instances 注入
+
+name: fis-aurora-reboot
+description: "Reboot Aurora DB instance (~60s downtime), verify application retry and connection pool recovery"
+backend: fis
+
+target:
+  service: payforadoption
+  namespace: rds
+  tier: Tier0
+
+fault:
+  type: fis_rds_reboot
+  mode: all
+  value: "100"
+  duration: "3m"
+  extra_params:
+    cluster_arn: "arn:aws:rds:ap-northeast-1:926093770964:cluster:serviceseks2-databaseb269d8bb-efjeyzicx2ak"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 5000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "60s"
+    action: abort
+    cloudwatch_alarm_arn: "arn:aws:cloudwatch:ap-northeast-1:926093770964:alarm:chaos-rds-sr-critical"
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: payforadoption
+
+graph_feedback:
+  enabled: true
+  edges:
+    - DependsOn
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

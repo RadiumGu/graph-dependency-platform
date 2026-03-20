@@ -1,0 +1,17 @@
+{
+  "tool": "dns_chaos",
+  "params": {
+    "service": "search-service",
+    "duration": "30s",
+    "mode": "one",
+    "action": "error",
+    "patterns": [
+      "github.com"
+    ],
+    "namespace": "default"
+  },
+  "result": {},
+  "status": "success",
+  "error": "bug fixed: removed spec.scope field",
+  "cleanup": "success"
+}

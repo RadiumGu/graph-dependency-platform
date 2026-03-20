@@ -1,0 +1,11 @@
+{
+  "tool": "remove_delay_fault",
+  "params": {
+    "service": "search-service",
+    "namespace": "default"
+  },
+  "result": {},
+  "status": "skip",
+  "error": "需要 Istio，当前集群未安装",
+  "cleanup": "na"
+}

@@ -1,0 +1,23 @@
+{
+  "tool": "kernel_chaos",
+  "params": {
+    "service": "search-service",
+    "duration": "30s",
+    "mode": "one",
+    "fail_kern_request": {
+      "callchain": [
+        {
+          "funcname": "alloc_pages"
+        }
+      ],
+      "failtype": 0,
+      "probability": 1,
+      "times": 1
+    },
+    "namespace": "default"
+  },
+  "result": {},
+  "status": "success",
+  "error": "",
+  "cleanup": "success"
+}

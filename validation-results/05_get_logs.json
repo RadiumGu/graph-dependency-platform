@@ -1,0 +1,1 @@
+{"tool":"get_logs","params":{"service_name":"search-service","namespace":"default","container_name":"search-service"},"result":{"pods_returned":4},"status":"success","error":"","cleanup":"na"}

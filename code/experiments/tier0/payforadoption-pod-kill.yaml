@@ -1,0 +1,42 @@
+name: payforadoption-pod-kill-tier0
+description: "Kill payforadoption pod，验证支付链路弹性和 RCA 精准度"
+
+target:
+  service: payforadoption
+  namespace: default
+  tier: Tier0
+
+fault:
+  type: pod_kill
+  mode: all
+  value: "100"
+  duration: "2m"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 99%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 99%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 30%"
+    window: "30s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: payforadoption
+
+graph_feedback:
+  enabled: true
+  edges:
+    - Calls
+
+options:
+  max_duration: "10m"

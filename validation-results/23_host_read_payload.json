@@ -1,0 +1,16 @@
+{
+  "tool": "host_read_payload",
+  "params": {
+    "address": [
+      "11.0.2.24"
+    ],
+    "duration": "30s",
+    "size": "1024K",
+    "path": "/tmp",
+    "payload_process_num": 1
+  },
+  "result": {},
+  "status": "success",
+  "error": "bug fixed: kubectl YAML workaround",
+  "cleanup": "success"
+}

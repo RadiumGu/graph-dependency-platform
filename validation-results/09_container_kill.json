@@ -1,0 +1,17 @@
+{
+  "tool": "container_kill",
+  "params": {
+    "service": "search-service",
+    "duration": "30s",
+    "mode": "one",
+    "value": "",
+    "container_names": [
+      "search-service"
+    ],
+    "namespace": "default"
+  },
+  "result": {},
+  "status": "success",
+  "error": "",
+  "cleanup": "success"
+}

@@ -1,0 +1,14 @@
+{
+  "tool": "pod_failure",
+  "params": {
+    "service": "search-service",
+    "duration": "30s",
+    "mode": "one",
+    "value": "",
+    "namespace": "default"
+  },
+  "result": {},
+  "status": "success",
+  "error": "",
+  "cleanup": "success"
+}

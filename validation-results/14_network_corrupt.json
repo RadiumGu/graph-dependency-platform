@@ -1,0 +1,16 @@
+{
+  "tool": "network_corrupt",
+  "params": {
+    "service": "search-service",
+    "duration": "30s",
+    "mode": "one",
+    "value": "",
+    "corrupt": "10",
+    "direction": "to",
+    "namespace": "default"
+  },
+  "result": {},
+  "status": "success",
+  "error": "",
+  "cleanup": "success"
+}

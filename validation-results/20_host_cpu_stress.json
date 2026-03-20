@@ -1,0 +1,15 @@
+{
+  "tool": "host_cpu_stress",
+  "params": {
+    "address": [
+      "11.0.2.24"
+    ],
+    "duration": "30s",
+    "workers": 1,
+    "load": 50
+  },
+  "result": {},
+  "status": "success",
+  "error": "",
+  "cleanup": "success"
+}

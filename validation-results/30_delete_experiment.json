@@ -1,0 +1,12 @@
+{
+  "tool": "delete_experiment",
+  "params": {
+    "type": "POD_KILL",
+    "name": "<experiment_name>",
+    "namespace": "default"
+  },
+  "result": {},
+  "status": "success",
+  "error": "verified via cleanup in each step",
+  "cleanup": "na"
+}

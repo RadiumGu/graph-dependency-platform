@@ -1,0 +1,16 @@
+{
+  "tool": "network_partition",
+  "params": {
+    "service": "search-service",
+    "duration": "30s",
+    "mode": "one",
+    "value": "",
+    "direction": "both",
+    "external_targets": [],
+    "namespace": "default"
+  },
+  "result": {},
+  "status": "success",
+  "error": "",
+  "cleanup": "success"
+}

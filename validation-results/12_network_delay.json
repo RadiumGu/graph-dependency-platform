@@ -1,0 +1,17 @@
+{
+  "tool": "network_delay",
+  "params": {
+    "service": "search-service",
+    "duration": "30s",
+    "mode": "one",
+    "value": "",
+    "latency": "200ms",
+    "jitter": "10ms",
+    "direction": "to",
+    "namespace": "default"
+  },
+  "result": {},
+  "status": "success",
+  "error": "",
+  "cleanup": "success"
+}

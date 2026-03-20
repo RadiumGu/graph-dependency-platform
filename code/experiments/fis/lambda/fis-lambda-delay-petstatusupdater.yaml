@@ -1,0 +1,56 @@
+# FIS 实验：petstatusupdater Lambda 调用延迟注入
+# 验证 SQS 消费者在 Lambda 高延迟时的消息堆积和系统弹性
+# backend: fis — 通过 AWS FIS + Lambda Extension 注入
+
+name: fis-lambda-delay-petstatusupdater
+description: "Inject 3s invocation delay into petstatusupdater Lambda, verify SQS queue resilience"
+backend: fis
+
+target:
+  service: petstatusupdater
+  namespace: lambda
+  tier: Tier1
+
+fault:
+  type: fis_lambda_delay
+  mode: all
+  value: "100"
+  duration: "5m"
+  extra_params:
+    function_arn: "arn:aws:lambda:ap-northeast-1:926093770964:function:ServicesEks2-statusupdaterservicelambdafn37242E00-0SHsIkrhwJ32"
+    delay_ms: 3000
+    percentage: 100
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 8000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "30s"
+    action: abort
+    cloudwatch_alarm_arn: "arn:aws:cloudwatch:ap-northeast-1:926093770964:alarm:chaos-petstatusupdater-sr-critical"
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: petstatusupdater
+
+graph_feedback:
+  enabled: true
+  edges:
+    - DependsOn
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

@@ -1,0 +1,18 @@
+{
+  "tool": "pod_memory_stress",
+  "params": {
+    "service": "search-service",
+    "duration": "30s",
+    "mode": "one",
+    "value": "",
+    "size": "64MB",
+    "container_names": [
+      "search-service"
+    ],
+    "namespace": "default"
+  },
+  "result": {},
+  "status": "success",
+  "error": "",
+  "cleanup": "success"
+}
