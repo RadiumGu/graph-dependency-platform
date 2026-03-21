@@ -1,4 +1,4 @@
-🇨🇳 中文文档 | [🇺🇸 English](./README.md)
+中文文档 | [English](./README.md)
 
 # rca_engine — Neptune 图谱 + AIOps 根因分析引擎
 

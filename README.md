@@ -1,4 +1,4 @@
-[🇨🇳 中文文档](./README_CN.md) | 🇺🇸 English
+[中文文档](./README_CN.md) | English
 
 # rca_engine — Neptune Graph + AIOps Root Cause Analysis Engine
 
