@@ -66,16 +66,18 @@ Microservice ─[RunsOn]→ Pod ─[RunsOn]→ EC2Instance ─[LocatedIn]→ AZ
 - **Q11** expands blast radius: given faulty EC2 IDs, finds ALL impacted services (not just the alerting one)
 - Works when ETL has run recently and Neptune has up-to-date `EC2Instance.state`
 
-### Layer 2: EC2 API Fallback (real-time)
+### Layer 2: EC2 API Fallback (real-time, infra faults only)
 
-When graph traversal finds nothing (ETL lag, or ASG terminates the instance before ETL runs):
+Applies **only when the fault is infrastructure-related** (EC2 node failure, AZ outage) and Neptune graph traversal returns nothing due to ETL lag:
 
 1. Queries `describe_instances` with `tag:eks:cluster-name` filter
 2. Filters for `stopped/stopping/shutting-down/terminated` states
 3. Uses `StateTransitionReason` timestamp to only include recent events (< 30 min)
 4. Feeds results back into the same scoring pipeline
 
-This two-layer approach handles the **ASG race condition**: EC2 stop → ASG terminates instance → Neptune loses the node (no `BelongsTo` edge) → EC2 API catches it.
+This handles the **ASG race condition**: EC2 stop → ASG terminates instance → Neptune loses the node (no `BelongsTo` edge) → EC2 API catches it.
+
+> **Note**: For application-layer faults (DB connection errors, OOM, logic errors) that produce `HTTPCode_Target_5XX_Count` spikes, EC2 nodes remain `running`. In these cases, Layer 2 finds nothing and the RCA relies entirely on DeepFlow L7/L4 signals + CloudTrail + Neptune service call-chain (Layers applied in `rca_engine.py` steps 1–3).
 
 ---
 
