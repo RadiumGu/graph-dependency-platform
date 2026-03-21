@@ -12,8 +12,6 @@ from __future__ import annotations
 
 import json
 import logging
-import subprocess
-import sys
 import time
 import traceback
 from datetime import datetime, timezone
@@ -27,8 +25,10 @@ from .report import Reporter
 from .graph_feedback import GraphFeedback
 from .chaos_mcp import ChaosMCPClient
 from .fis_backend import FISClient
+from .observability import get_logger, ChaosMetrics
 
 logger = logging.getLogger(__name__)
+slog = get_logger("experiment-runner")
 
 
 # ─── 异常 ───────────────────────────────────────────────────────────────────
@@ -41,243 +41,6 @@ class PrefightFailure(Exception):
     """Pre-flight 检查失败，不应注入"""
 
 
-# ─── Chaos Mesh MCP 调用封装 ─────────────────────────────────────────────────
-
-class ChaosMeshClient:
-    """
-    通过直接调用 fault_inject.py / server.py 函数注入故障。
-    server.py 是经过验证的封装层，所有函数签名均通过 2026-02-28 全量验证。
-    """
-
-    MCP_DIR = "/home/ubuntu/tech/chaos/Chaosmesh-MCP"
-
-    # 需要通过 fault_inject.delete_experiment(type=...) 删除的 Pod 类故障
-    POD_DELETE_TYPE_MAP = {
-        "pod_kill":     "POD_KILL",
-        "pod_failure":  "POD_FAILURE",
-        "container_kill": "CONTAINER_KILL",
-    }
-    # 需要通过 kubectl delete <crd> 删除的 CRD 类故障
-    CRD_KIND_MAP = {
-        "network_delay":     "NetworkChaos",
-        "network_loss":      "NetworkChaos",
-        "network_corrupt":   "NetworkChaos",
-        "network_partition": "NetworkChaos",
-        "network_duplicate": "NetworkChaos",
-        "dns_chaos":         "DNSChaos",
-        "http_chaos":        "HTTPChaos",
-        "io_chaos":          "IOChaos",
-        "time_chaos":        "TimeChaos",
-        "kernel_chaos":      "KernelChaos",
-        "pod_cpu_stress":    "StressChaos",
-        "pod_memory_stress": "StressChaos",
-    }
-
-    def _ensure_mcp(self):
-        if self.MCP_DIR not in sys.path:
-            sys.path.insert(0, self.MCP_DIR)
-
-    def inject(self, experiment: Experiment) -> str:
-        """
-        注入故障，返回 Chaos Mesh 实验名。
-        使用 server.py 函数（已验证的封装），通过 metadata.name 提取名字。
-        """
-        self._ensure_mcp()
-        import server as cm_server
-
-        ft   = experiment.fault
-        svc  = experiment.target_service
-        ns   = experiment.target_namespace
-        dur  = ft.duration
-        mode = ft.mode
-        val  = ft.value
-
-        logger.info(f"注入: {ft.type} → {svc} ns={ns} mode={mode}/{val} dur={dur}")
-
-        if ft.type == "pod_kill":
-            result = cm_server.pod_kill(service=svc, duration=dur, mode=mode, value=val, namespace=ns)
-        elif ft.type == "pod_failure":
-            result = cm_server.pod_failure(service=svc, duration=dur, mode=mode, value=val, namespace=ns)
-        elif ft.type == "container_kill":
-            result = cm_server.container_kill(
-                service=svc, duration=dur, mode=mode, value=val,
-                container_names=ft.container_names or ["main"], namespace=ns)
-        elif ft.type == "pod_cpu_stress":
-            result = cm_server.pod_cpu_stress(
-                service=svc, duration=dur, mode=mode, value=val,
-                container_names=[], workers=ft.workers or 1, load=ft.load or 50, namespace=ns)
-        elif ft.type == "pod_memory_stress":
-            result = cm_server.pod_memory_stress(
-                service=svc, duration=dur, mode=mode, value=val,
-                container_names=[], size=ft.size or "256MB", namespace=ns)
-        elif ft.type == "network_delay":
-            result = cm_server.network_delay(
-                service=svc, duration=dur, mode=mode, value=val,
-                latency=ft.latency or "100ms", namespace=ns)
-        elif ft.type == "network_loss":
-            result = cm_server.network_loss(
-                service=svc, duration=dur, mode=mode, value=val,
-                loss=ft.loss or "50", namespace=ns)
-        elif ft.type == "network_corrupt":
-            result = cm_server.network_corrupt(
-                service=svc, duration=dur, mode=mode, value=val,
-                corrupt=ft.corrupt or "50", namespace=ns)
-        elif ft.type == "network_partition":
-            result = cm_server.network_partition(
-                service=svc, mode=mode, value=val,
-                direction=ft.direction or "to",
-                external_targets=ft.external_targets or [], namespace=ns)
-        elif ft.type == "network_duplicate":
-            result = cm_server.network_duplicate(
-                service=svc, duration=dur, mode=mode, value=val, namespace=ns)
-        elif ft.type == "http_chaos":
-            result = cm_server.http_chaos(
-                service=svc, duration=dur, mode=mode, value=val, namespace=ns)
-        elif ft.type == "io_chaos":
-            result = cm_server.io_chaos(
-                service=svc, duration=dur, mode=mode, value=val, namespace=ns)
-        elif ft.type == "time_chaos":
-            result = cm_server.time_chaos(
-                service=svc, duration=dur, mode=mode, value=val,
-                time_offset=ft.time_offset or "+1h", namespace=ns)
-        elif ft.type == "kernel_chaos":
-            result = cm_server.kernel_chaos(
-                service=svc, duration=dur, mode=mode, value=val, namespace=ns)
-        else:
-            raise ValueError(f"未知 fault_type: {ft.type!r}")
-
-        if isinstance(result, dict) and result.get("error"):
-            raise RuntimeError(f"注入失败: {result['error']}")
-
-        # 提取实验名
-        exp_name = self._extract_name(result, ft.type)
-        logger.info(f"✅ 注入成功，实验名: {exp_name}")
-        return exp_name
-
-    def _extract_name(self, result, fault_type: str) -> str:
-        """从注入结果提取 Chaos Mesh 实验名"""
-        if isinstance(result, dict):
-            # CRD 路径：metadata.name
-            meta = result.get("metadata") or {}
-            if isinstance(meta, dict) and meta.get("name"):
-                return meta["name"]
-            # 直接有 name 字段
-            if result.get("name"):
-                return result["name"]
-            if result.get("experiment_name"):
-                return result["experiment_name"]
-        # 兜底：从 kubectl get 列出刚创建的实验
-        return self._find_latest_experiment(fault_type)
-
-    def _find_latest_experiment(self, fault_type: str) -> str:
-        """兜底方案：kubectl 获取最新的 Chaos Mesh 实验名"""
-        kind_map = {
-            "pod_kill": "podchaos", "pod_failure": "podchaos",
-            "container_kill": "podchaos",
-            "pod_cpu_stress": "stresschaos", "pod_memory_stress": "stresschaos",
-            "network_delay": "networkchaos", "network_loss": "networkchaos",
-            "network_corrupt": "networkchaos", "network_partition": "networkchaos",
-            "network_duplicate": "networkchaos",
-            "http_chaos": "httpchaos", "io_chaos": "iochaos",
-            "time_chaos": "timechaos", "kernel_chaos": "kernelchaos",
-        }
-        crd = kind_map.get(fault_type, "podchaos")
-        try:
-            r = subprocess.run(
-                ["kubectl", "get", crd, "-n", "default",
-                 "--sort-by=.metadata.creationTimestamp",
-                 "-o", "jsonpath={.items[-1].metadata.name}"],
-                capture_output=True, text=True, timeout=5,
-            )
-            name = r.stdout.strip()
-            if name:
-                logger.warning(f"兜底获取实验名: {name}")
-                return name
-        except Exception:
-            pass
-        return f"{fault_type.replace('_', '-')}-unknown"
-
-    def delete(self, experiment_name: str, fault_type: str = "", namespace: str = "default") -> bool:
-        """
-        清理 Chaos Mesh 实验。
-        优先用 kubectl delete（通用，适用所有类型）。
-        """
-        if not experiment_name or experiment_name.endswith("-unknown"):
-            return True
-        self._ensure_mcp()
-
-        # 确定 CRD 类型（用于 kubectl delete）
-        crd_type = {
-            **{k: "podchaos"    for k in self.POD_DELETE_TYPE_MAP},
-            **{k: v.lower()     for k, v in self.CRD_KIND_MAP.items()},
-            "pod_cpu_stress": "stresschaos", "pod_memory_stress": "stresschaos",
-        }.get(fault_type, "podchaos")
-
-        try:
-            r = subprocess.run(
-                ["kubectl", "delete", crd_type, experiment_name,
-                 "-n", namespace, "--ignore-not-found"],
-                capture_output=True, text=True, timeout=15,
-            )
-            logger.info(f"✅ 实验已清理: {experiment_name} (kubectl delete {crd_type})")
-            return True
-        except Exception as e:
-            logger.error(f"清理失败: {e}")
-            return False
-
-    def list_experiments(self) -> list:
-        """列出当前所有活跃的 Chaos Mesh 实验（Pre-flight 检查用）"""
-        active = []
-        crds = ["podchaos", "networkchaos", "stresschaos",
-                "httpchaos", "iochaos", "timechaos", "kernelchaos"]
-        for crd in crds:
-            try:
-                r = subprocess.run(
-                    ["kubectl", "get", crd, "-n", "default",
-                     "-o", "jsonpath={.items[*].metadata.name}"],
-                    capture_output=True, text=True, timeout=5,
-                )
-                names = r.stdout.strip().split()
-                active.extend({"name": n, "kind": crd} for n in names if n)
-            except Exception:
-                pass
-        return active
-
-    def check_pods(self, service: str, namespace: str = "default") -> dict:
-        """
-        检查目标服务 Pods 健康状态（Phase 4 恢复验证用）
-        返回: {total, running, not_running: [...]}
-        """
-        try:
-            import json as _json
-            result = subprocess.run(
-                ["kubectl", "get", "pods", "-n", namespace,
-                 "-l", f"app={service}", "-o", "json"],
-                capture_output=True, text=True, timeout=10,
-            )
-            pods_json = _json.loads(result.stdout or "{}")
-            items = pods_json.get("items", [])
-            total, running = 0, 0
-            not_running = []
-            for pod in items:
-                pod_name = pod["metadata"]["name"]
-                phase    = pod.get("status", {}).get("phase", "Unknown")
-                # 跳过终态 Pod（Succeeded/Completed 是正常退出）
-                if phase in ("Succeeded", "Completed"):
-                    continue
-                total += 1
-                cs = pod.get("status", {}).get("containerStatuses", [])
-                ready = all(c.get("ready", False) for c in cs) if cs else False
-                if phase == "Running" and ready:
-                    running += 1
-                else:
-                    not_running.append({"pod": pod_name, "phase": phase, "ready": ready})
-            return {"total": total, "running": running, "not_running": not_running}
-        except Exception as e:
-            logger.warning(f"check_pods 失败: {e}")
-            return {"total": 0, "running": 0, "not_running": []}
-
-
 # ─── 主执行引擎 ───────────────────────────────────────────────────────────────
 
 class ExperimentRunner:
@@ -288,13 +51,15 @@ class ExperimentRunner:
     RECOVERY_TIMEOUT = 300      # Phase4 最长等待恢复时间（秒）
     STEADY_SAMPLES = 3          # Phase1/5 稳态采样次数
 
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, dry_run: bool = False, tags: dict = None):
         self.dry_run   = dry_run
+        self.tags      = tags or {}
         self.metrics   = DeepFlowMetrics()
         self.injector  = ChaosMCPClient()     # Chaos Mesh 后端
         self.fis       = FISClient()          # FIS 后端
         self.rca       = RCATrigger()
         self.reporter  = Reporter()
+        self.cw_metrics = ChaosMetrics()
 
     def run(self, experiment: Experiment) -> ExperimentResult:
         result = ExperimentResult(experiment=experiment)
@@ -302,12 +67,12 @@ class ExperimentRunner:
         result.min_success_rate = 100.0
 
         try:
-            self._phase0_preflight(experiment, result)
-            self._phase1_steady_state_before(experiment, result)
-            self._phase2_inject(experiment, result)
-            self._phase3_observe(experiment, result)
-            self._phase4_recover(experiment, result)
-            self._phase5_steady_state_after(experiment, result)
+            self._run_phase(result, "phase0", self._phase0_preflight, experiment, result)
+            self._run_phase(result, "phase1", self._phase1_steady_state_before, experiment, result)
+            self._run_phase(result, "phase2", self._phase2_inject, experiment, result)
+            self._run_phase(result, "phase3", self._phase3_observe, experiment, result)
+            self._run_phase(result, "phase4", self._phase4_recover, experiment, result)
+            self._run_phase(result, "phase5", self._phase5_steady_state_after, experiment, result)
 
         except AbortException as e:
             result.status = "ABORTED"
@@ -332,24 +97,37 @@ class ExperimentRunner:
 
         return result
 
+    # ─── Phase timing helper ─────────────────────────────────────────────────
+
+    def _run_phase(self, result, phase_name, fn, *args):
+        t0 = time.time()
+        try:
+            fn(*args)
+        finally:
+            self.cw_metrics.publish_phase_timing(result.experiment_id, phase_name, time.time() - t0)
+
     # ─── Phase 0：Pre-flight ──────────────────────────────────────────────────
 
     def _phase0_preflight(self, exp: Experiment, result: ExperimentResult):
+        slog.info("phase_started", phase=0, experiment=exp.name, backend=exp.backend)
         logger.info(f"🔍 Phase 0: Pre-flight Check (backend={exp.backend})")
 
         from .target_resolver import TargetResolver
-        resolver = TargetResolver()
+        resolver = TargetResolver(tags=self.tags)
 
         if exp.backend == "fis":
             # 确保 ARN 已解析（load_experiment 可能已解析；这里确保最新，并写入审计）
             resolver.resolve_experiment(exp)
             if not self.fis.preflight_check():
                 raise PrefightFailure("FIS 服务不可用（检查 IAM 权限和区域配置）")
+            slog.info("target_resolved", service=exp.target_service, backend="fis", source="resolver")
             logger.info("✅ FIS Pre-flight 通过")
             return
 
         # Chaos Mesh 后端：解析 Pod 目标写入审计记录，然后检查残留实验 + Pod 健康
-        resolver.resolve_chaosmesh_target(exp.target_service, exp.target_namespace)
+        cm_target = resolver.resolve_chaosmesh_target(exp.target_service, exp.target_namespace)
+        slog.info("target_resolved", service=exp.target_service, backend="chaosmesh",
+                  pods=len(cm_target.get("pods", [])))
 
         active = self.injector.list_experiments()
         if active:
@@ -365,10 +143,12 @@ class ExperimentRunner:
             raise PrefightFailure(f"服务 {exp.target_service} 有 Pod 未就绪: {not_ok}")
 
         logger.info(f"✅ Pre-flight 通过: {pods['total']} pods ready")
+        slog.info("phase_completed", phase=0, experiment=exp.name)
 
     # ─── Phase 1：Steady State Before ────────────────────────────────────────
 
     def _phase1_steady_state_before(self, exp: Experiment, result: ExperimentResult):
+        slog.info("phase_started", phase=1, experiment=exp.name)
         logger.info("📊 Phase 1: Steady State Before")
 
         snap = self.metrics.collect_steady(
@@ -392,6 +172,7 @@ class ExperimentRunner:
     # ─── Phase 2：Fault Injection ─────────────────────────────────────────────
 
     def _phase2_inject(self, exp: Experiment, result: ExperimentResult):
+        slog.info("phase_started", phase=2, experiment=exp.name, fault_type=exp.fault.type)
         logger.info(f"💥 Phase 2: Fault Injection — {exp.fault.type} on {exp.target_service} (backend={exp.backend})")
 
         if self.dry_run:
@@ -406,6 +187,8 @@ class ExperimentRunner:
             result.chaos_experiment_name = fis_result["experiment_id"]
             result.fis_template_id = fis_result.get("template_id", "")
             result.inject_time = datetime.now(timezone.utc)
+            slog.info("fault_injected", experiment=exp.name, experiment_id=fis_result["experiment_id"],
+                      fault_type=exp.fault.type, backend="fis")
             logger.info(f"✅ FIS 注入完成: experiment={fis_result['experiment_id']}, template={fis_result.get('template_id', '')}")
         else:
             # Chaos Mesh 后端
@@ -431,6 +214,8 @@ class ExperimentRunner:
             exp_name = self.injector.extract_experiment_name(mcp_result, ft.type)
             result.chaos_experiment_name = exp_name
             result.inject_time = datetime.now(timezone.utc)
+            slog.info("fault_injected", experiment=exp.name, chaos_name=exp_name,
+                      fault_type=ft.type, duration=ft.duration, backend="chaosmesh")
             logger.info(f"✅ 注入完成: {exp_name}，持续 {ft.duration}")
 
     # ─── Phase 3：Observation + Guardrails ───────────────────────────────────
@@ -464,6 +249,9 @@ class ExperimentRunner:
             for cond in exp.stop_conditions:
                 if cond.is_triggered(snap):
                     msg = cond.describe(snap)
+                    slog.error("stop_condition_triggered", experiment=exp.name,
+                               condition=msg, success_rate=snap.success_rate,
+                               latency_p99=snap.latency_p99_ms)
                     logger.error(f"🚨 Stop Condition 触发: {msg}")
                     # 立刻熔断
                     if exp.backend == "fis":
@@ -558,6 +346,8 @@ class ExperimentRunner:
             if total > 0 and running == total:
                 elapsed = round(time.time() - recover_start, 1)
                 result.recovery_seconds = elapsed
+                slog.info("fault_recovered", experiment=exp.name, recovery_seconds=elapsed,
+                          pods_running=running, pods_total=total)
                 logger.info(f"✅ 所有 Pod 已恢复 ({running}/{total})，耗时 {elapsed}s")
                 return
 
@@ -621,6 +411,11 @@ class ExperimentRunner:
         result.status = "PASSED" if all_passed else "FAILED"
         result.end_time = datetime.now(timezone.utc)
 
+        slog.info("experiment_completed", experiment=exp.name, status=result.status,
+                  duration_seconds=result.duration_seconds,
+                  recovery_seconds=result.recovery_seconds,
+                  min_success_rate=result.min_success_rate)
+
         icon = "✅ PASSED" if all_passed else "❌ FAILED"
         logger.info(
             f"{icon} | 实验 {result.experiment_id} 完成 "
@@ -658,6 +453,8 @@ class ExperimentRunner:
         if result.abort_reason:
             print(f"原因:     {result.abort_reason}")
         print(f"{'='*60}\n")
+
+        self.cw_metrics.publish_experiment_metrics(result)
 
     def _emergency_cleanup(self, experiment_name: str, fault_type: str = "",
                            backend: str = "chaosmesh"):
