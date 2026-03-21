@@ -333,8 +333,10 @@ class ExperimentRunner:
 
         deadline = recover_start + self.RECOVERY_TIMEOUT
 
-        # Chaos Mesh duration 到期后 CR 自动删除，Pod 会重新调度
-        # 等待所有 Pods 变为 Running + Ready
+        # 等待所有 Pods 变为 Running + Ready。
+        # FIS 后端（如 Aurora failover / Lambda 延迟）不会直接操作 K8s Pod，
+        # 但目标微服务的 Pod 健康状态仍是"应用层恢复"的最终判断依据，
+        # 因此 FIS 路径同样调用 check_pods() 验证 EKS 工作负载恢复。
         while time.time() < deadline:
             pods = self.injector.check_pods(exp.target_service, exp.target_namespace)
             total   = pods["total"]

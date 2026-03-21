@@ -223,6 +223,7 @@ cd code && python3 main.py setup
 cd code
 
 # 解析所有实验目标（FIS ARN + ChaosMesh Pod）
+# --backend 默认值: "all"（同时解析 FIS + ChaosMesh 两类目标）
 python3 resolve_targets.py
 
 # 只看 FIS / 只看 ChaosMesh

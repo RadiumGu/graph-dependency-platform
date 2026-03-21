@@ -188,16 +188,18 @@ class FMEAGenerator:
         """
         计算 Occurrence（O）值（1-5）。
 
-        主源：DynamoDB 历史实验失败率（仅供参考——混沌实验失败率和自然失效率语义不同）
-        注：本实现遵循 TDD 设计，但 review.md 建议 Occurrence 主源应为 DeepFlow 自然错误率。
-            此处使用 DynamoDB 历史失败率作为示例，当无历史记录时默认 O=1。
+        【临时方案】当前使用 DynamoDB 历史实验失败率作为 Occurrence 代理指标。
+        这存在语义偏差：混沌实验失败率 != 自然失效率（正反馈风险：越常失败分数越高）。
 
-        映射规则：
-          历史实验失败率 ≥ 80%  → 5
-          60-79%               → 4
-          40-59%               → 3
-          20-39%               → 2
-          < 20%                → 1
+        正确主源应为 DeepFlow l7_flow_log 中的自然错误率（非混沌注入期间的 response_status > 0 占比）。
+        当前用 DynamoDB 历史失败率是权宜之计，待 DeepFlow 集成成熟后替换。
+
+        映射规则（历史实验失败率）：
+          ≥ 80%  → 5
+          60-79% → 4
+          40-59% → 3
+          20-39% → 2
+          < 20%  → 1
         """
         try:
             failure_rate = self.query_client.calc_failure_rate(service, days=90)

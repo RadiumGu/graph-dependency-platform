@@ -49,14 +49,18 @@ class ExperimentResult:
     chaos_experiment_name: str = ""   # Chaos Mesh 实验名 或 FIS experiment ID
     fis_template_id: str = ""         # FIS 实验模板 ID（用于清理）
 
-    # 计算字段
-    @property
-    def experiment_id(self) -> str:
-        from datetime import datetime
+    # experiment_id 在 __post_init__ 中固定生成，避免多次访问时因时钟偏移产生不同值
+    _experiment_id: str = field(default="", init=False, repr=False)
+
+    def __post_init__(self):
         ts = (self.start_time or datetime.now(timezone.utc)).strftime("%Y%m%d-%H%M%S")
         svc = self.experiment.target_service
         ft  = self.experiment.fault.type.replace("_", "-")
-        return f"exp-{svc}-{ft}-{ts}"
+        self._experiment_id = f"exp-{svc}-{ft}-{ts}"
+
+    @property
+    def experiment_id(self) -> str:
+        return self._experiment_id
 
     @property
     def duration_seconds(self) -> float:
