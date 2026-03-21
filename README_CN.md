@@ -1,3 +1,5 @@
+🇨🇳 中文文档 | [🇺🇸 English](./README.md)
+
 # rca_engine — Neptune 图谱 + AIOps 根因分析引擎
 
 基于 AWS Lambda 的 AIOps 根因分析引擎，核心功能：
