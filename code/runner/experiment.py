@@ -190,13 +190,20 @@ def load_experiment(path: str) -> Experiment:
             window=c.get('window', '1m'),
         ) for c in (items or [])]
 
+    def _expand_arn(arn: str) -> str:
+        """展开 ARN 中的 ${REGION} / ${ACCOUNT_ID} 占位符"""
+        if not arn:
+            return arn
+        from .config import REGION, ACCOUNT_ID
+        return arn.replace("${REGION}", REGION).replace("${ACCOUNT_ID}", ACCOUNT_ID)
+
     def parse_stops(items) -> list[StopCondition]:
         return [StopCondition(
             metric=c['metric'],
             threshold=c['threshold'],
             window=c.get('window', '30s'),
             action=c.get('action', 'abort'),
-            cloudwatch_alarm_arn=c.get('cloudwatch_alarm_arn'),
+            cloudwatch_alarm_arn=_expand_arn(c.get('cloudwatch_alarm_arn') or ""),
         ) for c in (items or [])]
 
     exp = Experiment(

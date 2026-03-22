@@ -1,32 +1,43 @@
 # chaos-automation
 
-PetSite 微服务混沌工程自动化平台 — 5 Phase 实验引擎，支持 AWS FIS + Chaos Mesh 双后端。
+PetSite 微服务混沌工程自动化平台 — AI 驱动的假设生成 → 5 Phase 实验引擎 → 闭环学习，支持 AWS FIS + Chaos Mesh 双后端。
 
 ## 架构概览
 
 ```
-                    main.py (CLI 入口)
-                        │
-                        ▼
-              ┌─── ExperimentRunner (5 Phase) ───┐
-              │                                   │
-    TargetResolver          Experiment YAML
-    (Neptune → AWS API      (逻辑名，无硬编码 ARN)
-     → targets-*.json)
-              │                                   │
-    ┌─────────┴─────────┐                         │
-    │                   │                         │
-FISClient          ChaosMCPClient                 │
-(AWS FIS API)      (kubectl apply CRD)            │
-    │                   │                         │
-    ▼                   ▼                         ▼
-targets-fis.json   targets-chaosmesh.json    DeepFlow Metrics
-(审计留底)          (审计留底)                (观测 + Guardrails)
-                                                  │
-                                        ┌─────────┴─────────┐
-                                        │                   │
-                                    RCA Engine          Reporter
-                                    (Lambda)        (Markdown + DDB)
+                         main.py (CLI 入口)
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+      HypothesisAgent   Orchestrator    LearningAgent
+      (Bedrock LLM        (批量编排       (实验结果闭环
+       + Neptune 图谱       顺序/并行)      学习 + 图谱更新)
+       + TargetResolver
+         实时快照)
+              │               │               │
+              ▼               ▼               ▼
+         hypotheses.json  ┌─── ExperimentRunner (5 Phase) ───┐
+                          │                                   │
+                TargetResolver          Experiment YAML
+                (Neptune → AWS API      (逻辑名，无硬编码 ARN)
+                 → targets-*.json)
+                          │                                   │
+                ┌─────────┴─────────┐                         │
+                │                   │                         │
+          FISClient          ChaosMCPClient                   │
+          (AWS FIS API)      (kubectl apply CRD)              │
+                │                   │                         │
+                ▼                   ▼                         ▼
+          targets-fis.json   targets-chaosmesh.json    DeepFlow Metrics
+          (审计留底)          (审计留底)                (观测 + Guardrails)
+                                                              │
+                                                    ┌─────────┴─────────┐
+                                                    │                   │
+                                              RCA Engine          Reporter
+                                              (Lambda)        (Markdown + DDB)
+                                                                      │
+                                                              CloudWatch Metrics
+                                                              (ChaosEngineering)
 ```
 
 ## 环境依赖
@@ -37,6 +48,7 @@ targets-fis.json   targets-chaosmesh.json    DeepFlow Metrics
 |------|---------|------|
 | Python | >= 3.12 | 运行时 |
 | boto3 | >= 1.34 | AWS API（FIS / RDS / EKS / Lambda / CloudWatch / DynamoDB / S3） |
+| structlog | >= 23.0 | 结构化日志（JSON 格式，CloudWatch 友好） |
 | PyYAML | >= 6.0 | 实验 YAML 解析 |
 | requests | >= 2.28 | Neptune HTTP API |
 | kubectl | >= 1.28 | Chaos Mesh CRD 注入 / Pod 状态查询 |
@@ -45,7 +57,7 @@ targets-fis.json   targets-chaosmesh.json    DeepFlow Metrics
 ### Python 依赖安装
 
 ```bash
-pip install boto3 pyyaml requests
+pip install boto3 pyyaml requests structlog
 ```
 
 > 其余均为 Python 标准库（json / subprocess / logging / ssl / urllib 等）
@@ -86,9 +98,15 @@ export BEDROCK_MODEL=us.anthropic.claude-sonnet-4-20250514
 
 ```
 code/
-├── main.py                     # CLI 入口（run / setup / history）
+├── main.py                     # CLI 入口（run / setup / history / suite / auto / hypothesis / learn）
+├── orchestrator.py             # 批量实验编排（顺序/并行执行 + tag 过滤）
 ├── resolve_targets.py          # 目标解析 CLI 工具
 ├── gen_template.py             # 从 Neptune 图谱自动生成实验模板
+│
+├── agents/
+│   ├── models.py               # 数据模型（Hypothesis / LearningReport / ServiceStats 等）
+│   ├── hypothesis_agent.py     # AI 假设生成 Agent（Bedrock LLM + Neptune 图谱）
+│   └── learning_agent.py       # 闭环学习 Agent（实验历史分析 + 假设迭代）
 │
 ├── runner/
 │   ├── config.py               # 中心化配置（Region / Account / Neptune / FIS）
@@ -99,6 +117,7 @@ code/
 │   ├── fis_backend.py          # AWS FIS 后端（create_template → start_experiment）
 │   ├── chaos_mcp.py            # Chaos Mesh 后端（kubectl apply CRD）
 │   ├── metrics.py              # DeepFlow 指标采集
+│   ├── observability.py        # 结构化日志 + CloudWatch Metrics 发布
 │   ├── rca.py                  # RCA 根因分析触发器
 │   ├── report.py               # Markdown 报告 + DynamoDB 写入
 │   ├── graph_feedback.py       # Neptune 图谱反馈（chaos_resilience_score）
@@ -169,7 +188,48 @@ python3 main.py run --file experiments/fis/rds/fis-aurora-failover.yaml
 python3 main.py run --file experiments/tier0/petsite-pod-kill.yaml --dry-run
 ```
 
-### 4. 查询历史
+### 4. AI 假设生成 & 自动化实验
+
+```bash
+cd code
+
+# 生成混沌实验假设（基于 Neptune 图谱 + Bedrock LLM）
+python3 main.py hypothesis generate --service petsearch
+
+# 列出现有假设
+python3 main.py hypothesis list
+
+# 导出假设为可执行的实验 YAML
+python3 main.py hypothesis export --output experiments/generated/
+
+# 端到端自动化：假设生成 → 实验执行 → 结果分析
+python3 main.py auto --max-hypotheses 5 --top 3 --dry-run
+
+# 带 tag 过滤（只对特定标签的资源执行）
+python3 main.py auto --max-hypotheses 5 --top 3 --tags env=staging
+```
+
+### 5. 批量编排
+
+```bash
+# 按目录批量执行实验
+python3 main.py suite --dir experiments/tier0/ --strategy by_priority
+
+# 并行执行 + 失败即停
+python3 main.py suite --dir experiments/tier1/ --max-parallel 3 --stop-on-failure
+
+# 策略选项: by_tier / by_priority / by_domain / full_suite
+python3 main.py suite --dir experiments/ --strategy by_domain --top 5
+```
+
+### 6. 闭环学习
+
+```bash
+# 分析实验历史，生成学习报告 + 更新假设库
+python3 main.py learn
+```
+
+### 7. 查询历史
 
 ```bash
 python3 main.py history --service petsite --limit 10
@@ -184,7 +244,67 @@ python3 main.py history --service petsite --limit 10
 | 2 | Fault Injection | FIS: create_template → start_experiment / ChaosMesh: kubectl apply |
 | 3 | Observation | 每 10s 采样，Stop Condition 实时检测，超阈值自动熔断 + RCA 触发 |
 | 4 | Recovery | 等待故障到期，轮询 Pod/FIS 状态直到恢复（超时 300s） |
-| 5 | Steady State After | 验证恢复稳态 → 判定 PASSED/FAILED → 报告 + DynamoDB + 图谱反馈 |
+| 5 | Steady State After | 验证恢复稳态 → 判定 PASSED/FAILED → 报告 + DynamoDB + 图谱反馈 + CloudWatch Metrics |
+
+## AI Agents
+
+### Hypothesis Agent（假设生成）
+
+基于 Neptune 服务拓扑图谱 + **TargetResolver 实时基础设施快照** + Bedrock LLM，自动生成混沌实验假设：
+
+1. **Neptune 图谱** — 提取服务依赖关系、Tier 等级、历史故障事件
+2. **TargetResolver 快照** — 获取每个服务的实时 Pod 数量、节点分布、AWS 资源 ARN
+3. **DynamoDB 历史** — 已执行过的实验结果（避免重复）
+4. **Bedrock LLM 推理** — 结合拓扑 + 实时状态生成假设，自动适配实验参数：
+   - 2 副本服务 → `fixed:1` 而非 `fixed-percent:50`
+   - 单节点部署 → 更保守的注入参数
+   - 有 Lambda/RDS 资源 → 同时生成 FIS 实验
+   - 无 running Pod → 跳过 Chaos Mesh 类假设
+5. 假设评分 + 去重 + 导出为实验 YAML
+
+### Learning Agent（闭环学习）
+
+实验结果自动分析，持续改进：
+
+- 从 DynamoDB 读取实验历史，按服务聚合统计
+- 识别重复失败模式、覆盖盲区、趋势变化
+- LLM 生成改进建议 + 迭代更新假设库
+- 更新 Neptune 图谱（resilience_score / failure_pattern）
+- 输出 `learning_report.md`
+
+### Orchestrator（批量编排）
+
+- 支持顺序 / 并行执行多个实验
+- 4 种排序策略：`by_tier` / `by_priority` / `by_domain` / `full_suite`
+- 实验间冷却时间、失败即停、`--tags` 资源过滤
+
+## CloudWatch Metrics（可观测性）
+
+每次实验自动发布指标到 CloudWatch `ChaosEngineering` namespace：
+
+### 实验指标
+
+| 指标名 | 单位 | 说明 |
+|--------|------|------|
+| `ExperimentDuration` | Seconds | 实验总耗时 |
+| `RecoveryTime` | Seconds | 故障恢复时间 |
+| `MinSuccessRate` | Percent | 实验期间最低成功率 |
+| `MaxLatencyP99` | Milliseconds | 实验期间最高 P99 延迟 |
+| `DegradationRate` | Percent | 成功率下降幅度（基线 vs 最低） |
+| `ExperimentCount` | Count | 实验计数（每次 +1） |
+| `ExperimentPassed` | Count | 1=通过 / 0=失败 |
+
+**Dimensions:** `Service` / `FaultType` / `Status`
+
+### Phase 耗时
+
+| 指标名 | 单位 | 说明 |
+|--------|------|------|
+| `PhaseDuration` | Seconds | 单个 Phase 执行耗时 |
+
+**Dimensions:** `ExperimentId` / `Phase`（phase0-phase5）
+
+> 可在 CloudWatch Console 创建 Dashboard 监控实验趋势，或设置 Alarm 对恢复时间/成功率做告警。
 
 ## 服务名映射
 

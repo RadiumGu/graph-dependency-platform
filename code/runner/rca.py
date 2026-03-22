@@ -99,10 +99,27 @@ class RCATrigger:
             )
 
     def _parse(self, body: dict) -> RCAResult:
-        # 兼容两种返回格式
+        # Lambda Proxy 响应：{statusCode: 200, body: "...json..."} 需要先解嵌套
+        if "statusCode" in body and "body" in body:
+            inner = body["body"]
+            if isinstance(inner, str):
+                import json as _json
+                try:
+                    body = _json.loads(inner)
+                except (ValueError, TypeError):
+                    pass
+            elif isinstance(inner, dict):
+                body = inner
+
+        # 兼容两种 RCA 返回格式
         rca = body.get("rca") or body
-        top = rca.get("top_candidate") or {}
-        candidates = rca.get("root_cause_candidates", [])
+
+        # 优先用 top_candidate（旧格式），fallback 到 root_cause_candidates[0]（新格式）
+        top = rca.get("top_candidate")
+        if not top:
+            candidates = rca.get("root_cause_candidates", [])
+            top = candidates[0] if candidates else {}
+
         root_cause  = (top.get("service") or top.get("root_cause", "")).strip()
         confidence  = float(top.get("confidence", 0.0))
         evidence    = top.get("evidence", [])
