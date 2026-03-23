@@ -1,3 +1,5 @@
+[中文文档](./README_CN.md) | English
+
 # graph-dp-cdk
 
 AWS CDK project that builds a **dynamic dependency graph** in Amazon Neptune by ingesting data from three sources:
@@ -7,6 +9,43 @@ AWS CDK project that builds a **dynamic dependency graph** in Amazon Neptune by 
 3. **CloudFormation templates** — Declared dependency edges (`DependsOn`, env var refs)
 
 The resulting graph powers SRE tooling such as blast-radius analysis, RCA (root cause analysis), and chaos experiment validation.
+
+---
+
+## Ecosystem — Three Projects, One Platform
+
+This repo is the **infrastructure & data layer** of a larger observability + resilience platform built around PetSite on AWS EKS. Three independent repos work together:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     PetSite on AWS EKS                          │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │
+         ┌──────────────────▼──────────────────┐
+         │  📦 graph-dp-cdk (this repo)        │
+         │  CDK infra + modular ETL pipeline   │
+         │  → builds Neptune knowledge graph   │
+         └────┬─────────────────────┬──────────┘
+              │ graph queries       │ alarm trigger
+              │                     │
+   ┌──────────▼──────────┐  ┌──────▼───────────────────┐
+   │  🔍 graph-rca-engine │  │  💥 graph-driven-chaos   │
+   │  Multi-layer RCA     │  │  AI-driven chaos         │
+   │  + Layer2 Probers    │  │  engineering platform    │
+   │  + Graph RAG reports │  │  (Chaos Mesh + AWS FIS)  │
+   └──────────┬──────────┘  └──────┬───────────────────┘
+              │  writes incidents   │  validates RCA
+              └────────────────────┘
+                    closed loop
+```
+
+| Project | Repo | Role |
+|---------|------|------|
+| **graph-dp-cdk** | [`RadiumGu/graph-dependency-managerment`](https://github.com/RadiumGu/graph-dependency-managerment) | Infrastructure layer — CDK stacks, Neptune ETL pipeline, DeepFlow + AWS topology ingestion |
+| **graph-rca-engine** | [`RadiumGu/graph-rca-engine`](https://github.com/RadiumGu/graph-rca-engine) | AIOps RCA engine — multi-layer root cause analysis, plugin-based AWS probers, Bedrock Graph RAG reports |
+| **graph-driven-chaos** | [`RadiumGu/graph-driven-chaos`](https://github.com/RadiumGu/graph-driven-chaos) | AI-driven chaos engineering — hypothesis generation, 5-phase experiment runner, closed-loop learning |
+
+**Data flow:** `graph-dp-cdk` ETL populates Neptune → CloudWatch Alarm triggers `graph-rca-engine` → `graph-driven-chaos` injects faults to validate RCA accuracy → results feed back into Neptune.
 
 ---
 
