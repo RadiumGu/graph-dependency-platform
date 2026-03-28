@@ -102,7 +102,7 @@ def generate_plan_from_data(nodes, edges, scope, source, target, exclude=None, p
         )
 
     # Build phases
-    phases = generator._build_phases(sorted_layers, layers, subgraph, source, target, None)
+    phases = generator._build_phases(sorted_layers, layers, subgraph, source, target, None, scope=scope)
 
     # Impact + RTO/RPO
     impact = ImpactAnalyzer().assess_impact(subgraph, scope, source)

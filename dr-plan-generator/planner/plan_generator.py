@@ -75,7 +75,7 @@ class PlanGenerator:
                 nodes, subgraph["edges"]
             )
 
-        phases = self._build_phases(sorted_layers, layers, subgraph, source, target, options)
+        phases = self._build_phases(sorted_layers, layers, subgraph, source, target, options, scope=scope)
 
         impact = ImpactAnalyzer().assess_impact(subgraph, scope, source)
         rto = RTOEstimator().estimate(phases)
@@ -117,6 +117,7 @@ class PlanGenerator:
         source: str,
         target: str,
         options: Optional[Dict[str, Any]],
+        scope: str = "region",
     ) -> List[DRPhase]:
         """Assemble the five standard DR phases (0–4).
 
@@ -140,7 +141,7 @@ class PlanGenerator:
         # Phase 1: Data Layer (L0)
         l0_nodes = [node_map[name] for name in sorted_layers.get("L0", []) if name in node_map]
         if l0_nodes:
-            phases.append(self._build_data_phase(l0_nodes, source, target))
+            phases.append(self._build_data_phase(l0_nodes, source, target, scope=scope))
 
         # Phase 2: Compute Layer (L1 + L2)
         l1_names = sorted_layers.get("L1", [])
@@ -151,12 +152,12 @@ class PlanGenerator:
             if name in node_map
         ]
         if compute_nodes:
-            phases.append(self._build_compute_phase(compute_nodes, source, target))
+            phases.append(self._build_compute_phase(compute_nodes, source, target, scope=scope))
 
         # Phase 3: Network / Traffic Layer (L3)
         l3_nodes = [node_map[name] for name in sorted_layers.get("L3", []) if name in node_map]
         if l3_nodes:
-            phases.append(self._build_network_phase(l3_nodes, source, target))
+            phases.append(self._build_network_phase(l3_nodes, source, target, scope=scope))
 
         # Phase 4: Post-switchover Validation
         phases.append(self._build_validation_phase(sorted_layers, layers))
@@ -280,6 +281,7 @@ class PlanGenerator:
         nodes: List[Dict[str, Any]],
         source: str,
         target: str,
+        scope: str = "region",
     ) -> DRPhase:
         """Build Phase 1: Data layer switchover.
 
@@ -287,11 +289,12 @@ class PlanGenerator:
             nodes: L0 data-layer nodes (sorted).
             source: Source identifier.
             target: Target identifier.
+            scope: Switchover scope (region/az/service).
 
         Returns:
             DRPhase for data layer.
         """
-        steps = self._nodes_to_steps(nodes, source, target, base_order=1)
+        steps = self._nodes_to_steps(nodes, source, target, base_order=1, scope=scope)
         total_secs = sum(s.estimated_time for s in steps)
         return DRPhase(
             phase_id="phase-1",
@@ -307,6 +310,7 @@ class PlanGenerator:
         nodes: List[Dict[str, Any]],
         source: str,
         target: str,
+        scope: str = "region",
     ) -> DRPhase:
         """Build Phase 2: Compute layer activation.
 
@@ -314,11 +318,12 @@ class PlanGenerator:
             nodes: L1 + L2 compute nodes (sorted).
             source: Source identifier.
             target: Target identifier.
+            scope: Switchover scope (region/az/service).
 
         Returns:
             DRPhase for compute layer.
         """
-        steps = self._nodes_to_steps(nodes, source, target, base_order=1)
+        steps = self._nodes_to_steps(nodes, source, target, base_order=1, scope=scope)
         total_secs = sum(s.estimated_time for s in steps)
         return DRPhase(
             phase_id="phase-2",
@@ -334,6 +339,7 @@ class PlanGenerator:
         nodes: List[Dict[str, Any]],
         source: str,
         target: str,
+        scope: str = "region",
     ) -> DRPhase:
         """Build Phase 3: Network/traffic layer cutover.
 
@@ -341,11 +347,12 @@ class PlanGenerator:
             nodes: L3 traffic-layer nodes (sorted).
             source: Source identifier.
             target: Target identifier.
+            scope: Switchover scope (region/az/service).
 
         Returns:
             DRPhase for network layer.
         """
-        steps = self._nodes_to_steps(nodes, source, target, base_order=1)
+        steps = self._nodes_to_steps(nodes, source, target, base_order=1, scope=scope)
         total_secs = sum(s.estimated_time for s in steps)
         return DRPhase(
             phase_id="phase-3",
@@ -433,25 +440,35 @@ class PlanGenerator:
         source: str,
         target: str,
         base_order: int = 1,
+        scope: str = "region",
     ) -> List[DRStep]:
         """Convert a list of nodes to DRStep objects.
+
+        For AZ-scope switchovers, regional/global services are
+        automatically skipped by the step builder.
 
         Args:
             nodes: Node dicts.
             source: Source identifier.
             target: Target identifier.
             base_order: Starting order counter.
+            scope: Switchover scope (region/az/service).
 
         Returns:
-            List of DRStep objects.
+            List of DRStep objects (skipped nodes excluded).
         """
         steps: List[DRStep] = []
-        for i, node in enumerate(nodes):
+        order = base_order
+        for node in nodes:
             step = self.step_builder.build_step(
-                node, source, target, context={"order": base_order + i}
+                node, source, target, context={"order": order, "scope": scope}
             )
-            step.order = base_order + i
+            if step is None:
+                # Skipped (e.g. regional service during AZ switchover)
+                continue
+            step.order = order
             steps.append(step)
+            order += 1
         return steps
 
     def _filter_excluded(

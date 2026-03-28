@@ -25,8 +25,12 @@ class StepBuilder:
         source: str,
         target: str,
         context: Optional[Dict[str, Any]] = None,
-    ) -> DRStep:
+    ) -> Optional[DRStep]:
         """Dispatch to the correct per-type builder based on node type.
+
+        For AZ-scope switchovers, regional/global services are skipped
+        because they are inherently multi-AZ and unaffected by a single
+        AZ failure (per AWS Fault Isolation Boundaries whitepaper).
 
         Args:
             node: Node dict with at least ``name`` and ``type`` keys.
@@ -35,17 +39,36 @@ class StepBuilder:
             context: Optional extra context (e.g. step order counter).
 
         Returns:
-            Populated DRStep.
+            Populated DRStep, or ``None`` if the resource should be
+            skipped for this switchover scope.
         """
         ctx = context or {}
-        resource_type = node.get("type", "").lower()
+        scope = ctx.get("scope", "region")
+        resource_type_raw = node.get("type", "")
+
+        # --- AZ switchover: skip regional/global services ---
+        # Regional services (DynamoDB, SQS, S3, Lambda, etc.) are
+        # inherently multi-AZ; they don't need AZ-level failover.
+        if scope == "az":
+            from registry import registry_loader
+            reg = registry_loader.get_registry()
+            fault_domain = reg.get_fault_domain(resource_type_raw)
+            if fault_domain in ("regional", "global"):
+                logger.info(
+                    "Skipping %s '%s' for AZ switchover — %s service "
+                    "(multi-AZ, no AZ-level failover needed).",
+                    resource_type_raw, node.get("name", ""), fault_domain,
+                )
+                return None
+
+        resource_type = resource_type_raw.lower()
         builder = getattr(self, f"_build_{resource_type}_step", None)
         if builder:
             return builder(node, source, target, ctx)
         logger.warning(
             "No dedicated step builder for resource type %r — falling back to generic step. "
             "Consider adding a _build_%s_step method or updating registry/custom_types.yaml.",
-            node.get("type", ""),
+            resource_type_raw,
             resource_type,
         )
         return self._build_generic_step(node, source, target)

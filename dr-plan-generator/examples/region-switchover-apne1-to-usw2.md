@@ -1,10 +1,10 @@
 # DR Switchover Plan — REGION Level
 
-> Generated: 2026-03-28T13:07:02.823209+00:00
+> Generated: 2026-03-28T13:17:16.030131+00:00
 > Failure scope: ap-northeast-1 → DR target: us-west-2
 > Estimated RTO: 55 minutes
 > Estimated RPO: 15 minutes
-> Graph snapshot: 2026-03-28T13:07:02.823209+00:00
+> Graph snapshot: 2026-03-28T13:17:16.030131+00:00
 > Plan ID: `dr-region-apne1-to-usw2`
 
 ## Impact Summary
@@ -115,28 +115,7 @@ aws route53 change-resource-record-sets --hosted-zone-id $ZONE_ID --change-batch
 **Estimated duration**: 17 min
 **Gate condition**: All data stores reachable and writable in target region
 
-### Step phase-1.1: `promote_read_replica` — petsite-db-replica (requires approval) [Tier0]
-
-**Resource type**: RDSCluster
-**Estimated time**: 300s
-
-**Command**:
-```bash
-aws rds failover-db-cluster --db-cluster-identifier petsite-db-replica --region us-west-2
-```
-
-**Validation**:
-```bash
-aws rds describe-db-clusters --db-cluster-identifier petsite-db-replica --region us-west-2 --query 'DBClusters[0].Status' --output text
-```
-Expected result: `available`
-
-**Rollback**:
-```bash
-aws rds failover-db-cluster --db-cluster-identifier petsite-db-replica --region ap-northeast-1
-```
-
-### Step phase-1.2: `switch_global_table_region` — petsearch-db (requires approval) [Tier0]
+### Step phase-1.1: `switch_global_table_region` — petsearch-db (requires approval) [Tier0]
 
 **Resource type**: DynamoDBTable
 **Estimated time**: 60s
@@ -157,6 +136,27 @@ Expected result: `ACTIVE`
 **Rollback**:
 ```bash
 aws ssm put-parameter --name '/petsite/dynamodb-region' --value 'ap-northeast-1' --overwrite --region ap-northeast-1
+```
+
+### Step phase-1.2: `promote_read_replica` — petsite-db-replica (requires approval) [Tier0]
+
+**Resource type**: RDSCluster
+**Estimated time**: 300s
+
+**Command**:
+```bash
+aws rds failover-db-cluster --db-cluster-identifier petsite-db-replica --region us-west-2
+```
+
+**Validation**:
+```bash
+aws rds describe-db-clusters --db-cluster-identifier petsite-db-replica --region us-west-2 --query 'DBClusters[0].Status' --output text
+```
+Expected result: `available`
+
+**Rollback**:
+```bash
+aws rds failover-db-cluster --db-cluster-identifier petsite-db-replica --region ap-northeast-1
 ```
 
 ### Step phase-1.3: `promote_read_replica` — petsite-db (requires approval) [Tier0]
@@ -254,30 +254,7 @@ Expected result: `Resource healthy in target`
 **Estimated duration**: 21 min
 **Gate condition**: All Tier0 services healthy in target
 
-### Step phase-2.1: `manual_switchover` — petsite-ec2-2 (requires approval)
-
-**Resource type**: EC2Instance
-**Estimated time**: 120s
-
-**Command**:
-```bash
-# TODO: Manual switchover required for EC2Instance 'petsite-ec2-2'
-# Source: ap-northeast-1 → Target: us-west-2
-# Add the appropriate AWS CLI command here.
-```
-
-**Validation**:
-```bash
-# TODO: Add verification command for petsite-ec2-2
-```
-Expected result: `Resource healthy in target`
-
-**Rollback**:
-```bash
-# TODO: Add rollback command for petsite-ec2-2
-```
-
-### Step phase-2.2: `manual_switchover` — petsite-ec2-3 (requires approval)
+### Step phase-2.1: `manual_switchover` — petsite-ec2-3 (requires approval)
 
 **Resource type**: EC2Instance
 **Estimated time**: 120s
@@ -300,7 +277,7 @@ Expected result: `Resource healthy in target`
 # TODO: Add rollback command for petsite-ec2-3
 ```
 
-### Step phase-2.3: `manual_switchover` — petsite-ec2-1 (requires approval)
+### Step phase-2.2: `manual_switchover` — petsite-ec2-1 (requires approval)
 
 **Resource type**: EC2Instance
 **Estimated time**: 120s
@@ -323,30 +300,30 @@ Expected result: `Resource healthy in target`
 # TODO: Add rollback command for petsite-ec2-1
 ```
 
-### Step phase-2.4: `verify_k8s_service_endpoints` — petsearch-svc [Tier0]
+### Step phase-2.3: `manual_switchover` — petsite-ec2-2 (requires approval)
 
-**Resource type**: K8sService
-**Estimated time**: 60s
+**Resource type**: EC2Instance
+**Estimated time**: 120s
 
 **Command**:
 ```bash
-kubectl get endpoints petsearch-svc --context us-west-2-cluster
-kubectl describe service petsearch-svc --context us-west-2-cluster
+# TODO: Manual switchover required for EC2Instance 'petsite-ec2-2'
+# Source: ap-northeast-1 → Target: us-west-2
+# Add the appropriate AWS CLI command here.
 ```
 
 **Validation**:
 ```bash
-kubectl get endpoints petsearch-svc --context us-west-2-cluster -o jsonpath='{.subsets[0].addresses[0].ip}'
+# TODO: Add verification command for petsite-ec2-2
 ```
-Expected result: `<non-empty IP>`
+Expected result: `Resource healthy in target`
 
 **Rollback**:
 ```bash
-kubectl delete endpoints petsearch-svc --context us-west-2-cluster
-# Service endpoints will repopulate from source cluster
+# TODO: Add rollback command for petsite-ec2-2
 ```
 
-### Step phase-2.5: `verify_k8s_service_endpoints` — petsite-svc [Tier0]
+### Step phase-2.4: `verify_k8s_service_endpoints` — petsite-svc [Tier0]
 
 **Resource type**: K8sService
 **Estimated time**: 60s
@@ -366,6 +343,29 @@ Expected result: `<non-empty IP>`
 **Rollback**:
 ```bash
 kubectl delete endpoints petsite-svc --context us-west-2-cluster
+# Service endpoints will repopulate from source cluster
+```
+
+### Step phase-2.5: `verify_k8s_service_endpoints` — petsearch-svc [Tier0]
+
+**Resource type**: K8sService
+**Estimated time**: 60s
+
+**Command**:
+```bash
+kubectl get endpoints petsearch-svc --context us-west-2-cluster
+kubectl describe service petsearch-svc --context us-west-2-cluster
+```
+
+**Validation**:
+```bash
+kubectl get endpoints petsearch-svc --context us-west-2-cluster -o jsonpath='{.subsets[0].addresses[0].ip}'
+```
+Expected result: `<non-empty IP>`
+
+**Rollback**:
+```bash
+kubectl delete endpoints petsearch-svc --context us-west-2-cluster
 # Service endpoints will repopulate from source cluster
 ```
 
@@ -920,29 +920,7 @@ Expected result: `Original state of petsite`
 # Manual intervention required
 ```
 
-### Step rollback-phase-2.9: `rollback_verify_k8s_service_endpoints` — petsite-svc (requires approval) [Tier0]
-
-**Resource type**: K8sService
-**Estimated time**: 60s
-
-**Command**:
-```bash
-kubectl delete endpoints petsite-svc --context us-west-2-cluster
-# Service endpoints will repopulate from source cluster
-```
-
-**Validation**:
-```bash
-kubectl get endpoints petsite-svc --context us-west-2-cluster -o jsonpath='{.subsets[0].addresses[0].ip}'
-```
-Expected result: `Original state of petsite-svc`
-
-**Rollback**:
-```bash
-# Manual intervention required
-```
-
-### Step rollback-phase-2.10: `rollback_verify_k8s_service_endpoints` — petsearch-svc (requires approval) [Tier0]
+### Step rollback-phase-2.9: `rollback_verify_k8s_service_endpoints` — petsearch-svc (requires approval) [Tier0]
 
 **Resource type**: K8sService
 **Estimated time**: 60s
@@ -964,7 +942,50 @@ Expected result: `Original state of petsearch-svc`
 # Manual intervention required
 ```
 
-### Step rollback-phase-2.11: `rollback_manual_switchover` — petsite-ec2-1 (requires approval)
+### Step rollback-phase-2.10: `rollback_verify_k8s_service_endpoints` — petsite-svc (requires approval) [Tier0]
+
+**Resource type**: K8sService
+**Estimated time**: 60s
+
+**Command**:
+```bash
+kubectl delete endpoints petsite-svc --context us-west-2-cluster
+# Service endpoints will repopulate from source cluster
+```
+
+**Validation**:
+```bash
+kubectl get endpoints petsite-svc --context us-west-2-cluster -o jsonpath='{.subsets[0].addresses[0].ip}'
+```
+Expected result: `Original state of petsite-svc`
+
+**Rollback**:
+```bash
+# Manual intervention required
+```
+
+### Step rollback-phase-2.11: `rollback_manual_switchover` — petsite-ec2-2 (requires approval)
+
+**Resource type**: EC2Instance
+**Estimated time**: 120s
+
+**Command**:
+```bash
+# TODO: Add rollback command for petsite-ec2-2
+```
+
+**Validation**:
+```bash
+# TODO: Add verification command for petsite-ec2-2
+```
+Expected result: `Original state of petsite-ec2-2`
+
+**Rollback**:
+```bash
+# Manual intervention required
+```
+
+### Step rollback-phase-2.12: `rollback_manual_switchover` — petsite-ec2-1 (requires approval)
 
 **Resource type**: EC2Instance
 **Estimated time**: 120s
@@ -985,7 +1006,7 @@ Expected result: `Original state of petsite-ec2-1`
 # Manual intervention required
 ```
 
-### Step rollback-phase-2.12: `rollback_manual_switchover` — petsite-ec2-3 (requires approval)
+### Step rollback-phase-2.13: `rollback_manual_switchover` — petsite-ec2-3 (requires approval)
 
 **Resource type**: EC2Instance
 **Estimated time**: 120s
@@ -1000,27 +1021,6 @@ Expected result: `Original state of petsite-ec2-1`
 # TODO: Add verification command for petsite-ec2-3
 ```
 Expected result: `Original state of petsite-ec2-3`
-
-**Rollback**:
-```bash
-# Manual intervention required
-```
-
-### Step rollback-phase-2.13: `rollback_manual_switchover` — petsite-ec2-2 (requires approval)
-
-**Resource type**: EC2Instance
-**Estimated time**: 120s
-
-**Command**:
-```bash
-# TODO: Add rollback command for petsite-ec2-2
-```
-
-**Validation**:
-```bash
-# TODO: Add verification command for petsite-ec2-2
-```
-Expected result: `Original state of petsite-ec2-2`
 
 **Rollback**:
 ```bash
@@ -1116,28 +1116,7 @@ Expected result: `Original state of petsite-db`
 # Manual intervention required
 ```
 
-### Step rollback-phase-1.5: `rollback_switch_global_table_region` — petsearch-db (requires approval) [Tier0]
-
-**Resource type**: DynamoDBTable
-**Estimated time**: 60s
-
-**Command**:
-```bash
-aws ssm put-parameter --name '/petsite/dynamodb-region' --value 'ap-northeast-1' --overwrite --region ap-northeast-1
-```
-
-**Validation**:
-```bash
-aws dynamodb describe-table --table-name petsearch-db --region us-west-2 --query 'Table.TableStatus' --output text
-```
-Expected result: `Original state of petsearch-db`
-
-**Rollback**:
-```bash
-# Manual intervention required
-```
-
-### Step rollback-phase-1.6: `rollback_promote_read_replica` — petsite-db-replica (requires approval) [Tier0]
+### Step rollback-phase-1.5: `rollback_promote_read_replica` — petsite-db-replica (requires approval) [Tier0]
 
 **Resource type**: RDSCluster
 **Estimated time**: 300s
@@ -1152,6 +1131,27 @@ aws rds failover-db-cluster --db-cluster-identifier petsite-db-replica --region 
 aws rds describe-db-clusters --db-cluster-identifier petsite-db-replica --region us-west-2 --query 'DBClusters[0].Status' --output text
 ```
 Expected result: `Original state of petsite-db-replica`
+
+**Rollback**:
+```bash
+# Manual intervention required
+```
+
+### Step rollback-phase-1.6: `rollback_switch_global_table_region` — petsearch-db (requires approval) [Tier0]
+
+**Resource type**: DynamoDBTable
+**Estimated time**: 60s
+
+**Command**:
+```bash
+aws ssm put-parameter --name '/petsite/dynamodb-region' --value 'ap-northeast-1' --overwrite --region ap-northeast-1
+```
+
+**Validation**:
+```bash
+aws dynamodb describe-table --table-name petsearch-db --region us-west-2 --query 'Table.TableStatus' --output text
+```
+Expected result: `Original state of petsearch-db`
 
 **Rollback**:
 ```bash
