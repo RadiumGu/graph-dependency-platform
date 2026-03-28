@@ -1,10 +1,10 @@
 # DR Switchover Plan — AZ Level
 
-> Generated: 2026-03-28T11:39:07.805043+00:00
+> Generated: 2026-03-28T11:53:54.550938+00:00
 > Failure scope: apne1-az1 → DR target: apne1-az2,apne1-az4
 > Estimated RTO: 34 minutes
 > Estimated RPO: 15 minutes
-> Graph snapshot: 2026-03-28T11:39:07.805043+00:00
+> Graph snapshot: 2026-03-28T11:53:54.550938+00:00
 > Plan ID: `dr-az-apne1az1-example`
 
 ## Impact Summary
@@ -20,8 +20,6 @@
 ### Single Point of Failure Risks
 
 - **petsite-db** (RDSCluster) — Only in `apne1-az1`, affects 3 service(s)
-- **petsearch-db** (DynamoDBTable) — Only in `apne1-az1`, affects 2 service(s)
-- **pethistory-queue** (SQSQueue) — Only in `apne1-az1`, affects 2 service(s)
 
 ## phase-0: Pre-flight Check
 
@@ -96,7 +94,28 @@ aws route53 change-resource-record-sets --hosted-zone-id $ZONE_ID --change-batch
 **Estimated duration**: 8 min
 **Gate condition**: All data stores reachable and writable in target region
 
-### Step phase-1.1: `switch_global_table_region` — petsearch-db (requires approval) [Tier0]
+### Step phase-1.1: `promote_read_replica` — petsite-db (requires approval) [Tier0]
+
+**Resource type**: RDSCluster
+**Estimated time**: 300s
+
+**Command**:
+```bash
+aws rds failover-db-cluster --db-cluster-identifier petsite-db --region apne1-az2,apne1-az4
+```
+
+**Validation**:
+```bash
+aws rds describe-db-clusters --db-cluster-identifier petsite-db --region apne1-az2,apne1-az4 --query 'DBClusters[0].Status' --output text
+```
+Expected result: `available`
+
+**Rollback**:
+```bash
+aws rds failover-db-cluster --db-cluster-identifier petsite-db --region apne1-az1
+```
+
+### Step phase-1.2: `switch_global_table_region` — petsearch-db (requires approval) [Tier0]
 
 **Resource type**: DynamoDBTable
 **Estimated time**: 60s
@@ -117,27 +136,6 @@ Expected result: `ACTIVE`
 **Rollback**:
 ```bash
 aws ssm put-parameter --name '/petsite/dynamodb-region' --value 'apne1-az1' --overwrite --region apne1-az1
-```
-
-### Step phase-1.2: `promote_read_replica` — petsite-db (requires approval) [Tier0]
-
-**Resource type**: RDSCluster
-**Estimated time**: 300s
-
-**Command**:
-```bash
-aws rds failover-db-cluster --db-cluster-identifier petsite-db --region apne1-az2,apne1-az4
-```
-
-**Validation**:
-```bash
-aws rds describe-db-clusters --db-cluster-identifier petsite-db --region apne1-az2,apne1-az4 --query 'DBClusters[0].Status' --output text
-```
-Expected result: `available`
-
-**Rollback**:
-```bash
-aws rds failover-db-cluster --db-cluster-identifier petsite-db --region apne1-az1
 ```
 
 ### Step phase-1.3: `manual_switchover` — pethistory-queue (requires approval) [Tier1]
@@ -302,7 +300,29 @@ Expected result: `3`
 kubectl scale deployment payforadoption --replicas=0 --context apne1-az2,apne1-az4-cluster
 ```
 
-### Step phase-2.7: `verify_lambda_function` — petstatusupdater [Tier2]
+### Step phase-2.7: `scale_up_and_verify` — petfood [Tier2]
+
+**Resource type**: Microservice
+**Estimated time**: 120s
+
+**Command**:
+```bash
+kubectl scale deployment petfood --replicas=3 --context apne1-az2,apne1-az4-cluster
+kubectl rollout status deployment/petfood --timeout=120s --context apne1-az2,apne1-az4-cluster
+```
+
+**Validation**:
+```bash
+kubectl get deployment petfood --context apne1-az2,apne1-az4-cluster -o jsonpath='{.status.readyReplicas}'
+```
+Expected result: `3`
+
+**Rollback**:
+```bash
+kubectl scale deployment petfood --replicas=0 --context apne1-az2,apne1-az4-cluster
+```
+
+### Step phase-2.8: `verify_lambda_function` — petstatusupdater [Tier2]
 
 **Resource type**: LambdaFunction
 **Estimated time**: 30s
@@ -323,28 +343,6 @@ Expected result: `Active`
 ```bash
 # Lambda functions are stateless; update event source mapping
 aws lambda update-event-source-mapping --region apne1-az1 --uuid $EVENT_SOURCE_UUID --enabled
-```
-
-### Step phase-2.8: `scale_up_and_verify` — petfood [Tier2]
-
-**Resource type**: Microservice
-**Estimated time**: 120s
-
-**Command**:
-```bash
-kubectl scale deployment petfood --replicas=3 --context apne1-az2,apne1-az4-cluster
-kubectl rollout status deployment/petfood --timeout=120s --context apne1-az2,apne1-az4-cluster
-```
-
-**Validation**:
-```bash
-kubectl get deployment petfood --context apne1-az2,apne1-az4-cluster -o jsonpath='{.status.readyReplicas}'
-```
-Expected result: `3`
-
-**Rollback**:
-```bash
-kubectl scale deployment petfood --replicas=0 --context apne1-az2,apne1-az4-cluster
 ```
 
 ### Step phase-2.9: `verify_lambda_function` — petadoption-lambda [Tier2]
@@ -549,28 +547,7 @@ Expected result: `Original state of petadoption-lambda`
 # Manual intervention required
 ```
 
-### Step rollback-phase-2.2: `rollback_scale_up_and_verify` — petfood (requires approval) [Tier2]
-
-**Resource type**: Microservice
-**Estimated time**: 120s
-
-**Command**:
-```bash
-kubectl scale deployment petfood --replicas=0 --context apne1-az2,apne1-az4-cluster
-```
-
-**Validation**:
-```bash
-kubectl get deployment petfood --context apne1-az2,apne1-az4-cluster -o jsonpath='{.status.readyReplicas}'
-```
-Expected result: `Original state of petfood`
-
-**Rollback**:
-```bash
-# Manual intervention required
-```
-
-### Step rollback-phase-2.3: `rollback_verify_lambda_function` — petstatusupdater (requires approval) [Tier2]
+### Step rollback-phase-2.2: `rollback_verify_lambda_function` — petstatusupdater (requires approval) [Tier2]
 
 **Resource type**: LambdaFunction
 **Estimated time**: 30s
@@ -586,6 +563,27 @@ aws lambda update-event-source-mapping --region apne1-az1 --uuid $EVENT_SOURCE_U
 aws lambda get-function-configuration --function-name petstatusupdater --region apne1-az2,apne1-az4 --query 'State' --output text
 ```
 Expected result: `Original state of petstatusupdater`
+
+**Rollback**:
+```bash
+# Manual intervention required
+```
+
+### Step rollback-phase-2.3: `rollback_scale_up_and_verify` — petfood (requires approval) [Tier2]
+
+**Resource type**: Microservice
+**Estimated time**: 120s
+
+**Command**:
+```bash
+kubectl scale deployment petfood --replicas=0 --context apne1-az2,apne1-az4-cluster
+```
+
+**Validation**:
+```bash
+kubectl get deployment petfood --context apne1-az2,apne1-az4-cluster -o jsonpath='{.status.readyReplicas}'
+```
+Expected result: `Original state of petfood`
 
 **Rollback**:
 ```bash
@@ -746,28 +744,7 @@ Expected result: `Original state of pethistory-queue`
 # Manual intervention required
 ```
 
-### Step rollback-phase-1.2: `rollback_promote_read_replica` — petsite-db (requires approval) [Tier0]
-
-**Resource type**: RDSCluster
-**Estimated time**: 300s
-
-**Command**:
-```bash
-aws rds failover-db-cluster --db-cluster-identifier petsite-db --region apne1-az1
-```
-
-**Validation**:
-```bash
-aws rds describe-db-clusters --db-cluster-identifier petsite-db --region apne1-az2,apne1-az4 --query 'DBClusters[0].Status' --output text
-```
-Expected result: `Original state of petsite-db`
-
-**Rollback**:
-```bash
-# Manual intervention required
-```
-
-### Step rollback-phase-1.3: `rollback_switch_global_table_region` — petsearch-db (requires approval) [Tier0]
+### Step rollback-phase-1.2: `rollback_switch_global_table_region` — petsearch-db (requires approval) [Tier0]
 
 **Resource type**: DynamoDBTable
 **Estimated time**: 60s
@@ -782,6 +759,27 @@ aws ssm put-parameter --name '/petsite/dynamodb-region' --value 'apne1-az1' --ov
 aws dynamodb describe-table --table-name petsearch-db --region apne1-az2,apne1-az4 --query 'Table.TableStatus' --output text
 ```
 Expected result: `Original state of petsearch-db`
+
+**Rollback**:
+```bash
+# Manual intervention required
+```
+
+### Step rollback-phase-1.3: `rollback_promote_read_replica` — petsite-db (requires approval) [Tier0]
+
+**Resource type**: RDSCluster
+**Estimated time**: 300s
+
+**Command**:
+```bash
+aws rds failover-db-cluster --db-cluster-identifier petsite-db --region apne1-az1
+```
+
+**Validation**:
+```bash
+aws rds describe-db-clusters --db-cluster-identifier petsite-db --region apne1-az2,apne1-az4 --query 'DBClusters[0].Status' --output text
+```
+Expected result: `Original state of petsite-db`
 
 **Rollback**:
 ```bash

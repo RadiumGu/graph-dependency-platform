@@ -1,10 +1,10 @@
 # DR Switchover Plan — REGION Level
 
-> Generated: 2026-03-28T11:39:07.809456+00:00
+> Generated: 2026-03-28T11:53:54.555411+00:00
 > Failure scope: ap-northeast-1 → DR target: us-west-2
 > Estimated RTO: 55 minutes
 > Estimated RPO: 15 minutes
-> Graph snapshot: 2026-03-28T11:39:07.809456+00:00
+> Graph snapshot: 2026-03-28T11:53:54.555411+00:00
 > Plan ID: `dr-region-apne1-to-usw2`
 
 ## Impact Summary
@@ -20,8 +20,6 @@
 ### Single Point of Failure Risks
 
 - **petsite-db** (RDSCluster) — Only in `apne1-az1`, affects 4 service(s)
-- **petsearch-db** (DynamoDBTable) — Only in `apne1-az1`, affects 2 service(s)
-- **pethistory-queue** (SQSQueue) — Only in `apne1-az1`, affects 2 service(s)
 
 ## phase-0: Pre-flight Check
 
@@ -182,30 +180,7 @@ Expected result: `available`
 aws rds failover-db-cluster --db-cluster-identifier petsite-db --region ap-northeast-1
 ```
 
-### Step phase-1.4: `manual_switchover` — petsite-neptune (requires approval) [Tier1]
-
-**Resource type**: NeptuneCluster
-**Estimated time**: 120s
-
-**Command**:
-```bash
-# TODO: Manual switchover required for NeptuneCluster 'petsite-neptune'
-# Source: ap-northeast-1 → Target: us-west-2
-# Add the appropriate AWS CLI command here.
-```
-
-**Validation**:
-```bash
-# TODO: Add verification command for petsite-neptune
-```
-Expected result: `Resource healthy in target`
-
-**Rollback**:
-```bash
-# TODO: Add rollback command for petsite-neptune
-```
-
-### Step phase-1.5: `manual_switchover` — pethistory-queue (requires approval) [Tier1]
+### Step phase-1.4: `manual_switchover` — pethistory-queue (requires approval) [Tier1]
 
 **Resource type**: SQSQueue
 **Estimated time**: 120s
@@ -226,6 +201,29 @@ Expected result: `Resource healthy in target`
 **Rollback**:
 ```bash
 # TODO: Add rollback command for pethistory-queue
+```
+
+### Step phase-1.5: `manual_switchover` — petsite-neptune (requires approval) [Tier1]
+
+**Resource type**: NeptuneCluster
+**Estimated time**: 120s
+
+**Command**:
+```bash
+# TODO: Manual switchover required for NeptuneCluster 'petsite-neptune'
+# Source: ap-northeast-1 → Target: us-west-2
+# Add the appropriate AWS CLI command here.
+```
+
+**Validation**:
+```bash
+# TODO: Add verification command for petsite-neptune
+```
+Expected result: `Resource healthy in target`
+
+**Rollback**:
+```bash
+# TODO: Add rollback command for petsite-neptune
 ```
 
 ### Step phase-1.6: `manual_switchover` — petsite-incidents (requires approval) [Tier2]
@@ -256,30 +254,7 @@ Expected result: `Resource healthy in target`
 **Estimated duration**: 21 min
 **Gate condition**: All Tier0 services healthy in target
 
-### Step phase-2.1: `manual_switchover` — petsite-ec2-1 (requires approval)
-
-**Resource type**: EC2Instance
-**Estimated time**: 120s
-
-**Command**:
-```bash
-# TODO: Manual switchover required for EC2Instance 'petsite-ec2-1'
-# Source: ap-northeast-1 → Target: us-west-2
-# Add the appropriate AWS CLI command here.
-```
-
-**Validation**:
-```bash
-# TODO: Add verification command for petsite-ec2-1
-```
-Expected result: `Resource healthy in target`
-
-**Rollback**:
-```bash
-# TODO: Add rollback command for petsite-ec2-1
-```
-
-### Step phase-2.2: `manual_switchover` — petsite-ec2-3 (requires approval)
+### Step phase-2.1: `manual_switchover` — petsite-ec2-3 (requires approval)
 
 **Resource type**: EC2Instance
 **Estimated time**: 120s
@@ -302,7 +277,7 @@ Expected result: `Resource healthy in target`
 # TODO: Add rollback command for petsite-ec2-3
 ```
 
-### Step phase-2.3: `manual_switchover` — petsite-ec2-2 (requires approval)
+### Step phase-2.2: `manual_switchover` — petsite-ec2-2 (requires approval)
 
 **Resource type**: EC2Instance
 **Estimated time**: 120s
@@ -323,6 +298,29 @@ Expected result: `Resource healthy in target`
 **Rollback**:
 ```bash
 # TODO: Add rollback command for petsite-ec2-2
+```
+
+### Step phase-2.3: `manual_switchover` — petsite-ec2-1 (requires approval)
+
+**Resource type**: EC2Instance
+**Estimated time**: 120s
+
+**Command**:
+```bash
+# TODO: Manual switchover required for EC2Instance 'petsite-ec2-1'
+# Source: ap-northeast-1 → Target: us-west-2
+# Add the appropriate AWS CLI command here.
+```
+
+**Validation**:
+```bash
+# TODO: Add verification command for petsite-ec2-1
+```
+Expected result: `Resource healthy in target`
+
+**Rollback**:
+```bash
+# TODO: Add rollback command for petsite-ec2-1
 ```
 
 ### Step phase-2.4: `verify_k8s_service_endpoints` — petsearch-svc [Tier0]
@@ -482,7 +480,29 @@ Expected result: `3`
 kubectl scale deployment payforadoption --replicas=0 --context us-west-2-cluster
 ```
 
-### Step phase-2.11: `verify_lambda_function` — petstatusupdater [Tier2]
+### Step phase-2.11: `scale_up_and_verify` — petfood [Tier2]
+
+**Resource type**: Microservice
+**Estimated time**: 120s
+
+**Command**:
+```bash
+kubectl scale deployment petfood --replicas=3 --context us-west-2-cluster
+kubectl rollout status deployment/petfood --timeout=120s --context us-west-2-cluster
+```
+
+**Validation**:
+```bash
+kubectl get deployment petfood --context us-west-2-cluster -o jsonpath='{.status.readyReplicas}'
+```
+Expected result: `3`
+
+**Rollback**:
+```bash
+kubectl scale deployment petfood --replicas=0 --context us-west-2-cluster
+```
+
+### Step phase-2.12: `verify_lambda_function` — petstatusupdater [Tier2]
 
 **Resource type**: LambdaFunction
 **Estimated time**: 30s
@@ -503,28 +523,6 @@ Expected result: `Active`
 ```bash
 # Lambda functions are stateless; update event source mapping
 aws lambda update-event-source-mapping --region ap-northeast-1 --uuid $EVENT_SOURCE_UUID --enabled
-```
-
-### Step phase-2.12: `scale_up_and_verify` — petfood [Tier2]
-
-**Resource type**: Microservice
-**Estimated time**: 120s
-
-**Command**:
-```bash
-kubectl scale deployment petfood --replicas=3 --context us-west-2-cluster
-kubectl rollout status deployment/petfood --timeout=120s --context us-west-2-cluster
-```
-
-**Validation**:
-```bash
-kubectl get deployment petfood --context us-west-2-cluster -o jsonpath='{.status.readyReplicas}'
-```
-Expected result: `3`
-
-**Rollback**:
-```bash
-kubectl scale deployment petfood --replicas=0 --context us-west-2-cluster
 ```
 
 ### Step phase-2.13: `verify_lambda_function` — petadoption-lambda [Tier2]
@@ -774,28 +772,7 @@ Expected result: `Original state of petadoption-lambda`
 # Manual intervention required
 ```
 
-### Step rollback-phase-2.2: `rollback_scale_up_and_verify` — petfood (requires approval) [Tier2]
-
-**Resource type**: Microservice
-**Estimated time**: 120s
-
-**Command**:
-```bash
-kubectl scale deployment petfood --replicas=0 --context us-west-2-cluster
-```
-
-**Validation**:
-```bash
-kubectl get deployment petfood --context us-west-2-cluster -o jsonpath='{.status.readyReplicas}'
-```
-Expected result: `Original state of petfood`
-
-**Rollback**:
-```bash
-# Manual intervention required
-```
-
-### Step rollback-phase-2.3: `rollback_verify_lambda_function` — petstatusupdater (requires approval) [Tier2]
+### Step rollback-phase-2.2: `rollback_verify_lambda_function` — petstatusupdater (requires approval) [Tier2]
 
 **Resource type**: LambdaFunction
 **Estimated time**: 30s
@@ -811,6 +788,27 @@ aws lambda update-event-source-mapping --region ap-northeast-1 --uuid $EVENT_SOU
 aws lambda get-function-configuration --function-name petstatusupdater --region us-west-2 --query 'State' --output text
 ```
 Expected result: `Original state of petstatusupdater`
+
+**Rollback**:
+```bash
+# Manual intervention required
+```
+
+### Step rollback-phase-2.3: `rollback_scale_up_and_verify` — petfood (requires approval) [Tier2]
+
+**Resource type**: Microservice
+**Estimated time**: 120s
+
+**Command**:
+```bash
+kubectl scale deployment petfood --replicas=0 --context us-west-2-cluster
+```
+
+**Validation**:
+```bash
+kubectl get deployment petfood --context us-west-2-cluster -o jsonpath='{.status.readyReplicas}'
+```
+Expected result: `Original state of petfood`
 
 **Rollback**:
 ```bash
@@ -966,7 +964,28 @@ Expected result: `Original state of petsearch-svc`
 # Manual intervention required
 ```
 
-### Step rollback-phase-2.11: `rollback_manual_switchover` — petsite-ec2-2 (requires approval)
+### Step rollback-phase-2.11: `rollback_manual_switchover` — petsite-ec2-1 (requires approval)
+
+**Resource type**: EC2Instance
+**Estimated time**: 120s
+
+**Command**:
+```bash
+# TODO: Add rollback command for petsite-ec2-1
+```
+
+**Validation**:
+```bash
+# TODO: Add verification command for petsite-ec2-1
+```
+Expected result: `Original state of petsite-ec2-1`
+
+**Rollback**:
+```bash
+# Manual intervention required
+```
+
+### Step rollback-phase-2.12: `rollback_manual_switchover` — petsite-ec2-2 (requires approval)
 
 **Resource type**: EC2Instance
 **Estimated time**: 120s
@@ -987,7 +1006,7 @@ Expected result: `Original state of petsite-ec2-2`
 # Manual intervention required
 ```
 
-### Step rollback-phase-2.12: `rollback_manual_switchover` — petsite-ec2-3 (requires approval)
+### Step rollback-phase-2.13: `rollback_manual_switchover` — petsite-ec2-3 (requires approval)
 
 **Resource type**: EC2Instance
 **Estimated time**: 120s
@@ -1002,27 +1021,6 @@ Expected result: `Original state of petsite-ec2-2`
 # TODO: Add verification command for petsite-ec2-3
 ```
 Expected result: `Original state of petsite-ec2-3`
-
-**Rollback**:
-```bash
-# Manual intervention required
-```
-
-### Step rollback-phase-2.13: `rollback_manual_switchover` — petsite-ec2-1 (requires approval)
-
-**Resource type**: EC2Instance
-**Estimated time**: 120s
-
-**Command**:
-```bash
-# TODO: Add rollback command for petsite-ec2-1
-```
-
-**Validation**:
-```bash
-# TODO: Add verification command for petsite-ec2-1
-```
-Expected result: `Original state of petsite-ec2-1`
 
 **Rollback**:
 ```bash
@@ -1055,28 +1053,7 @@ Expected result: `Original state of petsite-incidents`
 # Manual intervention required
 ```
 
-### Step rollback-phase-1.2: `rollback_manual_switchover` — pethistory-queue (requires approval) [Tier1]
-
-**Resource type**: SQSQueue
-**Estimated time**: 120s
-
-**Command**:
-```bash
-# TODO: Add rollback command for pethistory-queue
-```
-
-**Validation**:
-```bash
-# TODO: Add verification command for pethistory-queue
-```
-Expected result: `Original state of pethistory-queue`
-
-**Rollback**:
-```bash
-# Manual intervention required
-```
-
-### Step rollback-phase-1.3: `rollback_manual_switchover` — petsite-neptune (requires approval) [Tier1]
+### Step rollback-phase-1.2: `rollback_manual_switchover` — petsite-neptune (requires approval) [Tier1]
 
 **Resource type**: NeptuneCluster
 **Estimated time**: 120s
@@ -1091,6 +1068,27 @@ Expected result: `Original state of pethistory-queue`
 # TODO: Add verification command for petsite-neptune
 ```
 Expected result: `Original state of petsite-neptune`
+
+**Rollback**:
+```bash
+# Manual intervention required
+```
+
+### Step rollback-phase-1.3: `rollback_manual_switchover` — pethistory-queue (requires approval) [Tier1]
+
+**Resource type**: SQSQueue
+**Estimated time**: 120s
+
+**Command**:
+```bash
+# TODO: Add rollback command for pethistory-queue
+```
+
+**Validation**:
+```bash
+# TODO: Add verification command for pethistory-queue
+```
+Expected result: `Original state of pethistory-queue`
 
 **Rollback**:
 ```bash

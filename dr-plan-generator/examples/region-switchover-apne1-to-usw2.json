@@ -1,6 +1,6 @@
 {
   "plan_id": "dr-region-apne1-to-usw2",
-  "created_at": "2026-03-28T11:39:07.809456+00:00",
+  "created_at": "2026-03-28T11:53:54.555411+00:00",
   "scope": "region",
   "source": "ap-northeast-1",
   "target": "us-west-2",
@@ -172,25 +172,8 @@
           "dependencies": []
         },
         {
-          "step_id": "generic-petsite-neptune",
-          "order": 4,
-          "parallel_group": null,
-          "resource_type": "NeptuneCluster",
-          "resource_id": "",
-          "resource_name": "petsite-neptune",
-          "action": "manual_switchover",
-          "command": "# TODO: Manual switchover required for NeptuneCluster 'petsite-neptune'\n# Source: ap-northeast-1 → Target: us-west-2\n# Add the appropriate AWS CLI command here.",
-          "validation": "# TODO: Add verification command for petsite-neptune",
-          "expected_result": "Resource healthy in target",
-          "rollback_command": "# TODO: Add rollback command for petsite-neptune",
-          "estimated_time": 120,
-          "requires_approval": true,
-          "tier": "Tier1",
-          "dependencies": []
-        },
-        {
           "step_id": "generic-pethistory-queue",
-          "order": 5,
+          "order": 4,
           "parallel_group": null,
           "resource_type": "SQSQueue",
           "resource_id": "",
@@ -200,6 +183,23 @@
           "validation": "# TODO: Add verification command for pethistory-queue",
           "expected_result": "Resource healthy in target",
           "rollback_command": "# TODO: Add rollback command for pethistory-queue",
+          "estimated_time": 120,
+          "requires_approval": true,
+          "tier": "Tier1",
+          "dependencies": []
+        },
+        {
+          "step_id": "generic-petsite-neptune",
+          "order": 5,
+          "parallel_group": null,
+          "resource_type": "NeptuneCluster",
+          "resource_id": "",
+          "resource_name": "petsite-neptune",
+          "action": "manual_switchover",
+          "command": "# TODO: Manual switchover required for NeptuneCluster 'petsite-neptune'\n# Source: ap-northeast-1 → Target: us-west-2\n# Add the appropriate AWS CLI command here.",
+          "validation": "# TODO: Add verification command for petsite-neptune",
+          "expected_result": "Resource healthy in target",
+          "rollback_command": "# TODO: Add rollback command for petsite-neptune",
           "estimated_time": 120,
           "requires_approval": true,
           "tier": "Tier1",
@@ -232,25 +232,8 @@
       "layer": "L2",
       "steps": [
         {
-          "step_id": "generic-petsite-ec2-1",
-          "order": 1,
-          "parallel_group": null,
-          "resource_type": "EC2Instance",
-          "resource_id": "",
-          "resource_name": "petsite-ec2-1",
-          "action": "manual_switchover",
-          "command": "# TODO: Manual switchover required for EC2Instance 'petsite-ec2-1'\n# Source: ap-northeast-1 → Target: us-west-2\n# Add the appropriate AWS CLI command here.",
-          "validation": "# TODO: Add verification command for petsite-ec2-1",
-          "expected_result": "Resource healthy in target",
-          "rollback_command": "# TODO: Add rollback command for petsite-ec2-1",
-          "estimated_time": 120,
-          "requires_approval": true,
-          "tier": null,
-          "dependencies": []
-        },
-        {
           "step_id": "generic-petsite-ec2-3",
-          "order": 2,
+          "order": 1,
           "parallel_group": null,
           "resource_type": "EC2Instance",
           "resource_id": "",
@@ -267,7 +250,7 @@
         },
         {
           "step_id": "generic-petsite-ec2-2",
-          "order": 3,
+          "order": 2,
           "parallel_group": null,
           "resource_type": "EC2Instance",
           "resource_id": "",
@@ -277,6 +260,23 @@
           "validation": "# TODO: Add verification command for petsite-ec2-2",
           "expected_result": "Resource healthy in target",
           "rollback_command": "# TODO: Add rollback command for petsite-ec2-2",
+          "estimated_time": 120,
+          "requires_approval": true,
+          "tier": null,
+          "dependencies": []
+        },
+        {
+          "step_id": "generic-petsite-ec2-1",
+          "order": 3,
+          "parallel_group": null,
+          "resource_type": "EC2Instance",
+          "resource_id": "",
+          "resource_name": "petsite-ec2-1",
+          "action": "manual_switchover",
+          "command": "# TODO: Manual switchover required for EC2Instance 'petsite-ec2-1'\n# Source: ap-northeast-1 → Target: us-west-2\n# Add the appropriate AWS CLI command here.",
+          "validation": "# TODO: Add verification command for petsite-ec2-1",
+          "expected_result": "Resource healthy in target",
+          "rollback_command": "# TODO: Add rollback command for petsite-ec2-1",
           "estimated_time": 120,
           "requires_approval": true,
           "tier": null,
@@ -402,25 +402,8 @@
           "dependencies": []
         },
         {
-          "step_id": "lambda-petstatusupdater",
-          "order": 11,
-          "parallel_group": null,
-          "resource_type": "LambdaFunction",
-          "resource_id": "",
-          "resource_name": "petstatusupdater",
-          "action": "verify_lambda_function",
-          "command": "aws lambda invoke --function-name petstatusupdater --region us-west-2 --payload '{\"source\": \"dr-healthcheck\"}' /tmp/petstatusupdater-response.json\ncat /tmp/petstatusupdater-response.json",
-          "validation": "aws lambda get-function-configuration --function-name petstatusupdater --region us-west-2 --query 'State' --output text",
-          "expected_result": "Active",
-          "rollback_command": "# Lambda functions are stateless; update event source mapping\naws lambda update-event-source-mapping --region ap-northeast-1 --uuid $EVENT_SOURCE_UUID --enabled",
-          "estimated_time": 30,
-          "requires_approval": false,
-          "tier": "Tier2",
-          "dependencies": []
-        },
-        {
           "step_id": "svc-petfood",
-          "order": 12,
+          "order": 11,
           "parallel_group": null,
           "resource_type": "Microservice",
           "resource_id": "",
@@ -431,6 +414,23 @@
           "expected_result": "3",
           "rollback_command": "kubectl scale deployment petfood --replicas=0 --context us-west-2-cluster",
           "estimated_time": 120,
+          "requires_approval": false,
+          "tier": "Tier2",
+          "dependencies": []
+        },
+        {
+          "step_id": "lambda-petstatusupdater",
+          "order": 12,
+          "parallel_group": null,
+          "resource_type": "LambdaFunction",
+          "resource_id": "",
+          "resource_name": "petstatusupdater",
+          "action": "verify_lambda_function",
+          "command": "aws lambda invoke --function-name petstatusupdater --region us-west-2 --payload '{\"source\": \"dr-healthcheck\"}' /tmp/petstatusupdater-response.json\ncat /tmp/petstatusupdater-response.json",
+          "validation": "aws lambda get-function-configuration --function-name petstatusupdater --region us-west-2 --query 'State' --output text",
+          "expected_result": "Active",
+          "rollback_command": "# Lambda functions are stateless; update event source mapping\naws lambda update-event-source-mapping --region ap-northeast-1 --uuid $EVENT_SOURCE_UUID --enabled",
+          "estimated_time": 30,
           "requires_approval": false,
           "tier": "Tier2",
           "dependencies": []
@@ -646,25 +646,8 @@
           "dependencies": []
         },
         {
-          "step_id": "rollback-svc-petfood",
-          "order": 2,
-          "parallel_group": null,
-          "resource_type": "Microservice",
-          "resource_id": "",
-          "resource_name": "petfood",
-          "action": "rollback_scale_up_and_verify",
-          "command": "kubectl scale deployment petfood --replicas=0 --context us-west-2-cluster",
-          "validation": "kubectl get deployment petfood --context us-west-2-cluster -o jsonpath='{.status.readyReplicas}'",
-          "expected_result": "Original state of petfood",
-          "rollback_command": "# Manual intervention required",
-          "estimated_time": 120,
-          "requires_approval": true,
-          "tier": "Tier2",
-          "dependencies": []
-        },
-        {
           "step_id": "rollback-lambda-petstatusupdater",
-          "order": 3,
+          "order": 2,
           "parallel_group": null,
           "resource_type": "LambdaFunction",
           "resource_id": "",
@@ -675,6 +658,23 @@
           "expected_result": "Original state of petstatusupdater",
           "rollback_command": "# Manual intervention required",
           "estimated_time": 30,
+          "requires_approval": true,
+          "tier": "Tier2",
+          "dependencies": []
+        },
+        {
+          "step_id": "rollback-svc-petfood",
+          "order": 3,
+          "parallel_group": null,
+          "resource_type": "Microservice",
+          "resource_id": "",
+          "resource_name": "petfood",
+          "action": "rollback_scale_up_and_verify",
+          "command": "kubectl scale deployment petfood --replicas=0 --context us-west-2-cluster",
+          "validation": "kubectl get deployment petfood --context us-west-2-cluster -o jsonpath='{.status.readyReplicas}'",
+          "expected_result": "Original state of petfood",
+          "rollback_command": "# Manual intervention required",
+          "estimated_time": 120,
           "requires_approval": true,
           "tier": "Tier2",
           "dependencies": []
@@ -799,8 +799,25 @@
           "dependencies": []
         },
         {
-          "step_id": "rollback-generic-petsite-ec2-2",
+          "step_id": "rollback-generic-petsite-ec2-1",
           "order": 11,
+          "parallel_group": null,
+          "resource_type": "EC2Instance",
+          "resource_id": "",
+          "resource_name": "petsite-ec2-1",
+          "action": "rollback_manual_switchover",
+          "command": "# TODO: Add rollback command for petsite-ec2-1",
+          "validation": "# TODO: Add verification command for petsite-ec2-1",
+          "expected_result": "Original state of petsite-ec2-1",
+          "rollback_command": "# Manual intervention required",
+          "estimated_time": 120,
+          "requires_approval": true,
+          "tier": null,
+          "dependencies": []
+        },
+        {
+          "step_id": "rollback-generic-petsite-ec2-2",
+          "order": 12,
           "parallel_group": null,
           "resource_type": "EC2Instance",
           "resource_id": "",
@@ -817,7 +834,7 @@
         },
         {
           "step_id": "rollback-generic-petsite-ec2-3",
-          "order": 12,
+          "order": 13,
           "parallel_group": null,
           "resource_type": "EC2Instance",
           "resource_id": "",
@@ -826,23 +843,6 @@
           "command": "# TODO: Add rollback command for petsite-ec2-3",
           "validation": "# TODO: Add verification command for petsite-ec2-3",
           "expected_result": "Original state of petsite-ec2-3",
-          "rollback_command": "# Manual intervention required",
-          "estimated_time": 120,
-          "requires_approval": true,
-          "tier": null,
-          "dependencies": []
-        },
-        {
-          "step_id": "rollback-generic-petsite-ec2-1",
-          "order": 13,
-          "parallel_group": null,
-          "resource_type": "EC2Instance",
-          "resource_id": "",
-          "resource_name": "petsite-ec2-1",
-          "action": "rollback_manual_switchover",
-          "command": "# TODO: Add rollback command for petsite-ec2-1",
-          "validation": "# TODO: Add verification command for petsite-ec2-1",
-          "expected_result": "Original state of petsite-ec2-1",
           "rollback_command": "# Manual intervention required",
           "estimated_time": 120,
           "requires_approval": true,
@@ -876,25 +876,8 @@
           "dependencies": []
         },
         {
-          "step_id": "rollback-generic-pethistory-queue",
-          "order": 2,
-          "parallel_group": null,
-          "resource_type": "SQSQueue",
-          "resource_id": "",
-          "resource_name": "pethistory-queue",
-          "action": "rollback_manual_switchover",
-          "command": "# TODO: Add rollback command for pethistory-queue",
-          "validation": "# TODO: Add verification command for pethistory-queue",
-          "expected_result": "Original state of pethistory-queue",
-          "rollback_command": "# Manual intervention required",
-          "estimated_time": 120,
-          "requires_approval": true,
-          "tier": "Tier1",
-          "dependencies": []
-        },
-        {
           "step_id": "rollback-generic-petsite-neptune",
-          "order": 3,
+          "order": 2,
           "parallel_group": null,
           "resource_type": "NeptuneCluster",
           "resource_id": "",
@@ -903,6 +886,23 @@
           "command": "# TODO: Add rollback command for petsite-neptune",
           "validation": "# TODO: Add verification command for petsite-neptune",
           "expected_result": "Original state of petsite-neptune",
+          "rollback_command": "# Manual intervention required",
+          "estimated_time": 120,
+          "requires_approval": true,
+          "tier": "Tier1",
+          "dependencies": []
+        },
+        {
+          "step_id": "rollback-generic-pethistory-queue",
+          "order": 3,
+          "parallel_group": null,
+          "resource_type": "SQSQueue",
+          "resource_id": "",
+          "resource_name": "pethistory-queue",
+          "action": "rollback_manual_switchover",
+          "command": "# TODO: Add rollback command for pethistory-queue",
+          "validation": "# TODO: Add verification command for pethistory-queue",
+          "expected_result": "Original state of pethistory-queue",
           "rollback_command": "# Manual intervention required",
           "estimated_time": 120,
           "requires_approval": true,
@@ -1174,28 +1174,6 @@
           "petsite-db-replica"
         ],
         "recommendation": "Deploy to multiple AZs or add cross-region replica"
-      },
-      {
-        "resource": "petsearch-db",
-        "type": "DynamoDBTable",
-        "risk": "single_az",
-        "az": "apne1-az1",
-        "impact": [
-          "petsearch",
-          "petadoption-lambda"
-        ],
-        "recommendation": "Deploy to multiple AZs or add cross-region replica"
-      },
-      {
-        "resource": "pethistory-queue",
-        "type": "SQSQueue",
-        "risk": "single_az",
-        "az": "apne1-az1",
-        "impact": [
-          "pethistory",
-          "petstatusupdater"
-        ],
-        "recommendation": "Deploy to multiple AZs or add cross-region replica"
       }
     ],
     "estimated_rto_minutes": 43,
@@ -1203,16 +1181,14 @@
     "risk_matrix": {
       "severity": "HIGH",
       "tier0_services_affected": 7,
-      "single_points_of_failure": 3,
+      "single_points_of_failure": 1,
       "key_risks": [
-        "petsite-db",
-        "petsearch-db",
-        "pethistory-queue"
+        "petsite-db"
       ]
     }
   },
   "estimated_rto": 55,
   "estimated_rpo": 15,
   "validation_status": "valid",
-  "graph_snapshot_time": "2026-03-28T11:39:07.809456+00:00"
+  "graph_snapshot_time": "2026-03-28T11:53:54.555411+00:00"
 }

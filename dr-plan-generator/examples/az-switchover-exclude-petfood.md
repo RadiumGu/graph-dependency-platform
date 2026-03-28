@@ -1,10 +1,10 @@
 # DR Switchover Plan — AZ Level
 
-> Generated: 2026-03-28T11:39:07.807730+00:00
+> Generated: 2026-03-28T11:53:54.553649+00:00
 > Failure scope: apne1-az1 → DR target: apne1-az2,apne1-az4
 > Estimated RTO: 32 minutes
 > Estimated RPO: 15 minutes
-> Graph snapshot: 2026-03-28T11:39:07.807730+00:00
+> Graph snapshot: 2026-03-28T11:53:54.553649+00:00
 > Plan ID: `dr-az-apne1az1-no-petfood`
 
 ## Impact Summary
@@ -20,8 +20,6 @@
 ### Single Point of Failure Risks
 
 - **petsite-db** (RDSCluster) — Only in `apne1-az1`, affects 3 service(s)
-- **petsearch-db** (DynamoDBTable) — Only in `apne1-az1`, affects 2 service(s)
-- **pethistory-queue** (SQSQueue) — Only in `apne1-az1`, affects 2 service(s)
 
 ## phase-0: Pre-flight Check
 
@@ -96,7 +94,28 @@ aws route53 change-resource-record-sets --hosted-zone-id $ZONE_ID --change-batch
 **Estimated duration**: 8 min
 **Gate condition**: All data stores reachable and writable in target region
 
-### Step phase-1.1: `switch_global_table_region` — petsearch-db (requires approval) [Tier0]
+### Step phase-1.1: `promote_read_replica` — petsite-db (requires approval) [Tier0]
+
+**Resource type**: RDSCluster
+**Estimated time**: 300s
+
+**Command**:
+```bash
+aws rds failover-db-cluster --db-cluster-identifier petsite-db --region apne1-az2,apne1-az4
+```
+
+**Validation**:
+```bash
+aws rds describe-db-clusters --db-cluster-identifier petsite-db --region apne1-az2,apne1-az4 --query 'DBClusters[0].Status' --output text
+```
+Expected result: `available`
+
+**Rollback**:
+```bash
+aws rds failover-db-cluster --db-cluster-identifier petsite-db --region apne1-az1
+```
+
+### Step phase-1.2: `switch_global_table_region` — petsearch-db (requires approval) [Tier0]
 
 **Resource type**: DynamoDBTable
 **Estimated time**: 60s
@@ -117,27 +136,6 @@ Expected result: `ACTIVE`
 **Rollback**:
 ```bash
 aws ssm put-parameter --name '/petsite/dynamodb-region' --value 'apne1-az1' --overwrite --region apne1-az1
-```
-
-### Step phase-1.2: `promote_read_replica` — petsite-db (requires approval) [Tier0]
-
-**Resource type**: RDSCluster
-**Estimated time**: 300s
-
-**Command**:
-```bash
-aws rds failover-db-cluster --db-cluster-identifier petsite-db --region apne1-az2,apne1-az4
-```
-
-**Validation**:
-```bash
-aws rds describe-db-clusters --db-cluster-identifier petsite-db --region apne1-az2,apne1-az4 --query 'DBClusters[0].Status' --output text
-```
-Expected result: `available`
-
-**Rollback**:
-```bash
-aws rds failover-db-cluster --db-cluster-identifier petsite-db --region apne1-az1
 ```
 
 ### Step phase-1.3: `manual_switchover` — pethistory-queue (requires approval) [Tier1]
@@ -703,28 +701,7 @@ Expected result: `Original state of pethistory-queue`
 # Manual intervention required
 ```
 
-### Step rollback-phase-1.2: `rollback_promote_read_replica` — petsite-db (requires approval) [Tier0]
-
-**Resource type**: RDSCluster
-**Estimated time**: 300s
-
-**Command**:
-```bash
-aws rds failover-db-cluster --db-cluster-identifier petsite-db --region apne1-az1
-```
-
-**Validation**:
-```bash
-aws rds describe-db-clusters --db-cluster-identifier petsite-db --region apne1-az2,apne1-az4 --query 'DBClusters[0].Status' --output text
-```
-Expected result: `Original state of petsite-db`
-
-**Rollback**:
-```bash
-# Manual intervention required
-```
-
-### Step rollback-phase-1.3: `rollback_switch_global_table_region` — petsearch-db (requires approval) [Tier0]
+### Step rollback-phase-1.2: `rollback_switch_global_table_region` — petsearch-db (requires approval) [Tier0]
 
 **Resource type**: DynamoDBTable
 **Estimated time**: 60s
@@ -739,6 +716,27 @@ aws ssm put-parameter --name '/petsite/dynamodb-region' --value 'apne1-az1' --ov
 aws dynamodb describe-table --table-name petsearch-db --region apne1-az2,apne1-az4 --query 'Table.TableStatus' --output text
 ```
 Expected result: `Original state of petsearch-db`
+
+**Rollback**:
+```bash
+# Manual intervention required
+```
+
+### Step rollback-phase-1.3: `rollback_promote_read_replica` — petsite-db (requires approval) [Tier0]
+
+**Resource type**: RDSCluster
+**Estimated time**: 300s
+
+**Command**:
+```bash
+aws rds failover-db-cluster --db-cluster-identifier petsite-db --region apne1-az1
+```
+
+**Validation**:
+```bash
+aws rds describe-db-clusters --db-cluster-identifier petsite-db --region apne1-az2,apne1-az4 --query 'DBClusters[0].Status' --output text
+```
+Expected result: `Original state of petsite-db`
 
 **Rollback**:
 ```bash

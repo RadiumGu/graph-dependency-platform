@@ -76,9 +76,15 @@ class SPOFDetector:
                 dependents.setdefault(dst, []).append(src)
 
         spof_list: List[Dict[str, Any]] = []
-        data_types = {
-            "RDSCluster", "RDSInstance", "DynamoDBTable",
-            "NeptuneCluster", "S3Bucket", "SQSQueue",
+
+        # Resource types that are truly AZ-bound (SPOF candidates)
+        # DynamoDB, SQS, SNS, S3 are regional managed services — inherently
+        # multi-AZ, so they should NOT be flagged as single-AZ SPOF.
+        az_bound_types = {
+            "RDSCluster", "RDSInstance",
+            "NeptuneCluster", "NeptuneInstance",
+            "EC2Instance",
+            "EKSCluster",
         }
 
         for node in nodes:
@@ -87,7 +93,7 @@ class SPOFDetector:
             az = node.get("az", "")
             deps = dependents.get(name, [])
 
-            if rtype in data_types and az and len(deps) >= 2:
+            if rtype in az_bound_types and az and len(deps) >= 2:
                 spof_list.append({
                     "resource": name,
                     "type": rtype,

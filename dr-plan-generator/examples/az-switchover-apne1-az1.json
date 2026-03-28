@@ -1,6 +1,6 @@
 {
   "plan_id": "dr-az-apne1az1-example",
-  "created_at": "2026-03-28T11:39:07.805043+00:00",
+  "created_at": "2026-03-28T11:53:54.550938+00:00",
   "scope": "az",
   "source": "apne1-az1",
   "target": "apne1-az2,apne1-az4",
@@ -96,25 +96,8 @@
       "layer": "L0",
       "steps": [
         {
-          "step_id": "ddb-petsearch-db",
-          "order": 1,
-          "parallel_group": null,
-          "resource_type": "DynamoDBTable",
-          "resource_id": "",
-          "resource_name": "petsearch-db",
-          "action": "switch_global_table_region",
-          "command": "# DynamoDB Global Table: switch write endpoint to apne1-az2,apne1-az4\n# Update application config (env var / Parameter Store)\naws ssm put-parameter --name '/petsite/dynamodb-region' --value 'apne1-az2,apne1-az4' --overwrite --region apne1-az2,apne1-az4",
-          "validation": "aws dynamodb describe-table --table-name petsearch-db --region apne1-az2,apne1-az4 --query 'Table.TableStatus' --output text",
-          "expected_result": "ACTIVE",
-          "rollback_command": "aws ssm put-parameter --name '/petsite/dynamodb-region' --value 'apne1-az1' --overwrite --region apne1-az1",
-          "estimated_time": 60,
-          "requires_approval": true,
-          "tier": "Tier0",
-          "dependencies": []
-        },
-        {
           "step_id": "rds-petsite-db",
-          "order": 2,
+          "order": 1,
           "parallel_group": null,
           "resource_type": "RDSCluster",
           "resource_id": "",
@@ -125,6 +108,23 @@
           "expected_result": "available",
           "rollback_command": "aws rds failover-db-cluster --db-cluster-identifier petsite-db --region apne1-az1",
           "estimated_time": 300,
+          "requires_approval": true,
+          "tier": "Tier0",
+          "dependencies": []
+        },
+        {
+          "step_id": "ddb-petsearch-db",
+          "order": 2,
+          "parallel_group": null,
+          "resource_type": "DynamoDBTable",
+          "resource_id": "",
+          "resource_name": "petsearch-db",
+          "action": "switch_global_table_region",
+          "command": "# DynamoDB Global Table: switch write endpoint to apne1-az2,apne1-az4\n# Update application config (env var / Parameter Store)\naws ssm put-parameter --name '/petsite/dynamodb-region' --value 'apne1-az2,apne1-az4' --overwrite --region apne1-az2,apne1-az4",
+          "validation": "aws dynamodb describe-table --table-name petsearch-db --region apne1-az2,apne1-az4 --query 'Table.TableStatus' --output text",
+          "expected_result": "ACTIVE",
+          "rollback_command": "aws ssm put-parameter --name '/petsite/dynamodb-region' --value 'apne1-az1' --overwrite --region apne1-az1",
+          "estimated_time": 60,
           "requires_approval": true,
           "tier": "Tier0",
           "dependencies": []
@@ -258,25 +258,8 @@
           "dependencies": []
         },
         {
-          "step_id": "lambda-petstatusupdater",
-          "order": 7,
-          "parallel_group": null,
-          "resource_type": "LambdaFunction",
-          "resource_id": "",
-          "resource_name": "petstatusupdater",
-          "action": "verify_lambda_function",
-          "command": "aws lambda invoke --function-name petstatusupdater --region apne1-az2,apne1-az4 --payload '{\"source\": \"dr-healthcheck\"}' /tmp/petstatusupdater-response.json\ncat /tmp/petstatusupdater-response.json",
-          "validation": "aws lambda get-function-configuration --function-name petstatusupdater --region apne1-az2,apne1-az4 --query 'State' --output text",
-          "expected_result": "Active",
-          "rollback_command": "# Lambda functions are stateless; update event source mapping\naws lambda update-event-source-mapping --region apne1-az1 --uuid $EVENT_SOURCE_UUID --enabled",
-          "estimated_time": 30,
-          "requires_approval": false,
-          "tier": "Tier2",
-          "dependencies": []
-        },
-        {
           "step_id": "svc-petfood",
-          "order": 8,
+          "order": 7,
           "parallel_group": null,
           "resource_type": "Microservice",
           "resource_id": "",
@@ -287,6 +270,23 @@
           "expected_result": "3",
           "rollback_command": "kubectl scale deployment petfood --replicas=0 --context apne1-az2,apne1-az4-cluster",
           "estimated_time": 120,
+          "requires_approval": false,
+          "tier": "Tier2",
+          "dependencies": []
+        },
+        {
+          "step_id": "lambda-petstatusupdater",
+          "order": 8,
+          "parallel_group": null,
+          "resource_type": "LambdaFunction",
+          "resource_id": "",
+          "resource_name": "petstatusupdater",
+          "action": "verify_lambda_function",
+          "command": "aws lambda invoke --function-name petstatusupdater --region apne1-az2,apne1-az4 --payload '{\"source\": \"dr-healthcheck\"}' /tmp/petstatusupdater-response.json\ncat /tmp/petstatusupdater-response.json",
+          "validation": "aws lambda get-function-configuration --function-name petstatusupdater --region apne1-az2,apne1-az4 --query 'State' --output text",
+          "expected_result": "Active",
+          "rollback_command": "# Lambda functions are stateless; update event source mapping\naws lambda update-event-source-mapping --region apne1-az1 --uuid $EVENT_SOURCE_UUID --enabled",
+          "estimated_time": 30,
           "requires_approval": false,
           "tier": "Tier2",
           "dependencies": []
@@ -468,25 +468,8 @@
           "dependencies": []
         },
         {
-          "step_id": "rollback-svc-petfood",
-          "order": 2,
-          "parallel_group": null,
-          "resource_type": "Microservice",
-          "resource_id": "",
-          "resource_name": "petfood",
-          "action": "rollback_scale_up_and_verify",
-          "command": "kubectl scale deployment petfood --replicas=0 --context apne1-az2,apne1-az4-cluster",
-          "validation": "kubectl get deployment petfood --context apne1-az2,apne1-az4-cluster -o jsonpath='{.status.readyReplicas}'",
-          "expected_result": "Original state of petfood",
-          "rollback_command": "# Manual intervention required",
-          "estimated_time": 120,
-          "requires_approval": true,
-          "tier": "Tier2",
-          "dependencies": []
-        },
-        {
           "step_id": "rollback-lambda-petstatusupdater",
-          "order": 3,
+          "order": 2,
           "parallel_group": null,
           "resource_type": "LambdaFunction",
           "resource_id": "",
@@ -497,6 +480,23 @@
           "expected_result": "Original state of petstatusupdater",
           "rollback_command": "# Manual intervention required",
           "estimated_time": 30,
+          "requires_approval": true,
+          "tier": "Tier2",
+          "dependencies": []
+        },
+        {
+          "step_id": "rollback-svc-petfood",
+          "order": 3,
+          "parallel_group": null,
+          "resource_type": "Microservice",
+          "resource_id": "",
+          "resource_name": "petfood",
+          "action": "rollback_scale_up_and_verify",
+          "command": "kubectl scale deployment petfood --replicas=0 --context apne1-az2,apne1-az4-cluster",
+          "validation": "kubectl get deployment petfood --context apne1-az2,apne1-az4-cluster -o jsonpath='{.status.readyReplicas}'",
+          "expected_result": "Original state of petfood",
+          "rollback_command": "# Manual intervention required",
+          "estimated_time": 120,
           "requires_approval": true,
           "tier": "Tier2",
           "dependencies": []
@@ -630,25 +630,8 @@
           "dependencies": []
         },
         {
-          "step_id": "rollback-rds-petsite-db",
-          "order": 2,
-          "parallel_group": null,
-          "resource_type": "RDSCluster",
-          "resource_id": "",
-          "resource_name": "petsite-db",
-          "action": "rollback_promote_read_replica",
-          "command": "aws rds failover-db-cluster --db-cluster-identifier petsite-db --region apne1-az1",
-          "validation": "aws rds describe-db-clusters --db-cluster-identifier petsite-db --region apne1-az2,apne1-az4 --query 'DBClusters[0].Status' --output text",
-          "expected_result": "Original state of petsite-db",
-          "rollback_command": "# Manual intervention required",
-          "estimated_time": 300,
-          "requires_approval": true,
-          "tier": "Tier0",
-          "dependencies": []
-        },
-        {
           "step_id": "rollback-ddb-petsearch-db",
-          "order": 3,
+          "order": 2,
           "parallel_group": null,
           "resource_type": "DynamoDBTable",
           "resource_id": "",
@@ -659,6 +642,23 @@
           "expected_result": "Original state of petsearch-db",
           "rollback_command": "# Manual intervention required",
           "estimated_time": 60,
+          "requires_approval": true,
+          "tier": "Tier0",
+          "dependencies": []
+        },
+        {
+          "step_id": "rollback-rds-petsite-db",
+          "order": 3,
+          "parallel_group": null,
+          "resource_type": "RDSCluster",
+          "resource_id": "",
+          "resource_name": "petsite-db",
+          "action": "rollback_promote_read_replica",
+          "command": "aws rds failover-db-cluster --db-cluster-identifier petsite-db --region apne1-az1",
+          "validation": "aws rds describe-db-clusters --db-cluster-identifier petsite-db --region apne1-az2,apne1-az4 --query 'DBClusters[0].Status' --output text",
+          "expected_result": "Original state of petsite-db",
+          "rollback_command": "# Manual intervention required",
+          "estimated_time": 300,
           "requires_approval": true,
           "tier": "Tier0",
           "dependencies": []
@@ -820,28 +820,6 @@
           "pethistory"
         ],
         "recommendation": "Deploy to multiple AZs or add cross-region replica"
-      },
-      {
-        "resource": "petsearch-db",
-        "type": "DynamoDBTable",
-        "risk": "single_az",
-        "az": "apne1-az1",
-        "impact": [
-          "petsearch",
-          "petadoption-lambda"
-        ],
-        "recommendation": "Deploy to multiple AZs or add cross-region replica"
-      },
-      {
-        "resource": "pethistory-queue",
-        "type": "SQSQueue",
-        "risk": "single_az",
-        "az": "apne1-az1",
-        "impact": [
-          "pethistory",
-          "petstatusupdater"
-        ],
-        "recommendation": "Deploy to multiple AZs or add cross-region replica"
       }
     ],
     "estimated_rto_minutes": 23,
@@ -849,16 +827,14 @@
     "risk_matrix": {
       "severity": "HIGH",
       "tier0_services_affected": 6,
-      "single_points_of_failure": 3,
+      "single_points_of_failure": 1,
       "key_risks": [
-        "petsite-db",
-        "petsearch-db",
-        "pethistory-queue"
+        "petsite-db"
       ]
     }
   },
   "estimated_rto": 34,
   "estimated_rpo": 15,
   "validation_status": "valid",
-  "graph_snapshot_time": "2026-03-28T11:39:07.805043+00:00"
+  "graph_snapshot_time": "2026-03-28T11:53:54.550938+00:00"
 }
