@@ -6,7 +6,9 @@ but depended on by multiple services.
 """
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+from registry.registry_loader import ServiceTypeRegistry, get_registry
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +20,15 @@ class SPOFDetector:
     - Neptune Q16: resources with single-AZ deployment and multiple dependents.
     - Local subgraph analysis: data stores without replication metadata.
     """
+
+    def __init__(self, registry: Optional[ServiceTypeRegistry] = None) -> None:
+        """Initialize SPOFDetector.
+
+        Args:
+            registry: Optional ServiceTypeRegistry instance. If None, the
+                module-level singleton is used.
+        """
+        self._registry: ServiceTypeRegistry = registry if registry is not None else get_registry()
 
     def detect(self, subgraph: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Detect SPOF risks from a subgraph and Neptune Q16 results.
@@ -77,23 +88,13 @@ class SPOFDetector:
 
         spof_list: List[Dict[str, Any]] = []
 
-        # Resource types that are truly AZ-bound (SPOF candidates)
-        # DynamoDB, SQS, SNS, S3 are regional managed services — inherently
-        # multi-AZ, so they should NOT be flagged as single-AZ SPOF.
-        az_bound_types = {
-            "RDSCluster", "RDSInstance",
-            "NeptuneCluster", "NeptuneInstance",
-            "EC2Instance",
-            "EKSCluster",
-        }
-
         for node in nodes:
             name = node.get("name", "")
             rtype = node.get("type", "")
             az = node.get("az", "")
             deps = dependents.get(name, [])
 
-            if rtype in az_bound_types and az and len(deps) >= 2:
+            if self._registry.is_spof_candidate(rtype) and az and len(deps) >= 2:
                 spof_list.append({
                     "resource": name,
                     "type": rtype,

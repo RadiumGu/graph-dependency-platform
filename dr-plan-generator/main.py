@@ -40,9 +40,11 @@ def cmd_plan(args: argparse.Namespace) -> None:
     from planner.plan_generator import PlanGenerator
     from planner.rollback_generator import RollbackGenerator
     from planner.step_builder import StepBuilder
+    from registry.registry_loader import get_registry
     from validation.plan_validator import PlanValidator
 
-    analyzer = GraphAnalyzer()
+    registry = get_registry(custom_path=getattr(args, "custom_registry", None))
+    analyzer = GraphAnalyzer(registry=registry)
     builder = StepBuilder()
     generator = PlanGenerator(analyzer, builder)
 
@@ -84,8 +86,10 @@ def cmd_assess(args: argparse.Namespace) -> None:
     from assessment.impact_analyzer import ImpactAnalyzer
     from graph.graph_analyzer import GraphAnalyzer
     from output.markdown_renderer import MarkdownRenderer
+    from registry.registry_loader import get_registry
 
-    analyzer = GraphAnalyzer()
+    registry = get_registry(custom_path=getattr(args, "custom_registry", None))
+    analyzer = GraphAnalyzer(registry=registry)
     subgraph = analyzer.extract_affected_subgraph(args.scope, args.failure)
     impact = ImpactAnalyzer().assess_impact(subgraph, args.scope, args.failure)
 
@@ -213,6 +217,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--format", default="markdown", choices=["markdown", "json"])
     p.add_argument("--output-dir", default="plans", dest="output_dir")
     p.add_argument("--non-interactive", action="store_true")
+    p.add_argument(
+        "--custom-registry",
+        default=None,
+        dest="custom_registry",
+        metavar="PATH",
+        help="Path to custom_types.yaml (overrides bundled service_types.yaml entries)",
+    )
 
     # assess
     a = sub.add_parser("assess", help="Impact assessment for a failure scenario")
@@ -222,6 +233,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     a.add_argument("--failure", required=True, help="Failure source identifier")
     a.add_argument("--format", default="markdown", choices=["markdown", "json"])
+    a.add_argument(
+        "--custom-registry",
+        default=None,
+        dest="custom_registry",
+        metavar="PATH",
+        help="Path to custom_types.yaml (overrides bundled service_types.yaml entries)",
+    )
 
     # validate
     v = sub.add_parser("validate", help="Validate an existing plan JSON")

@@ -11,6 +11,7 @@ from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
 from graph import queries
+from registry.registry_loader import ServiceTypeRegistry, get_registry
 
 logger = logging.getLogger(__name__)
 
@@ -23,36 +24,17 @@ class GraphAnalyzer:
     finds critical paths, and detects dependency cycles.
     """
 
-    # Resource type → switchover layer mapping
-    LAYER_MAP: Dict[str, str] = {
-        # L0 — data layer (switch first)
-        "RDSCluster": "L0",
-        "RDSInstance": "L0",
-        "DynamoDBTable": "L0",
-        "NeptuneCluster": "L0",
-        "NeptuneInstance": "L0",
-        "S3Bucket": "L0",
-        "SQSQueue": "L0",
-        "SNSTopic": "L0",
-        # L1 — infrastructure layer
-        "EC2Instance": "L1",
-        "EKSCluster": "L1",
-        "Pod": "L1",
-        "SecurityGroup": "L1",
-        # L2 — application layer
-        "K8sService": "L2",
-        "Microservice": "L2",
-        "LambdaFunction": "L2",
-        "StepFunction": "L2",
-        "BusinessCapability": "L2",
-        # L3 — traffic layer (switch last)
-        "LoadBalancer": "L3",
-        "TargetGroup": "L3",
-        "ListenerRule": "L3",
-    }
-
     # Tier priority for stable sort within Kahn's algorithm
     _TIER_ORDER = {"Tier0": 0, "Tier1": 1, "Tier2": 2}
+
+    def __init__(self, registry: Optional[ServiceTypeRegistry] = None) -> None:
+        """Initialize GraphAnalyzer.
+
+        Args:
+            registry: Optional ServiceTypeRegistry instance. If None, the
+                module-level singleton is used.
+        """
+        self._registry: ServiceTypeRegistry = registry if registry is not None else get_registry()
 
     def extract_affected_subgraph(self, scope: str, source: str) -> Dict[str, Any]:
         """Extract the subgraph of nodes affected by a failure.
@@ -118,7 +100,7 @@ class GraphAnalyzer:
         """
         layers: Dict[str, List[Dict[str, Any]]] = {"L0": [], "L1": [], "L2": [], "L3": []}
         for node in subgraph["nodes"]:
-            layer = self.LAYER_MAP.get(node.get("type", ""), "L2")
+            layer = self._registry.get_layer(node.get("type", ""))
             layers[layer].append(node)
         return layers
 

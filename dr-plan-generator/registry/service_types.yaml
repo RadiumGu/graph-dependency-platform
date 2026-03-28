@@ -1,0 +1,267 @@
+# registry/service_types.yaml — Default AWS service type definitions
+#
+# Fields per type:
+#   layer:           L0 (data) / L1 (infra) / L2 (app) / L3 (traffic)
+#   fault_domain:    zonal / regional / global
+#   spof_candidate:  true/false — is it an AZ-bound SPOF candidate?
+#   has_step_builder: true/false — does StepBuilder have a dedicated builder?
+#   switchover_type: promote_replica / global_table_failover / etc.
+#   description:     Chinese description string
+#
+# Reference: AWS Fault Isolation Boundaries whitepaper
+
+service_types:
+
+  # === L0 数据层 — Zonal（AZ 绑定）===
+
+  RDSCluster:
+    layer: L0
+    fault_domain: zonal
+    spof_candidate: true
+    has_step_builder: true
+    switchover_type: promote_replica
+    description: "Amazon Aurora/RDS 集群（Writer 绑定单 AZ）"
+
+  RDSInstance:
+    layer: L0
+    fault_domain: zonal
+    spof_candidate: true
+    has_step_builder: true
+    switchover_type: promote_replica
+    description: "RDS 单实例（单 AZ 部署时为 SPOF）"
+
+  NeptuneCluster:
+    layer: L0
+    fault_domain: zonal
+    spof_candidate: true
+    has_step_builder: false
+    switchover_type: promote_replica
+    description: "Neptune 集群（Writer 绑定单 AZ，无原生跨 Region 复制）"
+
+  NeptuneInstance:
+    layer: L0
+    fault_domain: zonal
+    spof_candidate: true
+    has_step_builder: false
+    switchover_type: failover_to_replica
+    description: "Neptune 单实例"
+
+  ElastiCacheCluster:
+    layer: L0
+    fault_domain: zonal
+    spof_candidate: true
+    has_step_builder: false
+    switchover_type: promote_replica
+    description: "ElastiCache Redis/Memcached（单节点绑定 AZ）"
+
+  RedshiftCluster:
+    layer: L0
+    fault_domain: zonal
+    spof_candidate: true
+    has_step_builder: false
+    switchover_type: restore_from_snapshot
+    description: "Redshift 集群（单 AZ 部署）"
+
+  OpenSearchDomain:
+    layer: L0
+    fault_domain: zonal
+    spof_candidate: true
+    has_step_builder: false
+    switchover_type: promote_standby
+    description: "OpenSearch Service 域（单 AZ 时为 SPOF）"
+
+  # === L0 数据层 — Regional（区域级，多 AZ 自动）===
+
+  DynamoDBTable:
+    layer: L0
+    fault_domain: regional
+    spof_candidate: false
+    has_step_builder: true
+    switchover_type: global_table_failover
+    description: "DynamoDB 表（区域级服务，跨 AZ 自动冗余）"
+
+  S3Bucket:
+    layer: L0
+    fault_domain: regional
+    spof_candidate: false
+    has_step_builder: false
+    switchover_type: crr_validation
+    description: "S3 桶（区域级服务，数据跨 AZ 分布）"
+
+  SQSQueue:
+    layer: L0
+    fault_domain: regional
+    spof_candidate: false
+    has_step_builder: false
+    switchover_type: recreate_in_target
+    description: "SQS 队列（区域级服务，多 AZ 自动）"
+
+  SNSTopic:
+    layer: L0
+    fault_domain: regional
+    spof_candidate: false
+    has_step_builder: false
+    switchover_type: recreate_in_target
+    description: "SNS 主题（区域级服务，多 AZ 自动）"
+
+  MSKCluster:
+    layer: L0
+    fault_domain: regional
+    spof_candidate: false
+    has_step_builder: false
+    switchover_type: recreate_in_target
+    description: "Amazon MSK 集群（区域级，跨 AZ 部署）"
+
+  KinesisStream:
+    layer: L0
+    fault_domain: regional
+    spof_candidate: false
+    has_step_builder: false
+    switchover_type: recreate_in_target
+    description: "Kinesis Data Stream（区域级服务）"
+
+  # === L1 基础设施层 — Zonal ===
+
+  EC2Instance:
+    layer: L1
+    fault_domain: zonal
+    spof_candidate: true
+    has_step_builder: false
+    switchover_type: launch_in_target_az
+    description: "EC2 实例（绑定单 AZ）"
+
+  EKSCluster:
+    layer: L1
+    fault_domain: zonal
+    spof_candidate: true
+    has_step_builder: false
+    switchover_type: scale_node_group
+    description: "EKS 集群（控制面 Regional，Worker 节点 Zonal）"
+
+  EKSNodeGroup:
+    layer: L1
+    fault_domain: zonal
+    spof_candidate: true
+    has_step_builder: false
+    switchover_type: scale_in_target_az
+    description: "EKS 节点组（EC2 基础，绑定 AZ）"
+
+  Pod:
+    layer: L1
+    fault_domain: zonal
+    spof_candidate: false
+    has_step_builder: false
+    switchover_type: reschedule
+    description: "K8s Pod（跟随所在节点的 AZ）"
+
+  # === L1 基础设施层 — Regional ===
+
+  SecurityGroup:
+    layer: L1
+    fault_domain: regional
+    spof_candidate: false
+    has_step_builder: false
+    switchover_type: none
+    description: "安全组（VPC 级别，区域级）"
+
+  # === L2 应用层 ===
+
+  K8sService:
+    layer: L2
+    fault_domain: regional
+    spof_candidate: false
+    has_step_builder: true
+    switchover_type: verify_endpoints
+    description: "K8s Service（集群内服务发现）"
+
+  Microservice:
+    layer: L2
+    fault_domain: regional
+    spof_candidate: false
+    has_step_builder: true
+    switchover_type: verify_health
+    description: "微服务（逻辑节点）"
+
+  LambdaFunction:
+    layer: L2
+    fault_domain: regional
+    spof_candidate: false
+    has_step_builder: true
+    switchover_type: verify_invocation
+    description: "Lambda 函数（区域级服务，跨 AZ 运行）"
+
+  StepFunction:
+    layer: L2
+    fault_domain: regional
+    spof_candidate: false
+    has_step_builder: false
+    switchover_type: verify_execution
+    description: "Step Functions 状态机（区域级服务）"
+
+  BusinessCapability:
+    layer: L2
+    fault_domain: regional
+    spof_candidate: false
+    has_step_builder: false
+    switchover_type: none
+    description: "业务能力（逻辑节点，不直接切换）"
+
+  # === L3 流量层 — Regional ===
+
+  LoadBalancer:
+    layer: L3
+    fault_domain: regional
+    spof_candidate: false
+    has_step_builder: true
+    switchover_type: update_target_group
+    description: "ALB/NLB（区域级，但 Target 实例为 Zonal）"
+
+  TargetGroup:
+    layer: L3
+    fault_domain: regional
+    spof_candidate: false
+    has_step_builder: false
+    switchover_type: update_targets
+    description: "ALB/NLB Target Group"
+
+  ListenerRule:
+    layer: L3
+    fault_domain: regional
+    spof_candidate: false
+    has_step_builder: false
+    switchover_type: update_rule
+    description: "ALB Listener Rule"
+
+  APIGateway:
+    layer: L3
+    fault_domain: regional
+    spof_candidate: false
+    has_step_builder: false
+    switchover_type: update_stage
+    description: "API Gateway（区域级端点）"
+
+  # === L3 流量层 — Global ===
+
+  CloudFrontDistribution:
+    layer: L3
+    fault_domain: global
+    spof_candidate: false
+    has_step_builder: false
+    switchover_type: origin_failover
+    description: "CloudFront 分发（全局边缘网络）"
+
+  Route53Record:
+    layer: L3
+    fault_domain: global
+    spof_candidate: false
+    has_step_builder: false
+    switchover_type: health_check_failover
+    description: "Route 53 DNS 记录（全局，使用健康检查切换而非记录修改）"
+
+  GlobalAccelerator:
+    layer: L3
+    fault_domain: global
+    spof_candidate: false
+    has_step_builder: false
+    switchover_type: health_check_failover
+    description: "Global Accelerator（全局，使用健康检查路由）"

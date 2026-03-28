@@ -42,6 +42,12 @@ class StepBuilder:
         builder = getattr(self, f"_build_{resource_type}_step", None)
         if builder:
             return builder(node, source, target, ctx)
+        logger.warning(
+            "No dedicated step builder for resource type %r — falling back to generic step. "
+            "Consider adding a _build_%s_step method or updating registry/custom_types.yaml.",
+            node.get("type", ""),
+            resource_type,
+        )
         return self._build_generic_step(node, source, target)
 
     # ------------------------------------------------------------------
