@@ -1,0 +1,59 @@
+# 自动生成 by gen_template.py — 2026-03-12 09:56
+# Neptune 图谱上下文: tier=Tier1, callers=[petsite], callees=[petlistadoptions]
+# 上游调用方: petsite
+# 下游依赖:   petlistadoptions
+
+name: pethistory-network-delay-tier1-20260312
+description: "Network Delay on pethistory（Tier1）— 验证弹性与可观测性"
+
+target:
+  service: pethistory
+  namespace: default
+  tier: Tier1
+  resolve:
+    verify_pods: true
+
+fault:
+  type: network_delay
+  mode: fixed-percent
+  value: "50"
+  duration: "3m"
+  latency: "300ms"
+  jitter: "50ms"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 8000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 62%"
+    window: "30s"
+    action: abort
+  - metric: latency_p99
+    threshold: "> 15000ms"
+    window: "30s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: pethistory
+
+graph_feedback:
+  enabled: true
+  edges:
+    - Calls
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

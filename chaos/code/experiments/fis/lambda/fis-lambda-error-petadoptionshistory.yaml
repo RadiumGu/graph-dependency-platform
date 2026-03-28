@@ -1,0 +1,59 @@
+# FIS 实验：petadoptionshistory 错误注入
+# ⚠️  DISABLED: petadoptionshistory 实际是 EKS 部署（pethistory-deployment），不是 Lambda
+# 故障注入应走 Chaos Mesh（pod_kill/http_chaos），参见 experiments/chaosmesh/ 目录
+# 如需 FIS 对 EKS pod 注入，需改用 aws:eks:pod 系列 action（FIS 2024+ 支持）
+
+name: fis-lambda-error-petadoptionshistory
+description: "DISABLED - petadoptionshistory is an EKS pod (pethistory-deployment), not Lambda. Use Chaos Mesh instead."
+backend: fis
+enabled: false  # 标记为禁用
+
+target:
+  service: petadoptionshistory
+  namespace: lambda
+  tier: Tier1
+
+fault:
+  type: fis_lambda_error
+  mode: all
+  value: "100"
+  duration: "3m"
+  extra_params:
+    service_name: "petadoptionshistory"
+    resource_type: "lambda:function"
+    # ARN 解析在 enabled:false 时跳过（此实验已禁用）
+    percentage: 80
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 8000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 30%"
+    window: "30s"
+    action: abort
+    cloudwatch_alarm_arn: "arn:aws:cloudwatch:${REGION}:${ACCOUNT_ID}:alarm:chaos-petadoptionshistory-sr-critical"
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: petadoptionshistory
+
+graph_feedback:
+  enabled: true
+  edges:
+    - DependsOn
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

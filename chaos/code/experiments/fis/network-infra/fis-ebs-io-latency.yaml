@@ -1,0 +1,60 @@
+# FIS 实验：EBS 卷 IO 延迟注入
+# 验证 EKS 节点存储 IO 高延迟时应用层的超时处理和降级能力
+# backend: fis — 通过 AWS FIS aws:ebs:volume-io-latency 注入
+
+name: fis-ebs-io-latency
+description: "Inject high IO latency on EBS volumes attached to EKS nodes, verify app-level storage timeout handling"
+backend: fis
+
+target:
+  service: petsearch
+  namespace: eks
+  tier: Tier0
+
+fault:
+  type: fis_ebs_io_latency
+  mode: all
+  value: "100"
+  duration: "5m"
+  extra_params:
+    service_name: "ap-northeast-1a"  # TargetResolver: AZ 名 → EKS 节点 EBS 卷 ARN
+    resource_type: "ec2:volume"
+    # volume_arns: 由 TargetResolver 在运行时解析并写入（列表）
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 5000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 57%"
+    window: "30s"
+    action: abort
+    cloudwatch_alarm_arn: "arn:aws:cloudwatch:${REGION}:${ACCOUNT_ID}:alarm:chaos-eks-sr-critical"
+  - metric: latency_p99
+    threshold: "> 8000ms"
+    window: "30s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: petsearch
+
+graph_feedback:
+  enabled: true
+  edges:
+    - Calls
+
+options:
+  max_duration: "15m"
+  save_to_bedrock_kb: false

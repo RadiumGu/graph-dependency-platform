@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Resolved targets (environment-specific, regenerate with resolve_targets.py)
+targets-fis.json
+targets-chaosmesh.json
+
+# Validation results (local test runs)
+validation-results/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+
+# External submodules
+Chaosmesh-MCP/

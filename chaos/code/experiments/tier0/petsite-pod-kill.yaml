@@ -1,0 +1,57 @@
+# 自动生成 by gen_template.py — 2026-03-12 09:56
+# Neptune 图谱上下文: tier=Tier0, callers=[trafficgenerator], callees=[petsearch, petlistadoptions, payforadoption, pethistory]
+# 上游调用方: trafficgenerator
+# 下游依赖:   petsearch, petlistadoptions, payforadoption, pethistory
+
+name: petsite-pod-kill-tier0-20260312
+description: "Pod Kill on petsite（Tier0）— 验证弹性与可观测性"
+
+target:
+  service: petsite
+  namespace: default
+  tier: Tier0
+  resolve:
+    verify_pods: true
+
+fault:
+  type: pod_kill
+  mode: fixed-percent
+  value: "50"
+  duration: "2m"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 5000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 57%"
+    window: "30s"
+    action: abort
+  - metric: latency_p99
+    threshold: "> 8000ms"
+    window: "30s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: petsite
+
+graph_feedback:
+  enabled: true
+  edges:
+    - Calls
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

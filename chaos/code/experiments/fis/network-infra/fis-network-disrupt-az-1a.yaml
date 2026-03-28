@@ -1,0 +1,53 @@
+# FIS 实验：中断 AZ ap-northeast-1a 子网网络连通性
+# 验证 AZ 级网络故障时多 AZ 部署的流量切换能力
+# ⚠️  高风险：影响整个子网，需确认 DeepFlow/Neptune 与 EKS 在不同子网
+# backend: fis — 通过 AWS FIS aws:network:disrupt-connectivity 注入
+
+name: fis-network-disrupt-az-1a
+description: "Disrupt subnet connectivity in AZ ap-northeast-1a (via Network ACL), verify AZ failover"
+backend: fis
+
+target:
+  service: petsite
+  namespace: network
+  tier: Tier0
+
+fault:
+  type: fis_network_disrupt
+  mode: all
+  value: "100"
+  duration: "5m"
+  extra_params:
+    service_name: "ap-northeast-1a"  # TargetResolver: AZ 名 → EKS 工作子网 ARN
+    resource_type: "ec2:subnet"
+    # subnet_arn: 由 TargetResolver 在运行时解析并写入
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 5000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "30s"
+    action: abort
+    cloudwatch_alarm_arn: "arn:aws:cloudwatch:${REGION}:${ACCOUNT_ID}:alarm:chaos-eks-sr-critical"
+
+rca:
+  enabled: false
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "15m"
+  save_to_bedrock_kb: false
