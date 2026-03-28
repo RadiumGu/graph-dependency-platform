@@ -1,10 +1,10 @@
 # DR Switchover Plan — REGION Level
 
-> Generated: 2026-03-28T13:27:14.403121+00:00
+> Generated: 2026-03-28T13:34:15.422901+00:00
 > Failure scope: ap-northeast-1 → DR target: us-west-2
 > Estimated RTO: 55 minutes
 > Estimated RPO: 15 minutes
-> Graph snapshot: 2026-03-28T13:27:14.403121+00:00
+> Graph snapshot: 2026-03-28T13:34:15.422901+00:00
 > Plan ID: `dr-region-apne1-to-usw2`
 
 ## Impact Summary
@@ -225,7 +225,7 @@ aws rds failover-db-cluster --db-cluster-identifier petsite-db --region ap-north
 
 **Validation**:
 ```bash
-# TODO: Add verification command for petsite-neptune
+aws neptune describe-db-clusters --db-cluster-identifier petsite-neptune --region us-west-2 --query "DBClusters[0].Status" --output text
 ```
 Expected result: `Resource healthy in target`
 
@@ -248,7 +248,7 @@ Expected result: `Resource healthy in target`
 
 **Validation**:
 ```bash
-# TODO: Add verification command for pethistory-queue
+aws sqs list-queues --queue-name-prefix pethistory-queue --region us-west-2 --query "QueueUrls[0]" --output text
 ```
 Expected result: `Resource healthy in target`
 
@@ -271,7 +271,7 @@ Expected result: `Resource healthy in target`
 
 **Validation**:
 ```bash
-# TODO: Add verification command for petsite-incidents
+aws s3api head-bucket --bucket petsite-incidents --region us-west-2
 ```
 Expected result: `Resource healthy in target`
 
@@ -285,27 +285,27 @@ Expected result: `Resource healthy in target`
 **Estimated duration**: 21 min
 **Gate condition**: All Tier0 services healthy in target
 
-### Step phase-2.1: `manual_switchover` — petsite-ec2-1 (requires approval)
+### Step phase-2.1: `manual_switchover` — petsite-ec2-3 (requires approval)
 
 **Resource type**: EC2Instance
 **Estimated time**: 120s
 
 **Command**:
 ```bash
-# TODO: Manual switchover required for EC2Instance 'petsite-ec2-1'
+# TODO: Manual switchover required for EC2Instance 'petsite-ec2-3'
 # Source: ap-northeast-1 → Target: us-west-2
 # Add the appropriate AWS CLI command here.
 ```
 
 **Validation**:
 ```bash
-# TODO: Add verification command for petsite-ec2-1
+aws ec2 describe-instances --filters "Name=tag:Name,Values=petsite-ec2-3" --region us-west-2 --query "Reservations[0].Instances[0].State.Name" --output text
 ```
 Expected result: `Resource healthy in target`
 
 **Rollback**:
 ```bash
-# TODO: Add rollback command for petsite-ec2-1
+# TODO: Add rollback command for petsite-ec2-3
 ```
 
 ### Step phase-2.2: `manual_switchover` — petsite-ec2-2 (requires approval)
@@ -322,7 +322,7 @@ Expected result: `Resource healthy in target`
 
 **Validation**:
 ```bash
-# TODO: Add verification command for petsite-ec2-2
+aws ec2 describe-instances --filters "Name=tag:Name,Values=petsite-ec2-2" --region us-west-2 --query "Reservations[0].Instances[0].State.Name" --output text
 ```
 Expected result: `Resource healthy in target`
 
@@ -331,27 +331,27 @@ Expected result: `Resource healthy in target`
 # TODO: Add rollback command for petsite-ec2-2
 ```
 
-### Step phase-2.3: `manual_switchover` — petsite-ec2-3 (requires approval)
+### Step phase-2.3: `manual_switchover` — petsite-ec2-1 (requires approval)
 
 **Resource type**: EC2Instance
 **Estimated time**: 120s
 
 **Command**:
 ```bash
-# TODO: Manual switchover required for EC2Instance 'petsite-ec2-3'
+# TODO: Manual switchover required for EC2Instance 'petsite-ec2-1'
 # Source: ap-northeast-1 → Target: us-west-2
 # Add the appropriate AWS CLI command here.
 ```
 
 **Validation**:
 ```bash
-# TODO: Add verification command for petsite-ec2-3
+aws ec2 describe-instances --filters "Name=tag:Name,Values=petsite-ec2-1" --region us-west-2 --query "Reservations[0].Instances[0].State.Name" --output text
 ```
 Expected result: `Resource healthy in target`
 
 **Rollback**:
 ```bash
-# TODO: Add rollback command for petsite-ec2-3
+# TODO: Add rollback command for petsite-ec2-1
 ```
 
 ### Step phase-2.4: `verify_k8s_service_endpoints` — petsite-svc [Tier0]
@@ -458,7 +458,7 @@ kubectl scale deployment petsearch --replicas=0 --context us-west-2-cluster
 
 **Validation**:
 ```bash
-# TODO: Add verification command for pet-stepfn-adoption
+aws stepfunctions list-state-machines --region us-west-2 --query "stateMachines[?name==`pet-stepfn-adoption`].stateMachineArn" --output text
 ```
 Expected result: `Resource healthy in target`
 
@@ -646,7 +646,7 @@ aws route53 change-resource-record-sets --hosted-zone-id $ZONE_ID --change-batch
 
 **Validation**:
 ```bash
-# TODO: Add verification command for petsite-tg
+aws elbv2 describe-target-groups --names petsite-tg --region us-west-2 --query "TargetGroups[0].TargetGroupArn" --output text
 ```
 Expected result: `Resource healthy in target`
 
@@ -725,7 +725,7 @@ Expected result: `0`
 
 **Validation**:
 ```bash
-# TODO: Add verification command for petsite-tg
+aws elbv2 describe-target-groups --names petsite-tg --region us-west-2 --query "TargetGroups[0].TargetGroupArn" --output text
 ```
 Expected result: `Original state of petsite-tg`
 
@@ -900,7 +900,7 @@ Expected result: `Original state of pethistory`
 
 **Validation**:
 ```bash
-# TODO: Add verification command for pet-stepfn-adoption
+aws stepfunctions list-state-machines --region us-west-2 --query "stateMachines[?name==`pet-stepfn-adoption`].stateMachineArn" --output text
 ```
 Expected result: `Original state of pet-stepfn-adoption`
 
@@ -995,21 +995,21 @@ Expected result: `Original state of petsite-svc`
 # Manual intervention required
 ```
 
-### Step rollback-phase-2.11: `rollback_manual_switchover` — petsite-ec2-3 (requires approval)
+### Step rollback-phase-2.11: `rollback_manual_switchover` — petsite-ec2-1 (requires approval)
 
 **Resource type**: EC2Instance
 **Estimated time**: 120s
 
 **Command**:
 ```bash
-# TODO: Add rollback command for petsite-ec2-3
+# TODO: Add rollback command for petsite-ec2-1
 ```
 
 **Validation**:
 ```bash
-# TODO: Add verification command for petsite-ec2-3
+aws ec2 describe-instances --filters "Name=tag:Name,Values=petsite-ec2-1" --region us-west-2 --query "Reservations[0].Instances[0].State.Name" --output text
 ```
-Expected result: `Original state of petsite-ec2-3`
+Expected result: `Original state of petsite-ec2-1`
 
 **Rollback**:
 ```bash
@@ -1028,7 +1028,7 @@ Expected result: `Original state of petsite-ec2-3`
 
 **Validation**:
 ```bash
-# TODO: Add verification command for petsite-ec2-2
+aws ec2 describe-instances --filters "Name=tag:Name,Values=petsite-ec2-2" --region us-west-2 --query "Reservations[0].Instances[0].State.Name" --output text
 ```
 Expected result: `Original state of petsite-ec2-2`
 
@@ -1037,21 +1037,21 @@ Expected result: `Original state of petsite-ec2-2`
 # Manual intervention required
 ```
 
-### Step rollback-phase-2.13: `rollback_manual_switchover` — petsite-ec2-1 (requires approval)
+### Step rollback-phase-2.13: `rollback_manual_switchover` — petsite-ec2-3 (requires approval)
 
 **Resource type**: EC2Instance
 **Estimated time**: 120s
 
 **Command**:
 ```bash
-# TODO: Add rollback command for petsite-ec2-1
+# TODO: Add rollback command for petsite-ec2-3
 ```
 
 **Validation**:
 ```bash
-# TODO: Add verification command for petsite-ec2-1
+aws ec2 describe-instances --filters "Name=tag:Name,Values=petsite-ec2-3" --region us-west-2 --query "Reservations[0].Instances[0].State.Name" --output text
 ```
-Expected result: `Original state of petsite-ec2-1`
+Expected result: `Original state of petsite-ec2-3`
 
 **Rollback**:
 ```bash
@@ -1075,7 +1075,7 @@ Expected result: `Original state of petsite-ec2-1`
 
 **Validation**:
 ```bash
-# TODO: Add verification command for petsite-incidents
+aws s3api head-bucket --bucket petsite-incidents --region us-west-2
 ```
 Expected result: `Original state of petsite-incidents`
 
@@ -1096,7 +1096,7 @@ Expected result: `Original state of petsite-incidents`
 
 **Validation**:
 ```bash
-# TODO: Add verification command for pethistory-queue
+aws sqs list-queues --queue-name-prefix pethistory-queue --region us-west-2 --query "QueueUrls[0]" --output text
 ```
 Expected result: `Original state of pethistory-queue`
 
@@ -1117,7 +1117,7 @@ Expected result: `Original state of pethistory-queue`
 
 **Validation**:
 ```bash
-# TODO: Add verification command for petsite-neptune
+aws neptune describe-db-clusters --db-cluster-identifier petsite-neptune --region us-west-2 --query "DBClusters[0].Status" --output text
 ```
 Expected result: `Original state of petsite-neptune`
 

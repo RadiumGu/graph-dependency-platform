@@ -252,3 +252,75 @@ class TestValidationReport(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestValidationQuality:
+    """Tests for validation command quality checks."""
+
+    def _make_plan_with_validation(self, validation_str):
+        """Helper: create a minimal plan with one step having given validation."""
+        from models import DRPlan, DRPhase, DRStep
+        step = DRStep(
+            step_id="test-step",
+            order=1,
+            resource_type="RDSCluster",
+            resource_id="id-1",
+            resource_name="test-db",
+            action="promote_read_replica",
+            command="aws rds promote ...",
+            validation=validation_str,
+            expected_result="available",
+            rollback_command="aws rds ...",
+            estimated_time=60,
+            requires_approval=True,
+            tier="Tier0",
+            dependencies=[],
+        )
+        phase = DRPhase(
+            phase_id="phase-1",
+            name="Data",
+            layer="L0",
+            steps=[step],
+            estimated_duration=1,
+            gate_condition="ok",
+        )
+        return DRPlan(
+            plan_id="test",
+            created_at="2026-01-01T00:00:00Z",
+            scope="az",
+            source="apne1-az1",
+            target="apne1-az2",
+            phases=[phase],
+            graph_snapshot_time="2026-01-01T00:00:00Z",
+        )
+
+    def test_echo_dollar_flagged(self):
+        plan = self._make_plan_with_validation("echo $?")
+        report = PlanValidator().validate(plan)
+        warnings = [i for i in report.issues if "echo" in i.message.lower()]
+        assert len(warnings) == 1
+        assert "not meaningful" in warnings[0].message
+
+    def test_comment_only_flagged(self):
+        plan = self._make_plan_with_validation("# Just a comment")
+        report = PlanValidator().validate(plan)
+        warnings = [i for i in report.issues if "comment" in i.message.lower()]
+        assert len(warnings) == 1
+
+    def test_empty_validation_flagged(self):
+        plan = self._make_plan_with_validation("")
+        report = PlanValidator().validate(plan)
+        errors = [i for i in report.issues if "empty" in i.message.lower()]
+        assert len(errors) == 1
+        assert errors[0].severity == "ERROR"
+
+    def test_real_command_no_flag(self):
+        plan = self._make_plan_with_validation(
+            "aws rds describe-db-clusters --db-cluster-identifier test-db"
+        )
+        report = PlanValidator().validate(plan)
+        quality_issues = [i for i in report.issues
+                         if "echo" in i.message.lower()
+                         or "comment" in i.message.lower()
+                         or "empty" in i.message.lower()]
+        assert len(quality_issues) == 0

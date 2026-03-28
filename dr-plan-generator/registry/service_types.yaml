@@ -21,6 +21,7 @@ service_types:
     has_step_builder: true
     switchover_type: promote_replica
     description: "Amazon Aurora/RDS 集群（Writer 绑定单 AZ）"
+    validation_template: 'aws rds describe-db-clusters --db-cluster-identifier {name} --region {target} --query "DBClusters[0].Status" --output text'
 
   RDSInstance:
     layer: L0
@@ -29,6 +30,7 @@ service_types:
     has_step_builder: true
     switchover_type: promote_replica
     description: "RDS 单实例（单 AZ 部署时为 SPOF）"
+    validation_template: 'aws rds describe-db-instances --db-instance-identifier {name} --region {target} --query "DBInstances[0].DBInstanceStatus" --output text'
 
   NeptuneCluster:
     layer: L0
@@ -37,6 +39,7 @@ service_types:
     has_step_builder: false
     switchover_type: promote_replica
     description: "Neptune 集群（Writer 绑定单 AZ，无原生跨 Region 复制）"
+    validation_template: 'aws neptune describe-db-clusters --db-cluster-identifier {name} --region {target} --query "DBClusters[0].Status" --output text'
 
   NeptuneInstance:
     layer: L0
@@ -45,6 +48,7 @@ service_types:
     has_step_builder: false
     switchover_type: failover_to_replica
     description: "Neptune 单实例"
+    validation_template: 'aws neptune describe-db-instances --db-instance-identifier {name} --region {target} --query "DBInstances[0].DBInstanceStatus" --output text'
 
   ElastiCacheCluster:
     layer: L0
@@ -53,6 +57,7 @@ service_types:
     has_step_builder: false
     switchover_type: promote_replica
     description: "ElastiCache Redis/Memcached（单节点绑定 AZ）"
+    validation_template: 'aws elasticache describe-cache-clusters --cache-cluster-id {name} --region {target} --query "CacheClusters[0].CacheClusterStatus" --output text'
 
   RedshiftCluster:
     layer: L0
@@ -61,6 +66,7 @@ service_types:
     has_step_builder: false
     switchover_type: restore_from_snapshot
     description: "Redshift 集群（单 AZ 部署）"
+    validation_template: 'aws redshift describe-clusters --cluster-identifier {name} --region {target} --query "Clusters[0].ClusterStatus" --output text'
 
   OpenSearchDomain:
     layer: L0
@@ -69,6 +75,7 @@ service_types:
     has_step_builder: false
     switchover_type: promote_standby
     description: "OpenSearch Service 域（单 AZ 时为 SPOF）"
+    validation_template: 'aws opensearch describe-domain --domain-name {name} --region {target} --query "DomainStatus.Processing" --output text'
 
   # === L0 数据层 — Regional（区域级，多 AZ 自动）===
 
@@ -79,6 +86,7 @@ service_types:
     has_step_builder: true
     switchover_type: global_table_failover
     description: "DynamoDB 表（区域级服务，跨 AZ 自动冗余）"
+    validation_template: 'aws dynamodb describe-table --table-name {name} --region {target} --query "Table.TableStatus" --output text'
 
   S3Bucket:
     layer: L0
@@ -87,6 +95,7 @@ service_types:
     has_step_builder: false
     switchover_type: crr_validation
     description: "S3 桶（区域级服务，数据跨 AZ 分布）"
+    validation_template: 'aws s3api head-bucket --bucket {name} --region {target}'
 
   SQSQueue:
     layer: L0
@@ -95,6 +104,7 @@ service_types:
     has_step_builder: false
     switchover_type: recreate_in_target
     description: "SQS 队列（区域级服务，多 AZ 自动）"
+    validation_template: 'aws sqs list-queues --queue-name-prefix {name} --region {target} --query "QueueUrls[0]" --output text'
 
   SNSTopic:
     layer: L0
@@ -103,6 +113,7 @@ service_types:
     has_step_builder: false
     switchover_type: recreate_in_target
     description: "SNS 主题（区域级服务，多 AZ 自动）"
+    validation_template: 'aws sns list-topics --region {target} --query "Topics[].TopicArn" --output text | grep {name}'
 
   MSKCluster:
     layer: L0
@@ -111,6 +122,7 @@ service_types:
     has_step_builder: false
     switchover_type: recreate_in_target
     description: "Amazon MSK 集群（区域级，跨 AZ 部署）"
+    validation_template: 'aws kafka list-clusters --region {target} --query "ClusterInfoList[?ClusterName==`{name}`].State" --output text'
 
   KinesisStream:
     layer: L0
@@ -119,6 +131,7 @@ service_types:
     has_step_builder: false
     switchover_type: recreate_in_target
     description: "Kinesis Data Stream（区域级服务）"
+    validation_template: 'aws kinesis describe-stream --stream-name {name} --region {target} --query "StreamDescription.StreamStatus" --output text'
 
   # === L1 基础设施层 — Zonal ===
 
@@ -129,6 +142,7 @@ service_types:
     has_step_builder: false
     switchover_type: launch_in_target_az
     description: "EC2 实例（绑定单 AZ）"
+    validation_template: 'aws ec2 describe-instances --filters "Name=tag:Name,Values={name}" --region {target} --query "Reservations[0].Instances[0].State.Name" --output text'
 
   EKSCluster:
     layer: L1
@@ -137,6 +151,7 @@ service_types:
     has_step_builder: false
     switchover_type: scale_node_group
     description: "EKS 集群（控制面 Regional，Worker 节点 Zonal）"
+    validation_template: 'aws eks describe-cluster --name {name} --region {target} --query "cluster.status" --output text'
 
   EKSNodeGroup:
     layer: L1
@@ -145,6 +160,7 @@ service_types:
     has_step_builder: false
     switchover_type: scale_in_target_az
     description: "EKS 节点组（EC2 基础，绑定 AZ）"
+    validation_template: 'aws eks describe-nodegroup --cluster-name {name} --nodegroup-name {name}-ng --region {target} --query "nodegroup.status" --output text'
 
   Pod:
     layer: L1
@@ -153,6 +169,7 @@ service_types:
     has_step_builder: false
     switchover_type: reschedule
     description: "K8s Pod（跟随所在节点的 AZ）"
+    validation_template: 'kubectl get pod {name} -o jsonpath="{.status.phase}"'
 
   # === L1 基础设施层 — Regional ===
 
@@ -163,6 +180,7 @@ service_types:
     has_step_builder: false
     switchover_type: none
     description: "安全组（VPC 级别，区域级）"
+    validation_template: 'aws ec2 describe-security-groups --filters "Name=group-name,Values={name}" --region {target} --query "SecurityGroups[0].GroupId" --output text'
 
   # === L2 应用层 ===
 
@@ -173,6 +191,7 @@ service_types:
     has_step_builder: true
     switchover_type: verify_endpoints
     description: "K8s Service（集群内服务发现）"
+    validation_template: 'kubectl get endpoints {name} -o jsonpath="{.subsets[0].addresses}" | jq length'
 
   Microservice:
     layer: L2
@@ -181,6 +200,7 @@ service_types:
     has_step_builder: true
     switchover_type: verify_health
     description: "微服务（逻辑节点）"
+    validation_template: 'kubectl get deployment {name} -o jsonpath="{.status.readyReplicas}"'
 
   LambdaFunction:
     layer: L2
@@ -189,6 +209,7 @@ service_types:
     has_step_builder: true
     switchover_type: verify_invocation
     description: "Lambda 函数（区域级服务，跨 AZ 运行）"
+    validation_template: 'aws lambda get-function --function-name {name} --region {target} --query "Configuration.State" --output text'
 
   StepFunction:
     layer: L2
@@ -197,6 +218,7 @@ service_types:
     has_step_builder: false
     switchover_type: verify_execution
     description: "Step Functions 状态机（区域级服务）"
+    validation_template: 'aws stepfunctions list-state-machines --region {target} --query "stateMachines[?name==`{name}`].stateMachineArn" --output text'
 
   BusinessCapability:
     layer: L2
@@ -205,6 +227,7 @@ service_types:
     has_step_builder: false
     switchover_type: none
     description: "业务能力（逻辑节点，不直接切换）"
+    validation_template: 'echo "BusinessCapability {name} is a logical node; verify dependent services manually"'
 
   # === L3 流量层 — Regional ===
 
@@ -215,6 +238,7 @@ service_types:
     has_step_builder: true
     switchover_type: update_target_group
     description: "ALB/NLB（区域级，但 Target 实例为 Zonal）"
+    validation_template: 'aws elbv2 describe-target-health --target-group-arn $(aws elbv2 describe-target-groups --names {name}-tg --region {target} --query "TargetGroups[0].TargetGroupArn" --output text) --region {target}'
 
   TargetGroup:
     layer: L3
@@ -223,6 +247,7 @@ service_types:
     has_step_builder: false
     switchover_type: update_targets
     description: "ALB/NLB Target Group"
+    validation_template: 'aws elbv2 describe-target-groups --names {name} --region {target} --query "TargetGroups[0].TargetGroupArn" --output text'
 
   ListenerRule:
     layer: L3
@@ -231,6 +256,7 @@ service_types:
     has_step_builder: false
     switchover_type: update_rule
     description: "ALB Listener Rule"
+    validation_template: 'aws elbv2 describe-rules --region {target} --query "Rules[?Priority!=`default`][0].RuleArn" --output text'
 
   APIGateway:
     layer: L3
@@ -239,6 +265,7 @@ service_types:
     has_step_builder: false
     switchover_type: update_stage
     description: "API Gateway（区域级端点）"
+    validation_template: 'aws apigateway get-rest-apis --region {target} --query "items[?name==`{name}`].id" --output text'
 
   # === L3 流量层 — Global ===
 
@@ -249,6 +276,7 @@ service_types:
     has_step_builder: false
     switchover_type: origin_failover
     description: "CloudFront 分发（全局边缘网络）"
+    validation_template: 'aws cloudfront get-distribution --id {name} --query "Distribution.Status" --output text'
 
   Route53Record:
     layer: L3
@@ -257,6 +285,7 @@ service_types:
     has_step_builder: false
     switchover_type: health_check_failover
     description: "Route 53 DNS 记录（全局，使用健康检查切换而非记录修改）"
+    validation_template: 'aws route53 list-resource-record-sets --hosted-zone-id $ZONE_ID --query "ResourceRecordSets[?Name==`{name}`].Type" --output text'
 
   GlobalAccelerator:
     layer: L3
@@ -265,3 +294,4 @@ service_types:
     has_step_builder: false
     switchover_type: health_check_failover
     description: "Global Accelerator（全局，使用健康检查路由）"
+    validation_template: 'aws globalaccelerator describe-accelerator --accelerator-arn {name} --query "Accelerator.Status" --output text'

@@ -91,6 +91,10 @@ class PlanValidator:
             except ValueError as exc:
                 logger.warning("Could not parse graph_snapshot_time: %s", exc)
 
+        # 6. Validation command quality
+        validation_issues = self._check_validation_quality(plan)
+        issues.extend(validation_issues)
+
         return ValidationReport(
             valid=all(i.severity != "CRITICAL" for i in issues),
             issues=issues,
@@ -99,6 +103,44 @@ class PlanValidator:
     # ------------------------------------------------------------------
     # Individual checks
     # ------------------------------------------------------------------
+
+    def _check_validation_quality(self, plan: DRPlan) -> List[Issue]:
+        """Check that every step has a meaningful validation command.
+
+        Flags:
+        - Empty validation → ERROR
+        - ``echo $?`` → WARNING (meaningless in independent step execution)
+        - Comment-only (``# ...``) → WARNING (not executable)
+
+        Args:
+            plan: The DRPlan to check.
+
+        Returns:
+            List of Issues found.
+        """
+        issues: List[Issue] = []
+        for phase in plan.phases:
+            for step in phase.steps:
+                v = (step.validation or "").strip()
+                step_label = f"{phase.phase_id}/{step.step_id}"
+
+                if not v:
+                    issues.append(Issue(
+                        "ERROR",
+                        f"Step {step_label} has empty validation command",
+                    ))
+                elif v == "echo $?" or v.startswith("echo $"):
+                    issues.append(Issue(
+                        "WARNING",
+                        f"Step {step_label} uses 'echo $?' as validation — "
+                        "not meaningful (steps execute independently)",
+                    ))
+                elif all(line.strip().startswith("#") for line in v.splitlines() if line.strip()):
+                    issues.append(Issue(
+                        "WARNING",
+                        f"Step {step_label} validation is a comment, not an executable command",
+                    ))
+        return issues
 
     def _check_cycles(self, plan: DRPlan) -> List[List[str]]:
         """Detect dependency cycles across all plan steps.

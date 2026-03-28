@@ -1,10 +1,10 @@
 # DR Switchover Plan — AZ Level
 
-> Generated: 2026-03-28T13:27:14.401787+00:00
+> Generated: 2026-03-28T13:34:15.421497+00:00
 > Failure scope: apne1-az1 → DR target: apne1-az2,apne1-az4
 > Estimated RTO: 13 minutes
 > Estimated RPO: 15 minutes
-> Graph snapshot: 2026-03-28T13:27:14.401787+00:00
+> Graph snapshot: 2026-03-28T13:34:15.421497+00:00
 > Plan ID: `dr-az-apne1az1-no-petfood`
 
 ## Impact Summary

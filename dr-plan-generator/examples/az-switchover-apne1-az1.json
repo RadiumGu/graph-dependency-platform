@@ -1,6 +1,6 @@
 {
   "plan_id": "dr-az-apne1az1-example",
-  "created_at": "2026-03-28T13:27:14.400512+00:00",
+  "created_at": "2026-03-28T13:34:15.420174+00:00",
   "scope": "az",
   "source": "apne1-az1",
   "target": "apne1-az2,apne1-az4",
@@ -390,5 +390,5 @@
   "estimated_rto": 13,
   "estimated_rpo": 15,
   "validation_status": "valid",
-  "graph_snapshot_time": "2026-03-28T13:27:14.400512+00:00"
+  "graph_snapshot_time": "2026-03-28T13:34:15.420174+00:00"
 }

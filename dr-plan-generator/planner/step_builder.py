@@ -407,6 +407,15 @@ class StepBuilder:
         """
         resource_name = node.get("name", "unknown")
         resource_type = node.get("type", "Unknown")
+
+        # Use validation template from registry
+        from registry import registry_loader
+        reg = registry_loader.get_registry()
+        info = reg.get_type(resource_type)
+        validation_cmd = info.validation_template.format(
+            name=resource_name, target=target, type=resource_type
+        ) if info.validation_template else f"# TODO: Add validation for {resource_type} '{resource_name}'"
+
         return DRStep(
             step_id=f"generic-{resource_name}",
             order=0,
@@ -419,9 +428,7 @@ class StepBuilder:
                 f"# Source: {source} → Target: {target}\n"
                 f"# Add the appropriate AWS CLI command here."
             ),
-            validation=(
-                f"# TODO: Add verification command for {resource_name}"
-            ),
+            validation=validation_cmd,
             expected_result="Resource healthy in target",
             rollback_command=(
                 f"# TODO: Add rollback command for {resource_name}"

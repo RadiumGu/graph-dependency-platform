@@ -27,6 +27,7 @@ _UNKNOWN_DEFAULTS = {
     "has_step_builder": False,
     "switchover_type": "manual_switchover",
     "description": "未知资源类型（保守降级）",
+    "validation_template": 'echo "TODO: Add validation for {type} {name}" && exit 1',
 }
 
 
@@ -42,6 +43,9 @@ class ServiceTypeInfo:
         has_step_builder: Whether StepBuilder has a dedicated builder method.
         switchover_type: How to switch this resource over (e.g. ``promote_replica``).
         description: Human-readable Chinese description.
+        validation_template: Executable AWS CLI / kubectl command template to verify the
+            resource after switchover. Supports ``{name}``, ``{target}``, and ``{type}``
+            placeholders.
         is_unknown: True when this info was synthesized from defaults (type not in YAML).
     """
 
@@ -52,6 +56,7 @@ class ServiceTypeInfo:
     has_step_builder: bool
     switchover_type: str
     description: str
+    validation_template: str = ""
     is_unknown: bool = False
 
 
@@ -108,6 +113,7 @@ class ServiceTypeRegistry:
             has_step_builder=_UNKNOWN_DEFAULTS["has_step_builder"],
             switchover_type=_UNKNOWN_DEFAULTS["switchover_type"],
             description=_UNKNOWN_DEFAULTS["description"],
+            validation_template=_UNKNOWN_DEFAULTS["validation_template"],
             is_unknown=True,
         )
 
@@ -208,6 +214,7 @@ class ServiceTypeRegistry:
                 has_step_builder=bool(raw.get("has_step_builder", False)),
                 switchover_type=raw.get("switchover_type", _UNKNOWN_DEFAULTS["switchover_type"]),
                 description=raw.get("description", ""),
+                validation_template=raw.get("validation_template", _UNKNOWN_DEFAULTS["validation_template"]),
             )
             loaded += 1
 
