@@ -1,4 +1,4 @@
-English | [English](./README.md)
+[English](./README.md) | 中文文档
 
 # Graph Dependency Platform
 
