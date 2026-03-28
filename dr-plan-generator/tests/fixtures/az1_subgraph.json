@@ -1,0 +1,23 @@
+{
+  "nodes": [
+    {"name": "petsite-db", "type": "RDSCluster", "tier": "Tier0", "az": "apne1-az1", "state": "available"},
+    {"name": "petsearch-db", "type": "DynamoDBTable", "tier": "Tier0", "az": "apne1-az1", "state": "ACTIVE", "global_table": true},
+    {"name": "petsite", "type": "Microservice", "tier": "Tier0", "az": "apne1-az1", "state": "running"},
+    {"name": "petsearch", "type": "Microservice", "tier": "Tier1", "az": "apne1-az1", "state": "running"},
+    {"name": "payforadoption", "type": "Microservice", "tier": "Tier1", "az": "apne1-az1", "state": "running"},
+    {"name": "petadoption-lambda", "type": "LambdaFunction", "tier": "Tier2", "az": "apne1-az1", "state": "Active"},
+    {"name": "petsite-alb", "type": "LoadBalancer", "tier": null, "az": "apne1-az1", "state": "active"},
+    {"name": "petsite-svc", "type": "K8sService", "tier": "Tier0", "az": "apne1-az1", "state": "running"},
+    {"name": "petsite-capability", "type": "BusinessCapability", "tier": "Tier0", "az": "apne1-az1", "state": "active"}
+  ],
+  "edges": [
+    {"from": "petsite", "to": "petsite-db", "type": "AccessesData"},
+    {"from": "petsite", "to": "petsearch", "type": "Calls"},
+    {"from": "petsearch", "to": "petsearch-db", "type": "AccessesData"},
+    {"from": "payforadoption", "to": "petsite-db", "type": "AccessesData"},
+    {"from": "petadoption-lambda", "to": "petsearch-db", "type": "AccessesData"},
+    {"from": "petsite-alb", "to": "petsite", "type": "DependsOn"},
+    {"from": "petsite-svc", "to": "petsite", "type": "DependsOn"},
+    {"from": "petsite-capability", "to": "petsite", "type": "DependsOn"}
+  ]
+}
