@@ -1,6 +1,6 @@
 {
   "plan_id": "dr-az-apne1az1-no-petfood",
-  "created_at": "2026-03-28T13:22:04.314599+00:00",
+  "created_at": "2026-03-28T13:27:14.401787+00:00",
   "scope": "az",
   "source": "apne1-az1",
   "target": "apne1-az2,apne1-az4",
@@ -42,8 +42,8 @@
           "resource_name": "apne1-az2,apne1-az4",
           "action": "check_target_connectivity",
           "command": "aws sts get-caller-identity --region apne1-az2,apne1-az4",
-          "validation": "echo $?",
-          "expected_result": "0",
+          "validation": "aws sts get-caller-identity --region apne1-az2,apne1-az4 --query 'Account' --output text",
+          "expected_result": "Account ID returned (not empty)",
           "rollback_command": "# No rollback needed for connectivity check",
           "estimated_time": 10,
           "requires_approval": false,
@@ -59,8 +59,8 @@
           "resource_name": "petsite-db",
           "action": "check_replication_lag",
           "command": "aws rds describe-db-clusters --db-cluster-identifier petsite-db --region apne1-az1 --query 'DBClusters[0].ReplicationSourceIdentifier'",
-          "validation": "# ReplicaLag should be < 1000ms",
-          "expected_result": "ReplicaLag < 1000ms",
+          "validation": "aws cloudwatch get-metric-statistics --namespace AWS/RDS --metric-name ReplicaLag --dimensions Name=DBClusterIdentifier,Value=petsite-db --start-time $(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%S) --end-time $(date -u +%Y-%m-%dT%H:%M:%S) --period 60 --statistics Average --region apne1-az1 --query 'Datapoints[0].Average' --output text",
+          "expected_result": "< 1000 (milliseconds)",
           "rollback_command": "# No rollback needed for lag check",
           "estimated_time": 15,
           "requires_approval": false,
@@ -381,5 +381,5 @@
   "estimated_rto": 13,
   "estimated_rpo": 15,
   "validation_status": "valid",
-  "graph_snapshot_time": "2026-03-28T13:22:04.314599+00:00"
+  "graph_snapshot_time": "2026-03-28T13:27:14.401787+00:00"
 }

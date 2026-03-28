@@ -1,10 +1,10 @@
 # DR Switchover Plan — REGION Level
 
-> Generated: 2026-03-28T13:22:04.315974+00:00
+> Generated: 2026-03-28T13:27:14.403121+00:00
 > Failure scope: ap-northeast-1 → DR target: us-west-2
 > Estimated RTO: 55 minutes
 > Estimated RPO: 15 minutes
-> Graph snapshot: 2026-03-28T13:22:04.315974+00:00
+> Graph snapshot: 2026-03-28T13:27:14.403121+00:00
 > Plan ID: `dr-region-apne1-to-usw2`
 
 ## Impact Summary
@@ -69,9 +69,9 @@ aws sts get-caller-identity --region us-west-2
 
 **Validation**:
 ```bash
-echo $?
+aws sts get-caller-identity --region us-west-2 --query 'Account' --output text
 ```
-Expected result: `0`
+Expected result: `Account ID returned (not empty)`
 
 **Rollback**:
 ```bash
@@ -90,9 +90,9 @@ aws rds describe-db-clusters --db-cluster-identifier petsite-db --region ap-nort
 
 **Validation**:
 ```bash
-# ReplicaLag should be < 1000ms
+aws cloudwatch get-metric-statistics --namespace AWS/RDS --metric-name ReplicaLag --dimensions Name=DBClusterIdentifier,Value=petsite-db --start-time $(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%S) --end-time $(date -u +%Y-%m-%dT%H:%M:%S) --period 60 --statistics Average --region ap-northeast-1 --query 'Datapoints[0].Average' --output text
 ```
-Expected result: `ReplicaLag < 1000ms`
+Expected result: `< 1000 (milliseconds)`
 
 **Rollback**:
 ```bash
@@ -111,9 +111,9 @@ aws rds describe-db-clusters --db-cluster-identifier petsite-db-replica --region
 
 **Validation**:
 ```bash
-# ReplicaLag should be < 1000ms
+aws cloudwatch get-metric-statistics --namespace AWS/RDS --metric-name ReplicaLag --dimensions Name=DBClusterIdentifier,Value=petsite-db-replica --start-time $(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%S) --end-time $(date -u +%Y-%m-%dT%H:%M:%S) --period 60 --statistics Average --region ap-northeast-1 --query 'Datapoints[0].Average' --output text
 ```
-Expected result: `ReplicaLag < 1000ms`
+Expected result: `< 1000 (milliseconds)`
 
 **Rollback**:
 ```bash
@@ -285,27 +285,27 @@ Expected result: `Resource healthy in target`
 **Estimated duration**: 21 min
 **Gate condition**: All Tier0 services healthy in target
 
-### Step phase-2.1: `manual_switchover` — petsite-ec2-3 (requires approval)
+### Step phase-2.1: `manual_switchover` — petsite-ec2-1 (requires approval)
 
 **Resource type**: EC2Instance
 **Estimated time**: 120s
 
 **Command**:
 ```bash
-# TODO: Manual switchover required for EC2Instance 'petsite-ec2-3'
+# TODO: Manual switchover required for EC2Instance 'petsite-ec2-1'
 # Source: ap-northeast-1 → Target: us-west-2
 # Add the appropriate AWS CLI command here.
 ```
 
 **Validation**:
 ```bash
-# TODO: Add verification command for petsite-ec2-3
+# TODO: Add verification command for petsite-ec2-1
 ```
 Expected result: `Resource healthy in target`
 
 **Rollback**:
 ```bash
-# TODO: Add rollback command for petsite-ec2-3
+# TODO: Add rollback command for petsite-ec2-1
 ```
 
 ### Step phase-2.2: `manual_switchover` — petsite-ec2-2 (requires approval)
@@ -331,27 +331,27 @@ Expected result: `Resource healthy in target`
 # TODO: Add rollback command for petsite-ec2-2
 ```
 
-### Step phase-2.3: `manual_switchover` — petsite-ec2-1 (requires approval)
+### Step phase-2.3: `manual_switchover` — petsite-ec2-3 (requires approval)
 
 **Resource type**: EC2Instance
 **Estimated time**: 120s
 
 **Command**:
 ```bash
-# TODO: Manual switchover required for EC2Instance 'petsite-ec2-1'
+# TODO: Manual switchover required for EC2Instance 'petsite-ec2-3'
 # Source: ap-northeast-1 → Target: us-west-2
 # Add the appropriate AWS CLI command here.
 ```
 
 **Validation**:
 ```bash
-# TODO: Add verification command for petsite-ec2-1
+# TODO: Add verification command for petsite-ec2-3
 ```
 Expected result: `Resource healthy in target`
 
 **Rollback**:
 ```bash
-# TODO: Add rollback command for petsite-ec2-1
+# TODO: Add rollback command for petsite-ec2-3
 ```
 
 ### Step phase-2.4: `verify_k8s_service_endpoints` — petsite-svc [Tier0]
@@ -995,21 +995,21 @@ Expected result: `Original state of petsite-svc`
 # Manual intervention required
 ```
 
-### Step rollback-phase-2.11: `rollback_manual_switchover` — petsite-ec2-1 (requires approval)
+### Step rollback-phase-2.11: `rollback_manual_switchover` — petsite-ec2-3 (requires approval)
 
 **Resource type**: EC2Instance
 **Estimated time**: 120s
 
 **Command**:
 ```bash
-# TODO: Add rollback command for petsite-ec2-1
+# TODO: Add rollback command for petsite-ec2-3
 ```
 
 **Validation**:
 ```bash
-# TODO: Add verification command for petsite-ec2-1
+# TODO: Add verification command for petsite-ec2-3
 ```
-Expected result: `Original state of petsite-ec2-1`
+Expected result: `Original state of petsite-ec2-3`
 
 **Rollback**:
 ```bash
@@ -1037,21 +1037,21 @@ Expected result: `Original state of petsite-ec2-2`
 # Manual intervention required
 ```
 
-### Step rollback-phase-2.13: `rollback_manual_switchover` — petsite-ec2-3 (requires approval)
+### Step rollback-phase-2.13: `rollback_manual_switchover` — petsite-ec2-1 (requires approval)
 
 **Resource type**: EC2Instance
 **Estimated time**: 120s
 
 **Command**:
 ```bash
-# TODO: Add rollback command for petsite-ec2-3
+# TODO: Add rollback command for petsite-ec2-1
 ```
 
 **Validation**:
 ```bash
-# TODO: Add verification command for petsite-ec2-3
+# TODO: Add verification command for petsite-ec2-1
 ```
-Expected result: `Original state of petsite-ec2-3`
+Expected result: `Original state of petsite-ec2-1`
 
 **Rollback**:
 ```bash

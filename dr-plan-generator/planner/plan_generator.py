@@ -193,8 +193,8 @@ class PlanGenerator:
                 resource_name=target,
                 action="check_target_connectivity",
                 command=f"aws sts get-caller-identity --region {target}",
-                validation="echo $?",
-                expected_result="0",
+                validation=f"aws sts get-caller-identity --region {target} --query 'Account' --output text",
+                expected_result="Account ID returned (not empty)",
                 rollback_command="# No rollback needed for connectivity check",
                 estimated_time=10,
                 requires_approval=False,
@@ -221,8 +221,16 @@ class PlanGenerator:
                             f"--region {source} "
                             f"--query 'DBClusters[0].ReplicationSourceIdentifier'"
                         ),
-                        validation="# ReplicaLag should be < 1000ms",
-                        expected_result="ReplicaLag < 1000ms",
+                        validation=(
+                            f"aws cloudwatch get-metric-statistics "
+                            f"--namespace AWS/RDS --metric-name ReplicaLag "
+                            f"--dimensions Name=DBClusterIdentifier,Value={node['name']} "
+                            f"--start-time $(date -u -d '5 minutes ago' +%Y-%m-%dT%H:%M:%S) "
+                            f"--end-time $(date -u +%Y-%m-%dT%H:%M:%S) "
+                            f"--period 60 --statistics Average --region {source} "
+                            f"--query 'Datapoints[0].Average' --output text"
+                        ),
+                        expected_result="< 1000 (milliseconds)",
                         rollback_command="# No rollback needed for lag check",
                         estimated_time=15,
                         requires_approval=False,
