@@ -1,10 +1,10 @@
 # DR Switchover Plan — AZ Level
 
-> Generated: 2026-03-28T11:53:54.550938+00:00
+> Generated: 2026-03-28T13:07:02.819241+00:00
 > Failure scope: apne1-az1 → DR target: apne1-az2,apne1-az4
 > Estimated RTO: 34 minutes
 > Estimated RPO: 15 minutes
-> Graph snapshot: 2026-03-28T11:53:54.550938+00:00
+> Graph snapshot: 2026-03-28T13:07:02.819241+00:00
 > Plan ID: `dr-az-apne1az1-example`
 
 ## Impact Summary
@@ -322,30 +322,7 @@ Expected result: `3`
 kubectl scale deployment petfood --replicas=0 --context apne1-az2,apne1-az4-cluster
 ```
 
-### Step phase-2.8: `verify_lambda_function` — petstatusupdater [Tier2]
-
-**Resource type**: LambdaFunction
-**Estimated time**: 30s
-
-**Command**:
-```bash
-aws lambda invoke --function-name petstatusupdater --region apne1-az2,apne1-az4 --payload '{"source": "dr-healthcheck"}' /tmp/petstatusupdater-response.json
-cat /tmp/petstatusupdater-response.json
-```
-
-**Validation**:
-```bash
-aws lambda get-function-configuration --function-name petstatusupdater --region apne1-az2,apne1-az4 --query 'State' --output text
-```
-Expected result: `Active`
-
-**Rollback**:
-```bash
-# Lambda functions are stateless; update event source mapping
-aws lambda update-event-source-mapping --region apne1-az1 --uuid $EVENT_SOURCE_UUID --enabled
-```
-
-### Step phase-2.9: `verify_lambda_function` — petadoption-lambda [Tier2]
+### Step phase-2.8: `verify_lambda_function` — petadoption-lambda [Tier2]
 
 **Resource type**: LambdaFunction
 **Estimated time**: 30s
@@ -359,6 +336,29 @@ cat /tmp/petadoption-lambda-response.json
 **Validation**:
 ```bash
 aws lambda get-function-configuration --function-name petadoption-lambda --region apne1-az2,apne1-az4 --query 'State' --output text
+```
+Expected result: `Active`
+
+**Rollback**:
+```bash
+# Lambda functions are stateless; update event source mapping
+aws lambda update-event-source-mapping --region apne1-az1 --uuid $EVENT_SOURCE_UUID --enabled
+```
+
+### Step phase-2.9: `verify_lambda_function` — petstatusupdater [Tier2]
+
+**Resource type**: LambdaFunction
+**Estimated time**: 30s
+
+**Command**:
+```bash
+aws lambda invoke --function-name petstatusupdater --region apne1-az2,apne1-az4 --payload '{"source": "dr-healthcheck"}' /tmp/petstatusupdater-response.json
+cat /tmp/petstatusupdater-response.json
+```
+
+**Validation**:
+```bash
+aws lambda get-function-configuration --function-name petstatusupdater --region apne1-az2,apne1-az4 --query 'State' --output text
 ```
 Expected result: `Active`
 
@@ -525,29 +525,7 @@ Expected result: `Original state of petsite-alb`
 **Estimated duration**: 13 min
 **Gate condition**: All Compute Layer Activation rollback steps verified
 
-### Step rollback-phase-2.1: `rollback_verify_lambda_function` — petadoption-lambda (requires approval) [Tier2]
-
-**Resource type**: LambdaFunction
-**Estimated time**: 30s
-
-**Command**:
-```bash
-# Lambda functions are stateless; update event source mapping
-aws lambda update-event-source-mapping --region apne1-az1 --uuid $EVENT_SOURCE_UUID --enabled
-```
-
-**Validation**:
-```bash
-aws lambda get-function-configuration --function-name petadoption-lambda --region apne1-az2,apne1-az4 --query 'State' --output text
-```
-Expected result: `Original state of petadoption-lambda`
-
-**Rollback**:
-```bash
-# Manual intervention required
-```
-
-### Step rollback-phase-2.2: `rollback_verify_lambda_function` — petstatusupdater (requires approval) [Tier2]
+### Step rollback-phase-2.1: `rollback_verify_lambda_function` — petstatusupdater (requires approval) [Tier2]
 
 **Resource type**: LambdaFunction
 **Estimated time**: 30s
@@ -563,6 +541,28 @@ aws lambda update-event-source-mapping --region apne1-az1 --uuid $EVENT_SOURCE_U
 aws lambda get-function-configuration --function-name petstatusupdater --region apne1-az2,apne1-az4 --query 'State' --output text
 ```
 Expected result: `Original state of petstatusupdater`
+
+**Rollback**:
+```bash
+# Manual intervention required
+```
+
+### Step rollback-phase-2.2: `rollback_verify_lambda_function` — petadoption-lambda (requires approval) [Tier2]
+
+**Resource type**: LambdaFunction
+**Estimated time**: 30s
+
+**Command**:
+```bash
+# Lambda functions are stateless; update event source mapping
+aws lambda update-event-source-mapping --region apne1-az1 --uuid $EVENT_SOURCE_UUID --enabled
+```
+
+**Validation**:
+```bash
+aws lambda get-function-configuration --function-name petadoption-lambda --region apne1-az2,apne1-az4 --query 'State' --output text
+```
+Expected result: `Original state of petadoption-lambda`
 
 **Rollback**:
 ```bash
