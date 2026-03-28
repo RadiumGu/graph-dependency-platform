@@ -1,0 +1,13 @@
+[
+  {
+    "service": "pethistory-deployment",
+    "namespace": "default",
+    "db_cluster_id": "<YOUR_DB_CLUSTER_ID>",
+    "db_endpoint": "<YOUR_DB_CLUSTER_ENDPOINT>",
+    "dbname": "adoptions",
+    "engine": "postgres",
+    "source": "secrets_manager",
+    "secret_arn": "<YOUR_SECRET_ARN>",
+    "db_cluster_arn": "<YOUR_DB_CLUSTER_ARN>"
+  }
+]

@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# pip install artifacts (deploy.sh installs to source dir for Lambda packaging)
+requests/
+urllib3/
+certifi/
+idna/
+charset_normalizer/
+bin/
+*.dist-info/
+*.so
+
+# Environment / secrets
+.env
+
+# Lambda package
+/tmp/rca-engine.zip
