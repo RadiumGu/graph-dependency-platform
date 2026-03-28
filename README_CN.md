@@ -2,9 +2,9 @@
 
 # Graph Dependency Platform
 
-面向 AWS EKS 微服务的生产级 **可观测 → 知识图谱 → 智能根因分析 → 混沌验证** 完整闭环平台。
+面向 AWS EKS 微服务的生产级 **可观测 → 知识图谱 → 智能根因分析 → 混沌验证 → 容灾计划** 完整闭环平台。
 
-以 [PetSite](https://github.com/aws-samples/one-observability-demo)（运行在 EKS ARM64 Graviton3 上的多语言微服务应用）为目标系统，平台持续从实时流量和基础设施拓扑构建 Neptune 知识图谱，在告警触发时执行 AI 驱动的根因分析，并通过 AI 驱动的混沌实验验证系统韧性。
+以 [PetSite](https://github.com/aws-samples/one-observability-demo)（运行在 EKS ARM64 Graviton3 上的多语言微服务应用）为目标系统，平台持续从实时流量和基础设施拓扑构建 Neptune 知识图谱，在告警触发时执行 AI 驱动的根因分析，通过 AI 驱动的混沌实验验证系统韧性，并基于图谱自动生成容灾切换计划。
 
 ---
 
@@ -31,8 +31,13 @@
       │  + Graph RAG 报告    │  │                           │
       └──────────┬──────────┘  └──────┬────────────────────┘
                  │  事件写回           │  验证 RCA 准确性
+                 └──────────┬──────────┘
+                            │ 闭环验证
+                 ┌──────────▼──────────┐
+                 │  dr-plan-generator/  │
+                 │  图谱驱动容灾计划     │
+                 │  生成器              │
                  └─────────────────────┘
-                       闭环验证
 ```
 
 ### 数据流
@@ -41,6 +46,7 @@
 2. 真实或注入的故障触发 CloudWatch Alarm → **rca/** Lambda 激活
 3. **rca/** 执行多层分析（DeepFlow L7/L4 + CloudTrail + Neptune 图遍历 + Layer2 AWS 服务探针）→ 通过 Bedrock Claude 生成 Graph RAG 报告
 4. **chaos/** HypothesisAgent 基于 Neptune 图谱生成假设 → 5 Phase 实验引擎注入故障 → 验证 RCA 准确性 → LearningAgent 闭环学习
+5. **dr-plan-generator/** 查询 Neptune 图谱，自动生成有序、可执行的 DR 切换计划，附带回滚指令和 RTO/RPO 估算
 
 ---
 
@@ -68,6 +74,15 @@ graph-dependency-platform/
 │       ├── experiments/  # 实验 YAML 模板（tier0 / tier1 / fis）
 │       ├── infra/        # FIS IAM + 告警配置
 │       └── fmea/         # FMEA 故障模式分析
+│
+├── dr-plan-generator/  # 图谱驱动容灾计划生成器（新增）
+│   ├── graph/          #   Neptune 查询（Q12–Q16）+ 依赖分析器
+│   ├── planner/        #   计划生成（Phase 0–4）+ 回滚 + 步骤构建
+│   ├── assessment/     #   影响评估 + RTO 估算 + SPOF 检测
+│   ├── validation/     #   静态验证 + chaos 实验导出
+│   ├── output/         #   Markdown / JSON / LLM 摘要渲染
+│   ├── examples/       #   预生成示例计划（AZ + Region）
+│   └── AGENT.md        #   通用 AI Agent 指令
 │
 └── shared/         # 共享配置与工具
 ```
@@ -197,6 +212,56 @@ Slack 通知 + 半自动修复 + 事件归档
 | **AWS FIS** | AWS 托管服务层 | 15 种（Lambda/RDS/EKS Node/EBS/VPC 网络） |
 
 📖 **详细文档**：[`chaos/code/README.md`](chaos/code/README.md) | [`chaos/README.md`](chaos/README.md)
+
+---
+
+## 4. dr-plan-generator/ — 图谱驱动容灾计划生成器
+
+**Neptune 图谱 → 依赖分析 → 有序切换计划 → 回滚计划 → chaos 验证导出。**
+
+通过查询 Neptune 知识图谱的依赖关系，对资源进行拓扑排序，自动生成分层、可执行的容灾切换计划。
+
+### 切换阶段
+
+| Phase | 名称 | 操作 |
+|-------|------|------|
+| 0 | 预检 | 目标连通性、Replication Lag 验证、DNS TTL 降低 |
+| 1 | 数据层切换 | RDS/Aurora failover、DynamoDB Global Table 切换、SQS 端点更新 |
+| 2 | 计算层切换 | EKS 工作负载按 Tier 顺序扩容、Lambda 验证、健康检查 |
+| 3 | 流量层切换 | ALB 健康确认、Route 53 DNS 切换 |
+| 4 | 切换后验证 | 端到端验证、性能基线对比 |
+
+### 核心能力
+
+- **拓扑排序**（Kahn's 算法）：确保层内依赖顺序正确
+- **并行组检测**：识别可并发执行的步骤
+- **单点故障检测**：标记单 AZ 部署且被多服务依赖的资源
+- **RTO/RPO 估算**：基于资源类型默认时间 + 并行优化
+- **每步都有回滚**：不生成无回滚命令的步骤
+- **Chaos 导出**：将 DR 假设转为 chaos 实验 YAML，与 `chaos/` 联动验证
+
+### Neptune 查询（Q12–Q16）
+
+| 查询 | 用途 |
+|------|------|
+| Q12 | AZ/Region 依赖树 |
+| Q13 | 数据层拓扑（所有数据存储 + 依赖服务） |
+| Q14 | 跨 Region 资源（Global Table、副本） |
+| Q15 | 关键路径（Tier0 最长依赖链 → 最小 RTO） |
+| Q16 | 单点故障检测 |
+
+### AI Agent 集成
+
+`AGENT.md` 提供通用 Agent 指令，适用于 OpenClaw / Claude Code / kiro-cli，引导用户交互式完成影响评估 → 计划生成 → 回滚 → chaos 验证。
+
+### 示例计划
+
+| 示例 | 场景 | 步骤 | RTO |
+|------|------|------|-----|
+| [AZ 切换](dr-plan-generator/examples/az-switchover-apne1-az1.md) | AZ1 → AZ2+AZ4 | 19 + 15 回滚 | ~34min |
+| [Region 切换](dr-plan-generator/examples/region-switchover-apne1-to-usw2.md) | 东京 → 美西 | 28 + 23 回滚 | ~55min |
+
+📖 **详细文档**：[`dr-plan-generator/README.md`](dr-plan-generator/README.md) | [`dr-plan-generator/README_CN.md`](dr-plan-generator/README_CN.md)
 
 ---
 

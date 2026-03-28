@@ -2,9 +2,9 @@
 
 # Graph Dependency Platform
 
-A production-grade **Observability → Knowledge Graph → Intelligent RCA → Chaos Validation** closed-loop platform for microservices on AWS EKS.
+A production-grade **Observability → Knowledge Graph → Intelligent RCA → Chaos Validation → DR Planning** closed-loop platform for microservices on AWS EKS.
 
-Built around [PetSite](https://github.com/aws-samples/one-observability-demo) — a polyglot microservice application running on EKS (ARM64 Graviton3) — the platform continuously builds a Neptune knowledge graph from live traffic and infrastructure topology, performs AI-powered root cause analysis when alerts fire, and validates system resilience through AI-driven chaos experiments.
+Built around [PetSite](https://github.com/aws-samples/one-observability-demo) — a polyglot microservice application running on EKS (ARM64 Graviton3) — the platform continuously builds a Neptune knowledge graph from live traffic and infrastructure topology, performs AI-powered root cause analysis when alerts fire, validates system resilience through AI-driven chaos experiments, and generates graph-driven disaster recovery switchover plans.
 
 ---
 
@@ -31,8 +31,13 @@ Built around [PetSite](https://github.com/aws-samples/one-observability-demo) �
       │  + Graph RAG reports │  │  (Chaos Mesh + AWS FIS)   │
       └──────────┬──────────┘  └──────┬────────────────────┘
                  │  writes incidents   │  validates RCA
+                 └──────────┬──────────┘
+                            │ closed loop
+                 ┌──────────▼──────────┐
+                 │  dr-plan-generator/  │
+                 │  Graph-driven DR     │
+                 │  switchover plans    │
                  └─────────────────────┘
-                       closed loop
 ```
 
 ### Data Flow
@@ -41,6 +46,7 @@ Built around [PetSite](https://github.com/aws-samples/one-observability-demo) �
 2. Real or injected faults trigger CloudWatch Alarms → **rca/** Lambda activates
 3. **rca/** runs multi-layer analysis (DeepFlow L7/L4 + CloudTrail + Neptune graph traversal + Layer2 AWS Service Probers) → Graph RAG report via Bedrock Claude
 4. **chaos/** HypothesisAgent generates hypotheses from Neptune graph → 5-Phase experiment engine injects faults → validates RCA accuracy → LearningAgent feeds results back
+5. **dr-plan-generator/** queries Neptune graph to generate ordered, executable DR switchover plans with rollback instructions and RTO/RPO estimates
 
 ---
 
@@ -68,6 +74,15 @@ graph-dependency-platform/
 │       ├── experiments/  # Experiment YAML templates (tier0 / tier1 / fis)
 │       ├── infra/        # FIS IAM + alarm setup
 │       └── fmea/         # FMEA failure mode analysis
+│
+├── dr-plan-generator/  # Graph-Driven DR Plan Generator (NEW)
+│   ├── graph/          #   Neptune queries (Q12–Q16) + dependency analyzer
+│   ├── planner/        #   Plan generation (Phase 0–4) + rollback + step builder
+│   ├── assessment/     #   Impact analysis + RTO estimation + SPOF detection
+│   ├── validation/     #   Static validation + chaos experiment export
+│   ├── output/         #   Markdown / JSON / LLM summary renderers
+│   ├── examples/       #   Pre-generated example plans (AZ + Region)
+│   └── AGENT.md        #   Universal AI agent instructions
 │
 └── shared/         # Shared configuration & utilities
 ```
@@ -256,6 +271,56 @@ Each experiment publishes to the `ChaosEngineering` custom namespace:
 - `PhaseDuration` per phase — dimensions: ExperimentId / Phase
 
 📖 **Detailed docs**: [`chaos/code/README.md`](chaos/code/README.md)
+
+---
+
+## 4. dr-plan-generator/ — Graph-Driven DR Plan Generator
+
+**Neptune graph → dependency analysis → ordered switchover plan → rollback plan → chaos validation export.**
+
+Automatically generates phased, executable disaster recovery switchover plans by querying the Neptune knowledge graph for dependency relationships and topologically sorting resources across four layers.
+
+### Switchover Phases
+
+| Phase | Name | Actions |
+|-------|------|---------|
+| 0 | Pre-flight Check | Target connectivity, replication lag verification, DNS TTL lowering |
+| 1 | Data Layer | RDS/Aurora failover, DynamoDB Global Table switch, SQS endpoint update |
+| 2 | Compute Layer | EKS workload scale-up (by Tier), Lambda verification, health checks |
+| 3 | Network Layer | ALB health confirmation, Route 53 DNS switch |
+| 4 | Validation | End-to-end verification, performance baseline comparison |
+
+### Key Capabilities
+
+- **Topological Sort** (Kahn's algorithm): ensures correct dependency order within each layer
+- **Parallel Group Detection**: identifies steps that can execute concurrently
+- **SPOF Detection**: flags single-AZ resources with multiple dependents
+- **RTO/RPO Estimation**: based on resource type default times + parallel optimization
+- **Every Step Has Rollback**: no step generated without a rollback command
+- **Chaos Export**: converts DR assumptions into chaos experiment YAMLs for validation with `chaos/`
+
+### Neptune Queries (Q12–Q16)
+
+| Query | Purpose |
+|-------|---------|
+| Q12 | AZ/Region dependency tree |
+| Q13 | Data layer topology (all data stores + dependent services) |
+| Q14 | Cross-region resources (Global Tables, replicas) |
+| Q15 | Critical path (longest Tier0 dependency chain → minimum RTO) |
+| Q16 | Single point of failure detection |
+
+### AI Agent Integration
+
+`AGENT.md` provides universal instructions for AI agents (OpenClaw, Claude Code, kiro-cli) to interactively guide users through DR plan generation — from impact assessment to plan generation to rollback and chaos validation.
+
+### Example Plans
+
+| Example | Scenario | Steps | RTO |
+|---------|----------|-------|-----|
+| [AZ switchover](dr-plan-generator/examples/az-switchover-apne1-az1.md) | AZ1 → AZ2+AZ4 | 19 + 15 rollback | ~34min |
+| [Region switchover](dr-plan-generator/examples/region-switchover-apne1-to-usw2.md) | Tokyo → US West | 28 + 23 rollback | ~55min |
+
+📖 **Detailed docs**: [`dr-plan-generator/README.md`](dr-plan-generator/README.md)
 
 ---
 
