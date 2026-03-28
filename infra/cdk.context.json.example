@@ -1,0 +1,46 @@
+{
+  "vpc-provider:account=YOUR_ACCOUNT_ID:filter.vpc-id=YOUR_VPC_ID:region=YOUR_AWS_REGION:returnAsymmetricSubnets=true": {
+    "vpcId": "YOUR_VPC_ID",
+    "vpcCidrBlock": "10.0.0.0/16",
+    "ownerAccountId": "YOUR_ACCOUNT_ID",
+    "availabilityZones": [],
+    "subnetGroups": [
+      {
+        "name": "Private",
+        "type": "Private",
+        "subnets": [
+          {
+            "subnetId": "YOUR_PRIVATE_SUBNET_ID_AZ1",
+            "cidr": "10.0.2.0/24",
+            "availabilityZone": "YOUR_AWS_REGION_a",
+            "routeTableId": "YOUR_ROUTE_TABLE_ID_AZ1"
+          },
+          {
+            "subnetId": "YOUR_PRIVATE_SUBNET_ID_AZ2",
+            "cidr": "10.0.3.0/24",
+            "availabilityZone": "YOUR_AWS_REGION_c",
+            "routeTableId": "YOUR_ROUTE_TABLE_ID_AZ2"
+          }
+        ]
+      },
+      {
+        "name": "Public",
+        "type": "Public",
+        "subnets": [
+          {
+            "subnetId": "YOUR_PUBLIC_SUBNET_ID_AZ1",
+            "cidr": "10.0.0.0/24",
+            "availabilityZone": "YOUR_AWS_REGION_a",
+            "routeTableId": "YOUR_PUBLIC_ROUTE_TABLE_ID_AZ1"
+          },
+          {
+            "subnetId": "YOUR_PUBLIC_SUBNET_ID_AZ2",
+            "cidr": "10.0.1.0/24",
+            "availabilityZone": "YOUR_AWS_REGION_c",
+            "routeTableId": "YOUR_PUBLIC_ROUTE_TABLE_ID_AZ2"
+          }
+        ]
+      }
+    ]
+  }
+}

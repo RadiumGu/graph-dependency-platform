@@ -1,0 +1,225 @@
+{
+  "microservice_recovery_priority": {
+    "petsite": "Tier0",
+    "petsearch": "Tier0",
+    "payforadoption": "Tier0",
+    "petlistadoptions": "Tier1",
+    "pethistory": "Tier1",
+    "petstatusupdater": "Tier1",
+    "trafficgenerator": "Tier2"
+  },
+  "lambda_recovery_priority": {
+    "petstatusupdater": "Tier1",
+    "cleanup": "Tier2",
+    "guardduty": "Tier2",
+    "cloudwatch-custom": "Tier2",
+    "dynamodb-query": "Tier2"
+  },
+  "ec2_recovery_priority": {
+    "deepflow": "Tier1"
+  },
+  "k8s_service_alias": {
+    "pay-for-adoption": "payforadoption",
+    "list-adoptions": "petlistadoptions",
+    "search-service": "petsearch",
+    "pethistory": "pethistory",
+    "traffic-generator": "trafficgenerator"
+  },
+  "business_capabilities": [
+    {
+      "name": "PetAdoptionFlow",
+      "description": "Core pet adoption flow: browse -> pay -> status update",
+      "recovery_priority": "Tier0",
+      "serves_services": [
+        "petsite",
+        "payforadoption"
+      ],
+      "serves_lambda": [],
+      "depends_on_types": [
+        "DynamoDBTable",
+        "SQSQueue",
+        "SNSTopic",
+        "StepFunction",
+        "RDSCluster"
+      ]
+    },
+    {
+      "name": "AdoptionHistoryView",
+      "description": "Adoption history query and display",
+      "recovery_priority": "Tier1",
+      "serves_services": [
+        "pethistory"
+      ],
+      "serves_lambda": [],
+      "depends_on_types": [
+        "RDSCluster"
+      ]
+    },
+    {
+      "name": "PetInventoryManagement",
+      "description": "Pet inventory: search, adoptable list, async status update",
+      "recovery_priority": "Tier1",
+      "serves_services": [
+        "petsearch",
+        "petlistadoptions"
+      ],
+      "serves_lambda": [
+        "statusupdater"
+      ],
+      "depends_on_types": [
+        "DynamoDBTable",
+        "SQSQueue"
+      ]
+    }
+  ],
+  "microservice_infra_deps": {
+    "pethistory": [
+      {
+        "label": "RDSCluster",
+        "name_contains": "databaseb269d8bb",
+        "edge": "AccessesData",
+        "evidence": "source:petadoptionshistory.py#L14",
+        "declared_in": "etl_aws"
+      }
+    ],
+    "petlistadoptions": [
+      {
+        "label": "RDSCluster",
+        "name_contains": "databaseb269d8bb",
+        "edge": "AccessesData",
+        "evidence": "source:petlistadoptions-go/config.go#L57",
+        "declared_in": "etl_aws"
+      }
+    ],
+    "payforadoption": [
+      {
+        "label": "DynamoDBTable",
+        "name_contains": "ddbpetadoption",
+        "edge": "AccessesData",
+        "evidence": "source:repository.go#UpdateAvailability",
+        "declared_in": "etl_aws"
+      },
+      {
+        "label": "RDSCluster",
+        "name_contains": "databaseb269d8bb",
+        "edge": "AccessesData",
+        "evidence": "source:repository.go#CreateTransaction",
+        "declared_in": "etl_aws"
+      }
+    ],
+    "petsearch": [
+      {
+        "label": "DynamoDBTable",
+        "name_contains": "ddbpetadoption",
+        "edge": "AccessesData",
+        "evidence": "source:SearchController.java#search",
+        "declared_in": "etl_aws"
+      },
+      {
+        "label": "S3Bucket",
+        "name_contains": "s3bucketpetadoption",
+        "edge": "AccessesData",
+        "evidence": "source:SearchController.java#getPetUrl",
+        "declared_in": "etl_aws"
+      }
+    ],
+    "petsite": [
+      {
+        "label": "SQSQueue",
+        "name_contains": "sqspetadoption2E8B",
+        "edge": "PublishesTo",
+        "evidence": "source:PaymentController.cs#PostMessageToSqs",
+        "declared_in": "etl_aws"
+      },
+      {
+        "label": "SNSTopic",
+        "name_contains": "topicpetadoption",
+        "edge": "PublishesTo",
+        "evidence": "source:PaymentController.cs#SendNotification",
+        "declared_in": "etl_aws"
+      },
+      {
+        "label": "StepFunction",
+        "name_contains": "StepFnStateMachine",
+        "edge": "InvokesVia",
+        "evidence": "source:PaymentController.cs#StartStepFunctionExecution",
+        "declared_in": "etl_aws"
+      }
+    ]
+  },
+  "service_db_mapping": [
+    {
+      "service": "pethistory",
+      "db_cluster_id": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "dbname": "adoptions",
+      "engine": "postgres"
+    }
+  ],
+  "ops_tool_edges": [
+    [
+      "LambdaFunction",
+      "petsite-rca-engine",
+      "WritesTo",
+      "NeptuneCluster",
+      "petsite-neptune"
+    ],
+    [
+      "LambdaFunction",
+      "petsite-rca-interaction",
+      "WritesTo",
+      "NeptuneCluster",
+      "petsite-neptune"
+    ],
+    [
+      "SNSTopic",
+      "petsite-ops-alerts",
+      "Invokes",
+      "LambdaFunction",
+      "petsite-ops-slack-notifier"
+    ]
+  ],
+  "tg_app_label_static": {
+    "Servic-PetSi-BGUX1XK3RN6D": "petsite",
+    "Servic-PetAd-RPOCBTKKJYGI": "pethistory"
+  },
+  "infra_drift_rules": {
+    "dynamodb": {
+      "label": "DynamoDBTable",
+      "nc": "ddbpetadoption",
+      "dns_keywords": [
+        "dynamodb",
+        ".ddb."
+      ]
+    },
+    "sqs": {
+      "label": "SQSQueue",
+      "nc": "sqspetadoption",
+      "dns_keywords": [
+        ".sqs."
+      ]
+    },
+    "sns": {
+      "label": "SNSTopic",
+      "nc": "topicpetadoption",
+      "dns_keywords": [
+        ".sns."
+      ]
+    },
+    "rds": {
+      "label": "RDSCluster",
+      "nc": "databaseb269d8bb",
+      "dns_keywords": [
+        "rds.",
+        "aurora"
+      ]
+    },
+    "s3": {
+      "label": "S3Bucket",
+      "nc": "s3bucketpetadoption",
+      "dns_keywords": [
+        ".s3.",
+        "s3.amazon"
+      ]
+    }
+  }
+}

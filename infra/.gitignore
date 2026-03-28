@@ -1,0 +1,31 @@
+node_modules/
+cdk.out/
+dist/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# Environment variables — copy .env.example and fill in real values
+.env
+
+# CDK context cache — populated automatically by `cdk synth`; contains real IDs
+cdk.context.json
+
+# pip-installed Lambda dependencies (installed into Lambda package dirs)
+lambda/*/requests/
+lambda/*/requests-*
+lambda/*/urllib3/
+lambda/*/urllib3-*
+lambda/*/certifi/
+lambda/*/certifi-*
+lambda/*/botocore/
+lambda/*/boto3/
+lambda/*/charset_normalizer/
+lambda/*/idna/
+lambda/*/six*
+lambda/*/*.dist-info/
+lambda/*/*.egg-info/
+lambda/shared/python/requests/
+lambda/shared/python/urllib3/
+lambda/shared/python/certifi/
