@@ -1,21 +1,50 @@
 # DR Switchover Plan — AZ Level
 
-> Generated: 2026-03-28T13:17:16.028828+00:00
+> Generated: 2026-03-28T13:22:04.314599+00:00
 > Failure scope: apne1-az1 → DR target: apne1-az2,apne1-az4
 > Estimated RTO: 13 minutes
 > Estimated RPO: 15 minutes
-> Graph snapshot: 2026-03-28T13:17:16.028828+00:00
+> Graph snapshot: 2026-03-28T13:22:04.314599+00:00
 > Plan ID: `dr-az-apne1az1-no-petfood`
 
 ## Impact Summary
+
+**Risk level**: 🔴 HIGH  
+**Scope**: AZ — `apne1-az1` → `apne1-az2,apne1-az4`  
+**Estimated RTO**: 13 min | **RPO**: 15 min
 
 | Dimension | Value |
 |-----------|-------|
 | Affected services | 6 |
 | Affected resources | 13 |
-| Tier0 services | 6 |
-| Total phases | 5 |
-| Total steps | 6 |
+| Tier0 (critical) | 6 |
+| Tier1 (important) | 3 |
+| Tier2 (standard) | 2 |
+| Switchover steps | 6 |
+| Rollback steps | 2 |
+
+### Tier0 Critical Services
+
+`petsearch`, `petsearch-db`, `petsearch-svc`, `petsite`, `petsite-db`, `petsite-svc`
+
+### Tier1 Important Services
+
+`payforadoption`, `pethistory`, `pethistory-queue`
+
+### Affected Resource Types
+
+| Type | Count | Fault Domain |
+|------|-------|-------------|
+| Microservice | 4 | 🌐 regional |
+| K8sService | 2 | 🌐 regional |
+| LambdaFunction | 2 | 🌐 regional |
+| RDSCluster | 1 | ⚡ zonal |
+| DynamoDBTable | 1 | 🌐 regional |
+| SQSQueue | 1 | 🌐 regional |
+| LoadBalancer | 1 | 🌐 regional |
+| TargetGroup | 1 | 🌐 regional |
+
+> ℹ️ **7 regional/global resource type(s)** in the affected subgraph are unaffected by AZ failure and have no switchover steps: `DynamoDBTable`, `K8sService`, `LambdaFunction`, `LoadBalancer`, `Microservice`, `SQSQueue`, `TargetGroup`
 
 ### Single Point of Failure Risks
 

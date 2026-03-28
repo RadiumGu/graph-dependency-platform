@@ -117,28 +117,109 @@ class MarkdownRenderer:
     def _render_impact_summary(self, plan: DRPlan) -> List[str]:
         """Render the impact summary section.
 
+        Shows a concise but informative overview: scope, scale, tier
+        breakdown, service lists, risk level, and key timing estimates.
+
         Args:
             plan: DRPlan.
 
         Returns:
             List of Markdown lines.
         """
-        tier0 = 0
-        if plan.impact_assessment:
-            tier0 = len(plan.impact_assessment.by_tier.get("Tier0", []))
+        impact = plan.impact_assessment
+        tier0 = impact.by_tier.get("Tier0", []) if impact else []
+        tier1 = impact.by_tier.get("Tier1", []) if impact else []
+        tier2 = impact.by_tier.get("Tier2", []) if impact else []
+        risk = impact.risk_matrix if impact else {}
+        severity = risk.get("severity", "UNKNOWN")
+
+        # Severity emoji
+        sev_map = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢"}
+        sev_icon = sev_map.get(severity, "⚪")
+
+        total_steps = sum(len(p.steps) for p in plan.phases)
+        rollback_steps = sum(len(p.steps) for p in plan.rollback_phases)
 
         lines = [
             "## Impact Summary",
+            "",
+            f"**Risk level**: {sev_icon} {severity}  ",
+            f"**Scope**: {plan.scope.upper()} — `{plan.source}` → `{plan.target}`  ",
+            f"**Estimated RTO**: {plan.estimated_rto} min | **RPO**: {plan.estimated_rpo} min",
             "",
             "| Dimension | Value |",
             "|-----------|-------|",
             f"| Affected services | {len(plan.affected_services)} |",
             f"| Affected resources | {len(plan.affected_resources)} |",
-            f"| Tier0 services | {tier0} |",
-            f"| Total phases | {len(plan.phases)} |",
-            f"| Total steps | {sum(len(p.steps) for p in plan.phases)} |",
+            f"| Tier0 (critical) | {len(tier0)} |",
+            f"| Tier1 (important) | {len(tier1)} |",
+            f"| Tier2 (standard) | {len(tier2)} |",
+            f"| Switchover steps | {total_steps} |",
+            f"| Rollback steps | {rollback_steps} |",
             "",
         ]
+
+        # Tier0 services (always list — these are critical)
+        if tier0:
+            names = sorted(set(n.get("name", "?") for n in tier0))
+            lines += [
+                "### Tier0 Critical Services",
+                "",
+                ", ".join(f"`{n}`" for n in names),
+                "",
+            ]
+
+        # Tier1 services (list if any)
+        if tier1:
+            names = sorted(set(n.get("name", "?") for n in tier1))
+            lines += [
+                "### Tier1 Important Services",
+                "",
+                ", ".join(f"`{n}`" for n in names),
+                "",
+            ]
+
+        # Affected by layer (compact view)
+        layer_counts: dict = {}
+        if impact:
+            for node in (
+                impact.by_tier.get("Tier0", [])
+                + impact.by_tier.get("Tier1", [])
+                + impact.by_tier.get("Tier2", [])
+                + impact.by_tier.get("Unknown", [])
+            ):
+                rtype = node.get("type", "Unknown")
+                layer_counts[rtype] = layer_counts.get(rtype, 0) + 1
+
+        if layer_counts:
+            lines += [
+                "### Affected Resource Types",
+                "",
+                "| Type | Count | Fault Domain |",
+                "|------|-------|-------------|",
+            ]
+            from registry import registry_loader
+            reg = registry_loader.get_registry()
+            for rtype, count in sorted(layer_counts.items(), key=lambda x: -x[1]):
+                fd = reg.get_fault_domain(rtype)
+                fd_icon = {"zonal": "⚡ zonal", "regional": "🌐 regional", "global": "🌍 global"}.get(fd, fd)
+                lines.append(f"| {rtype} | {count} | {fd_icon} |")
+            lines.append("")
+
+        # Skipped regional services note (AZ scope only)
+        if plan.scope == "az" and layer_counts:
+            regional_types = [
+                rtype for rtype, _ in layer_counts.items()
+                if registry_loader.get_registry().get_fault_domain(rtype) in ("regional", "global")
+            ]
+            if regional_types:
+                lines += [
+                    f"> ℹ️ **{len(regional_types)} regional/global resource type(s)** in the affected subgraph "
+                    f"are unaffected by AZ failure and have no switchover steps: "
+                    f"{', '.join(f'`{t}`' for t in sorted(regional_types))}",
+                    "",
+                ]
+
         return lines
 
     def _render_spof_warnings(self, report: ImpactReport) -> List[str]:
