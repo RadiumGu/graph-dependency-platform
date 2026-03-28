@@ -86,7 +86,7 @@ Control plane in a single Region, data plane globally distributed:
 | Examples | Launch EC2 instance, create S3 bucket, describe SQS queue | Running EC2 instance, reading S3 objects, Route 53 DNS resolution |
 
 **Critical DR principle**: 
-> **Do NOT rely on control plane operations in your recovery path. Use data plane operations instead. Pre-provision resources before disaster.**
+> **Prefer data plane operations in your recovery path. Flag control plane operations as risks — especially those with cross-Region dependencies (e.g., Route 53 CP in us-east-1). Pre-provision resources when possible, but acknowledge that 100% data-plane-only recovery is an ideal, not always achievable.**
 
 ---
 
