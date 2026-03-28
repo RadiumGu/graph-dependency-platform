@@ -240,4 +240,66 @@ REGIONAL_TYPES = {
 
 ---
 
+## 10. Appendix A — Partitional Service Guidance (Static Stability)
+
+Each partitional service has CP in a single Region; DP is distributed. Key: **never use CP operations in recovery path**.
+
+| Service | CP Location | DP Behavior During CP Failure | Static Stability Pattern |
+|---------|-------------|-------------------------------|--------------------------|
+| **IAM** | us-east-1 | Auth & authz continue working. STS (separate DP) works. | Pre-provision break-glass users with credentials in vault. Don't create/modify roles during recovery. |
+| **AWS Organizations** | us-east-1 | SCPs continue evaluating. Delegated admin works. | Use session tags for dynamic perms (DP). Don't modify SCPs during recovery. |
+| **Account Management** | us-east-1 | Existing accounts work. | Pre-provision all DR accounts. Don't create new accounts during failure. |
+| **Route 53 ARC** | us-west-2 | Recovery cluster DP works. Routing controls queryable. | Bookmark/hardcode 5 Regional cluster endpoints. Use CLI/SDK not console. |
+| **Network Manager** | us-west-2 | Cloud WAN data plane unaffected. | Don't use NM for network changes during recovery. Export CW metrics to S3 proactively. |
+| **Route 53 Private DNS** | us-east-1 | Same as public DNS — resolution continues. | Same as Route 53 public: use health-check-based failover. |
+
+---
+
+## 11. Appendix B — Edge Network Global Service Guidance
+
+| Service | CP Location | DP During CP Failure | Static Stability Pattern |
+|---------|-------------|----------------------|--------------------------|
+| **Route 53 Public DNS** | us-east-1 | DNS resolution + health checks continue. Record changes via health check status work. | Use health-check-based failover (ARC routing controls). Pre-provision DNS records. Never ChangeResourceRecordSets in recovery. |
+| **CloudFront** | us-east-1 | Caching + serving continue. Origin failover works. Invalidations may fail. | Use origin failover groups. Don't modify distribution config during recovery. |
+| **ACM (for CloudFront)** | us-east-1 | Existing certs work. Auto-renewal works. | Don't create/change certs during recovery. |
+| **WAF / WAF Classic** | us-east-1 | Existing web ACLs + rules continue. | Don't update WAF rules during recovery. |
+| **Global Accelerator** | us-west-2 | Anycast routing continues. Health checks work. Traffic dials/weights applied. | Use health-check-based failover. Don't modify traffic dial or endpoints during recovery. |
+| **Shield Advanced** | us-east-1 | DDoS protection continues. Health check responses work. | Pre-configure DR resources in protection groups. Don't add protections during recovery. |
+
+---
+
+## 12. Appendix C — Single-Region Services (DR Risk)
+
+These services exist in **only one Region** — no multi-Region option:
+- AWS Marketplace (Catalog API, Commerce Analytics, Entitlement)
+- Billing & Cost Management (Cost Explorer, CUR, Budgets, Savings Plans)
+- AWS Chatbot, AWS DeepRacer, AWS Device Farm
+- Alexa for Business, Amazon Chime, Amazon Mechanical Turk
+
+**DR implication**: If your workflow depends on these services, there is no failover option. Plan accordingly.
+
+---
+
+## 13. Static Stability — Deep Dive
+
+**Core AWS design principle**: Systems continue operating without changes during dependency failures.
+
+Key properties:
+1. **Data plane independence**: Once provisioned, resources don't need control plane to function
+2. **No circular dependencies**: Services designed to recover without mutual blocking
+3. **State maintenance**: DP maintains existing state during CP failure
+
+**Examples of static stability**:
+- EC2 instance once launched: stays running regardless of EC2 CP health
+- VPCs, S3 buckets/objects, EBS volumes: all data plane, no CP dependency
+- Route 53 health checks: data plane, continue evaluating during CP failure
+- IAM auth/authz: data plane in each Region, works during IAM CP failure
+
+**For DR Plan Generator**: Every step in Phase 1-4 should be checked:
+- Does it require resource creation? → **Not statically stable** → flag as risk
+- Does it only use existing resources? → **Statically stable** → safe
+- Does it modify configuration? → **Depends on CP** → pre-configure before disaster
+
+---
+
 *This reference should be consulted whenever modifying SPOF detection logic, step builder commands, or pre-flight checks in dr-plan-generator.*
