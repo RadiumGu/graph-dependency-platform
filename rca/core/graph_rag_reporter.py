@@ -104,6 +104,51 @@ def _get_neptune_subgraph(affected_service: str) -> str:
         except Exception as e:
             logger.warning(f"Neptune infra path failed: {e}")
 
+        # === 历史上下文（Phase A 新增） ===
+        try:
+            # 同资源历史 Incident（Q17）
+            hist_incidents = nq.q17_incidents_by_resource(affected_service, limit=3)
+            if hist_incidents:
+                lines.append("")
+                lines.append("[历史故障记录（同服务 MentionsResource）]")
+                for inc in hist_incidents:
+                    lines.append(
+                        f"- {inc.get('id', '?')} | {inc.get('severity', '?')} | "
+                        f"根因: {inc.get('root_cause', '?')} | 修复: {inc.get('resolution', '?')}"
+                    )
+
+            # 混沌实验历史（Q18）
+            chaos_hist = nq.q18_chaos_history(affected_service, limit=3)
+            if chaos_hist:
+                lines.append("")
+                lines.append("[混沌实验历史]")
+                for exp in chaos_hist:
+                    degradation = exp.get('degradation', 0) or 0
+                    lines.append(
+                        f"- {exp.get('fault_type', '?')} | 结果: {exp.get('result', '?')} | "
+                        f"恢复: {exp.get('recovery_time', 0)}s | 降级率: {float(degradation):.1%}"
+                    )
+        except Exception as e:
+            logger.warning(f"Historical context query failed (non-fatal): {e}")
+
+        # === 语义相似历史故障（Phase B5 新增）===
+        try:
+            from search.incident_vectordb import search_similar
+            fault_desc = f"{affected_service} 故障 " + " ".join(lines[:5])
+            similar = search_similar(fault_desc, top_k=3)
+            if similar:
+                lines.append("")
+                lines.append("[语义相似历史故障（向量搜索）]")
+                for s in similar:
+                    lines.append(
+                        f"- {s.get('incident_id', '?')} | {s.get('severity', '?')} | "
+                        f"服务: {s.get('affected_service', '?')} | "
+                        f"根因: {s.get('root_cause', '?')} | "
+                        f"相似度: {s.get('score', 0):.2f}"
+                    )
+        except Exception as e:
+            logger.warning(f"Semantic incident search failed (non-fatal): {e}")
+
         return '\n'.join(lines)
     except Exception as e:
         logger.warning(f"Neptune subgraph failed: {e}")

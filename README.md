@@ -42,7 +42,7 @@ Built around [PetSite](https://github.com/aws-samples/one-observability-demo) �
 
 ### Data Flow
 
-1. **infra/** — Modular ETL pipeline continuously ingests infrastructure topology into Neptune (171+ nodes, 17 edge types)
+1. **infra/** — Modular ETL pipeline continuously ingests infrastructure topology into Neptune (171+ nodes, 19 edge types)
 2. Real or injected faults trigger CloudWatch Alarms → **rca/** Lambda activates
 3. **rca/** runs multi-layer analysis (DeepFlow L7/L4 + CloudTrail + Neptune graph traversal + Layer2 AWS Service Probers) → Graph RAG report via Bedrock Claude
 4. **chaos/** HypothesisAgent generates hypotheses from Neptune graph → 5-Phase experiment engine injects faults → validates RCA accuracy → LearningAgent feeds results back
@@ -62,9 +62,11 @@ graph-dependency-platform/
 │
 ├── rca/            # Intelligent RCA Engine (formerly graph-rca-engine)
 │   ├── core/       #   Multi-layer RCA engine + fault classifier + Graph RAG reporter
-│   ├── neptune/    #   Neptune query library (Q1–Q11, openCypher)
+│   ├── neptune/    #   Neptune query library (Q1–Q18, openCypher) + NL query engine + schema prompt
 │   ├── collectors/ #   Layer2 AWS Service Probers + infra collector + EKS auth
 │   ├── actions/    #   Playbook engine + semi-auto remediation + Slack notifier
+│   ├── search/     #   S3 Vectors incident semantic search
+│   ├── scripts/    #   CLI tools (graph-ask.py — NL graph queries)
 │   └── deploy.sh   #   Lambda deployment script
 │
 ├── chaos/          # AI-Driven Chaos Engineering (formerly graph-driven-chaos)
@@ -73,6 +75,7 @@ graph-dependency-platform/
 │       ├── runner/       # 5-Phase experiment engine + FIS/ChaosMesh backends
 │       ├── experiments/  # Experiment YAML templates (tier0 / tier1 / fis)
 │       ├── infra/        # FIS IAM + alarm setup
+│       ├── neptune_sync.py  # Neptune sync: ChaosExperiment node + TestedBy edge (NEW)
 │       └── fmea/         # FMEA failure mode analysis
 │
 ├── dr-plan-generator/  # Graph-Driven DR Plan Generator (NEW)
@@ -106,9 +109,9 @@ Deploys all AWS resources (EKS, DeepFlow, Neptune, ALB, Lambda) via TypeScript C
 
 ### Neptune Graph Schema
 
-**22 vertex types** — Region, AZ, VPC, Subnet, EC2, EKS, K8s Service, Pod, ALB, TargetGroup, Lambda, StepFunction, DynamoDB, RDS, Neptune, S3, SQS, SNS, ECR, SecurityGroup, Microservice, BusinessCapability
+**23 vertex types** — Region, AZ, VPC, Subnet, EC2, EKS, K8s Service, Pod, ALB, TargetGroup, Lambda, StepFunction, DynamoDB, RDS, Neptune, S3, SQS, SNS, ECR, SecurityGroup, Microservice, BusinessCapability, **ChaosExperiment**
 
-**17 edge types** — LocatedIn, BelongsTo, Contains, RunsOn, RoutesTo, ForwardsTo, HasRule, HasSG, Invokes, AccessesData, ConnectsTo, WritesTo, PublishesTo, TriggeredBy, Calls, DependsOn, Implements
+**19 edge types** — LocatedIn, BelongsTo, Contains, RunsOn, RoutesTo, ForwardsTo, HasRule, HasSG, Invokes, AccessesData, ConnectsTo, WritesTo, PublishesTo, TriggeredBy, Calls, DependsOn, Implements, **TestedBy**, **MentionsResource**
 
 ### Modular ETL Architecture
 
@@ -154,7 +157,7 @@ handler.py → fault_classifier (P0/P1/P2)
     ├─ Step 1:  DeepFlow L7 (HTTP 5xx call chain)
     ├─ Step 1b: DeepFlow L4 (TCP RST / timeout / SYN retrans)
     ├─ Step 2:  CloudTrail change events
-    ├─ Step 3:  Neptune graph traversal (Q1–Q11)
+    ├─ Step 3:  Neptune graph traversal (Q1–Q18)
     │           ├─ Service call chain (Calls / DependsOn)
     │           ├─ Infrastructure: Service → Pod → EC2 → AZ
     │           └─ Blast radius expansion
@@ -203,12 +206,36 @@ class MyServiceProbe(BaseProbe):
 | **P1** | Tier0/1 + moderate impact | Suggest mode + Slack button confirmation |
 | **P2** | Tier1/2 + low impact | Low-risk actions auto-execute |
 
-### Neptune Query Library (Q1–Q11)
+### Neptune Query Library (Q1–Q18)
 
 | Query | Purpose | Layer |
 |-------|---------|-------|
 | Q1–Q8 | Blast radius, Tier0 status, upstream deps, service info, incidents, Pod status, DB connections, full dependency subgraph | Service |
 | Q9–Q11 | Service → Pod → EC2 → AZ path, non-running EC2 detection, cross-service blast radius | Infrastructure |
+| Q17 | Historical incidents that mention the same resource (`MentionsResource` edge) | Unstructured |
+| Q18 | Chaos experiment history for a service (`TestedBy` edge) | Unstructured |
+
+### Natural Language Graph Queries
+
+Ask questions in natural language; the NL query engine translates them to openCypher via Bedrock Claude, executes against Neptune, and returns results with a Chinese-language summary.
+
+```bash
+cd rca
+python3 scripts/graph-ask.py "petsite 的所有下游依赖有哪些？"
+python3 scripts/graph-ask.py "哪些 Tier0 服务没做过混沌实验？"
+python3 scripts/graph-ask.py "最近发生了几次 P0 故障？"
+```
+
+- **`rca/neptune/schema_prompt.py`** — Hard-coded graph schema + 6 few-shot examples as LLM prompt
+- **`rca/neptune/nl_query.py`** — `NLQueryEngine`: LLM → openCypher → execute → summarise
+- **`rca/neptune/query_guard.py`** — Safety: blocks write keywords, limits hop depth, enforces `LIMIT`
+
+### Semantic Incident Search (S3 Vectors)
+
+RCA reports are chunked, embedded (Bedrock Titan v2), and stored in an S3 Vectors index. During the next RCA, semantically similar historical incidents are retrieved and injected into the Graph RAG context.
+
+- Cost: **< $0.02/month** (vs OpenSearch Serverless ~$30+/month)
+- Implementation: `rca/search/incident_vectordb.py`
 
 📖 **Detailed docs**: [`rca/README.md`](rca/README.md)
 
@@ -329,7 +356,9 @@ Automatically generates phased, executable disaster recovery switchover plans by
 | Metric | Value |
 |--------|-------|
 | Neptune knowledge graph nodes | **171+** |
-| Neptune query library | **Q1–Q11 (11 queries)** |
+| Neptune node types | **23** |
+| Neptune edge types | **19** |
+| Neptune query library | **Q1–Q18 (18 queries)** |
 | Chaos Mesh validated tools | **30** |
 | AWS FIS fault types | **15** |
 | Layer2 AWS Service Probers | **6** |
@@ -351,6 +380,7 @@ Automatically generates phased, executable disaster recovery switchover plans by
 | Lambda (×4) | `neptune-etl-from-*` | ETL pipeline |
 | Bedrock | Claude Sonnet 4.6 | Graph RAG reports + chaos LLM analysis |
 | Bedrock KB | `0RWLEK153U` | Historical incident knowledge base |
+| S3 Vectors | `gp-incident-kb` | Semantic incident search index |
 | DynamoDB | `chaos-experiments` | Chaos experiment history |
 | S3 | `petsite-rca-incidents-*` | Incident archive |
 | Region | `ap-northeast-1` (Tokyo) | Primary deployment |

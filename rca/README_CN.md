@@ -77,6 +77,8 @@ core/     core/rca_engine.py                         core/graph_rag_reporter.py
   │       3b. 时序验证（图路径深度 × 时间戳）
   │       3c. CW Logs 采样（ERROR/FATAL）
   │       3d. Layer2 AWS 服务探针（并行执行）
+  │       3e. 历史上下文（Q17 同资源历史故障 + Q18 混沌实验历史）
+  │       3f. 语义相似故障搜索（S3 Vectors）
   │           ├─ SQSProbe / DynamoDBProbe / LambdaProbe
   │           ├─ ALBProbe / StepFunctionsProbe
   │           └─ EC2ASGProbe（兜底，仅限基础设施故障）
@@ -85,6 +87,7 @@ core/     core/rca_engine.py                         core/graph_rag_reporter.py
   │       neptune/neptune_queries.py  collectors/infra_collector.py
   │       Q1-Q8（服务层）              实时 Pod 状态（K8s API）
   │       Q9-Q11（基础设施层）         实时 DB 指标（CloudWatch RDS）
+  │       Q17-Q18（非结构化层）        search/incident_vectordb.py（S3 Vectors）
   ▼
 actions/playbook_engine.py → actions/semi_auto.py → actions/action_executor.py
 （故障 Playbook）             （半自动执行）           （kubectl rollout/scale）
@@ -273,6 +276,8 @@ L4 TCP 信号（L7 无数据时）：
 | **Q9** `q9_service_infra_path` | **服务 → Pod → EC2 → AZ** 完整基础设施链路 |
 | **Q10** `q10_infra_root_cause` | **集群中所有非 running EC2**，反向遍历找到受影响的 Pod 和服务，含 AZ 影响分析 |
 | **Q11** `q11_broader_impact` | 给定故障 EC2 ID，找出所有受影响的服务（爆炸半径） |
+| **Q17** `q17_incidents_by_resource` | 涉及相同资源的历史已解决故障（`MentionsResource` 边） |
+| **Q18** `q18_chaos_history` | 服务的混沌实验历史（`TestedBy` 边） |
 
 ---
 
@@ -339,7 +344,10 @@ cat /tmp/rca-output.json | python3 -m json.tool
 | **core/** | `fault_classifier.py` | P0/P1/P2 严重度分级；自动执行门控 |
 | **core/** | `graph_rag_reporter.py` | Graph RAG：Neptune 子图 + 所有探针信号 → Claude → 结构化报告 |
 | **neptune/** | `neptune_client.py` | 带 IAM SigV4 签名的 Neptune HTTP 客户端 |
-| **neptune/** | `neptune_queries.py` | Neptune openCypher 查询 Q1–Q11（服务层 + 基础设施层） |
+| **neptune/** | `neptune_queries.py` | Neptune openCypher 查询 Q1–Q18（服务层 + 基础设施层 + 非结构化层） |
+| **neptune/** | `schema_prompt.py` | 图谱 Schema LLM Prompt + 6 个 few-shot 示例（NL 查询用） |
+| **neptune/** | `nl_query.py` | `NLQueryEngine`：自然语言→openCypher→执行→摘要（Bedrock Claude） |
+| **neptune/** | `query_guard.py` | openCypher 安全校验：屏蔽写操作、限制跳数、强制 LIMIT |
 | **collectors/** | `infra_collector.py` | 实时 Pod 状态（K8s API）+ DB 指标（CloudWatch RDS） |
 | **collectors/** | `aws_probers.py` | ★ **插件化 AWS 服务探针**（SQS/DynamoDB/Lambda/ALB/EC2/StepFunctions） |
 | **collectors/** | `eks_auth.py` | EKS Bearer Token 生成（SigV4 预签名 STS URL） |
@@ -347,9 +355,11 @@ cat /tmp/rca-output.json | python3 -m json.tool
 | **actions/** | `playbook_engine.py` | 故障 Playbook 匹配（4 种预定义模式） |
 | **actions/** | `semi_auto.py` | P1/P2 半自动执行流程；Slack 确认交互 |
 | **actions/** | `slack_notifier.py` | Slack 消息格式化 + Webhook 推送 |
-| **actions/** | `incident_writer.py` | Neptune Incident 节点 + S3 归档 + Bedrock KB 索引 |
+| **actions/** | `incident_writer.py` | Neptune Incident 节点 + 实体提取（`MentionsResource` 边）+ S3 归档 + Bedrock KB + S3 Vectors 索引 |
+| **search/** | `incident_vectordb.py` | S3 Vectors Incident 索引：分块 + 向量化（Bedrock Titan v2）+ 语义搜索 |
 | **data/** | `service-db-mapping.json` | 服务 → DB 集群映射关系 |
 | **scripts/** | `scan-service-db-mapping.py` | 扫描 K8s Deployment 发现服务→DB 关联关系 |
+| **scripts/** | `graph-ask.py` | CLI：自然语言提问图谱，返回 Cypher + 结果 + 中文摘要 |
 
 ---
 
@@ -381,7 +391,10 @@ rca_engine/
 │   └── graph_rag_reporter.py   # Bedrock Claude Graph RAG 报告
 ├── neptune/                    # 图数据库层
 │   ├── neptune_client.py       # SigV4 签名 HTTP 客户端
-│   └── neptune_queries.py      # Q1-Q11 openCypher 查询
+│   ├── neptune_queries.py      # Q1-Q18 openCypher 查询
+│   ├── schema_prompt.py        # 图谱 Schema Prompt + few-shot 示例
+│   ├── nl_query.py             # NLQueryEngine：自然语言→openCypher（Bedrock Claude）
+│   └── query_guard.py          # 安全校验：屏蔽写操作、限制跳数、强制 LIMIT
 ├── collectors/                 # 实时数据采集
 │   ├── infra_collector.py      # K8s Pod 状态 + RDS 指标
 │   ├── aws_probers.py          # ★ 插件化 AWS 服务探针（第二层）
@@ -391,11 +404,14 @@ rca_engine/
 │   ├── playbook_engine.py      # 故障 Playbook 匹配
 │   ├── semi_auto.py            # 半自动执行流程
 │   ├── slack_notifier.py       # Slack Webhook 推送
-│   └── incident_writer.py      # Neptune + S3 + Bedrock KB
+│   └── incident_writer.py      # Neptune + 实体提取 + S3 + Bedrock KB + S3 Vectors
+├── search/
+│   └── incident_vectordb.py    # S3 Vectors Incident 语义搜索
 ├── data/
 │   └── service-db-mapping.json # 服务 → DB 集群映射
 ├── scripts/
-│   └── scan-service-db-mapping.py
+│   ├── scan-service-db-mapping.py
+│   └── graph-ask.py            # CLI：自然语言图谱查询
 ├── tests/
 │   └── test_rca.py             # 17 个单元测试
 ├── docs/
@@ -406,6 +422,74 @@ rca_engine/
 ├── README.md                   # 英文文档
 └── README_CN.md                # 中文文档（本文件）
 ```
+
+---
+
+---
+
+## Phase A：非结构化数据整合
+
+### 实体提取 & MentionsResource 边
+
+`actions/incident_writer.py` 从 RCA 报告文本中提取实体（服务名 + EC2 实例 ID），并在 Neptune 中创建 `Incident -[:MentionsResource]→ Resource` 边。Q17 利用这些边查找涉及相同资源的历史故障。
+
+### 混沌实验整合（Q18）
+
+每次混沌实验 Phase 5 结束后，`chaos/code/neptune_sync.py` 写入 `ChaosExperiment` 节点，并建立 `Microservice -[:TestedBy]→ ChaosExperiment` 边。Q18 查询该历史为 RCA 提供上下文。
+
+### 增强 Graph RAG 上下文
+
+`core/graph_rag_reporter.py` 在 RCA 报告中新增三段历史上下文：
+
+1. **历史故障记录** — Q17：涉及相同资源的历史 Incident
+2. **混沌实验历史** — Q18：受影响服务的过往实验
+3. **语义相似故障** — S3 Vectors 语义搜索
+
+---
+
+## Phase B：自然语言图谱查询
+
+### 自然语言查询引擎
+
+```python
+from neptune.nl_query import NLQueryEngine
+
+engine = NLQueryEngine()
+result = engine.query("petsite 依赖哪些数据库？")
+# result = { "question": ..., "cypher": ..., "results": [...], "summary": "..." }
+```
+
+### CLI 工具
+
+```bash
+cd rca
+python3 scripts/graph-ask.py "petsite 的所有下游依赖有哪些？"
+python3 scripts/graph-ask.py "哪些 Tier0 服务没做过混沌实验？"
+python3 scripts/graph-ask.py "AZ ap-northeast-1a 有多少个 Pod？"
+python3 scripts/graph-ask.py "最近一周发生了几次 P0 故障？"
+```
+
+### 安全校验（query_guard.py）
+
+| 规则 | 说明 |
+|------|------|
+| 写操作屏蔽 | 拒绝含 `CREATE / DELETE / SET / MERGE / REMOVE / DROP / CALL` 的查询 |
+| 跳数上限 | 拒绝可变长度遍历深度 > 6 的查询 |
+| LIMIT 强制 | 无 LIMIT 子句时自动追加 `LIMIT 200` |
+
+### Incident 语义搜索（S3 Vectors）
+
+```python
+from search.incident_vectordb import index_incident, search_similar
+
+# 故障写入时自动触发（incident_writer.py）
+index_incident(incident_id, report_text, metadata)
+
+# 下次 RCA 时自动调用（graph_rag_reporter.py）
+results = search_similar("DynamoDB 限流导致服务超时", top_k=3)
+```
+
+成本：**< $0.02/月**（vs OpenSearch Serverless ~$30+/月）
 
 ---
 

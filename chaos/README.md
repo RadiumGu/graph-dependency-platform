@@ -235,6 +235,7 @@ code/
 │   ├── tier1/                  # Chaos Mesh Tier1 实验（3 个）
 │   └── network/                # Chaos Mesh 网络实验
 │
+├── neptune_sync.py             # Neptune 同步：ChaosExperiment 节点 + TestedBy 边（Phase 5 触发）
 ├── infra/
 │   ├── fis_setup.py            # FIS 基础设施一键配置（IAM + Alarms + S3）
 │   └── dynamodb_setup.py       # DynamoDB 建表
@@ -346,7 +347,16 @@ python3 main.py history --service petsite --limit 10
 | 2 | Fault Injection | FIS: create_template → start_experiment / ChaosMesh: kubectl apply |
 | 3 | Observation | 每 10s 采样，Stop Condition 实时检测，超阈值自动熔断 + RCA 触发 |
 | 4 | Recovery | 等待故障到期，轮询 Pod/FIS 状态直到恢复（超时 300s） |
-| 5 | Steady State After | 验证恢复稳态 → 判定 PASSED/FAILED → 报告 + DynamoDB + 图谱反馈 + CloudWatch Metrics |
+| 5 | Steady State After | 验证恢复稳态 → 判定 PASSED/FAILED → 报告 + DynamoDB + 图谱反馈 + CloudWatch Metrics + **Neptune 同步** |
+
+### Neptune 同步（Phase 5 新增）
+
+每次实验结束后，`code/neptune_sync.py` 自动执行（non-fatal，失败不影响实验结果）：
+
+1. **写入 `ChaosExperiment` 节点**（幂等 MERGE）：记录 `experiment_id`、`fault_type`、`result`、`recovery_time_sec`、`degradation_rate`、`timestamp`
+2. **建立 `TestedBy` 边**：`Microservice -[:TestedBy]→ ChaosExperiment`
+
+这使得 RCA 引擎可通过 Q18 查询任意服务的混沌实验历史，并在分析报告中注入历史韧性数据。
 
 ## AI Agents
 

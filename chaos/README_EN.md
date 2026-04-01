@@ -219,6 +219,7 @@ code/
 │   ├── tier1/                  # Chaos Mesh Tier1 experiments (3)
 │   └── network/                # Chaos Mesh network experiments
 │
+├── neptune_sync.py             # Neptune sync: ChaosExperiment node + TestedBy edge (triggered in Phase 5)
 ├── infra/
 │   ├── fis_setup.py            # One-click FIS infrastructure setup (IAM + Alarms + S3)
 │   └── dynamodb_setup.py       # DynamoDB table creation
@@ -333,7 +334,16 @@ python3 main.py history --service petsite --limit 10
 | 2 | Fault Injection | FIS: create_template → start_experiment / ChaosMesh: kubectl apply |
 | 3 | Observation | Sample every 10s, real-time stop-condition detection, auto-circuit-break + RCA trigger |
 | 4 | Recovery | Wait for fault expiry, poll Pod/FIS status until recovered (timeout 300s) |
-| 5 | Steady State After | Verify recovery → PASSED/FAILED verdict → report + DynamoDB + graph feedback + CloudWatch Metrics |
+| 5 | Steady State After | Verify recovery → PASSED/FAILED verdict → report + DynamoDB + graph feedback + CloudWatch Metrics + **Neptune sync** |
+
+### Neptune Sync (Phase 5 addition)
+
+After each experiment completes, `code/neptune_sync.py` runs automatically (non-fatal — failure does not affect experiment result):
+
+1. **Writes a `ChaosExperiment` node** (idempotent MERGE): records `experiment_id`, `fault_type`, `result`, `recovery_time_sec`, `degradation_rate`, `timestamp`
+2. **Creates a `TestedBy` edge**: `Microservice -[:TestedBy]→ ChaosExperiment`
+
+This allows the RCA engine to query any service's chaos experiment history via Q18 and inject that resilience history into the analysis report.
 
 ---
 

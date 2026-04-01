@@ -42,7 +42,7 @@
 
 ### 数据流
 
-1. **infra/** — 模块化 ETL 持续采集基础设施拓扑到 Neptune（171+ 节点，17 种边类型）
+1. **infra/** — 模块化 ETL 持续采集基础设施拓扑到 Neptune（171+ 节点，19 种边类型）
 2. 真实或注入的故障触发 CloudWatch Alarm → **rca/** Lambda 激活
 3. **rca/** 执行多层分析（DeepFlow L7/L4 + CloudTrail + Neptune 图遍历 + Layer2 AWS 服务探针）→ 通过 Bedrock Claude 生成 Graph RAG 报告
 4. **chaos/** HypothesisAgent 基于 Neptune 图谱生成假设 → 5 Phase 实验引擎注入故障 → 验证 RCA 准确性 → LearningAgent 闭环学习
@@ -62,9 +62,11 @@ graph-dependency-platform/
 │
 ├── rca/            # 智能根因分析引擎（原 graph-rca-engine）
 │   ├── core/       #   多层 RCA 引擎 + 故障分级 + Graph RAG 报告生成
-│   ├── neptune/    #   Neptune 查询库（Q1–Q11，openCypher）
+│   ├── neptune/    #   Neptune 查询库（Q1–Q18，openCypher）+ 自然语言查询引擎 + Schema Prompt
 │   ├── collectors/ #   Layer2 AWS 服务探针 + 基础设施采集器 + EKS 认证
 │   ├── actions/    #   故障手册 + 半自动修复 + Slack 通知
+│   ├── search/     #   S3 Vectors Incident 语义搜索
+│   ├── scripts/    #   CLI 工具（graph-ask.py — 自然语言图谱查询）
 │   └── deploy.sh   #   Lambda 部署脚本
 │
 ├── chaos/          # AI 驱动混沌工程（原 graph-driven-chaos）
@@ -73,6 +75,7 @@ graph-dependency-platform/
 │       ├── runner/       # 5 Phase 实验引擎 + FIS/ChaosMesh 后端
 │       ├── experiments/  # 实验 YAML 模板（tier0 / tier1 / fis）
 │       ├── infra/        # FIS IAM + 告警配置
+│       ├── neptune_sync.py  # Neptune 同步：ChaosExperiment 节点 + TestedBy 边（新增）
 │       └── fmea/         # FMEA 故障模式分析
 │
 ├── dr-plan-generator/  # 图谱驱动容灾计划生成器（新增）
@@ -131,7 +134,7 @@ handler.py → fault_classifier (P0/P1/P2)
     ├─ Step 1:  DeepFlow L7（HTTP 5xx 调用链）
     ├─ Step 1b: DeepFlow L4（TCP RST / 超时 / SYN 重传）
     ├─ Step 2:  CloudTrail 变更事件
-    ├─ Step 3:  Neptune 图遍历（Q1–Q11）
+    ├─ Step 3:  Neptune 图遍历（Q1–Q18）
     │           ├─ 服务调用链（Calls / DependsOn）
     │           ├─ 基础设施：Service → Pod → EC2 → AZ
     │           └─ 爆炸半径扩展
@@ -166,6 +169,37 @@ Slack 通知 + 半自动修复 + 事件归档
 | **P0** | Tier0 服务 + 高错误率 | 禁止自动，先诊断，人工确认 |
 | **P1** | Tier0/1 + 中等影响 | Suggest 模式 + Slack 按钮确认 |
 | **P2** | Tier1/2 + 低影响 | LOW 风险全自动执行 |
+
+### Neptune 查询库（Q1–Q18）
+
+| 查询 | 用途 | 层 |
+|------|------|---|
+| Q1–Q8 | 爆炸半径、Tier0 状态、上游依赖、服务信息、故障记录、Pod 状态、DB 连接、完整依赖子图 | 服务层 |
+| Q9–Q11 | 服务→Pod→EC2→AZ 路径、非 running EC2 检测、跨服务爆炸半径 | 基础设施层 |
+| Q17 | 涉及相同资源的历史 Incident（`MentionsResource` 边） | 非结构化 |
+| Q18 | 服务混沌实验历史（`TestedBy` 边） | 非结构化 |
+
+### 自然语言图谱查询
+
+用中文提问，NL 查询引擎通过 Bedrock Claude 生成 openCypher，执行后返回结果与摘要：
+
+```bash
+cd rca
+python3 scripts/graph-ask.py "petsite 的所有下游依赖有哪些？"
+python3 scripts/graph-ask.py "哪些 Tier0 服务没做过混沌实验？"
+python3 scripts/graph-ask.py "最近发生了几次 P0 故障？"
+```
+
+- **`rca/neptune/schema_prompt.py`** — 图谱 Schema 硬编码 + 6 个 few-shot 示例
+- **`rca/neptune/nl_query.py`** — `NLQueryEngine`：LLM→openCypher→执行→摘要
+- **`rca/neptune/query_guard.py`** — 安全校验：屏蔽写操作、限制跳数、强制 LIMIT
+
+### Incident 语义搜索（S3 Vectors）
+
+RCA 报告自动分块 + 向量化（Bedrock Titan v2）+ 写入 S3 Vectors 索引，下次 RCA 时语义召回相似历史故障注入 Graph RAG 上下文。
+
+- 成本：**< $0.02/月**（vs OpenSearch Serverless ~$30+/月）
+- 实现：`rca/search/incident_vectordb.py`
 
 📖 **详细文档**：[`rca/README.md`](rca/README.md) | [`rca/README_CN.md`](rca/README_CN.md)
 
@@ -270,7 +304,9 @@ Slack 通知 + 半自动修复 + 事件归档
 | 指标 | 数值 |
 |------|------|
 | Neptune 知识图谱节点 | **171+** |
-| Neptune 查询库 | **Q1–Q11（11 个查询）** |
+| Neptune 节点类型 | **23 种** |
+| Neptune 边类型 | **19 种** |
+| Neptune 查询库 | **Q1–Q18（18 个查询）** |
 | Chaos Mesh 已验证工具 | **30 个** |
 | AWS FIS 故障类型 | **15 种** |
 | Layer2 AWS 服务探针 | **6 个** |
@@ -288,7 +324,8 @@ Slack 通知 + 半自动修复 + 事件归档
 | Neptune | `petsite-neptune` | 知识图谱存储 |
 | Lambda | `petsite-rca-engine` | RCA 主引擎 |
 | Lambda（×4） | `neptune-etl-from-*` | ETL 管道 |
-| Bedrock | Claude Sonnet 4.6 | Graph RAG 报告 + 混沌实验 LLM 分析 |
+| Bedrock | Claude Sonnet 4.6 | Graph RAG 报告 + 混沌实验 LLM 分析 + NL 图谱查询 |
+| S3 Vectors | `gp-incident-kb` | Incident 语义搜索索引 |
 | DynamoDB | `chaos-experiments` | 混沌实验历史 |
 | Region | `ap-northeast-1`（东京） | 主部署区域 |
 

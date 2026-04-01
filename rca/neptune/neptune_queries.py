@@ -202,6 +202,50 @@ def q11_broader_impact(ec2_ids: list) -> list:
     return nc.results(cypher, {"ids": ec2_ids})
 
 
+def q17_incidents_by_resource(resource_name: str, limit: int = 5) -> list:
+    """Q17: 查找涉及相同资源的历史 Incident（通过 MentionsResource 边）。
+
+    Args:
+        resource_name: 资源节点 name 属性（服务名或 EC2 instance name）
+        limit: 返回条数上限
+
+    Returns:
+        [{'id':..., 'severity':..., 'root_cause':..., 'resolution':..., 'start_time':...}]
+    """
+    cypher = """
+    MATCH (inc:Incident)-[:MentionsResource]->(r {name: $name})
+    WHERE inc.status = 'resolved'
+    RETURN inc.id AS id, inc.severity AS severity,
+           inc.root_cause AS root_cause, inc.resolution AS resolution,
+           inc.start_time AS start_time
+    ORDER BY inc.start_time DESC
+    LIMIT $limit
+    """
+    return nc.results(cypher, {"name": resource_name, "limit": limit})
+
+
+def q18_chaos_history(service_name: str, limit: int = 5) -> list:
+    """Q18: 查询服务的混沌实验历史（通过 TestedBy 边）。
+
+    Args:
+        service_name: Neptune Microservice 节点 name 属性
+        limit: 返回条数上限
+
+    Returns:
+        [{'id':..., 'fault_type':..., 'result':..., 'recovery_time':...,
+          'degradation':..., 'timestamp':...}]
+    """
+    cypher = """
+    MATCH (svc:Microservice {name: $svc})-[:TestedBy]->(exp:ChaosExperiment)
+    RETURN exp.experiment_id AS id, exp.fault_type AS fault_type,
+           exp.result AS result, exp.recovery_time_sec AS recovery_time,
+           exp.degradation_rate AS degradation, exp.timestamp AS timestamp
+    ORDER BY exp.timestamp DESC
+    LIMIT $limit
+    """
+    return nc.results(cypher, {"svc": service_name, "limit": limit})
+
+
 def q8_log_source(service_name: str) -> str:
     """
     Q8: 查询节点的 log_source 属性

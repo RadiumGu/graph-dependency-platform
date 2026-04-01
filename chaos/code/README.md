@@ -100,6 +100,7 @@ export BEDROCK_MODEL=us.anthropic.claude-sonnet-4-20250514
 code/
 ├── main.py                     # CLI 入口（run / setup / history / suite / auto / hypothesis / learn）
 ├── orchestrator.py             # 批量实验编排（顺序/并行执行 + tag 过滤）
+├── neptune_sync.py             # Neptune 同步：ChaosExperiment 节点 + TestedBy 边
 ├── resolve_targets.py          # 目标解析 CLI 工具
 ├── gen_template.py             # 从 Neptune 图谱自动生成实验模板
 │
@@ -244,7 +245,9 @@ python3 main.py history --service petsite --limit 10
 | 2 | Fault Injection | FIS: create_template → start_experiment / ChaosMesh: kubectl apply |
 | 3 | Observation | 每 10s 采样，Stop Condition 实时检测，超阈值自动熔断 + RCA 触发 |
 | 4 | Recovery | 等待故障到期，轮询 Pod/FIS 状态直到恢复（超时 300s） |
-| 5 | Steady State After | 验证恢复稳态 → 判定 PASSED/FAILED → 报告 + DynamoDB + 图谱反馈 + CloudWatch Metrics |
+| 5 | Steady State After | 验证恢复稳态 → 判定 PASSED/FAILED → 报告 + DynamoDB + 图谱反馈 + CloudWatch Metrics + Neptune 同步 |
+
+**Phase 5 Neptune 同步**：`neptune_sync.py` 在报告写入完成后自动触发（non-fatal），写入 `ChaosExperiment` 节点并建立 `Microservice -[:TestedBy]→ ChaosExperiment` 边，供 RCA 引擎 Q18 查询。
 
 ## AI Agents
 

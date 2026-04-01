@@ -433,6 +433,24 @@ class ExperimentRunner:
             except Exception as e:
                 logger.warning(f"Neptune 图谱反馈失败（非致命）: {e}")
 
+        # Phase A2: 同步实验记录到 Neptune ChaosExperiment 节点
+        try:
+            import sys as _sys, os as _os
+            _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), '..'))
+            from neptune_sync import write_experiment
+            write_experiment({
+                'experiment_id': result.experiment_id,
+                'target_service': exp.target_service,
+                'fault_type': exp.fault.type,
+                'result': result.status.lower(),
+                'recovery_time_sec': int(result.recovery_seconds or 0),
+                'degradation_rate': round(result.degradation_rate() / 100.0, 4),
+                'timestamp': result.end_time.isoformat() if result.end_time else '',
+            })
+            logger.info(f"Experiment {result.experiment_id} synced to Neptune")
+        except Exception as e:
+            logger.warning(f"Neptune sync failed (non-fatal): {e}")
+
     # ─── 报告 & 清理 ──────────────────────────────────────────────────────────
 
     def _save_and_report(self, result: ExperimentResult):

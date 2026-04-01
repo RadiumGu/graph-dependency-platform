@@ -77,6 +77,8 @@ classifier  1.  DeepFlow L7 (HTTP 5xx call chain)      + Neptune subgraph
   │       3b. Temporal validation (graph depth × time)
   │       3c. CW Logs sampling (ERROR/FATAL)
   │       3d. Layer2 AWS Service Probers (parallel)
+  │       3e. Historical context (Q17 similar incidents + Q18 chaos history)
+  │       3f. Semantic incident search (S3 Vectors)
   │           ├─ SQSProbe / DynamoDBProbe / LambdaProbe
   │           ├─ ALBProbe / StepFunctionsProbe
   │           └─ EC2ASGProbe (fallback, infra only)
@@ -85,6 +87,7 @@ classifier  1.  DeepFlow L7 (HTTP 5xx call chain)      + Neptune subgraph
   │       neptune/neptune_queries.py  collectors/infra_collector.py
   │       Q1-Q8 (service layer)       real-time Pod status (K8s API)
   │       Q9-Q11 (infra layer)        real-time DB metrics (CloudWatch RDS)
+  │       Q17-Q18 (unstructured)      search/incident_vectordb.py (S3 Vectors)
   ▼
 actions/playbook_engine.py → actions/semi_auto.py → actions/action_executor.py
 (fault playbooks)            (semi-auto)             (kubectl rollout/scale via EKS token)
@@ -273,6 +276,8 @@ Cap: min(score, 100)
 | **Q9** `q9_service_infra_path` | **Service → Pod → EC2 → AZ** full infrastructure chain |
 | **Q10** `q10_infra_root_cause` | **All non-running EC2** in cluster, reverse to find affected Pods/Services + AZ impact |
 | **Q11** `q11_broader_impact` | Given faulty EC2 IDs, find ALL affected services (blast radius) |
+| **Q17** `q17_incidents_by_resource` | Historical resolved incidents that mention the same resource (`MentionsResource` edge) |
+| **Q18** `q18_chaos_history` | Chaos experiment history for a service (`TestedBy` edge) |
 
 ---
 
@@ -339,7 +344,10 @@ cat /tmp/rca-output.json | python3 -m json.tool
 | **core/** | `fault_classifier.py` | Severity grading (P0/P1/P2); auto-execution gate |
 | **core/** | `graph_rag_reporter.py` | Graph RAG: Neptune subgraph + all probe signals → Claude → structured report |
 | **neptune/** | `neptune_client.py` | Neptune HTTP client with IAM SigV4 signing |
-| **neptune/** | `neptune_queries.py` | Neptune openCypher queries Q1–Q11 (service + infrastructure layer) |
+| **neptune/** | `neptune_queries.py` | Neptune openCypher queries Q1–Q18 (service + infrastructure + unstructured layers) |
+| **neptune/** | `schema_prompt.py` | Graph schema as LLM prompt + 6 few-shot examples for NL→openCypher |
+| **neptune/** | `nl_query.py` | `NLQueryEngine`: natural language → openCypher → execute → summarise via Bedrock Claude |
+| **neptune/** | `query_guard.py` | openCypher safety validation: blocks write ops, limits hop depth, enforces LIMIT |
 | **collectors/** | `infra_collector.py` | Real-time Pod status (K8s API) + DB metrics (CloudWatch RDS) |
 | **collectors/** | `aws_probers.py` | **Plugin-based AWS Service Probers** (SQS/DynamoDB/Lambda/ALB/EC2/StepFunctions) |
 | **collectors/** | `eks_auth.py` | Shared EKS bearer token generation (SigV4 presigned STS URL) |
@@ -347,9 +355,11 @@ cat /tmp/rca-output.json | python3 -m json.tool
 | **actions/** | `playbook_engine.py` | Fault playbook matching (4 predefined patterns) |
 | **actions/** | `semi_auto.py` | P1/P2 semi-automatic execution; Slack confirmation flow |
 | **actions/** | `slack_notifier.py` | Slack message formatting + Incoming Webhook delivery |
-| **actions/** | `incident_writer.py` | Neptune Incident node + S3 archive + Bedrock KB indexing |
+| **actions/** | `incident_writer.py` | Neptune Incident node + entity extraction (`MentionsResource` edges) + S3 archive + Bedrock KB + S3 Vectors indexing |
+| **search/** | `incident_vectordb.py` | S3 Vectors incident index: chunk + embed (Bedrock Titan v2) + semantic search |
 | **data/** | `service-db-mapping.json` | Service → DB cluster mapping |
 | **scripts/** | `scan-service-db-mapping.py` | Scans K8s Deployments to discover service→DB relationships |
+| **scripts/** | `graph-ask.py` | CLI: ask graph questions in natural language, returns Cypher + results + summary |
 
 ---
 
@@ -381,7 +391,10 @@ rca_engine/
 │   └── graph_rag_reporter.py   # Bedrock Claude Graph RAG report
 ├── neptune/                    # Graph database layer
 │   ├── neptune_client.py       # SigV4-signed HTTP client
-│   └── neptune_queries.py      # Q1-Q11 openCypher queries
+│   ├── neptune_queries.py      # Q1-Q18 openCypher queries
+│   ├── schema_prompt.py        # Graph schema prompt + few-shot examples (NL query)
+│   ├── nl_query.py             # NLQueryEngine: NL→openCypher via Bedrock Claude
+│   └── query_guard.py          # Safety: write-op blocking, hop limit, LIMIT enforcement
 ├── collectors/                 # Real-time data collection
 │   ├── infra_collector.py      # K8s Pod status + RDS metrics
 │   ├── aws_probers.py          # ★ Plugin-based AWS Service Probers (Layer 2)
@@ -391,11 +404,14 @@ rca_engine/
 │   ├── playbook_engine.py      # Fault playbook matching
 │   ├── semi_auto.py            # Semi-automatic execution flow
 │   ├── slack_notifier.py       # Slack webhook delivery
-│   └── incident_writer.py      # Neptune + S3 + Bedrock KB
+│   └── incident_writer.py      # Neptune + entity extraction + S3 + Bedrock KB + S3 Vectors
+├── search/
+│   └── incident_vectordb.py    # S3 Vectors incident semantic search
 ├── data/
 │   └── service-db-mapping.json # Service → DB cluster mapping
 ├── scripts/
-│   └── scan-service-db-mapping.py
+│   ├── scan-service-db-mapping.py
+│   └── graph-ask.py            # CLI: natural language graph queries
 ├── tests/
 │   └── test_rca.py             # 17 unit tests
 ├── docs/
@@ -404,6 +420,76 @@ rca_engine/
 ├── deploy.sh                   # Lambda packaging + deployment
 ├── .env.example
 └── README.md
+```
+
+---
+
+---
+
+## Phase A: Unstructured Data Integration
+
+### Entity Extraction & MentionsResource Edges
+
+`actions/incident_writer.py` now extracts entities (service names + EC2 instance IDs) from RCA report text and creates `Incident -[:MentionsResource]→ Resource` edges in Neptune. This enables Q17 to find historical incidents involving the same resource.
+
+### Chaos Experiment Integration (Q18)
+
+After each chaos experiment completes (Phase 5), `chaos/code/neptune_sync.py` writes a `ChaosExperiment` node and creates a `Microservice -[:TestedBy]→ ChaosExperiment` edge. Q18 queries this history for RCA context.
+
+### Enhanced Graph RAG Context
+
+`core/graph_rag_reporter.py` now enriches RCA reports with three additional context sections:
+
+1. **Historical incidents** — Q17: incidents that mention the same resource
+2. **Chaos experiment history** — Q18: past experiments on the affected service
+3. **Semantically similar incidents** — S3 Vectors semantic search
+
+---
+
+## Phase B: Natural Language Graph Queries
+
+### NL Query Engine
+
+```python
+from neptune.nl_query import NLQueryEngine
+
+engine = NLQueryEngine()
+result = engine.query("petsite 依赖哪些数据库？")
+# result = { "question": ..., "cypher": ..., "results": [...], "summary": "..." }
+```
+
+### CLI Tool
+
+```bash
+cd rca
+python3 scripts/graph-ask.py "petsite 的所有下游依赖有哪些？"
+python3 scripts/graph-ask.py "哪些 Tier0 服务没做过混沌实验？"
+python3 scripts/graph-ask.py "AZ ap-northeast-1a 有多少个 Pod？"
+python3 scripts/graph-ask.py "最近一周发生了几次 P0 故障？"
+```
+
+### Safety Guard
+
+`query_guard.py` enforces three rules before executing any LLM-generated query:
+
+| Rule | Detail |
+|------|--------|
+| Write-op blocking | Rejects queries containing `CREATE / DELETE / SET / MERGE / REMOVE / DROP / CALL` |
+| Hop depth limit | Rejects variable-length traversals with depth > 6 |
+| LIMIT enforcement | Appends `LIMIT 200` if no LIMIT clause present |
+
+### Semantic Incident Search (S3 Vectors)
+
+RCA reports are indexed at write-time and semantically searched at read-time:
+
+```python
+from search.incident_vectordb import index_incident, search_similar
+
+# On incident write (automatic via incident_writer.py)
+index_incident(incident_id, report_text, metadata)
+
+# On next RCA (automatic via graph_rag_reporter.py)
+results = search_similar("DynamoDB 限流导致服务超时", top_k=3)
 ```
 
 ---
