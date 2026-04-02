@@ -1,0 +1,883 @@
+# fault_catalog.yaml — 统一故障类型注册表
+#
+# 字段说明:
+#   type           : 故障类型名（唯一键）
+#   backend        : "chaosmesh" | "fis" | "fis-scenario"
+#   category       : compute | network | data | resources | dependencies | az-level | cross-az | cross-region
+#   crd            : ChaosMesh CRD 类型（仅 chaosmesh 后端）
+#   description    : 中文描述（给人和 LLM 看）
+#   fis_action_id  : FIS ActionId（ChaosMesh 类型为空字符串）
+#   default_params : 默认参数字典
+#   requires       : FIS 类型需要的 extra_params 键列表（ChaosMesh 为空列表）
+#   tier           : 适用的 Tier 列表
+#   recommended_for: 推荐的架构场景列表
+#   scenario_id    : FIS Scenario Library 场景 ID（仅 fis-scenario 后端）
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ChaosMesh 故障类型（19 种）
+# ─────────────────────────────────────────────────────────────────────────────
+
+chaosmesh:
+
+  # ── Pod 生命周期 ────────────────────────────────────────────────────────────
+
+  - type: pod_kill
+    backend: chaosmesh
+    category: compute
+    crd: PodChaos
+    description: 随机杀死目标服务的 Pod，验证 K8s 自愈能力和服务弹性
+    fis_action_id: ""
+    default_params:
+      action: pod-kill
+      mode: fixed-percent
+      value: "50"
+      duration: "2m"
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  - type: pod_failure
+    backend: chaosmesh
+    category: compute
+    crd: PodChaos
+    description: 使目标 Pod 不可用（替换为 pause 镜像），模拟应用崩溃
+    fis_action_id: ""
+    default_params:
+      action: pod-failure
+      mode: fixed-percent
+      value: "50"
+      duration: "3m"
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  - type: container_kill
+    backend: chaosmesh
+    category: compute
+    crd: PodChaos
+    description: 杀死 Pod 内指定容器进程，验证容器重启恢复行为
+    fis_action_id: ""
+    default_params:
+      action: container-kill
+      mode: fixed-percent
+      value: "50"
+      duration: "2m"
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  # ── 网络层 ──────────────────────────────────────────────────────────────────
+
+  - type: network_delay
+    backend: chaosmesh
+    category: network
+    crd: NetworkChaos
+    description: 向目标服务注入网络延迟，模拟跨 AZ / 跨服务高延迟
+    fis_action_id: ""
+    default_params:
+      action: delay
+      mode: all
+      value: ""
+      duration: "3m"
+      latency: "200ms"
+      jitter: "50ms"
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  - type: network_loss
+    backend: chaosmesh
+    category: network
+    crd: NetworkChaos
+    description: 向目标服务注入丢包，模拟不稳定网络条件
+    fis_action_id: ""
+    default_params:
+      action: loss
+      mode: all
+      value: ""
+      duration: "3m"
+      loss: "30"
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  - type: network_corrupt
+    backend: chaosmesh
+    category: network
+    crd: NetworkChaos
+    description: 向目标服务注入数据包损坏，验证应用层重试和错误处理
+    fis_action_id: ""
+    default_params:
+      action: corrupt
+      mode: all
+      value: ""
+      duration: "3m"
+      corrupt: "30"
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  - type: network_duplicate
+    backend: chaosmesh
+    category: network
+    crd: NetworkChaos
+    description: 向目标服务注入重复数据包，验证幂等性和去重逻辑
+    fis_action_id: ""
+    default_params:
+      action: duplicate
+      mode: all
+      value: ""
+      duration: "3m"
+      duplicate: "30"
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  - type: network_partition
+    backend: chaosmesh
+    category: network
+    crd: NetworkChaos
+    description: 模拟网络分区（双向隔离），验证服务降级和熔断器
+    fis_action_id: ""
+    default_params:
+      action: partition
+      mode: all
+      value: ""
+      duration: "2m"
+      direction: both
+      external_targets: []
+    requires: []
+    tier: [Tier0, Tier1]
+    recommended_for: [eks-microservices]
+
+  - type: network_bandwidth
+    backend: chaosmesh
+    category: network
+    crd: NetworkChaos
+    description: 限制目标服务网络带宽，模拟带宽受限场景（如跨区域链路拥塞）
+    fis_action_id: ""
+    default_params:
+      action: bandwidth
+      mode: all
+      value: ""
+      duration: "5m"
+      rate: "1mbps"
+    requires: []
+    tier: [Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  # ── HTTP 层 ─────────────────────────────────────────────────────────────────
+
+  - type: http_chaos
+    backend: chaosmesh
+    category: dependencies
+    crd: HTTPChaos
+    description: 对 HTTP 请求注入延迟或错误响应，验证客户端超时和重试（兼容旧实验 YAML）
+    fis_action_id: ""
+    default_params:
+      mode: all
+      value: ""
+      duration: "3m"
+      action: delay
+      port: 80
+      delay: "1s"
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  - type: http_abort
+    backend: chaosmesh
+    category: dependencies
+    crd: HTTPChaos
+    description: 中断 HTTP 连接，模拟下游服务完全不可用
+    fis_action_id: ""
+    default_params:
+      mode: all
+      value: ""
+      duration: "3m"
+      abort: true
+      port: 80
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  - type: http_delay
+    backend: chaosmesh
+    category: dependencies
+    crd: HTTPChaos
+    description: 对 HTTP 响应注入延迟，验证客户端超时和重试逻辑
+    fis_action_id: ""
+    default_params:
+      mode: all
+      value: ""
+      duration: "3m"
+      delay: "3s"
+      port: 80
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  # ── 资源压力 ────────────────────────────────────────────────────────────────
+
+  - type: pod_cpu_stress
+    backend: chaosmesh
+    category: resources
+    crd: StressChaos
+    description: 对目标 Pod 注入 CPU 压力，模拟 CPU 热点导致的性能降级
+    fis_action_id: ""
+    default_params:
+      mode: all
+      value: ""
+      duration: "5m"
+      workers: 2
+      load: 80
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  - type: pod_memory_stress
+    backend: chaosmesh
+    category: resources
+    crd: StressChaos
+    description: 对目标 Pod 注入内存压力，验证 OOM 处理和内存限制
+    fis_action_id: ""
+    default_params:
+      mode: all
+      value: ""
+      duration: "5m"
+      size: "256MB"
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  # ── IO 层 ───────────────────────────────────────────────────────────────────
+
+  - type: io_chaos
+    backend: chaosmesh
+    category: data
+    crd: IOChaos
+    description: 对目标 Pod 注入磁盘 I/O 延迟，模拟存储抖动
+    fis_action_id: ""
+    default_params:
+      action: latency
+      mode: all
+      value: ""
+      duration: "3m"
+      io_action: latency
+      io_delay: "100ms"
+    requires: []
+    tier: [Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  - type: io_fault
+    backend: chaosmesh
+    category: data
+    crd: IOChaos
+    description: 对目标 Pod 注入磁盘 I/O 错误（errno），模拟存储硬件故障
+    fis_action_id: ""
+    default_params:
+      action: fault
+      mode: all
+      value: ""
+      duration: "3m"
+      errno: 5
+    requires: []
+    tier: [Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  - type: block_chaos
+    backend: chaosmesh
+    category: data
+    crd: BlockChaos
+    description: 对块设备注入 I/O 延迟，模拟 EBS 性能抖动
+    fis_action_id: ""
+    default_params:
+      mode: all
+      value: ""
+      duration: "3m"
+      block_action: delay
+      block_delay: "100ms"
+    requires: []
+    tier: [Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  # ── DNS ─────────────────────────────────────────────────────────────────────
+
+  - type: dns_chaos
+    backend: chaosmesh
+    category: network
+    crd: DNSChaos
+    description: 注入 DNS 解析错误，模拟服务发现失败场景
+    fis_action_id: ""
+    default_params:
+      action: error
+      mode: all
+      value: ""
+      duration: "2m"
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  # ── 时钟 ────────────────────────────────────────────────────────────────────
+
+  - type: time_chaos
+    backend: chaosmesh
+    category: resources
+    crd: TimeChaos
+    description: 对目标 Pod 注入时钟偏移，验证时序依赖和 Token 过期处理
+    fis_action_id: ""
+    default_params:
+      mode: all
+      value: ""
+      duration: "3m"
+      time_offset: "-5m"
+    requires: []
+    tier: [Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AWS FIS 故障类型（37 种）
+# ─────────────────────────────────────────────────────────────────────────────
+
+fis:
+
+  # ── Lambda ──────────────────────────────────────────────────────────────────
+
+  - type: fis_lambda_delay
+    backend: fis
+    category: dependencies
+    description: 向 Lambda 调用注入延迟，验证调用方超时和重试逻辑
+    fis_action_id: "aws:lambda:invocation-add-delay"
+    default_params:
+      duration: "3m"
+      percentage: 100
+      delay_ms: 1000
+    requires: [function_arn]
+    tier: [Tier0, Tier1]
+    recommended_for: [serverless, event-driven]
+
+  - type: fis_lambda_error
+    backend: fis
+    category: dependencies
+    description: 使 Lambda 调用返回错误，验证上游服务的降级和错误处理
+    fis_action_id: "aws:lambda:invocation-error"
+    default_params:
+      duration: "3m"
+      percentage: 100
+    requires: [function_arn]
+    tier: [Tier0, Tier1]
+    recommended_for: [serverless, event-driven]
+
+  - type: fis_lambda_http_response
+    backend: fis
+    category: dependencies
+    description: 修改 Lambda HTTP 集成响应，模拟 API 返回异常状态码
+    fis_action_id: "aws:lambda:invocation-http-integration-response"
+    default_params:
+      duration: "3m"
+      percentage: 100
+    requires: [function_arn]
+    tier: [Tier0, Tier1]
+    recommended_for: [serverless, event-driven]
+
+  # ── RDS / Aurora ─────────────────────────────────────────────────────────────
+
+  - type: fis_rds_failover
+    backend: fis
+    category: data
+    description: 触发 RDS Aurora 集群主备切换，验证数据库故障转移和应用重连
+    fis_action_id: "aws:rds:failover-db-cluster"
+    default_params: {}
+    requires: [cluster_arn]
+    tier: [Tier0, Tier1]
+    recommended_for: [rds-based, all]
+
+  - type: fis_rds_reboot
+    backend: fis
+    category: data
+    description: 重启 RDS 数据库实例，验证连接池恢复和应用重试
+    fis_action_id: "aws:rds:reboot-db-instances"
+    default_params:
+      force_failover: false
+    requires: [cluster_arn]
+    tier: [Tier0, Tier1]
+    recommended_for: [rds-based, all]
+
+  # ── EKS 节点 ─────────────────────────────────────────────────────────────────
+
+  - type: fis_eks_terminate_node
+    backend: fis
+    category: compute
+    description: 终止 EKS 节点组中的节点实例，验证 Pod 重调度和节点自愈
+    fis_action_id: "aws:eks:terminate-nodegroup-instances"
+    default_params:
+      instance_termination_percentage: 50
+    requires: [nodegroup_arn]
+    tier: [Tier0, Tier1]
+    recommended_for: [eks-microservices]
+
+  # ── EKS Pod（FIS 原生）───────────────────────────────────────────────────────
+
+  - type: fis_eks_pod_network_latency
+    backend: fis
+    category: network
+    description: 向 EKS Pod 注入网络延迟（FIS 基础设施级），无需 ChaosMesh 部署
+    fis_action_id: "aws:eks:pod-network-latency"
+    default_params:
+      duration: "3m"
+      delay_ms: 200
+      flows_percent: 100
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  - type: fis_eks_pod_network_packet_loss
+    backend: fis
+    category: network
+    description: 向 EKS Pod 注入丢包（FIS 基础设施级）
+    fis_action_id: "aws:eks:pod-network-packet-loss"
+    default_params:
+      duration: "3m"
+      loss_percent: 15
+      flows_percent: 100
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  - type: fis_eks_pod_delete
+    backend: fis
+    category: compute
+    description: 删除 EKS Pod（FIS 原生），触发 K8s 重建流程
+    fis_action_id: "aws:eks:pod-delete"
+    default_params:
+      duration: "2m"
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  - type: fis_eks_pod_cpu_stress
+    backend: fis
+    category: resources
+    description: 向 EKS Pod 注入 CPU 压力（FIS 原生）
+    fis_action_id: "aws:eks:pod-cpu-stress"
+    default_params:
+      duration: "5m"
+      workers: 1
+      cpu_percent: 80
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  - type: fis_eks_pod_memory_stress
+    backend: fis
+    category: resources
+    description: 向 EKS Pod 注入内存压力（FIS 原生）
+    fis_action_id: "aws:eks:pod-memory-stress"
+    default_params:
+      duration: "5m"
+      workers: 1
+      memory_percent: 80
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  - type: fis_eks_pod_io_stress
+    backend: fis
+    category: data
+    description: 向 EKS Pod 注入磁盘 I/O 压力（FIS 原生）
+    fis_action_id: "aws:eks:pod-io-stress"
+    default_params:
+      duration: "3m"
+      workers: 1
+      io_percent: 80
+    requires: []
+    tier: [Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  - type: fis_eks_pod_network_blackhole
+    backend: fis
+    category: network
+    description: 封锁 EKS Pod 指定端口的网络流量（FIS 原生）
+    fis_action_id: "aws:eks:pod-network-blackhole-port"
+    default_params:
+      duration: "2m"
+      traffic_type: ingress
+      port: 80
+    requires: []
+    tier: [Tier0, Tier1]
+    recommended_for: [eks-microservices]
+
+  - type: fis_eks_inject_k8s_custom
+    backend: fis
+    category: compute
+    description: 通过 FIS 注入自定义 Kubernetes 资源（高级故障场景）
+    fis_action_id: "aws:eks:inject-kubernetes-custom-resource"
+    default_params:
+      duration: "3m"
+    requires: []
+    tier: [Tier1, Tier2]
+    recommended_for: [eks-microservices]
+
+  # ── EC2 ──────────────────────────────────────────────────────────────────────
+
+  - type: fis_ec2_stop
+    backend: fis
+    category: compute
+    description: 停止 EC2 实例，验证 EKS 节点失联后的 Pod 重调度
+    fis_action_id: "aws:ec2:stop-instances"
+    default_params:
+      startInstancesAfterDuration: "PT5M"
+    requires: []
+    tier: [Tier0, Tier1]
+    recommended_for: [ec2-based, eks-microservices]
+
+  - type: fis_ec2_terminate
+    backend: fis
+    category: compute
+    description: 终止 EC2 实例，模拟节点硬件故障（不可恢复）
+    fis_action_id: "aws:ec2:terminate-instances"
+    default_params: {}
+    requires: []
+    tier: [Tier0, Tier1]
+    recommended_for: [ec2-based, eks-microservices]
+
+  - type: fis_ec2_reboot
+    backend: fis
+    category: compute
+    description: 重启 EC2 实例，验证节点重启后的服务恢复
+    fis_action_id: "aws:ec2:reboot-instances"
+    default_params: {}
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    recommended_for: [ec2-based, eks-microservices]
+
+  - type: fis_ec2_spot_interruption
+    backend: fis
+    category: compute
+    description: 模拟 Spot 实例中断，验证 Spot 节点回收后的 Pod 迁移和容量弹性
+    fis_action_id: "aws:ec2:send-spot-instance-interruptions"
+    default_params:
+      durationBeforeInterruption: "PT2M"
+    requires: []
+    tier: [Tier0, Tier1]
+    recommended_for: [ec2-based, eks-microservices]
+
+  - type: fis_ec2_insufficient_capacity
+    backend: fis
+    category: resources
+    description: 模拟 EC2 容量不足错误，验证弹性伸缩和容量规划
+    fis_action_id: "aws:ec2:api-insufficient-instance-capacity-error"
+    default_params:
+      duration: "5m"
+    requires: [role_arn]
+    tier: [Tier0, Tier1]
+    recommended_for: [ec2-based, eks-microservices]
+
+  - type: fis_ec2_asg_insufficient_capacity
+    backend: fis
+    category: resources
+    description: 模拟 Auto Scaling Group 容量不足，验证 ASG 伸缩降级
+    fis_action_id: "aws:ec2:asg-insufficient-instance-capacity-error"
+    default_params:
+      duration: "5m"
+    requires: [asg_arn]
+    tier: [Tier0, Tier1]
+    recommended_for: [ec2-based, eks-microservices]
+
+  - type: fis_ec2_network_disrupt
+    backend: fis
+    category: network
+    description: 通过 NACL 修改中断 EC2 网络连通性，模拟实例级网络隔离
+    fis_action_id: "aws:ec2:disrupt-network-connectivity"
+    default_params:
+      duration: "5m"
+      scope: all
+    requires: []
+    tier: [Tier0, Tier1]
+    recommended_for: [ec2-based]
+
+  # ── EC2 SSM（通过 Systems Manager 执行压力测试）──────────────────────────────
+
+  - type: fis_ssm_network_latency
+    backend: fis
+    category: network
+    description: 通过 SSM 在 EC2 节点注入网络延迟（OS 层面，覆盖所有容器）
+    fis_action_id: "aws:ssm:send-command"
+    default_params:
+      duration: "3m"
+    requires: []
+    tier: [Tier0, Tier1]
+    recommended_for: [ec2-based]
+
+  - type: fis_ssm_network_loss
+    backend: fis
+    category: network
+    description: 通过 SSM 在 EC2 节点注入丢包（OS 层面）
+    fis_action_id: "aws:ssm:send-command"
+    default_params:
+      duration: "3m"
+    requires: []
+    tier: [Tier0, Tier1]
+    recommended_for: [ec2-based]
+
+  - type: fis_ssm_cpu_stress
+    backend: fis
+    category: resources
+    description: 通过 SSM 在 EC2 节点运行 CPU 压力测试（节点级）
+    fis_action_id: "aws:ssm:send-command"
+    default_params:
+      duration: "5m"
+    requires: []
+    tier: [Tier0, Tier1]
+    recommended_for: [ec2-based]
+
+  - type: fis_ssm_disk_stress
+    backend: fis
+    category: data
+    description: 通过 SSM 在 EC2 节点运行磁盘填充测试（节点级存储压力）
+    fis_action_id: "aws:ssm:send-command"
+    default_params:
+      duration: "3m"
+    requires: []
+    tier: [Tier1, Tier2]
+    recommended_for: [ec2-based]
+
+  # ── EBS ──────────────────────────────────────────────────────────────────────
+
+  - type: fis_ebs_pause_io
+    backend: fis
+    category: data
+    description: 暂停 EBS 卷 I/O，模拟存储完全不可用
+    fis_action_id: "aws:ebs:pause-volume-io"
+    default_params:
+      duration: "1m"
+    requires: [volume_arns]
+    tier: [Tier1, Tier2]
+    recommended_for: [ebs-storage]
+
+  - type: fis_ebs_io_latency
+    backend: fis
+    category: data
+    description: 向 EBS 卷注入读写延迟，模拟 EBS 性能抖动
+    fis_action_id: "aws:ebs:volume-io-latency"
+    default_params:
+      duration: "3m"
+      read_io_latency_ms: 100
+      write_io_latency_ms: 100
+    requires: [volume_arns]
+    tier: [Tier1, Tier2]
+    recommended_for: [ebs-storage]
+
+  # ── 网络基础设施 ─────────────────────────────────────────────────────────────
+
+  - type: fis_network_disrupt
+    backend: fis
+    category: network
+    description: 中断 Subnet 网络连通性，模拟 AZ 级别网络故障
+    fis_action_id: "aws:network:disrupt-connectivity"
+    default_params:
+      duration: "2m"
+      scope: availability-zone
+    requires: [subnet_arn]
+    tier: [Tier0, Tier1]
+    recommended_for: [multi-az, all]
+
+  - type: fis_network_cross_region_route
+    backend: fis
+    category: network
+    description: 中断跨区域路由表连通性，模拟跨 Region 网络故障
+    fis_action_id: "aws:network:route-table-disrupt-cross-region-connectivity"
+    default_params:
+      duration: "5m"
+    requires: [route_table_arn]
+    tier: [Tier0]
+    recommended_for: [multi-region]
+
+  - type: fis_vpc_endpoint_disrupt
+    backend: fis
+    category: network
+    description: 中断 VPC Endpoint 连接，模拟 AWS 服务访问中断
+    fis_action_id: "aws:network:disrupt-vpc-endpoint"
+    default_params:
+      duration: "2m"
+    requires: [subnet_arn]
+    tier: [Tier0, Tier1]
+    recommended_for: [multi-az, all]
+
+  # ── API 注入 ─────────────────────────────────────────────────────────────────
+
+  - type: fis_api_internal_error
+    backend: fis
+    category: dependencies
+    description: 注入 AWS API 内部错误（500），验证 SDK 重试和服务降级
+    fis_action_id: "aws:fis:inject-api-internal-error"
+    default_params:
+      duration: "3m"
+    requires: [role_arn]
+    tier: [Tier0, Tier1]
+    recommended_for: [all]
+
+  - type: fis_api_throttle
+    backend: fis
+    category: dependencies
+    description: 注入 AWS API 限流错误（429），验证退避重试逻辑
+    fis_action_id: "aws:fis:inject-api-throttle-error"
+    default_params:
+      duration: "3m"
+    requires: [role_arn]
+    tier: [Tier0, Tier1]
+    recommended_for: [all]
+
+  - type: fis_api_unavailable
+    backend: fis
+    category: dependencies
+    description: 注入 AWS API 不可用错误（503），验证服务不可用时的降级策略
+    fis_action_id: "aws:fis:inject-api-unavailable-error"
+    default_params:
+      duration: "3m"
+    requires: [role_arn]
+    tier: [Tier0, Tier1]
+    recommended_for: [all]
+
+  # ── DynamoDB ─────────────────────────────────────────────────────────────────
+
+  - type: fis_dynamodb_pause_replication
+    backend: fis
+    category: data
+    description: 暂停 DynamoDB 全局表跨区域复制，验证多区域数据一致性和降级策略
+    fis_action_id: "aws:dynamodb:global-table-pause-replication"
+    default_params:
+      duration: "5m"
+    requires: [global_table_arn]
+    tier: [Tier0, Tier1]
+    recommended_for: [multi-region, serverless]
+
+  # ── ElastiCache ──────────────────────────────────────────────────────────────
+
+  - type: fis_elasticache_az_power
+    backend: fis
+    category: data
+    description: 模拟 ElastiCache 集群 AZ 断电，验证缓存层故障后的应用降级
+    fis_action_id: "aws:elasticache:interrupt-cluster-az-power"
+    default_params:
+      duration: "5m"
+    requires: [cluster_arn, availability_zone]
+    tier: [Tier0, Tier1]
+    recommended_for: [multi-az]
+
+  # ── S3 ───────────────────────────────────────────────────────────────────────
+
+  - type: fis_s3_pause_replication
+    backend: fis
+    category: data
+    description: 暂停 S3 跨区域复制（CRR），验证多区域数据同步中断的影响
+    fis_action_id: "aws:s3:bucket-pause-replication"
+    default_params:
+      duration: "10m"
+    requires: [bucket_arn]
+    tier: [Tier0, Tier1]
+    recommended_for: [multi-region]
+
+  # ── AZ Recovery ──────────────────────────────────────────────────────────────
+
+  - type: fis_arc_zonal_autoshift
+    backend: fis
+    category: compute
+    description: 触发 ARC Zonal Autoshift，将流量从指定 AZ 迁移，验证跨 AZ 容灾
+    fis_action_id: "aws:arc:start-zonal-autoshift"
+    default_params: {}
+    requires: [managed_resource_arn]
+    tier: [Tier0]
+    recommended_for: [multi-az]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FIS Scenario Library 复合场景（4 种）
+# ⚠️ 这些场景的实验模板不能通过 aws fis create-experiment-template API 创建，
+#    必须从 AWS 文档页面提取 JSON 骨架或通过 FIS Console Scenario Library 入口创建。
+# ─────────────────────────────────────────────────────────────────────────────
+
+fis_scenarios:
+
+  - type: fis_scenario_az_power_interruption
+    backend: fis-scenario
+    category: az-level
+    composite: true
+    scenario_id: "az-availability-scenario"
+    description: AZ 断电场景 — 同时停止 EC2 实例、failover RDS、暂停 EBS IO、中断 ElastiCache，模拟整个 AZ 电力中断
+    sub_actions:
+      - aws:ec2:stop-instances
+      - aws:rds:failover-db-cluster
+      - aws:ebs:pause-volume-io
+      - aws:elasticache:interrupt-cluster-az-power
+    required_tags:
+      AzImpairmentPower: "IceQualified"
+    template_source: docs
+    doc_url: "https://docs.aws.amazon.com/fis/latest/userguide/az-availability-scenario.html"
+    fis_action_id: ""
+    default_params:
+      duration: "10m"
+    requires: [availability_zone, tagged_resources]
+    tier: [Tier0]
+    recommended_for: [multi-az]
+
+  - type: fis_scenario_az_app_slowdown
+    backend: fis-scenario
+    category: az-level
+    composite: true
+    scenario_id: "az-application-slowdown-scenario"
+    description: AZ 应用减速场景 — 在指定 AZ 内注入多层应用延迟，模拟 AZ 级灰色故障
+    sub_actions:
+      - aws:ec2:disrupt-network-connectivity
+      - aws:lambda:invocation-add-delay
+    required_tags:
+      AzImpairmentPower: "IceQualified"
+    template_source: docs
+    doc_url: "https://docs.aws.amazon.com/fis/latest/userguide/az-application-slowdown-scenario.html"
+    fis_action_id: ""
+    default_params:
+      duration: "10m"
+      delay_ms: 200
+    requires: [availability_zone, cluster_name]
+    tier: [Tier0, Tier1]
+    recommended_for: [multi-az, eks-microservices]
+
+  - type: fis_scenario_cross_az_traffic_slowdown
+    backend: fis-scenario
+    category: cross-az
+    composite: true
+    scenario_id: "cross-az-traffic-slowdown-scenario"
+    description: 跨 AZ 流量减速场景 — 对跨 AZ 的网络流量注入延迟，验证 AZ 亲和性路由和降级策略
+    sub_actions:
+      - aws:network:disrupt-connectivity
+    required_tags:
+      AzImpairmentPower: "IceQualified"
+    template_source: docs
+    doc_url: "https://docs.aws.amazon.com/fis/latest/userguide/cross-az-traffic-slowdown-scenario.html"
+    fis_action_id: ""
+    default_params:
+      duration: "10m"
+      delay_ms: 100
+    requires: [availability_zone, cluster_name]
+    tier: [Tier0, Tier1]
+    recommended_for: [multi-az, eks-microservices]
+
+  - type: fis_scenario_cross_region_connectivity
+    backend: fis-scenario
+    category: cross-region
+    composite: true
+    scenario_id: "cross-region-scenario"
+    description: 跨区域连接中断场景 — 中断两个 AWS 区域间的网络连接，验证多区域架构的故障隔离和流量切换
+    sub_actions:
+      - aws:network:route-table-disrupt-cross-region-connectivity
+      - aws:network:transit-gateway-disrupt-cross-region-connectivity
+    required_tags: {}
+    template_source: docs
+    doc_url: "https://docs.aws.amazon.com/fis/latest/userguide/cross-region-scenario.html"
+    fis_action_id: ""
+    default_params:
+      duration: "10m"
+    requires: [source_region, target_region, transit_gateway_arn]
+    tier: [Tier0]
+    recommended_for: [multi-region]

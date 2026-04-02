@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from .experiment import Experiment
 
 from .config import REGION, ACCOUNT_ID, FIS_ROLE_ARN
+from .fault_registry import FIS_ACTION_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -38,30 +39,54 @@ def _to_iso_duration(duration: str) -> str:
     return duration
 
 
-# fault.type → FIS actionId
-FIS_ACTION_MAP = {
-    # Lambda
-    "fis_lambda_delay":         "aws:lambda:invocation-add-delay",
-    "fis_lambda_error":         "aws:lambda:invocation-error",
-    "fis_lambda_http_response": "aws:lambda:invocation-http-integration-response",
-    # RDS/Aurora
-    "fis_rds_failover":         "aws:rds:failover-db-cluster",
-    "fis_rds_reboot":           "aws:rds:reboot-db-instances",
-    # EKS 节点
-    "fis_eks_terminate_node":   "aws:eks:terminate-nodegroup-instances",
-    # EC2
-    "fis_ec2_stop":             "aws:ec2:stop-instances",
-    "fis_ec2_terminate":        "aws:ec2:terminate-instances",
-    # EBS
-    "fis_ebs_pause_io":         "aws:ebs:pause-volume-io",
-    "fis_ebs_io_latency":       "aws:ebs:volume-io-latency",
-    # 网络
-    "fis_network_disrupt":      "aws:network:disrupt-connectivity",
-    "fis_vpc_endpoint_disrupt": "aws:network:disrupt-vpc-endpoint",
-    # API 注入
-    "fis_api_internal_error":   "aws:fis:inject-api-internal-error",
-    "fis_api_throttle":         "aws:fis:inject-api-throttle-error",
-    "fis_api_unavailable":      "aws:fis:inject-api-unavailable-error",
+# FIS action_id → target key name used inside the action's `targets` field
+# Source: aws fis get-action --id <action_id>
+FIS_TARGET_KEY_MAP: dict[str, str | None] = {
+    "aws:lambda:invocation-add-delay":                  "Functions",
+    "aws:lambda:invocation-error":                      "Functions",
+    "aws:lambda:invocation-http-integration-response":  "Functions",
+    "aws:rds:failover-db-cluster":                      "Clusters",
+    "aws:rds:reboot-db-instances":                      "DBInstances",
+    "aws:eks:terminate-nodegroup-instances":             "Nodegroups",
+    "aws:eks:pod-network-latency":                      "Pods",
+    "aws:eks:pod-network-packet-loss":                  "Pods",
+    "aws:eks:pod-delete":                               "Pods",
+    "aws:eks:pod-cpu-stress":                           "Pods",
+    "aws:eks:pod-memory-stress":                        "Pods",
+    "aws:eks:pod-io-stress":                            "Pods",
+    "aws:eks:pod-network-blackhole-port":               "Pods",
+    "aws:eks:inject-kubernetes-custom-resource":        "Pods",
+    "aws:ec2:stop-instances":                           "Instances",
+    "aws:ec2:terminate-instances":                      "Instances",
+    "aws:ec2:reboot-instances":                         "Instances",
+    "aws:ec2:api-insufficient-instance-capacity-error": "Roles",
+    "aws:ec2:asg-insufficient-instance-capacity-error": "AutoScalingGroups",
+    "aws:ssm:send-command":                             "Instances",
+    "aws:ebs:pause-volume-io":                          "Volumes",
+    "aws:ebs:volume-io-latency":                        "Volumes",
+    "aws:network:disrupt-connectivity":                 "Subnets",
+    "aws:network:disrupt-vpc-endpoint":                 "VpcEndpoints",
+    "aws:fis:inject-api-internal-error":                "Roles",
+    "aws:fis:inject-api-throttle-error":                "Roles",
+    "aws:fis:inject-api-unavailable-error":             "Roles",
+    "aws:arc:start-zonal-autoshift":                    "ManagedResources",
+    "aws:ec2:send-spot-instance-interruptions":          "Instances",
+    "aws:ec2:disrupt-network-connectivity":              "Instances",
+    "aws:dynamodb:global-table-pause-replication":       "Tables",
+    "aws:elasticache:interrupt-cluster-az-power":        "ReplicationGroups",
+    "aws:s3:bucket-pause-replication":                   "Buckets",
+    "aws:network:route-table-disrupt-cross-region-connectivity": "RouteTables",
+}
+
+# Actions that do NOT accept a 'duration' parameter
+FIS_ACTIONS_WITHOUT_DURATION = {
+    "aws:rds:failover-db-cluster",
+    "aws:rds:reboot-db-instances",
+    "aws:eks:terminate-nodegroup-instances",
+    "aws:ec2:stop-instances",
+    "aws:ec2:terminate-instances",
+    "aws:ec2:reboot-instances",
+    "aws:eks:pod-delete",
 }
 
 
@@ -92,21 +117,135 @@ class FISClient:
         if not action_id:
             raise ValueError(f"未知 FIS fault type: {ft.type}")
 
-        # 构建 action
-        action_params = {"duration": _to_iso_duration(ft.duration)}
-        if "percentage" in extra:
-            action_params["percentage"] = str(extra["percentage"])
-        if "delay_ms" in extra:
-            action_params["delayMilliseconds"] = str(extra["delay_ms"])
+        target_key = FIS_TARGET_KEY_MAP.get(action_id)
 
-        action = {
+        # 构建 action
+        action_params: dict[str, str] = {}
+        if action_id not in FIS_ACTIONS_WITHOUT_DURATION:
+            action_params["duration"] = _to_iso_duration(ft.duration)
+        if "percentage" in extra and action_id.startswith("aws:lambda:"):
+            action_params["invocationPercentage"] = str(extra["percentage"])
+        if "delay_ms" in extra and action_id.startswith("aws:lambda:"):
+            action_params["startupDelayMilliseconds"] = str(extra["delay_ms"])
+        # Lambda HTTP response params
+        if action_id == "aws:lambda:invocation-http-integration-response":
+            action_params["statusCode"] = str(extra.get("status_code", 502))
+            action_params["contentTypeHeader"] = extra.get("content_type_header", "application/json")
+            action_params["preventExecution"] = str(extra.get("prevent_execution", "true")).lower()
+        if "read_io_latency_ms" in extra:
+            action_params["readIOLatencyMilliseconds"] = str(extra["read_io_latency_ms"])
+        if "write_io_latency_ms" in extra:
+            action_params["writeIOLatencyMilliseconds"] = str(extra["write_io_latency_ms"])
+        if "scope" in extra:
+            action_params["scope"] = extra["scope"]
+        if action_id == "aws:eks:terminate-nodegroup-instances":
+            action_params["instanceTerminationPercentage"] = str(
+                extra.get("instance_termination_percentage", 50)
+            )
+        if action_id == "aws:rds:reboot-db-instances" and "force_failover" in extra:
+            action_params["forceFailover"] = str(extra["force_failover"]).lower()
+        # EC2 Spot interruption params
+        if action_id == "aws:ec2:send-spot-instance-interruptions":
+            action_params["durationBeforeInterruption"] = extra.get(
+                "durationBeforeInterruption", "PT2M"
+            )
+        # EC2 network disrupt params
+        if action_id == "aws:ec2:disrupt-network-connectivity":
+            action_params["scope"] = extra.get("scope", "all")
+
+        # FIS API Injection 特有参数
+        if action_id.startswith("aws:fis:inject-api-"):
+            action_params["service"] = extra.get("service", "ec2")
+            action_params["operations"] = extra.get("operations", "all")
+            action_params["percentage"] = str(extra.get("percentage", 100))
+        # EC2 API insufficient capacity 特有参数
+        if action_id in ("aws:ec2:api-insufficient-instance-capacity-error",
+                         "aws:ec2:asg-insufficient-instance-capacity-error"):
+            action_params["percentage"] = str(extra.get("percentage", 100))
+            action_params["availabilityZoneIdentifiers"] = extra.get(
+                "availability_zone_identifiers",
+                f"{REGION}a"
+            )
+
+        # EKS Pod action 特有参数
+        if action_id == "aws:eks:pod-network-latency":
+            action_params["delayMilliseconds"] = str(extra.get("delay_ms", 200))
+            action_params["flowsPercent"] = str(extra.get("flows_percent", 100))
+            action_params["interface"] = extra.get("interface", "DEFAULT")
+            if extra.get("sources"):
+                action_params["sources"] = extra["sources"]
+            action_params["kubernetesServiceAccount"] = extra.get(
+                "kubernetes_service_account", "fis-service-account"
+            )
+        elif action_id == "aws:eks:pod-network-packet-loss":
+            action_params["lossPercent"] = str(extra.get("loss_percent", 15))
+            action_params["flowsPercent"] = str(extra.get("flows_percent", 100))
+            action_params["interface"] = extra.get("interface", "DEFAULT")
+            if extra.get("sources"):
+                action_params["sources"] = extra["sources"]
+            action_params["kubernetesServiceAccount"] = extra.get(
+                "kubernetes_service_account", "fis-service-account"
+            )
+        elif action_id == "aws:eks:pod-delete":
+            action_params["kubernetesServiceAccount"] = extra.get(
+                "kubernetes_service_account", "fis-service-account"
+            )
+        elif action_id == "aws:eks:pod-cpu-stress":
+            action_params["workers"] = str(extra.get("workers", 1))
+            action_params["percent"] = str(extra.get("cpu_percent", 80))
+            action_params["kubernetesServiceAccount"] = extra.get(
+                "kubernetes_service_account", "fis-service-account"
+            )
+        elif action_id == "aws:eks:pod-memory-stress":
+            action_params["workers"] = str(extra.get("workers", 1))
+            action_params["percent"] = str(extra.get("memory_percent", 80))
+            action_params["kubernetesServiceAccount"] = extra.get(
+                "kubernetes_service_account", "fis-service-account"
+            )
+        elif action_id == "aws:eks:pod-io-stress":
+            action_params["workers"] = str(extra.get("workers", 1))
+            action_params["percent"] = str(extra.get("io_percent", 80))
+            action_params["kubernetesServiceAccount"] = extra.get(
+                "kubernetes_service_account", "fis-service-account"
+            )
+        elif action_id == "aws:eks:pod-network-blackhole-port":
+            action_params["trafficType"] = extra.get("traffic_type", "ingress")
+            action_params["port"] = str(extra.get("port", 80))
+            if extra.get("protocol"):
+                action_params["protocol"] = extra["protocol"]
+            action_params["kubernetesServiceAccount"] = extra.get(
+                "kubernetes_service_account", "fis-service-account"
+            )
+
+        # SSM send-command 特有参数
+        if ft.type.startswith("fis_ssm"):
+            ssm_doc_map = {
+                "fis_ssm_network_latency": "AWSFIS-Run-Network-Latency-Sources",
+                "fis_ssm_network_loss":    "AWSFIS-Run-Network-Packet-Loss-Sources",
+                "fis_ssm_cpu_stress":      "AWSFIS-Run-CPU-Stress",
+                "fis_ssm_disk_stress":     "AWSFIS-Run-Disk-Fill",
+            }
+            doc_name = ssm_doc_map.get(ft.type, "AWSFIS-Run-CPU-Stress")
+            doc_arn = f"arn:aws:ssm:{REGION}::document/{doc_name}"
+            action_params["documentArn"] = doc_arn
+            if extra.get("document_parameters"):
+                import json as _json
+                action_params["documentParameters"] = _json.dumps(extra["document_parameters"])
+
+        # target_name is the shared key between action.targets and template.targets
+        target_name = "main-target"
+        action: dict = {
             "actionId": action_id,
             "parameters": action_params,
-            "targets": {"target-0": "target-0"},
+            "targets": {target_key: target_name} if target_key else {},
         }
 
-        # 构建 target
-        target = self._build_target(ft.type, extra)
+        # 构建 target（仅当 action 需要 targets 时）
+        if target_key:
+            target = self._build_target(ft.type, extra)
+            template_targets = {target_name: target}
+        else:
+            template_targets = {}
 
         # 构建 Stop Conditions
         stop_conditions = []
@@ -122,7 +261,7 @@ class FISClient:
         template_resp = self.fis.create_experiment_template(
             description=experiment.description or f"chaos-runner: {experiment.name}",
             actions={"fault-action": action},
-            targets={"target-0": target},
+            targets=template_targets,
             stopConditions=stop_conditions or [{"source": "none"}],
             roleArn=FIS_ROLE_ARN,
             tags={
@@ -155,10 +294,30 @@ class FISClient:
                 "resourceArns": [extra["function_arn"]],
                 "selectionMode": "ALL",
             }
-        elif fault_type.startswith("fis_rds"):
+        elif fault_type == "fis_rds_failover":
             return {
                 "resourceType": "aws:rds:cluster",
                 "resourceArns": [extra["cluster_arn"]],
+                "selectionMode": "ALL",
+            }
+        elif fault_type == "fis_rds_reboot":
+            # FIS reboot-db-instances targets individual DB instances (aws:rds:db),
+            # not the cluster. Resolve the writer instance ARN from the cluster ARN.
+            cluster_arn = extra["cluster_arn"]
+            cluster_id = cluster_arn.split(":")[-1]
+            rds = boto3.client("rds", region_name=REGION)
+            resp = rds.describe_db_clusters(DBClusterIdentifier=cluster_id)
+            writer = next(
+                m for m in resp["DBClusters"][0]["DBClusterMembers"]
+                if m["IsClusterWriter"]
+            )
+            instance_arn = (
+                f"arn:aws:rds:{REGION}:{ACCOUNT_ID}:db:"
+                f"{writer['DBInstanceIdentifier']}"
+            )
+            return {
+                "resourceType": "aws:rds:db",
+                "resourceArns": [instance_arn],
                 "selectionMode": "ALL",
             }
         elif fault_type == "fis_eks_terminate_node":
@@ -166,6 +325,18 @@ class FISClient:
                 "resourceType": "aws:eks:nodegroup",
                 "resourceArns": [extra["nodegroup_arn"]],
                 "selectionMode": extra.get("selection_mode", "COUNT(1)"),
+            }
+        elif fault_type == "fis_ec2_insufficient_capacity":
+            return {
+                "resourceType": "aws:iam:role",
+                "resourceArns": [extra["role_arn"]],
+                "selectionMode": "ALL",
+            }
+        elif fault_type == "fis_ec2_asg_insufficient_capacity":
+            return {
+                "resourceType": "aws:ec2:autoscaling-group",
+                "resourceArns": [extra["asg_arn"]],
+                "selectionMode": "ALL",
             }
         elif fault_type.startswith("fis_ec2"):
             target = {
@@ -196,7 +367,7 @@ class FISClient:
                     for vid in extra.get("volume_ids", [])
                 ]
             return {
-                "resourceType": "aws:ebs:volume",
+                "resourceType": "aws:ec2:ebs-volume",
                 "resourceArns": arns,
                 "selectionMode": "ALL",
             }
@@ -206,11 +377,106 @@ class FISClient:
                 "resourceArns": [extra["subnet_arn"]],
                 "selectionMode": "ALL",
             }
+        elif fault_type.startswith("fis_eks_pod"):
+            # FIS native EKS pod actions — 通过 cluster + namespace + label 选择 Pod
+            target = {
+                "resourceType": "aws:eks:pod",
+                "selectionMode": extra.get("selection_mode", "ALL"),
+                "parameters": {
+                    "clusterIdentifier": extra.get("cluster_name", "PetSite"),
+                    "namespace": extra.get("namespace", "petadoptions"),
+                    "selectorType": extra.get("selector_type", "labelSelector"),
+                    "selectorValue": extra.get("selector_value", ""),
+                },
+            }
+            if extra.get("availability_zone"):
+                target["parameters"]["availabilityZoneIdentifier"] = extra["availability_zone"]
+            return target
+        elif fault_type.startswith("fis_ssm"):
+            # SSM send-command — target EC2 instances by tag or ARN
+            target = {
+                "resourceType": "aws:ec2:instance",
+                "selectionMode": extra.get("selection_mode", "ALL"),
+            }
+            if "instance_arns" in extra:
+                arns = extra["instance_arns"]
+                target["resourceArns"] = [arns] if isinstance(arns, str) else arns
+            else:
+                target["resourceTags"] = extra.get("tags", {"chaos-target": "true"})
+            if extra.get("availability_zone"):
+                target["filters"] = [
+                    {"path": "Placement.AvailabilityZone", "values": [extra["availability_zone"]]}
+                ]
+            return target
         elif fault_type.startswith("fis_api"):
             # API injection targets an IAM role
             return {
                 "resourceType": "aws:iam:role",
                 "resourceArns": [extra["role_arn"]],
+                "selectionMode": "ALL",
+            }
+        elif fault_type == "fis_ec2_insufficient_capacity":
+            return {
+                "resourceType": "aws:iam:role",
+                "resourceArns": [extra["role_arn"]],
+                "selectionMode": "ALL",
+            }
+        elif fault_type == "fis_ec2_asg_insufficient_capacity":
+            return {
+                "resourceType": "aws:ec2:autoscaling-group",
+                "resourceArns": [extra["asg_arn"]],
+                "selectionMode": "ALL",
+            }
+        elif fault_type == "fis_arc_zonal_autoshift":
+            return {
+                "resourceType": "aws:arc:zonal-shift-managed-resource",
+                "resourceArns": [extra["managed_resource_arn"]],
+                "selectionMode": "ALL",
+            }
+        elif fault_type == "fis_ec2_spot_interruption":
+            target = {
+                "resourceType": "aws:ec2:spot-instance",
+                "selectionMode": extra.get("selection_mode", "COUNT(1)"),
+            }
+            if "instance_arns" in extra:
+                arns = extra["instance_arns"]
+                target["resourceArns"] = [arns] if isinstance(arns, str) else arns
+            else:
+                target["resourceTags"] = extra.get("tags", {"chaos-target": "true"})
+            return target
+        elif fault_type == "fis_ec2_network_disrupt":
+            target = {
+                "resourceType": "aws:ec2:instance",
+                "selectionMode": extra.get("selection_mode", "ALL"),
+            }
+            if "instance_arns" in extra:
+                arns = extra["instance_arns"]
+                target["resourceArns"] = [arns] if isinstance(arns, str) else arns
+            else:
+                target["resourceTags"] = extra.get("tags", {"chaos-target": "true"})
+            return target
+        elif fault_type == "fis_dynamodb_pause_replication":
+            return {
+                "resourceType": "aws:dynamodb:global-table",
+                "resourceArns": [extra["global_table_arn"]],
+                "selectionMode": "ALL",
+            }
+        elif fault_type == "fis_elasticache_az_power":
+            return {
+                "resourceType": "aws:elasticache:replicationgroup",
+                "resourceArns": [extra["cluster_arn"]],
+                "selectionMode": "ALL",
+            }
+        elif fault_type == "fis_s3_pause_replication":
+            return {
+                "resourceType": "aws:s3:bucket",
+                "resourceArns": [extra["bucket_arn"]],
+                "selectionMode": "ALL",
+            }
+        elif fault_type == "fis_network_cross_region_route":
+            return {
+                "resourceType": "aws:ec2:route-table",
+                "resourceArns": [extra["route_table_arn"]],
                 "selectionMode": "ALL",
             }
         else:
