@@ -113,6 +113,10 @@ class FaultSpec:
     action: Optional[str] = None         # http_chaos action
     port: Optional[int] = None           # http_chaos port
     delay: Optional[int] = None          # http_chaos delay (ms)
+    exclude_paths: Optional[list] = None # http_chaos 排除路径（预留字段）
+    # 注意：Chaos Mesh 2.8.x 中 exclude_paths 对 delay action 无效，
+    # iptables 拦截发生在 HTTP 层解析之前，path 过滤不生效。
+    # 当前通过将 delay 值控制在 probe timeout 以下来规避 CrashLoopBackOff。
     extra_params: Optional[dict] = None  # FIS 专属参数（function_arn, cluster_arn 等）
 
 
@@ -180,6 +184,7 @@ def load_experiment(path: str) -> Experiment:
         action=fault_d.get('action'),
         port=fault_d.get('port'),
         delay=fault_d.get('delay'),
+        exclude_paths=fault_d.get('exclude_paths'),
         extra_params=fault_d.get('extra_params'),
     )
 
@@ -233,6 +238,7 @@ def load_experiment(path: str) -> Experiment:
     )
 
     # FIS 实验：运行时解析 ARN（service_name + resource_type → 真实 ARN）
+    # fis-scenario 不走 TargetResolver（多 action 模板用 tag + AZ filter，ARN 在 YAML extra_params 中直接指定）
     if exp.backend == "fis" and exp.enabled:
         try:
             from .target_resolver import TargetResolver
@@ -242,5 +248,11 @@ def load_experiment(path: str) -> Experiment:
             logging.getLogger(__name__).warning(
                 f"实验 {exp.name}: ARN 解析跳过（{e}）"
             )
+
+    # fis-scenario: 展开 extra_params 中的 ARN 占位符
+    if exp.backend == "fis-scenario" and exp.fault.extra_params:
+        for key, val in exp.fault.extra_params.items():
+            if isinstance(val, str) and "${" in val:
+                exp.fault.extra_params[key] = _expand_arn(val)
 
     return exp

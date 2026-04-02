@@ -1,0 +1,56 @@
+# FIS Scenario Library: AZ Power Interruption（1a 断电）
+# 参考: https://docs.aws.amazon.com/fis/latest/userguide/az-availability-scenario.html
+# 多 action 复合场景：stop-ec2 + pause-ebs-io + failover-rds + interrupt-elasticache
+# 模拟 AZ ap-northeast-1a 完全断电，验证跨 AZ 容灾切换
+# 前置条件：目标 EC2/EBS 必须打 AzImpairmentPower: IceQualified 标签
+
+name: fis-scenario-az-power-interruption-1a
+description: "Simulate complete AZ power loss in 1a: stop EC2, pause EBS IO, failover RDS, interrupt ElastiCache"
+backend: fis-scenario
+
+target:
+  service: petsite
+  namespace: az-scenario
+  tier: Tier0
+
+fault:
+  type: fis_scenario_az_power_interruption
+  mode: all
+  value: "100"
+  duration: "10m"
+  extra_params:
+    availability_zone: "ap-northeast-1a"
+    rds_cluster_arn: "arn:aws:rds:${REGION}:${ACCOUNT_ID}:cluster:petsite-aurora-cluster"
+    # elasticache_arn: "arn:aws:elasticache:${REGION}:${ACCOUNT_ID}:replicationgroup:petsite-redis"
+    # ↑ 如果环境无 ElastiCache，注释掉即可，对应 action 会被自动 skip
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 5000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 30%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "60s"
+  expected_root_cause: az-power-interruption
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "20m"
+  save_to_bedrock_kb: false

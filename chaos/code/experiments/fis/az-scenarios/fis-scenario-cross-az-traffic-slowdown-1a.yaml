@@ -1,0 +1,54 @@
+# FIS Scenario Library: Cross-AZ Traffic Slowdown（1a 跨 AZ 流量减速）
+# 参考: https://docs.aws.amazon.com/fis/latest/userguide/cross-az-traffic-slowdown-scenario.html
+# 多 action 复合场景：disrupt-cross-az-traffic（subnet 级 NACL 注入）
+# 与单 action fis_eks_pod_network_packet_loss 区别：Scenario Library 在 VPC NACL 层操作，
+# 影响整个 AZ 的跨 AZ 流量，不仅限于 EKS Pod
+# 前置条件：目标 subnet 必须打 AzImpairmentPower: IceQualified 标签
+
+name: fis-scenario-cross-az-traffic-slowdown-1a
+description: "Disrupt cross-AZ traffic from subnets in 1a via NACL injection, simulating AZ-level network degradation"
+backend: fis-scenario
+
+target:
+  service: petsite
+  namespace: az-scenario
+  tier: Tier0
+
+fault:
+  type: fis_scenario_cross_az_traffic_slowdown
+  mode: all
+  value: "100"
+  duration: "10m"
+  extra_params:
+    availability_zone: "ap-northeast-1a"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 85%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 8000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 40%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "60s"
+  expected_root_cause: network-cross-az
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "15m"
+  save_to_bedrock_kb: false

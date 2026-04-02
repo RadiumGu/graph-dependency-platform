@@ -521,6 +521,247 @@ class FISClient:
             logger.error(f"FIS preflight 失败: {e}")
             return False
 
+    # ─── FIS Scenario Library：多 action 复合场景 ─────────────────────────
+
+    def inject_scenario(self, experiment: "Experiment") -> dict:
+        """
+        创建 FIS Scenario Library 多 action 模板 + 启动实验。
+        根据 fault.type 选择对应的 JSON skeleton builder，
+        缺失资源 ARN 的 action 会被 skip（不阻塞整个实验）。
+        返回 {"experiment_id": ..., "template_id": ...}
+        """
+        ft = experiment.fault
+        extra = ft.extra_params or {}
+        duration_iso = _to_iso_duration(ft.duration)
+
+        builders = {
+            "fis_scenario_az_power_interruption": self._build_az_power_template,
+            "fis_scenario_az_app_slowdown": self._build_az_app_slowdown_template,
+            "fis_scenario_cross_az_traffic_slowdown": self._build_cross_az_traffic_template,
+            "fis_scenario_cross_region_connectivity": self._build_cross_region_template,
+        }
+        builder = builders.get(ft.type)
+        if not builder:
+            raise ValueError(f"未知 FIS scenario type: {ft.type}")
+
+        actions, targets = builder(extra, duration_iso)
+
+        if not actions:
+            raise ValueError(f"场景 {ft.type} 所有 action 均因缺少资源 ARN 被跳过，无法执行")
+
+        # 构建 Stop Conditions
+        stop_conditions = []
+        for sc in experiment.stop_conditions:
+            if sc.cloudwatch_alarm_arn:
+                stop_conditions.append({
+                    "source": "aws:cloudwatch:alarm",
+                    "value": sc.cloudwatch_alarm_arn,
+                })
+
+        logger.info(f"创建 FIS scenario 模板: {ft.type} ({len(actions)} actions, {len(targets)} targets)")
+        template_resp = self.fis.create_experiment_template(
+            description=experiment.description or f"chaos-runner scenario: {experiment.name}",
+            actions=actions,
+            targets=targets,
+            stopConditions=stop_conditions or [{"source": "none"}],
+            roleArn=FIS_ROLE_ARN,
+            tags={
+                "chaos-automation": "true",
+                "experiment-name": experiment.name,
+                "target-service": experiment.target_service,
+                "scenario-type": ft.type,
+            },
+        )
+        template_id = template_resp["experimentTemplate"]["id"]
+        logger.info(f"FIS scenario 模板已创建: {template_id}")
+
+        exp_resp = self.fis.start_experiment(
+            experimentTemplateId=template_id,
+            tags={"experiment-name": experiment.name},
+        )
+        experiment_id = exp_resp["experiment"]["id"]
+        logger.info(f"✅ FIS scenario 实验已启动: {experiment_id}")
+
+        return {
+            "experiment_id": experiment_id,
+            "template_id": template_id,
+        }
+
+    def _build_az_power_template(
+        self, extra: dict, duration_iso: str
+    ) -> tuple[dict, dict]:
+        """AZ Power Interruption: stop-ec2 + pause-ebs-io + failover-rds + interrupt-elasticache"""
+        az = extra.get("availability_zone", f"{REGION}a")
+        actions: dict = {}
+        targets: dict = {}
+
+        # EC2 stop — tag 筛选 + AZ filter
+        actions["stop-ec2"] = {
+            "actionId": "aws:ec2:stop-instances",
+            "parameters": {"startInstancesAfterDuration": duration_iso},
+            "targets": {"Instances": "ec2-instances"},
+        }
+        targets["ec2-instances"] = {
+            "resourceType": "aws:ec2:instance",
+            "resourceTags": {"AzImpairmentPower": "IceQualified"},
+            "filters": [{"path": "Placement.AvailabilityZone", "values": [az]}],
+            "selectionMode": "ALL",
+        }
+
+        # EBS pause IO — tag 筛选 + AZ filter
+        actions["pause-ebs-io"] = {
+            "actionId": "aws:ebs:pause-volume-io",
+            "parameters": {"duration": duration_iso},
+            "targets": {"Volumes": "ebs-volumes"},
+        }
+        targets["ebs-volumes"] = {
+            "resourceType": "aws:ebs:volume",
+            "resourceTags": {"AzImpairmentPower": "IceQualified"},
+            "filters": [{"path": "AvailabilityZone", "values": [az]}],
+            "selectionMode": "ALL",
+        }
+
+        # RDS failover（可选 — 需要 cluster ARN）
+        rds_arn = extra.get("rds_cluster_arn")
+        if rds_arn:
+            actions["failover-rds"] = {
+                "actionId": "aws:rds:failover-db-cluster",
+                "parameters": {},
+                "targets": {"Clusters": "rds-clusters"},
+            }
+            targets["rds-clusters"] = {
+                "resourceType": "aws:rds:cluster",
+                "resourceArns": [rds_arn],
+                "selectionMode": "ALL",
+            }
+        else:
+            logger.warning("AZ Power: rds_cluster_arn 缺失，跳过 failover-rds action")
+
+        # ElastiCache interrupt（可选 — 需要 cluster ARN）
+        elasticache_arn = extra.get("elasticache_arn")
+        if elasticache_arn:
+            actions["interrupt-elasticache"] = {
+                "actionId": "aws:elasticache:interrupt-cluster-az-power",
+                "parameters": {"duration": duration_iso},
+                "targets": {"ReplicationGroups": "elasticache-clusters"},
+            }
+            targets["elasticache-clusters"] = {
+                "resourceType": "aws:elasticache:replicationgroup",
+                "resourceArns": [elasticache_arn],
+                "selectionMode": "ALL",
+            }
+        else:
+            logger.warning("AZ Power: elasticache_arn 缺失，跳过 interrupt-elasticache action")
+
+        return actions, targets
+
+    def _build_az_app_slowdown_template(
+        self, extra: dict, duration_iso: str
+    ) -> tuple[dict, dict]:
+        """AZ App Slowdown: disrupt-network + slow-lambda"""
+        az = extra.get("availability_zone", f"{REGION}a")
+        scope = extra.get("scope", "availability-zone")
+        actions: dict = {}
+        targets: dict = {}
+
+        # 网络中断 — subnet tag 筛选 + AZ filter
+        actions["disrupt-network"] = {
+            "actionId": "aws:network:disrupt-connectivity",
+            "parameters": {"duration": duration_iso, "scope": scope},
+            "targets": {"Subnets": "ec2-subnets"},
+        }
+        targets["ec2-subnets"] = {
+            "resourceType": "aws:ec2:subnet",
+            "resourceTags": {"AzImpairmentPower": "IceQualified"},
+            "filters": [{"path": "AvailabilityZone", "values": [az]}],
+            "selectionMode": "ALL",
+        }
+
+        # Lambda 延迟（可选 — 需要 function ARN）
+        lambda_arn = extra.get("lambda_function_arn")
+        if lambda_arn:
+            actions["slow-lambda"] = {
+                "actionId": "aws:lambda:invocation-add-delay",
+                "parameters": {
+                    "duration": duration_iso,
+                    "invocationPercentage": str(extra.get("percentage", 100)),
+                    "startupDelayMilliseconds": str(extra.get("delay_ms", 2000)),
+                },
+                "targets": {"Functions": "lambda-functions"},
+            }
+            targets["lambda-functions"] = {
+                "resourceType": "aws:lambda:function",
+                "resourceArns": [lambda_arn],
+                "selectionMode": "ALL",
+            }
+        else:
+            logger.warning("AZ App Slowdown: lambda_function_arn 缺失，跳过 slow-lambda action")
+
+        return actions, targets
+
+    def _build_cross_az_traffic_template(
+        self, extra: dict, duration_iso: str
+    ) -> tuple[dict, dict]:
+        """Cross-AZ Traffic Slowdown: disrupt-cross-az-traffic"""
+        az = extra.get("availability_zone", f"{REGION}a")
+        actions: dict = {}
+        targets: dict = {}
+
+        actions["disrupt-cross-az-traffic"] = {
+            "actionId": "aws:network:disrupt-connectivity",
+            "parameters": {"duration": duration_iso, "scope": "availability-zone"},
+            "targets": {"Subnets": "target-subnets"},
+        }
+        targets["target-subnets"] = {
+            "resourceType": "aws:ec2:subnet",
+            "resourceTags": {"AzImpairmentPower": "IceQualified"},
+            "filters": [{"path": "AvailabilityZone", "values": [az]}],
+            "selectionMode": "ALL",
+        }
+
+        return actions, targets
+
+    def _build_cross_region_template(
+        self, extra: dict, duration_iso: str
+    ) -> tuple[dict, dict]:
+        """Cross-Region Connectivity: disrupt-route-tables + disrupt-tgw"""
+        actions: dict = {}
+        targets: dict = {}
+
+        # Route table（可选）
+        route_table_arn = extra.get("route_table_arn")
+        if route_table_arn:
+            actions["disrupt-route-tables"] = {
+                "actionId": "aws:network:route-table-disrupt-cross-region-connectivity",
+                "parameters": {"duration": duration_iso},
+                "targets": {"RouteTables": "route-tables"},
+            }
+            targets["route-tables"] = {
+                "resourceType": "aws:ec2:routeTable",
+                "resourceArns": [route_table_arn],
+                "selectionMode": "ALL",
+            }
+        else:
+            logger.warning("Cross-Region: route_table_arn 缺失，跳过 disrupt-route-tables action")
+
+        # Transit Gateway（可选）
+        tgw_arn = extra.get("transit_gateway_arn")
+        if tgw_arn:
+            actions["disrupt-tgw"] = {
+                "actionId": "aws:network:transit-gateway-disrupt-cross-region-connectivity",
+                "parameters": {"duration": duration_iso},
+                "targets": {"TransitGateways": "transit-gateways"},
+            }
+            targets["transit-gateways"] = {
+                "resourceType": "aws:ec2:transit-gateway",
+                "resourceArns": [tgw_arn],
+                "selectionMode": "ALL",
+            }
+        else:
+            logger.warning("Cross-Region: transit_gateway_arn 缺失，跳过 disrupt-tgw action")
+
+        return actions, targets
+
     def wait_for_completion(self, experiment_id: str, timeout: int = 600,
                             poll_interval: int = 10) -> str:
         """

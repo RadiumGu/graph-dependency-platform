@@ -65,19 +65,49 @@ class ExperimentRunner:
         result = ExperimentResult(experiment=experiment)
         result.start_time = datetime.now(timezone.utc)
         result.min_success_rate = 100.0
+        log_collector = None
 
         try:
             self._run_phase(result, "phase0", self._phase0_preflight, experiment, result)
             self._run_phase(result, "phase1", self._phase1_steady_state_before, experiment, result)
             self._run_phase(result, "phase2", self._phase2_inject, experiment, result)
+
+            # Phase 2 完成后启动后台日志采集（best-effort，non-fatal）
+            if not self.dry_run:
+                try:
+                    from .log_collector import PodLogCollector
+                    log_collector = PodLogCollector(
+                        service=experiment.target_service,
+                        namespace=experiment.target_namespace,
+                        since="1m",
+                    )
+                    log_collector.start_background()
+                except Exception as e:
+                    logger.warning(f"日志采集启动失败（非致命）: {e}")
+
             self._run_phase(result, "phase3", self._phase3_observe, experiment, result)
             self._run_phase(result, "phase4", self._phase4_recover, experiment, result)
+
+            # Phase 4 结束后停止日志采集
+            if log_collector is not None:
+                try:
+                    log_result = log_collector.stop_and_collect()
+                    result.log_collection = log_result
+                except Exception as e:
+                    logger.warning(f"日志采集停止失败（非致命）: {e}")
+
             self._run_phase(result, "phase5", self._phase5_steady_state_after, experiment, result)
 
         except AbortException as e:
             result.status = "ABORTED"
             result.abort_reason = str(e)
             logger.error(f"🛑 实验熔断: {e}")
+            if log_collector is not None:
+                try:
+                    log_result = log_collector.stop_and_collect()
+                    result.log_collection = log_result
+                except Exception:
+                    pass
             self._emergency_cleanup(result.chaos_experiment_name, experiment.fault.type, experiment.backend)
 
         except PrefightFailure as e:
@@ -89,6 +119,12 @@ class ExperimentRunner:
             result.status = "ERROR"
             result.abort_reason = f"未预期异常: {e}"
             logger.error(f"💥 实验异常: {e}\n{traceback.format_exc()}")
+            if log_collector is not None:
+                try:
+                    log_result = log_collector.stop_and_collect()
+                    result.log_collection = log_result
+                except Exception:
+                    pass
             self._emergency_cleanup(result.chaos_experiment_name, experiment.fault.type, experiment.backend)
 
         finally:
@@ -115,13 +151,14 @@ class ExperimentRunner:
         from .target_resolver import TargetResolver
         resolver = TargetResolver(tags=self.tags)
 
-        if exp.backend == "fis":
+        if exp.backend in ("fis", "fis-scenario"):
             # 确保 ARN 已解析（load_experiment 可能已解析；这里确保最新，并写入审计）
-            resolver.resolve_experiment(exp)
+            if exp.backend == "fis":
+                resolver.resolve_experiment(exp)
             if not self.fis.preflight_check():
                 raise PrefightFailure("FIS 服务不可用（检查 IAM 权限和区域配置）")
-            slog.info("target_resolved", service=exp.target_service, backend="fis", source="resolver")
-            logger.info("✅ FIS Pre-flight 通过")
+            slog.info("target_resolved", service=exp.target_service, backend=exp.backend, source="resolver")
+            logger.info(f"✅ FIS Pre-flight 通过 (backend={exp.backend})")
             return
 
         # Chaos Mesh 后端：解析 Pod 目标写入审计记录，然后检查残留实验 + Pod 健康
@@ -182,7 +219,7 @@ class ExperimentRunner:
             return
 
         if exp.backend == "fis":
-            # FIS 后端
+            # FIS 后端（单 action）
             fis_result = self.fis.inject(exp)
             result.chaos_experiment_name = fis_result["experiment_id"]
             result.fis_template_id = fis_result.get("template_id", "")
@@ -190,6 +227,15 @@ class ExperimentRunner:
             slog.info("fault_injected", experiment=exp.name, experiment_id=fis_result["experiment_id"],
                       fault_type=exp.fault.type, backend="fis")
             logger.info(f"✅ FIS 注入完成: experiment={fis_result['experiment_id']}, template={fis_result.get('template_id', '')}")
+        elif exp.backend == "fis-scenario":
+            # FIS Scenario Library（多 action 复合场景）
+            fis_result = self.fis.inject_scenario(exp)
+            result.chaos_experiment_name = fis_result["experiment_id"]
+            result.fis_template_id = fis_result.get("template_id", "")
+            result.inject_time = datetime.now(timezone.utc)
+            slog.info("fault_injected", experiment=exp.name, experiment_id=fis_result["experiment_id"],
+                      fault_type=exp.fault.type, backend="fis-scenario")
+            logger.info(f"✅ FIS scenario 注入完成: experiment={fis_result['experiment_id']}, template={fis_result.get('template_id', '')}")
         else:
             # Chaos Mesh 后端
             ft = exp.fault
@@ -254,7 +300,7 @@ class ExperimentRunner:
                                latency_p99=snap.latency_p99_ms)
                     logger.error(f"🚨 Stop Condition 触发: {msg}")
                     # 立刻熔断
-                    if exp.backend == "fis":
+                    if exp.backend in ("fis", "fis-scenario"):
                         self.fis.stop(result.chaos_experiment_name)
                     else:
                         delete_type = self.injector.FAULT_TO_DELETE_TYPE.get(exp.fault.type, exp.fault.type)
@@ -319,7 +365,7 @@ class ExperimentRunner:
         recover_start = time.time()
 
         # FIS 后端：先等 FIS 实验自然完成
-        if exp.backend == "fis" and result.chaos_experiment_name:
+        if exp.backend in ("fis", "fis-scenario") and result.chaos_experiment_name:
             logger.info(f"等待 FIS 实验完成: {result.chaos_experiment_name}")
             final_state = self.fis.wait_for_completion(
                 result.chaos_experiment_name,
@@ -334,9 +380,15 @@ class ExperimentRunner:
         deadline = recover_start + self.RECOVERY_TIMEOUT
 
         # 等待所有 Pods 变为 Running + Ready。
-        # FIS 后端（如 Aurora failover / Lambda 延迟）不会直接操作 K8s Pod，
-        # 但目标微服务的 Pod 健康状态仍是"应用层恢复"的最终判断依据，
-        # 因此 FIS 路径同样调用 check_pods() 验证 EKS 工作负载恢复。
+        # FIS infra 实验（Lambda / EBS / subnet）可能没有直接对应的 K8s Pods，
+        # 先检查是否有 Pods 需要恢复；如果 total==0 则跳过 Pod 恢复循环。
+        initial_pods = self.injector.check_pods(exp.target_service, exp.target_namespace)
+        if initial_pods["total"] == 0:
+            elapsed = round(time.time() - recover_start, 1)
+            result.recovery_seconds = elapsed
+            logger.info(f"✅ 无 K8s Pods 需要恢复（FIS infra 实验），耗时 {elapsed}s")
+            return
+
         while time.time() < deadline:
             pods = self.injector.check_pods(exp.target_service, exp.target_namespace)
             total   = pods["total"]
@@ -472,6 +524,10 @@ class ExperimentRunner:
             print(f"报告:     {result.report_path}")
         if result.abort_reason:
             print(f"原因:     {result.abort_reason}")
+        if result.log_collection is not None:
+            print(f"日志采集: {result.log_collection.summary()}")
+            if result.log_collection.error_summary:
+                print(f"错误分类: {result.log_collection.error_summary}")
         print(f"{'='*60}\n")
 
         self.cw_metrics.publish_experiment_metrics(result)
@@ -481,7 +537,7 @@ class ExperimentRunner:
         """紧急清理：删除实验，避免故障持续"""
         if experiment_name and not self.dry_run:
             logger.warning(f"🧹 紧急清理: {experiment_name} (backend={backend})")
-            if backend == "fis":
+            if backend in ("fis", "fis-scenario"):
                 self.fis.stop(experiment_name)
             else:
                 chaos_type = self.injector.FAULT_TO_DELETE_TYPE.get(fault_type, fault_type)
