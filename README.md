@@ -11,34 +11,82 @@ Built around [PetSite](https://github.com/aws-samples/one-observability-demo) �
 ## Platform Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                   PetSite on AWS EKS (ARM64 Graviton3)               │
-│    petsite / petsearch / pethistory / payforadoption / petfood …     │
-└──────────────────────────────┬───────────────────────────────────────┘
-                               │ traffic & metrics
-            ┌──────────────────▼──────────────────┐
-            │         infra/ (CDK + ETL)           │
-            │   EKS + DeepFlow + Neptune + ALB     │
-            │   Modular ETL (event-driven sync)    │
-            │   → Neptune Knowledge Graph          │
-            └────┬─────────────────────┬───────────┘
-                 │ graph queries       │ CW Alarm trigger
-                 │                     │
-      ┌──────────▼──────────┐  ┌──────▼───────────────────┐
-      │      rca/            │  │       chaos/              │
-      │  Multi-layer RCA     │  │  AI-driven chaos          │
-      │  + Layer2 Probers    │  │  engineering platform     │
-      │  + Graph RAG reports │  │  (Chaos Mesh + AWS FIS)   │
-      └──────────┬──────────┘  └──────┬────────────────────┘
-                 │  writes incidents   │  validates RCA
-                 └──────────┬──────────┘
-                            │ closed loop
-                 ┌──────────▼──────────┐
-                 │  dr-plan-generator/  │
-                 │  Graph-driven DR     │
-                 │  switchover plans    │
-                 └─────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    PetSite on AWS EKS (ARM64 Graviton3)                                      │
+│                    petsite / petsearch / pethistory / payforadoption / petfood / ...                         │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+          │ eBPF L7/L4 traffic                                                     │ CW Alarm → SNS
+          │ AWS API Describe/List                                                  │
+          │ CloudFormation GetTemplate                                             │
+          │ EventBridge real-time change events                                    │
+          ▼                                                                        ▼
+┌─────────────────────┐   write (mergeV/mergeE)  ┌──────────────────────┐  read   ┌──────────────────────────┐
+│   infra/ (CDK+ETL)  │ ──────────────────────→  │                      │ ──────→ │          rca/            │
+│  4 Lambda pipelines │                           │   Amazon Neptune     │         │  Multi-layer RCA engine  │
+│  • DeepFlow  5min   │                           │   (openCypher)       │ ←────── │  DeepFlow + CloudTrail   │
+│  • AWS APIs  15min  │                           │                      │  write  │  6 Layer2 probers        │
+│  • EventBridge live │                           │   23 node types      │         │  Graph RAG report→Slack  │
+│  • CloudFormation   │                           │   19 edge types      │  read   ┌──────────────────────────┐
+└─────────────────────┘                           │   171+ nodes         │ ──────→ │         chaos/           │
+                                                  │                      │         │  AI hypothesis (graph)   │
+                                                  │   Q1–Q18 query lib   │ ←────── │  61 fault types × 2 back │
+                                                  │                      │  write  │  LearningAgent loop      │
+                                                  │                      │         └──────────────────────────┘
+                                                  │                      │  read   ┌──────────────────────────┐
+                                                  │                      │ ──────→ │    dr-plan-generator/    │
+                                                  └──────────────────────┘         │  Dep tree + crit. path   │
+                                                                                   │  7-phase ordered plan    │
+                                                                                   │  3-level verify + policy │
+                                                                                   └──────────────────────────┘
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                          profiles/ + shared/   Unified environment config & service registry (all modules)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
+
+<table style="border-collapse:collapse; width:100%; margin:1.5em 0; font-size:0.9em;">
+  <tr>
+    <td colspan="4" style="text-align:center; background:#f5f5f5; font-weight:bold; font-size:1.05em; padding:12px; border:1px solid #ddd;">
+      Microservice Resilience Platform · Four-Layer Capability Overview
+    </td>
+  </tr>
+  <tr>
+    <td style="font-weight:bold; padding:10px 12px; border:1px solid #ddd; width:25%;">Continuous Awareness: Real-time Knowledge Graph</td>
+    <td style="font-weight:bold; padding:10px 12px; border:1px solid #ddd; width:25%;">During Incident: Fast Root Cause Analysis</td>
+    <td style="font-weight:bold; padding:10px 12px; border:1px solid #ddd; width:25%;">Post-Incident: Proactive Resilience Validation</td>
+    <td style="font-weight:bold; padding:10px 12px; border:1px solid #ddd; width:25%;">Emergency: Ordered DR Execution</td>
+  </tr>
+  <tr>
+    <td style="padding:8px 12px; border:1px solid #ddd;"><b>infra/</b><br>graph-dp-cdk</td>
+    <td style="padding:8px 12px; border:1px solid #ddd;"><b>rca/</b><br>graph-rca-engine</td>
+    <td style="padding:8px 12px; border:1px solid #ddd;"><b>chaos/</b><br>graph-driven-chaos</td>
+    <td style="padding:8px 12px; border:1px solid #ddd;"><b>dr-plan-generator/</b></td>
+  </tr>
+  <tr>
+    <td style="padding:6px 12px; border:1px solid #ddd;">▶ Real-time dependency graph</td>
+    <td style="padding:6px 12px; border:1px solid #ddd;">▶ Automated root cause analysis</td>
+    <td style="padding:6px 12px; border:1px solid #ddd;">▶ Active fault injection</td>
+    <td style="padding:6px 12px; border:1px solid #ddd;">▶ Ordered switchover plan</td>
+  </tr>
+  <tr>
+    <td style="padding:6px 12px; border:1px solid #ddd;">▶ Blast radius analysis</td>
+    <td style="padding:6px 12px; border:1px solid #ddd;">▶ Intelligent alert aggregation</td>
+    <td style="padding:6px 12px; border:1px solid #ddd;">▶ RCA accuracy validation</td>
+    <td style="padding:6px 12px; border:1px solid #ddd;">▶ 3-level verification engine</td>
+  </tr>
+  <tr>
+    <td style="padding:6px 12px; border:1px solid #ddd;">▶ Change impact assessment</td>
+    <td style="padding:6px 12px; border:1px solid #ddd;">▶ Sub-minute MTTR</td>
+    <td style="padding:6px 12px; border:1px solid #ddd;">▶ DR plan continuous validation</td>
+    <td style="padding:6px 12px; border:1px solid #ddd;">▶ Policy-driven customization</td>
+  </tr>
+  <tr>
+    <td style="padding:6px 12px; border:1px solid #ddd;">▶ Dependency drift detection</td>
+    <td style="padding:6px 12px; border:1px solid #ddd;">▶ Graph RAG reports</td>
+    <td style="padding:6px 12px; border:1px solid #ddd;">▶ Weak dependency discovery</td>
+    <td style="padding:6px 12px; border:1px solid #ddd;">▶ Critical path RTO optimization</td>
+  </tr>
+</table>
 
 ### Data Flow
 
@@ -46,7 +94,8 @@ Built around [PetSite](https://github.com/aws-samples/one-observability-demo) �
 2. Real or injected faults trigger CloudWatch Alarms → **rca/** Lambda activates
 3. **rca/** runs multi-layer analysis (DeepFlow L7/L4 + CloudTrail + Neptune graph traversal + Layer2 AWS Service Probers) → Graph RAG report via Bedrock Claude
 4. **chaos/** HypothesisAgent generates hypotheses from Neptune graph → 5-Phase experiment engine injects faults → validates RCA accuracy → LearningAgent feeds results back
-5. **dr-plan-generator/** queries Neptune graph to generate ordered, executable DR switchover plans with rollback instructions and RTO/RPO estimates
+5. **dr-plan-generator/** queries Neptune graph to generate ordered, executable DR switchover plans with three-level verification (dry-run → step-by-step → full rehearsal), policy-driven customization, Phase 2.5 readiness gates, and rollback instructions
+6. **profiles/** + **shared/** provide centralized environment configuration — all modules load service mappings, K8s namespaces, and resource identifiers from a single YAML profile instead of hardcoded values
 
 ---
 
@@ -78,16 +127,26 @@ graph-dependency-platform/
 │       ├── neptune_sync.py  # Neptune sync: ChaosExperiment node + TestedBy edge (NEW)
 │       └── fmea/         # FMEA failure mode analysis
 │
-├── dr-plan-generator/  # Graph-Driven DR Plan Generator (NEW)
+├── dr-plan-generator/  # Graph-Driven DR Plan Generator
 │   ├── graph/          #   Neptune queries (Q12–Q16) + dependency analyzer
-│   ├── planner/        #   Plan generation (Phase 0–4) + rollback + step builder
+│   ├── planner/        #   Plan generation (Phase -1 to 4 + Phase 2.5) + rollback
+│   ├── registry/       #   ★ Policy system (YAML/Markdown/NL rules/CLI)
 │   ├── assessment/     #   Impact analysis + RTO estimation + SPOF detection
-│   ├── validation/     #   Static validation + chaos experiment export
+│   ├── validation/     #   ★ 3-level verification engine (dry-run/step/rehearsal)
 │   ├── output/         #   Markdown / JSON / LLM summary renderers
 │   ├── examples/       #   Pre-generated example plans (AZ + Region)
 │   └── AGENT.md        #   Universal AI agent instructions
 │
-└── shared/         # Shared configuration & utilities
+├── profiles/       # ★ Environment profiles (multi-app support)
+│   ├── profile_loader.py   # EnvironmentProfile loader
+│   └── petsite.yaml        # PetSite application profile
+│
+├── shared/         # ★ Shared modules across all subsystems
+│   └── service_registry.py # Centralized service name mapping
+│
+├── tests/          # Cross-module integration & regression tests
+│
+└── demo/           # Streamlit demo dashboard
 ```
 
 ---
@@ -303,51 +362,80 @@ Each experiment publishes to the `ChaosEngineering` custom namespace:
 
 ## 4. dr-plan-generator/ — Graph-Driven DR Plan Generator
 
-**Neptune graph → dependency analysis → ordered switchover plan → rollback plan → chaos validation export.**
+**Neptune graph → dependency analysis → ordered switchover plan → 3-level verification → policy customization → rollback → chaos export.**
 
-Automatically generates phased, executable disaster recovery switchover plans by querying the Neptune knowledge graph for dependency relationships and topologically sorting resources across four layers.
+Automatically generates phased, executable disaster recovery switchover plans with three-level verification, policy-driven customization, and Phase 2.5 readiness gate.
 
 ### Switchover Phases
 
 | Phase | Name | Actions |
 |-------|------|---------|
-| 0 | Pre-flight Check | Target connectivity, replication lag verification, DNS TTL lowering |
-| 1 | Data Layer | RDS/Aurora failover, DynamoDB Global Table switch, SQS endpoint update |
-| 2 | Compute Layer | EKS workload scale-up (by Tier), Lambda verification, health checks |
-| 3 | Network Layer | ALB health confirmation, Route 53 DNS switch |
+| -1 (opt) | Switchover Decision Trigger | CloudWatch alarms, 5XX rate, AWS Health events, human confirmation |
+| 0 | Pre-flight Check | Target connectivity, replication lag, DNS TTL |
+| 1 | Data Layer | RDS/Aurora failover, DynamoDB Global Table switch |
+| 2 | Compute Layer | EKS workload scale-up (by Tier), Lambda, health checks |
+| **2.5** | **Target Readiness Gate** | **5 checks: Tier0 replicas, ALB/NLB health, data connectivity, synthetic E2E, capacity — hard block** |
+| 3 | Network Layer | ALB health, Route 53 DNS switch, CDN origin |
 | 4 | Validation | End-to-end verification, performance baseline comparison |
+
+### Three-Level Verification
+
+| Level | Risk | What |
+|-------|------|------|
+| L1 Dry-Run | Zero | Variables, resources, IAM, state, network, freshness, contexts |
+| L2 Step-by-Step | Low | Execute → validate → rollback (3 strategies) |
+| L3 Full Rehearsal | Medium | End-to-end with Phase 2.5 hard-block and auto-rollback |
+
+### Three-Tier Policy System
+
+- **Layer 1**: `service_types.yaml` — resource type definitions
+- **Layer 2**: `plan_policy.yaml` or Markdown policy — persistent customization + NL rules (LLM-parsed)
+- **Layer 3**: CLI `--set` overrides — highest priority, one-time
 
 ### Key Capabilities
 
-- **Topological Sort** (Kahn's algorithm): ensures correct dependency order within each layer
-- **Parallel Group Detection**: identifies steps that can execute concurrently
-- **SPOF Detection**: flags single-AZ resources with multiple dependents
-- **RTO/RPO Estimation**: based on resource type default times + parallel optimization
-- **Every Step Has Rollback**: no step generated without a rollback command
-- **Chaos Export**: converts DR assumptions into chaos experiment YAMLs for validation with `chaos/`
-
-### Neptune Queries (Q12–Q16)
-
-| Query | Purpose |
-|-------|---------|
-| Q12 | AZ/Region dependency tree |
-| Q13 | Data layer topology (all data stores + dependent services) |
-| Q14 | Cross-region resources (Global Tables, replicas) |
-| Q15 | Critical path (longest Tier0 dependency chain → minimum RTO) |
-| Q16 | Single point of failure detection |
-
-### AI Agent Integration
-
-`AGENT.md` provides universal instructions for AI agents (OpenClaw, Claude Code, kiro-cli) to interactively guide users through DR plan generation — from impact assessment to plan generation to rollback and chaos validation.
-
-### Example Plans
-
-| Example | Scenario | Steps | RTO |
-|---------|----------|-------|-----|
-| [AZ switchover](dr-plan-generator/examples/az-switchover-apne1-az1.md) | AZ1 → AZ2+AZ4 | 19 + 15 rollback | ~34min |
-| [Region switchover](dr-plan-generator/examples/region-switchover-apne1-to-usw2.md) | Tokyo → US West | 28 + 23 rollback | ~55min |
+- **Topological Sort** (Kahn's algorithm): correct dependency order within each layer
+- **Phase 2.5 Readiness Gate**: 5 hard-block checks before traffic cutover
+- **Policy-Driven**: per-phase approval, parallelism, timeouts, resource overrides
+- **NL Business Rules**: write rules in Chinese/English, LLM parses to structured rules
+- **Every Step Has Rollback**: no step without a rollback command
+- **Environment Profile**: all service mappings from `profiles/petsite.yaml`
 
 📖 **Detailed docs**: [`dr-plan-generator/README.md`](dr-plan-generator/README.md)
+
+---
+
+## 5. profiles/ + shared/ — Environment Configuration
+
+**Centralized, profile-driven configuration for multi-application support.**
+
+All modules (rca, chaos, dr-plan-generator, infra ETL) load service name mappings, K8s namespaces, and resource identifiers from a single YAML profile instead of hardcoded values.
+
+### profiles/petsite.yaml
+
+Defines the complete application topology:
+- Service catalog: Neptune names, K8s deployments/labels, DeepFlow app names, tiers, types
+- Kubernetes config: cluster name, namespace, contexts (source/target)
+- DR configuration: default scope, source/target regions, domain, health endpoints
+- Infrastructure: alarm prefixes, SSM parameter paths, Neptune endpoints
+
+### shared/service_registry.py
+
+`ServiceRegistry` provides bidirectional lookups:
+- Neptune name → K8s deployment / K8s label / DeepFlow app
+- K8s deployment → Neptune name
+- Service type, tier, and alias resolution
+
+### Profile Migration Status
+
+All modules now load from profile with hardcoded fallback:
+- `rca/config.py` — service name mappings
+- `chaos/code/runner/config.py` — K8s label and deployment mappings
+- `rca/neptune/schema_prompt.py` — few-shot examples, service names
+- `infra/lambda/etl_aws/collectors/eks.py` — K8S_SVC_ALIAS
+- `dr-plan-generator/planner/` — all three planners
+
+📖 **Detailed docs**: See `profiles/petsite.yaml` and `shared/service_registry.py`
 
 ---
 
@@ -359,12 +447,16 @@ Automatically generates phased, executable disaster recovery switchover plans by
 | Neptune node types | **23** |
 | Neptune edge types | **19** |
 | Neptune query library | **Q1–Q18 (18 queries)** |
+| DR verification levels | **3** (dry-run → step → rehearsal) |
+| DR plan phases | **7** (Phase -1 to 4 + Phase 2.5) |
+| Policy system layers | **3** (YAML → Markdown/NL → CLI) |
 | Chaos Mesh validated tools | **30** |
 | AWS FIS fault types | **15** |
 | Layer2 AWS Service Probers | **6** |
 | RCA trigger latency | **< 1 min** |
 | ETL sync cadence | 5min (DeepFlow) + 15min (AWS) + real-time (events) |
 | Functional test pass rate | **47/47** |
+| Cross-module integration tests | **47+** |
 | Architecture version | **v18** |
 
 ---
