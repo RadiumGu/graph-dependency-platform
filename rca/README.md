@@ -10,13 +10,13 @@ An AWS Lambda-based AIOps engine that:
 5. Sends Slack notification with evidence and recommended actions
 6. Writes incident to Neptune knowledge base
 
-> **Prerequisite**: The Neptune dependency graph must be built first using the companion [graph-dp-cdk](../graph-dp-cdk/) project.
+> **Prerequisite**: The Neptune dependency graph must be built first using the companion [infra/](../infra/) directory.
 
 ---
 
-## Ecosystem — Three Projects, One Platform
+## Ecosystem — Four Directories, One Platform
 
-This repo is the **AIOps RCA engine** of a larger observability + resilience platform built around PetSite on AWS EKS. Three independent repos work together:
+This directory (`rca/`) is the **AIOps RCA engine** of a larger observability + resilience platform built around PetSite on AWS EKS. The platform is organized as a monorepo; four directories work together:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -24,77 +24,73 @@ This repo is the **AIOps RCA engine** of a larger observability + resilience pla
 └───────────────────────────┬─────────────────────────────────────┘
                             │
          ┌──────────────────▼──────────────────┐
-         │  📦 graph-dp-cdk                    │
+         │  📦 infra/                          │
          │  CDK infra + modular ETL pipeline   │
          │  → builds Neptune knowledge graph   │
-         └────┬─────────────────────┬──────────┘
-              │ graph queries       │ alarm trigger
-              │                     │
-   ┌──────────▼──────────┐  ┌──────▼───────────────────┐
-   │  🔍 graph-rca-engine │  │  💥 graph-driven-chaos   │
-   │  (this repo)         │  │  AI-driven chaos         │
-   │  Multi-layer RCA     │  │  engineering platform    │
-   │  + Layer2 Probers    │  │  (Chaos Mesh + AWS FIS)  │
-   │  + Graph RAG reports │  │                          │
-   └──────────┬──────────┘  └──────┬───────────────────┘
-              │  writes incidents   │  validates RCA
-              └────────────────────┘
-                    closed loop
+         └────┬──────────┬──────────┬──────────┘
+              │ graph     │ alarm    │ graph
+              │ queries   │ trigger  │ queries
+              ▼           ▼           ▼
+   ┌────────────┐  ┌────────────┐  ┌──────────────────────┐
+   │ 🔍 rca/    │  │ 💥 chaos/  │  │ 📋 dr-plan-          │
+   │  (this dir)│  │ AI-driven  │  │    generator/        │
+   │  Multi-    │  │ chaos eng. │  │  Neptune-driven      │
+   │  layer RCA │  │(FIS + CM)  │  │  DR plan generation  │
+   │  + Probers │  │            │  │                      │
+   │  + GraphRAG│  │            │  │                      │
+   └─────┬──────┘  └──────┬─────┘  └──────────────────────┘
+         │  writes         │ validates RCA
+         │  incidents      │
+         └────────────────┘
+               closed loop
 ```
 
-| Project | Repo | Role |
-|---------|------|------|
-| **graph-dp-cdk** | [`RadiumGu/graph-dependency-managerment`](https://github.com/RadiumGu/graph-dependency-managerment) | Infrastructure layer — CDK stacks, Neptune ETL pipeline, DeepFlow + AWS topology ingestion |
-| **graph-rca-engine** | [`RadiumGu/graph-rca-engine`](https://github.com/RadiumGu/graph-rca-engine) | AIOps RCA engine — multi-layer root cause analysis, plugin-based AWS probers, Bedrock Graph RAG reports |
-| **graph-driven-chaos** | [`RadiumGu/graph-driven-chaos`](https://github.com/RadiumGu/graph-driven-chaos) | AI-driven chaos engineering — hypothesis generation, 5-phase experiment runner, closed-loop learning |
+| Directory | Role |
+|-----------|------|
+| **[infra/](../infra/)** | Infrastructure layer — CDK stacks, Neptune ETL pipeline, DeepFlow + AWS topology ingestion |
+| **rca/** | AIOps RCA engine — multi-layer root cause analysis, plugin-based AWS probers, Bedrock Graph RAG reports (this directory) |
+| **[chaos/](../chaos/)** | AI-driven chaos engineering — hypothesis generation, 5-phase experiment runner, FIS + Chaos Mesh closed-loop learning |
+| **[dr-plan-generator/](../dr-plan-generator/)** | Disaster recovery plan generator — Neptune graph-driven DR step generation and rollback plans |
 
-**Data flow:** `graph-dp-cdk` ETL populates Neptune → CloudWatch Alarm triggers `graph-rca-engine` → `graph-driven-chaos` injects faults to validate RCA accuracy → results feed back into Neptune.
+**Data flow:** `infra/` ETL populates Neptune → CloudWatch Alarm triggers `rca/` for root cause analysis → `chaos/` injects faults to validate RCA accuracy → `dr-plan-generator/` uses the graph to generate DR plans → results feed back into Neptune.
 
 ---
 
 ## Architecture
 
+### Core RCA Pipeline
+
 ```
-CloudWatch Alarm (HTTPCode_Target_5XX_Count > 5)
-          │
-          ▼
-       SNS Topic (petsite-rca-alerts)
-          │
-          ▼
-    handler.py                         ← Lambda entry point
-          │
-  ┌───────┼──────────────────────────────────────────────────────┐
-  ▼       ▼                                                      ▼
-core/     core/rca_engine.py                         core/graph_rag_reporter.py
-fault_      Multi-layer RCA:                           Bedrock Claude
-classifier  1.  DeepFlow L7 (HTTP 5xx call chain)      + Neptune subgraph
-  │       1b. DeepFlow L4 (TCP RST/timeout/SYN重传)    + Service→Pod→EC2→AZ path
-  │       2.  CloudTrail change events                 + CloudWatch metrics
-  │       3.  Neptune graph candidates                 + collectors/infra_collector
-  │           ├─ Service call chain (Calls/DependsOn)  + Layer2 AWS probe results
-  │           ├─ Infra: graph traversal (q10)          + CW Logs sampling
-  │           └─ Infra: EC2/ASG Probe (if q10 empty)  → structured RCA report
-  │       3b. Temporal validation (graph depth × time)
-  │       3c. CW Logs sampling (ERROR/FATAL)
-  │       3d. Layer2 AWS Service Probers (parallel)
-  │       3e. Historical context (Q17 similar incidents + Q18 chaos history)
-  │       3f. Semantic incident search (S3 Vectors)
-  │           ├─ SQSProbe / DynamoDBProbe / LambdaProbe
-  │           ├─ ALBProbe / StepFunctionsProbe
-  │           └─ EC2ASGProbe (fallback, infra only)
-  │       4.  Confidence scoring (max 100)
-  │             │
-  │       neptune/neptune_queries.py  collectors/infra_collector.py
-  │       Q1-Q8 (service layer)       real-time Pod status (K8s API)
-  │       Q9-Q11 (infra layer)        real-time DB metrics (CloudWatch RDS)
-  │       Q17-Q18 (unstructured)      search/incident_vectordb.py (S3 Vectors)
-  ▼
-actions/playbook_engine.py → actions/semi_auto.py → actions/action_executor.py
-(fault playbooks)            (semi-auto)             (kubectl rollout/scale via EKS token)
-          │
-          ▼
-  actions/slack_notifier.py  ← Slack Incoming Webhook + confirmation buttons
-  actions/incident_writer.py ← Neptune Incident node + S3 archive + Bedrock KB index
+CloudWatch Alarm
+    │
+    ▼ SNS
+handler.py
+    │
+    ├─ fault_classifier.py ──────────────────────────────→ P0/P1/P2 severity
+    │
+    ├─ rca_engine.py ── Multi-layer RCA ─────────────────────────────────────┐
+    │   Step 1:  DeepFlow L7 (HTTP 5xx call chain)                          │
+    │   Step 1b: DeepFlow L4 (TCP RST/timeout/SYN retrans)                  │
+    │   Step 2:  CloudTrail change events                                    │
+    │   Step 3:  Neptune graph traversal (Service→Pod→EC2→AZ)               │
+    │   Step 3b: Temporal validation (graph depth × timestamp)              │
+    │   Step 3c: CW Logs sampling (ERROR/FATAL)                              │
+    │   Step 3d: Layer2 probers (parallel)  ←── collectors/aws_probers.py   │
+    │   Step 3e: Historical context         ←── neptune Q17/Q18             │
+    │   Step 3f: Semantic incident search   ←── search/incident_vectordb.py │
+    │   Step 4:  Confidence scoring (max 100)                               │
+    │                                                                        │
+    ├─ graph_rag_reporter.py ───────────────────────────────────────────────┘
+    │   Bedrock Claude + Neptune subgraph → structured RCA report
+    │
+    ├─ actions/
+    │   ├─ playbook_engine.py ──→ fault playbook matching
+    │   ├─ semi_auto.py ────────→ P1/P2 semi-auto execution
+    │   ├─ action_executor.py ──→ kubectl rollout/scale
+    │   ├─ slack_notifier.py ───→ Slack notification + buttons
+    │   └─ incident_writer.py ──→ Neptune Incident + S3 + Bedrock KB + S3 Vectors
+    │
+    └─ feedback_collector.py ───→ Slack feedback → Neptune write-back (Q19/Q20)
 ```
 
 ---
@@ -202,7 +198,7 @@ class MyServiceProbe(BaseProbe):
 
 | Component | Description |
 |-----------|-------------|
-| **Neptune graph** | Built by [graph-dp-cdk](../graph-dp-cdk/). Microservice, Pod, EC2Instance, AZ nodes; `Calls`, `DependsOn`, `RunsOn`, `LocatedIn` edges. ETL runs every 15 min. |
+| **Neptune graph** | Built by [infra/](../infra/). Microservice, Pod, EC2Instance, AZ nodes; `Calls`, `DependsOn`, `RunsOn`, `LocatedIn` edges. ETL runs every 15 min. |
 | **EKS cluster** | Target Kubernetes cluster. Lambda needs `eks:DescribeCluster`. |
 | **DeepFlow / ClickHouse** | eBPF observability. `l7_flow_log` (HTTP 5xx) and `l4_flow_log` (TCP RST/timeout/SYN retrans) tables. |
 | **Bedrock** | Claude Sonnet (`bedrock:InvokeModel`) + Knowledge Base (`bedrock-agent-runtime:Retrieve`). |
@@ -339,13 +335,13 @@ cat /tmp/rca-output.json | python3 -m json.tool
 | Module | File | Role |
 |--------|------|------|
 | _(root)_ | `handler.py` | Lambda entry point; parses SNS/CW events, orchestrates all modules |
-| _(root)_ | `config.py` | Canonical K8s deployment ↔ Neptune service name mapping |
+| _(root)_ | `config.py` | Service name mapping (★ now loaded from `profiles/petsite.yaml` with hardcoded fallback) |
 | **core/** | `rca_engine.py` | Multi-layer RCA engine: DeepFlow L7/L4 + CloudTrail + Neptune graph + AWS Probers + scoring |
 | **core/** | `fault_classifier.py` | Severity grading (P0/P1/P2); auto-execution gate |
 | **core/** | `graph_rag_reporter.py` | Graph RAG: Neptune subgraph + all probe signals → Claude → structured report |
 | **neptune/** | `neptune_client.py` | Neptune HTTP client with IAM SigV4 signing |
 | **neptune/** | `neptune_queries.py` | Neptune openCypher queries Q1–Q18 (service + infrastructure + unstructured layers) |
-| **neptune/** | `schema_prompt.py` | Graph schema as LLM prompt + 6 few-shot examples for NL→openCypher |
+| **neptune/** | `schema_prompt.py` | Graph schema as LLM prompt + few-shot examples (★ dynamically loaded from profile) |
 | **neptune/** | `nl_query.py` | `NLQueryEngine`: natural language → openCypher → execute → summarise via Bedrock Claude |
 | **neptune/** | `query_guard.py` | openCypher safety validation: blocks write ops, limits hop depth, enforces LIMIT |
 | **collectors/** | `infra_collector.py` | Real-time Pod status (K8s API) + DB metrics (CloudWatch RDS) |

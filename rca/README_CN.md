@@ -4,19 +4,20 @@
 
 基于 AWS Lambda 的 AIOps 根因分析引擎，核心功能：
 1. 接收 CloudWatch/SNS 告警（例如 `HTTPCode_Target_5XX_Count > 5`）
-2. 对故障进行 P0/P1/P2 严重度分级
-3. 执行多层 RCA：DeepFlow L7/L4 → CloudTrail → Neptune 图谱遍历 → **插件化 AWS 服务探针**
-4. 通过 Bedrock Claude 生成 Graph RAG 根因报告
-5. 发送 Slack 通知（含证据链和建议操作）
-6. 将故障记录写入 Neptune 知识库
+2. **告警聚合降噪**：同一故障链的多条告警在 DynamoDB 缓冲窗口内聚合为 1 个事件，仅触发 1 次 RCA；拓扑驱动关联将下游症状归并到根因服务
+3. 对故障进行 P0/P1/P2 严重度分级
+4. 执行多层 RCA：DeepFlow L7/L4 → CloudTrail → Neptune 图谱遍历 → **插件化 AWS 服务探针**
+5. 通过 Bedrock Claude 生成 Graph RAG 根因报告
+6. 发送 Slack 通知（含证据链和建议操作）；支持 Slack 交互确认/否定 RCA 结论，反馈写回 Neptune
+7. 将故障记录写入 Neptune 知识库
 
-> **前置条件**：需要先使用 [graph-dp-cdk](../graph-dp-cdk/) 项目构建 Neptune 依赖关系图谱。
+> **前置条件**：需要先使用 [infra/](../infra/) 项目构建 Neptune 依赖关系图谱。
 
 ---
 
-## 生态全景 — 三个项目，一个平台
+## 生态全景 — 四个目录，一个平台
 
-本仓库是基于 PetSite (AWS EKS) 构建的可观测性 + 弹性验证平台中的 **AIOps 根因分析引擎**。三个独立仓库协同工作：
+本目录（`rca/`）是基于 PetSite (AWS EKS) 构建的可观测性 + 弹性验证平台中的 **AIOps 根因分析引擎**。平台以 monorepo 形式组织，四个目录协同工作：
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -24,78 +25,76 @@
 └───────────────────────────┬─────────────────────────────────────┘
                             │
          ┌──────────────────▼──────────────────┐
-         │  📦 graph-dp-cdk                    │
+         │  📦 infra/                          │
          │  CDK 基础设施 + 模块化 ETL 管道      │
          │  → 构建 Neptune 知识图谱             │
-         └────┬─────────────────────┬──────────┘
-              │ 图谱查询            │ 告警触发
-              │                     │
-   ┌──────────▼──────────┐  ┌──────▼───────────────────┐
-   │  🔍 graph-rca-engine │  │  💥 graph-driven-chaos   │
-   │  （本仓库）           │  │  AI 驱动的混沌工程平台   │
-   │  多层 RCA 分析        │  │  (Chaos Mesh + AWS FIS)  │
-   │  + Layer2 探针        │  │                          │
-   │  + Graph RAG 报告     │  │                          │
-   └──────────┬──────────┘  └──────┬───────────────────┘
-              │  写入事件记录       │  验证 RCA 准确性
-              └────────────────────┘
-                      闭环
+         └────┬──────────┬──────────┬──────────┘
+              │ 图谱查询  │ 告警触发  │ 图谱查询
+              ▼           ▼           ▼
+   ┌────────────┐  ┌────────────┐  ┌──────────────────────┐
+   │ 🔍 rca/    │  │ 💥 chaos/  │  │ 📋 dr-plan-          │
+   │  （本目录） │  │ AI 驱动混  │  │    generator/        │
+   │  多层 RCA  │  │ 沌工程平台 │  │  Neptune 驱动的       │
+   │  + 探针    │  │(FIS + CM)  │  │  灾难恢复计划生成      │
+   │  + Graph   │  │            │  │                      │
+   │    RAG     │  │            │  │                      │
+   └─────┬──────┘  └──────┬─────┘  └──────────────────────┘
+         │  写入事件记录   │ 验证 RCA 准确性
+         └────────────────┘
+                   闭环
 ```
 
-| 项目 | 仓库 | 定位 |
-|------|------|------|
-| **graph-dp-cdk** | [`RadiumGu/graph-dependency-managerment`](https://github.com/RadiumGu/graph-dependency-managerment) | 基础设施层 — CDK 栈、Neptune ETL 管道、DeepFlow + AWS 拓扑采集 |
-| **graph-rca-engine** | [`RadiumGu/graph-rca-engine`](https://github.com/RadiumGu/graph-rca-engine) | AIOps 根因分析引擎 — 多层根因分析、插件化 AWS 探针、Bedrock Graph RAG 报告 |
-| **graph-driven-chaos** | [`RadiumGu/graph-driven-chaos`](https://github.com/RadiumGu/graph-driven-chaos) | AI 驱动的混沌工程 — 假设生成、5 阶段实验引擎、闭环学习 |
+| 目录 | 定位 |
+|------|------|
+| **[infra/](../infra/)** | 基础设施层 — CDK 栈、Neptune ETL 管道、DeepFlow + AWS 拓扑采集 |
+| **rca/** | AIOps 根因分析引擎 — 多层根因分析、插件化 AWS 探针、Bedrock Graph RAG 报告（本目录） |
+| **[chaos/](../chaos/)** | AI 驱动的混沌工程 — 假设生成、5 阶段实验引擎、FIS + Chaos Mesh 闭环学习 |
+| **[dr-plan-generator/](../dr-plan-generator/)** | 灾难恢复计划生成器 — Neptune 图谱驱动的 DR 步骤生成、回滚方案 |
 
-**数据流：** `graph-dp-cdk` ETL 填充 Neptune → CloudWatch 告警触发 `graph-rca-engine` → `graph-driven-chaos` 注入故障验证 RCA 准确性 → 结果回写 Neptune。
+**数据流：** `infra/` ETL 填充 Neptune → CloudWatch 告警触发 `rca/` 执行根因分析 → `chaos/` 注入故障验证 RCA 准确性 → `dr-plan-generator/` 基于图谱生成灾难恢复计划 → 结果回写 Neptune。
 
 ---
 
 ## 系统架构
 
+### 核心 RCA 流水线
+
 ```
-CloudWatch Alarm (HTTPCode_Target_5XX_Count > 5)
-          │
-          ▼
-       SNS Topic (petsite-rca-alerts)
-          │
-          ▼
-    handler.py                         ← Lambda 入口
-          │
-  ┌───────┼──────────────────────────────────────────────────────┐
-  ▼       ▼                                                      ▼
-core/     core/rca_engine.py                         core/graph_rag_reporter.py
-故障      多层 RCA：                                   Bedrock Claude
-分级器    1.  DeepFlow L7（HTTP 5xx 调用链）            + Neptune 子图
-  │       1b. DeepFlow L4（TCP RST/超时/SYN重传）       + 服务→Pod→EC2→AZ 路径
-  │       2.  CloudTrail 变更事件                      + CloudWatch 指标
-  │       3.  Neptune 图谱候选根因                     + collectors/infra_collector
-  │           ├─ 服务调用链（Calls/DependsOn）          + Layer2 AWS 探针结果
-  │           ├─ 基础设施：图遍历（q10）                + CW Logs 采样
-  │           └─ 基础设施：EC2/ASG 探针（q10 为空时）  → 结构化根因报告
-  │       3b. 时序验证（图路径深度 × 时间戳）
-  │       3c. CW Logs 采样（ERROR/FATAL）
-  │       3d. Layer2 AWS 服务探针（并行执行）
-  │       3e. 历史上下文（Q17 同资源历史故障 + Q18 混沌实验历史）
-  │       3f. 语义相似故障搜索（S3 Vectors）
-  │           ├─ SQSProbe / DynamoDBProbe / LambdaProbe
-  │           ├─ ALBProbe / StepFunctionsProbe
-  │           └─ EC2ASGProbe（兜底，仅限基础设施故障）
-  │       4.  置信度评分（最高 100）
-  │             │
-  │       neptune/neptune_queries.py  collectors/infra_collector.py
-  │       Q1-Q8（服务层）              实时 Pod 状态（K8s API）
-  │       Q9-Q11（基础设施层）         实时 DB 指标（CloudWatch RDS）
-  │       Q17-Q18（非结构化层）        search/incident_vectordb.py（S3 Vectors）
-  ▼
-actions/playbook_engine.py → actions/semi_auto.py → actions/action_executor.py
-（故障 Playbook）             （半自动执行）           （kubectl rollout/scale）
-          │
-          ▼
-  actions/slack_notifier.py  ← Slack Incoming Webhook + 确认按钮
-  actions/incident_writer.py ← Neptune Incident 节点 + S3 归档 + Bedrock KB 索引
+CloudWatch Alarm
+    │
+    ▼ SNS
+handler.py
+    │
+    ├─ fault_classifier.py ──────────────────────────────→ P0/P1/P2 分级
+    │
+    ├─ rca_engine.py ── 多层 RCA ──────────────────────────────────────┐
+    │   Step 1:  DeepFlow L7（HTTP 5xx 调用链）                        │
+    │   Step 1b: DeepFlow L4（TCP RST/超时/SYN 重传）                  │
+    │   Step 2:  CloudTrail 变更事件                                   │
+    │   Step 3:  Neptune 图谱遍历（服务→Pod→EC2→AZ）                   │
+    │   Step 3b: 时序验证（图路径深度 × 时间戳）                        │
+    │   Step 3c: CW Logs 采样（ERROR/FATAL）                           │
+    │   Step 3d: Layer2 探针（并行）  ←── collectors/aws_probers.py    │
+    │   Step 3e: 历史上下文           ←── neptune Q17/Q18              │
+    │   Step 3f: 语义相似故障搜索     ←── search/incident_vectordb.py  │
+    │   Step 4:  置信度评分（最高 100）                                 │
+    │                                                                  │
+    ├─ graph_rag_reporter.py ─────────────────────────────────────────┘
+    │   Bedrock Claude + Neptune 子图 → 结构化根因报告
+    │
+    ├─ actions/
+    │   ├─ playbook_engine.py ──→ 故障 Playbook 匹配
+    │   ├─ semi_auto.py ────────→ P1/P2 半自动执行
+    │   ├─ action_executor.py ──→ kubectl rollout/scale
+    │   ├─ slack_notifier.py ───→ Slack 通知 + 交互按钮
+    │   └─ incident_writer.py ──→ Neptune Incident + S3 + Bedrock KB + S3 Vectors
+    │
+    └─ feedback_collector.py ───→ Slack 反馈 → Neptune 写回 (Q19/Q20)
 ```
+
+### Phase 4 告警聚合（六层架构）
+
+告警聚合层架构详见下方 **[Phase 4：告警降噪与智能事件管理](#phase-4告警降噪与智能事件管理)** 章节。
 
 ---
 
@@ -202,12 +201,13 @@ class MyServiceProbe(BaseProbe):
 
 | 组件 | 说明 |
 |-----|------|
-| **Neptune 图谱** | 由 [graph-dp-cdk](../graph-dp-cdk/) 构建。包含 Microservice、Pod、EC2Instance、AZ 节点及 `Calls`、`DependsOn`、`RunsOn`、`LocatedIn` 边，ETL 每 15 分钟运行一次。 |
+| **Neptune 图谱** | 由 [infra/](../infra/) 构建。包含 Microservice、Pod、EC2Instance、AZ 节点及 `Calls`、`DependsOn`、`RunsOn`、`LocatedIn` 边，ETL 每 15 分钟运行一次。 |
 | **EKS 集群** | 目标 Kubernetes 集群，Lambda 需要 `eks:DescribeCluster` 权限。 |
 | **DeepFlow / ClickHouse** | eBPF 可观测性平台，包含 `l7_flow_log`（HTTP 5xx）和 `l4_flow_log`（TCP RST/超时/SYN 重传）数据表。 |
 | **Bedrock** | Claude Sonnet（`bedrock:InvokeModel`）+ 知识库（`bedrock-agent-runtime:Retrieve`）。 |
 | **Slack** | Incoming Webhook URL，存储在 SSM Parameter Store 中。 |
-| **IAM Role** | Lambda 执行角色需要：`neptune-db:*`、`eks:DescribeCluster`、`cloudtrail:LookupEvents`、`cloudwatch:GetMetricData`、`logs:*`、`ssm:GetParameter*`、`bedrock:InvokeModel`、`bedrock-agent-runtime:Retrieve`、`ec2:DescribeInstances`、`rds:Describe*`、`autoscaling:DescribeAutoScalingGroups`、`sqs:ListQueues`、`sqs:GetQueueAttributes`、`dynamodb:ListTables`、`lambda:ListFunctions`、`lambda:GetFunctionConfiguration`、`states:ListStateMachines`、`elasticloadbalancing:Describe*`。 |
+| **DynamoDB** | `gp-alert-buffer` 表（由 CDK AlertBufferStack 创建），用于 Phase 4 告警聚合缓冲窗口。 |
+| **IAM Role** | Lambda 执行角色需要：`neptune-db:*`、`eks:DescribeCluster`、`cloudtrail:LookupEvents`、`cloudwatch:GetMetricData`、`logs:*`、`ssm:GetParameter*`、`bedrock:InvokeModel`、`bedrock-agent-runtime:Retrieve`、`ec2:DescribeInstances`、`rds:Describe*`、`autoscaling:DescribeAutoScalingGroups`、`sqs:ListQueues`、`sqs:GetQueueAttributes`、`dynamodb:ListTables`、`dynamodb:PutItem`、`dynamodb:UpdateItem`、`dynamodb:GetItem`、`dynamodb:Query`、`lambda:ListFunctions`、`lambda:GetFunctionConfiguration`、`lambda:InvokeFunction`、`states:ListStateMachines`、`elasticloadbalancing:Describe*`、`scheduler:CreateSchedule`、`iam:PassRole`。 |
 
 ---
 
@@ -225,6 +225,9 @@ class MyServiceProbe(BaseProbe):
 | `BEDROCK_KB_ID` | **是** | — | Bedrock 知识库 ID |
 | `SLACK_WEBHOOK_URL` | 否 | — | Slack Incoming Webhook（由 `deploy.sh` 从 SSM 注入） |
 | `SLACK_CHANNEL` | 否 | — | Slack 频道 ID |
+| `BUFFER_TABLE_NAME` | 否 | `gp-alert-buffer` | Phase 4 告警缓冲 DynamoDB 表名 |
+| `SCHEDULER_ROLE_ARN` | 否 | — | EventBridge Scheduler 执行角色 ARN（由 CDK AlertBufferStack 输出） |
+| `WINDOW_FLUSH_FUNCTION_ARN` | 否 | — | 窗口到期处理 Lambda ARN（gp-window-flush，由 CDK AlertBufferStack 输出） |
 
 ---
 
@@ -278,6 +281,8 @@ L4 TCP 信号（L7 无数据时）：
 | **Q11** `q11_broader_impact` | 给定故障 EC2 ID，找出所有受影响的服务（爆炸半径） |
 | **Q17** `q17_incidents_by_resource` | 涉及相同资源的历史已解决故障（`MentionsResource` 边） |
 | **Q18** `q18_chaos_history` | 服务的混沌实验历史（`TestedBy` 边） |
+| **Q19** `q19_confirmed_incidents` | 查询已被 Slack 反馈确认的 Incident，按服务/时间筛选 |
+| **Q20** `q20_false_positive_rate` | 计算指定时间段内各服务的 RCA 误报率（被否定的 Incident 比例） |
 
 ---
 
@@ -338,13 +343,18 @@ cat /tmp/rca-output.json | python3 -m json.tool
 
 | 模块 | 文件 | 职责 |
 |------|------|------|
-| _（根目录）_ | `handler.py` | Lambda 入口；解析 SNS/CW 事件，编排所有模块 |
-| _（根目录）_ | `config.py` | K8s Deployment ↔ Neptune 服务名映射 |
-| **core/** | `rca_engine.py` | 多层 RCA 引擎：DeepFlow L7/L4 + CloudTrail + Neptune 图谱 + AWS 探针 + 评分 |
-| **core/** | `fault_classifier.py` | P0/P1/P2 严重度分级；自动执行门控 |
-| **core/** | `graph_rag_reporter.py` | Graph RAG：Neptune 子图 + 所有探针信号 → Claude → 结构化报告 |
+| _（根目录）_ | `handler.py` ★ | Lambda 入口；解析 SNS/CW 事件，编排所有模块；**Phase 4 新增聚合分流入口，FEATURE_FLAGS 控制** |
+| _（根目录）_ | `window_flush_handler.py` | **Phase 4 新增**：窗口到期批量处理 Lambda；由 EventBridge Scheduler 触发 |
+| _（根目录）_ | `config.py` ★ | 服务名映射（★ 现在从 `profiles/petsite.yaml` 动态加载，硬编码作为回退）+ FEATURE_FLAGS |
+| **core/** | `rca_engine.py` ★ | 多层 RCA 引擎：DeepFlow L7/L4 + CloudTrail + Neptune 图谱 + AWS 探针 + 评分；**Phase 4 新增 `analyze_group()`** |
+| **core/** | `fault_classifier.py` ★ | P0/P1/P2 严重度分级；自动执行门控；**Phase 4 新增 `classify_group()`** |
+| **core/** | `graph_rag_reporter.py` ★ | Graph RAG：Neptune 子图 + 所有探针信号 → Claude → 结构化报告；**Phase 4 新增 `generate_group_report()`** |
+| **core/** | `event_normalizer.py` | **Phase 4 新增**：`UnifiedAlertEvent` 统一事件模型 + `EventNormalizer` 标准化所有告警源 |
+| **core/** | `alert_buffer.py` | **Phase 4 新增**：DynamoDB `gp-alert-buffer` 表操作；2 分钟聚合窗口；P0 直通 bypass |
+| **core/** | `topology_correlator.py` | **Phase 4 新增**：`EventGroup` 拓扑关联；Neptune blast_radius + upstream 识别；下游症状归并根因 |
+| **core/** | `decision_engine.py` | **Phase 4 新增**：自动化策略矩阵（severity × confidence）；编排 RCA 后续动作 |
 | **neptune/** | `neptune_client.py` | 带 IAM SigV4 签名的 Neptune HTTP 客户端 |
-| **neptune/** | `neptune_queries.py` | Neptune openCypher 查询 Q1–Q18（服务层 + 基础设施层 + 非结构化层） |
+| **neptune/** | `neptune_queries.py` ★ | Neptune openCypher 查询 Q1–Q20（服务层 + 基础设施层 + 非结构化层 + 反馈层） |
 | **neptune/** | `schema_prompt.py` | 图谱 Schema LLM Prompt + 6 个 few-shot 示例（NL 查询用） |
 | **neptune/** | `nl_query.py` | `NLQueryEngine`：自然语言→openCypher→执行→摘要（Bedrock Claude） |
 | **neptune/** | `query_guard.py` | openCypher 安全校验：屏蔽写操作、限制跳数、强制 LIMIT |
@@ -356,6 +366,7 @@ cat /tmp/rca-output.json | python3 -m json.tool
 | **actions/** | `semi_auto.py` | P1/P2 半自动执行流程；Slack 确认交互 |
 | **actions/** | `slack_notifier.py` | Slack 消息格式化 + Webhook 推送 |
 | **actions/** | `incident_writer.py` | Neptune Incident 节点 + 实体提取（`MentionsResource` 边）+ S3 归档 + Bedrock KB + S3 Vectors 索引 |
+| **actions/** | `feedback_collector.py` | **Phase 4 新增**：Slack 反馈收集（确认/否定 RCA 结论）+ Neptune 写回（更新 Incident 节点） |
 | **search/** | `incident_vectordb.py` | S3 Vectors Incident 索引：分块 + 向量化（Bedrock Titan v2）+ 语义搜索 |
 | **data/** | `service-db-mapping.json` | 服务 → DB 集群映射关系 |
 | **scripts/** | `scan-service-db-mapping.py` | 扫描 K8s Deployment 发现服务→DB 关联关系 |
@@ -382,16 +393,21 @@ python3 -m unittest rca_engine.tests.test_rca -v
 
 ```
 rca_engine/
-├── handler.py                  # Lambda 入口（必须保留在根目录）
-├── config.py                   # K8s Deployment ↔ Neptune 名称映射
+├── handler.py                  # Lambda 入口（含 Phase 4 聚合分流，必须保留在根目录）
+├── window_flush_handler.py     # Phase 4：窗口到期批量处理 Lambda
+├── config.py                   # K8s Deployment ↔ Neptune 名称映射 + FEATURE_FLAGS
 ├── __init__.py
 ├── core/                       # 核心 RCA 逻辑
-│   ├── rca_engine.py           # 多层 RCA 引擎
-│   ├── fault_classifier.py     # P0/P1/P2 严重度分级
-│   └── graph_rag_reporter.py   # Bedrock Claude Graph RAG 报告
+│   ├── rca_engine.py           # 多层 RCA 引擎（含 analyze_group）
+│   ├── fault_classifier.py     # P0/P1/P2 严重度分级（含 classify_group）
+│   ├── graph_rag_reporter.py   # Bedrock Claude Graph RAG 报告（含 generate_group_report）
+│   ├── event_normalizer.py     # Phase 4：UnifiedAlertEvent + EventNormalizer
+│   ├── alert_buffer.py         # Phase 4：DynamoDB 缓冲窗口（2 min，P0 bypass）
+│   ├── topology_correlator.py  # Phase 4：EventGroup 拓扑关联（blast_radius + upstream）
+│   └── decision_engine.py      # Phase 4：自动化策略矩阵（severity × confidence）
 ├── neptune/                    # 图数据库层
 │   ├── neptune_client.py       # SigV4 签名 HTTP 客户端
-│   ├── neptune_queries.py      # Q1-Q18 openCypher 查询
+│   ├── neptune_queries.py      # Q1-Q20 openCypher 查询
 │   ├── schema_prompt.py        # 图谱 Schema Prompt + few-shot 示例
 │   ├── nl_query.py             # NLQueryEngine：自然语言→openCypher（Bedrock Claude）
 │   └── query_guard.py          # 安全校验：屏蔽写操作、限制跳数、强制 LIMIT
@@ -404,7 +420,8 @@ rca_engine/
 │   ├── playbook_engine.py      # 故障 Playbook 匹配
 │   ├── semi_auto.py            # 半自动执行流程
 │   ├── slack_notifier.py       # Slack Webhook 推送
-│   └── incident_writer.py      # Neptune + 实体提取 + S3 + Bedrock KB + S3 Vectors
+│   ├── incident_writer.py      # Neptune + 实体提取 + S3 + Bedrock KB + S3 Vectors
+│   └── feedback_collector.py   # Phase 4：Slack 反馈收集 + Neptune 写回
 ├── search/
 │   └── incident_vectordb.py    # S3 Vectors Incident 语义搜索
 ├── data/
@@ -413,7 +430,7 @@ rca_engine/
 │   ├── scan-service-db-mapping.py
 │   └── graph-ask.py            # CLI：自然语言图谱查询
 ├── tests/
-│   └── test_rca.py             # 17 个单元测试
+│   └── test_rca.py             # 单元测试
 ├── docs/
 │   ├── TDD-fault-recovery-rca.md
 │   └── RCA-SYSTEM-DOC.md
@@ -493,6 +510,141 @@ results = search_similar("DynamoDB 限流导致服务超时", top_k=3)
 
 ---
 
+## Phase 4：告警降噪与智能事件管理
+
+### 背景与动机
+
+在大规模故障场景下，单一根因往往触发数十条级联告警（ALB 5xx → Pod 异常 → DB 连接超时 → 业务指标下降）。若每条告警都独立触发一次 RCA，不仅造成重复分析噪声，还会影响 on-call 人员对根因的判断。Phase 4 在告警入口处引入三层聚合机制，将同一故障链的多条告警收敛为 **1 个 EventGroup**，仅触发 1 次 RCA。
+
+### 六层架构与数据流
+
+```
+Layer 0: 原始告警
+  CloudWatch Alarm × N  →  SNS Topic  →  handler.py
+                                               │
+                                    FEATURE_FLAGS.alert_aggregation
+                                         enabled?
+                                        YES /     \ NO（直通）
+                                           ▼
+Layer 1: 事件标准化
+  core/event_normalizer.py
+  UnifiedAlertEvent { alert_id, source, severity, affected_service,
+                      group_key, raw_payload, timestamp }
+                                           │
+                                           ▼
+Layer 2: 缓冲聚合
+  core/alert_buffer.py
+  DynamoDB gp-alert-buffer
+  - TTL 2 分钟（P0 立即 bypass）
+  - group_key = hash(affected_service + fault_type)
+  - 同 group_key 的告警追加到同一条目（set_add）
+                                           │
+                              窗口到期 / 窗口满 / P0 直通
+                                           ▼
+Layer 3: 拓扑关联
+  core/topology_correlator.py
+  - Q1 blast_radius：识别下游受影响节点
+  - Q3 upstream_deps：识别潜在根因上游
+  - 下游症状告警归并 → EventGroup { root_service, symptom_services, alerts[] }
+                                           │
+                                           ▼
+Layer 4: 决策编排
+  core/decision_engine.py
+  策略矩阵（severity × confidence）：
+  ┌──────────┬──────────┬────────────────────────────┐
+  │ severity │confidence│ 动作                        │
+  ├──────────┼──────────┼────────────────────────────┤
+  │ P0       │ ≥80      │ 自动执行 + Slack 通知        │
+  │ P0       │ <80      │ Slack 确认后执行             │
+  │ P1/P2    │ ≥70      │ Slack 通知 + 建议操作        │
+  │ P1/P2    │ <70      │ Slack 通知（仅信息）         │
+  └──────────┴──────────┴────────────────────────────┘
+                                           │
+                                           ▼
+Layer 5: RCA 分析
+  core/rca_engine.analyze_group()
+  core/fault_classifier.classify_group()
+  core/graph_rag_reporter.generate_group_report()
+  （与单告警 RCA 逻辑复用，输入为 EventGroup）
+                                           │
+                                           ▼
+Layer 6: 闭环反馈
+  actions/feedback_collector.py
+  - Slack 交互按钮：[✅ 确认根因] [❌ 否定] [🔄 重新分析]
+  - 反馈写回 Neptune：更新 Incident.feedback 属性
+  - Q19 查询已确认 Incident；Q20 统计误报率
+  - 误报率持续升高时自动调整置信度阈值
+```
+
+### 窗口到期处理
+
+```bash
+# EventBridge Scheduler 每 2 分钟触发一次 gp-window-flush Lambda
+# window_flush_handler.py 扫描到期的 AlertBuffer 窗口 → 触发 EventGroup 处理
+```
+
+### 新增基础设施（CDK AlertBufferStack）
+
+| 资源 | 说明 |
+|------|------|
+| DynamoDB `gp-alert-buffer` | 告警缓冲表；TTL 字段自动清理过期窗口 |
+| Lambda `gp-window-flush` | 窗口到期批量处理；由 EventBridge Scheduler 触发 |
+| EventBridge Scheduler Role | 允许 Scheduler 调用 `gp-window-flush` Lambda |
+
+### 部署 AlertBufferStack
+
+```bash
+cd infra
+# 1. 部署 CDK 栈（首次）
+cdk diff --app "npx ts-node bin/graph-dp.ts" AlertBufferStack
+cdk deploy --app "npx ts-node bin/graph-dp.ts" AlertBufferStack
+
+# 2. 获取输出值并更新 Lambda 环境变量
+BUFFER_TABLE=$(aws cloudformation describe-stacks \
+  --stack-name AlertBufferStack \
+  --query 'Stacks[0].Outputs[?OutputKey==`BufferTableName`].OutputValue' \
+  --output text --region ap-northeast-1)
+
+SCHEDULER_ROLE=$(aws cloudformation describe-stacks \
+  --stack-name AlertBufferStack \
+  --query 'Stacks[0].Outputs[?OutputKey==`SchedulerRoleArn`].OutputValue' \
+  --output text --region ap-northeast-1)
+
+FLUSH_FN=$(aws cloudformation describe-stacks \
+  --stack-name AlertBufferStack \
+  --query 'Stacks[0].Outputs[?OutputKey==`WindowFlushFunctionArn`].OutputValue' \
+  --output text --region ap-northeast-1)
+
+aws lambda update-function-configuration \
+  --function-name petsite-rca-engine \
+  --environment "Variables={BUFFER_TABLE_NAME=$BUFFER_TABLE,SCHEDULER_ROLE_ARN=$SCHEDULER_ROLE,WINDOW_FLUSH_FUNCTION_ARN=$FLUSH_FN}" \
+  --region ap-northeast-1
+```
+
+### FEATURE_FLAGS 说明
+
+Phase 4 全部能力通过 `config.py` 中的 `FEATURE_FLAGS` 字典控制，**默认全部关闭**，可按需逐步开启：
+
+```python
+FEATURE_FLAGS = {
+    "alert_aggregation": False,    # 告警聚合缓冲（Layer 1-3）
+    "topology_correlation": False, # 拓扑驱动关联（Layer 3）
+    "decision_engine": False,      # 自动化策略矩阵（Layer 4）
+    "feedback_loop": False,        # Slack 闭环反馈（Layer 6）
+}
+```
+
+通过环境变量覆盖（无需重新部署代码）：
+
+```bash
+aws lambda update-function-configuration \
+  --function-name petsite-rca-engine \
+  --environment "Variables={FEATURE_FLAG_ALERT_AGGREGATION=true}" \
+  --region ap-northeast-1
+```
+
+---
+
 ## 设计文档
 
 - [`docs/TDD-fault-recovery-rca.md`](./docs/TDD-fault-recovery-rca.md) — 技术设计文档（TDD）
@@ -507,3 +659,5 @@ results = search_similar("DynamoDB 限流导致服务超时", top_k=3)
 3. **ETL-ASG 竞态条件**：EC2 停止后 ASG 会快速终止实例，ETL 可能来不及记录 `stopped` 状态，EC2ASGProbe 负责处理此场景。
 4. **历史 Pod 数据积累**：Neptune 会保留历史部署中已 Failed/Succeeded 的 Pod，`gc.py` 会清理部分，但历史 Pod 的 `RunsOn` 边可能已过期。
 5. **AWS 探针覆盖范围**：目前覆盖 SQS/DynamoDB/Lambda/ALB/StepFunctions，其他 AWS 服务（如 ElastiCache、Kinesis、API Gateway）暂未覆盖。如需扩展，在 `collectors/aws_probers.py` 中通过 `@register_probe` 添加新探针即可。
+6. **Phase 4 默认关闭**：告警聚合（`alert_aggregation`）、拓扑关联（`topology_correlation`）、决策引擎（`decision_engine`）和闭环反馈（`feedback_loop`）四个 FEATURE_FLAGS 默认全部为 `False`，需部署 CDK AlertBufferStack 并手动开启。开启前请确保 `gp-alert-buffer` DynamoDB 表已创建、`BUFFER_TABLE_NAME` 等环境变量已配置。
+7. **告警聚合窗口延迟**：开启聚合后，非 P0 告警最多等待 2 分钟才会触发 RCA，对响应时延有一定影响。P0 告警走 bypass 通道，不受此限制。
