@@ -10,11 +10,15 @@ main.py - chaos-automation CLI 入口
 from __future__ import annotations
 import argparse
 import logging
+import signal
 import sys
 import os
 
 # 确保 code/ 在 path 上
 sys.path.insert(0, os.path.dirname(__file__))
+# 忽略 SIGPIPE：父进程（Slack agent/shell）关闭管道时，进程继续运行完成实验并写 DynamoDB
+if hasattr(signal, "SIGPIPE"):
+    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -142,7 +146,8 @@ def cmd_auto(args):
     from orchestrator import WorkflowOrchestrator
 
     tags = parse_tags(getattr(args, "tags", None))
-    orch = WorkflowOrchestrator(dry_run=args.dry_run, tags=tags)
+    prepare_only = getattr(args, "prepare_only", False)
+    orch = WorkflowOrchestrator(dry_run=args.dry_run or prepare_only, tags=tags)
     result = orch.generate_and_run(
         max_hypotheses=args.max_hypotheses,
         top_n=args.top,
@@ -150,7 +155,11 @@ def cmd_auto(args):
         stop_on_failure=args.stop_on_failure,
         cooldown=args.cooldown,
         dry_run=args.dry_run,
+        prepare_only=prepare_only,
     )
+    if prepare_only:
+        print("\n实验已准备完毕，执行请运行:")
+        print("  python3 main.py suite --dir experiments/generated/\n")
     print(result.summary())
     sys.exit(0 if result.failed + result.aborted + result.errors == 0 else 1)
 
@@ -238,6 +247,119 @@ def cmd_hypothesis(args):
         print("用法: python main.py hypothesis {generate|list|export}")
 
 
+def cmd_dr_verify(args):
+    """DR Plan 逐步验证"""
+    import json as _json
+
+    # Add project root so dr-plan-generator modules are importable
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
+    from dr_step_runner import DRStepRunner
+
+    # Load plan — support both dr-plan-generator and raw JSON
+    dr_gen_root = os.path.join(project_root, "dr-plan-generator")
+    if dr_gen_root not in sys.path:
+        sys.path.insert(0, dr_gen_root)
+    from models import DRPlan
+
+    with open(args.plan, encoding="utf-8") as fh:
+        plan = DRPlan.from_dict(_json.load(fh))
+
+    runner = DRStepRunner(
+        dry_run=getattr(args, "dry_run", False),
+        cooldown_seconds=args.cooldown,
+    )
+
+    if args.level == "dry-run":
+        from validation.plan_verifier import DRPlanVerifier
+        verifier = DRPlanVerifier(plan=plan)
+        report = verifier.dry_run()
+        print(_json.dumps(
+            {"ready": report.ready, "pass": report.pass_count,
+             "fail": report.fail_count, "warn": report.warn_count,
+             "blockers": report.blockers},
+            indent=2, ensure_ascii=False,
+        ))
+    else:
+        from dr_orchestrator import DROrchestrator
+        orch = DROrchestrator(
+            step_runner=runner,
+            plan=plan,
+            stop_on_failure=args.stop_on_failure,
+        )
+        # Run phase by phase
+        for phase in plan.phases:
+            print(f"\n{'='*60}")
+            print(f"Phase: {phase.phase_id} — {phase.name}")
+            print(f"{'='*60}")
+            result = orch.run_phase(phase)
+            status = "✅ PASS" if result.all_steps_passed else "❌ FAIL"
+            print(f"  Result: {status} ({len(result.steps)} steps, "
+                  f"{result.total_duration_seconds:.1f}s)")
+            if result.failed_steps:
+                print(f"  Failed: {result.failed_steps}")
+                if phase.phase_id == "phase-readiness":
+                    print("  ⛔ HARD BLOCK: Readiness gate failed — stopping before traffic cutover")
+                    break
+                if args.stop_on_failure:
+                    break
+
+
+def cmd_dr_rehearsal(args):
+    """DR Plan 全量演练"""
+    import json as _json
+
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+
+    dr_gen_root = os.path.join(project_root, "dr-plan-generator")
+    if dr_gen_root not in sys.path:
+        sys.path.insert(0, dr_gen_root)
+
+    from models import DRPlan
+    from runner.dr_step_runner import DRStepRunner
+    from dr_orchestrator import DROrchestrator
+
+    with open(args.plan, encoding="utf-8") as fh:
+        plan = DRPlan.from_dict(_json.load(fh))
+
+    runner = DRStepRunner(cooldown_seconds=args.cooldown)
+    orch = DROrchestrator(
+        step_runner=runner,
+        plan=plan,
+        require_approval=args.require_approval,
+        stop_on_failure=args.stop_on_failure,
+        environment=args.environment,
+    )
+
+    print(f"\n{'='*60}")
+    print(f"DR Plan Full Rehearsal: {plan.plan_id}")
+    print(f"Scope: {plan.scope} | Environment: {args.environment}")
+    print(f"{'='*60}\n")
+
+    report = orch.run_rehearsal()
+
+    # Summary
+    print(f"\n{'='*60}")
+    print(f"Rehearsal {'PASSED ✅' if report.success else 'FAILED ❌'}")
+    print(f"  Duration: {report.total_duration_seconds:.0f}s "
+          f"(actual RTO: {report.actual_rto_minutes:.1f} min, "
+          f"estimated: {report.estimated_rto_minutes} min)")
+    if report.failed_steps:
+        print(f"  Failed steps: {report.failed_steps}")
+    if report.warnings:
+        for w in report.warnings:
+            print(f"  ⚠️  {w}")
+    print(f"{'='*60}")
+
+    # Save report
+    report_path = orch.save_report(report)
+    print(f"\nReport saved to: {report_path}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="chaos-automation runner")
     sub = parser.add_subparsers(dest="cmd")
@@ -278,6 +400,8 @@ def main():
     auto_p.add_argument("--no-stop-on-failure", dest="stop_on_failure", action="store_false")
     auto_p.add_argument("--cooldown", type=int, default=60)
     auto_p.add_argument("--dry-run", action="store_true")
+    auto_p.add_argument("--prepare-only", action="store_true",
+                        help="只生成假设和实验 YAML + dry-run 验证，不实际执行")
     auto_p.add_argument("--tags", default=None, help="资源 tag 过滤 (格式: key=value,key2=value2)")
 
     # hypothesis
@@ -302,6 +426,26 @@ def main():
     exp_p.add_argument("--top", type=int, default=5, help="导出优先级最高的 N 个")
     exp_p.add_argument("--output-dir", default="experiments/generated/", help="输出目录")
 
+    # dr-verify
+    drv_p = sub.add_parser("dr-verify", help="DR Plan 逐步验证")
+    drv_p.add_argument("--plan", required=True, help="DR Plan JSON 路径")
+    drv_p.add_argument("--level", default="step", choices=["dry-run", "step"],
+                       help="验证级别 (dry-run | step)")
+    drv_p.add_argument("--strategy", default="checkpoint",
+                       choices=["isolated", "cumulative", "checkpoint"])
+    drv_p.add_argument("--dry-run", action="store_true", help="DRStepRunner dry-run 模式")
+    drv_p.add_argument("--cooldown", type=int, default=10, help="步骤间冷却秒数")
+    drv_p.add_argument("--stop-on-failure", action="store_true", default=True)
+
+    # dr-rehearsal
+    drr_p = sub.add_parser("dr-rehearsal", help="DR Plan 全量演练")
+    drr_p.add_argument("--plan", required=True, help="DR Plan JSON 路径")
+    drr_p.add_argument("--cooldown", type=int, default=30, help="步骤间冷却秒数")
+    drr_p.add_argument("--stop-on-failure", action="store_true", default=True)
+    drr_p.add_argument("--no-stop-on-failure", dest="stop_on_failure", action="store_false")
+    drr_p.add_argument("--environment", default="staging", choices=["staging", "production"])
+    drr_p.add_argument("--require-approval", action="store_true", default=False)
+
     args = parser.parse_args()
     if args.cmd == "setup":
         cmd_setup(args)
@@ -317,6 +461,10 @@ def main():
         cmd_learn(args)
     elif args.cmd == "hypothesis":
         cmd_hypothesis(args)
+    elif args.cmd == "dr-verify":
+        cmd_dr_verify(args)
+    elif args.cmd == "dr-rehearsal":
+        cmd_dr_rehearsal(args)
     else:
         parser.print_help()
 

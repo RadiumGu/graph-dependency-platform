@@ -11,6 +11,9 @@ Phase 5: Steady State After    恢复后稳态验证 + 报告生成
 from __future__ import annotations
 
 import json
+import os
+import signal
+import sys
 import logging
 import time
 import traceback
@@ -60,6 +63,9 @@ class ExperimentRunner:
         self.rca       = RCATrigger()
         self.reporter  = Reporter()
         self.cw_metrics = ChaosMetrics()
+        # 忽略 SIGPIPE（父进程管道断开不影响实验运行）
+        if hasattr(signal, "SIGPIPE"):
+            signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
     def run(self, experiment: Experiment) -> ExperimentResult:
         result = ExperimentResult(experiment=experiment)
@@ -114,6 +120,16 @@ class ExperimentRunner:
             result.status = "ABORTED"
             result.abort_reason = f"Pre-flight 失败: {e}"
             logger.error(f"🛑 Pre-flight 失败: {e}")
+
+        except BrokenPipeError:
+            # 父进程管道断开（如 Slack agent 超时），实验本身已完成
+            # 状态以实际运行结果为准，不强制改为 ERROR
+            logger.warning("⚠️  stdout 管道断开（父进程已退出），实验结果保持当前状态")
+            try:
+                sys.stdout = open(os.devnull, "w")
+                sys.stderr = open(os.devnull, "w")
+            except Exception:
+                pass
 
         except Exception as e:
             result.status = "ERROR"
@@ -517,20 +533,28 @@ class ExperimentRunner:
         except Exception as e:
             logger.error(f"DynamoDB 写入失败: {e}")
 
-        print(f"\n{'='*60}")
-        print(f"实验结果: {result.status}")
-        print(f"实验 ID:  {result.experiment_id}")
+        self._safe_print(f"\n{'='*60}")
+        self._safe_print(f"实验结果: {result.status}")
+        self._safe_print(f"实验 ID:  {result.experiment_id}")
         if result.report_path:
-            print(f"报告:     {result.report_path}")
+            self._safe_print(f"报告:     {result.report_path}")
         if result.abort_reason:
-            print(f"原因:     {result.abort_reason}")
+            self._safe_print(f"原因:     {result.abort_reason}")
         if result.log_collection is not None:
-            print(f"日志采集: {result.log_collection.summary()}")
+            self._safe_print(f"日志采集: {result.log_collection.summary()}")
             if result.log_collection.error_summary:
-                print(f"错误分类: {result.log_collection.error_summary}")
-        print(f"{'='*60}\n")
+                self._safe_print(f"错误分类: {result.log_collection.error_summary}")
+        self._safe_print(f"{'='*60}\n")
 
         self.cw_metrics.publish_experiment_metrics(result)
+
+    @staticmethod
+    def _safe_print(msg: str) -> None:
+        """print wrapper — 管道断开时静默忽略"""
+        try:
+            print(msg, flush=True)
+        except (BrokenPipeError, OSError):
+            pass
 
     def _emergency_cleanup(self, experiment_name: str, fault_type: str = "",
                            backend: str = "chaosmesh"):
