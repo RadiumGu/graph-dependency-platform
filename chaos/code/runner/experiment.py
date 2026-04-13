@@ -1,5 +1,6 @@
 """
 experiment.py - Experiment 数据模型（YAML 解析 + 验证）
+支持单 action 实验（fault 字段）和组合实验（faults 字段）两种格式。
 """
 from __future__ import annotations
 import re
@@ -133,6 +134,34 @@ class GraphFeedbackSpec:
     edges: list = field(default_factory=lambda: ["Calls"])
 
 
+# ─── 组合实验数据类 ────────────────────────────────────────────────────────────
+
+@dataclass
+class FaultAction:
+    """组合实验中的单个故障动作，对应 faults[] 下的一个条目"""
+    id: str                               # action 唯一标识，YAML 中用于 start 依赖引用
+    type: str                             # fault_catalog.yaml 中的 type
+    backend: str                          # "chaosmesh" | "fis"
+    params: dict                          # mode, value, duration, latency, extra_params 等
+    target_service: Optional[str] = None  # 可选，覆盖顶层 target.service
+    target_namespace: Optional[str] = None  # 可选，覆盖顶层 target.namespace
+    start: str = "immediate"             # 启动时序语法，见 parse_start_spec()
+
+
+@dataclass
+class Wave:
+    """schedule.waves 中的一个执行阶段，同 wave 内并行，wave 间串行"""
+    name: str
+    action_ids: list[str]
+    delay_after_previous: str = "0s"     # 上一个 wave 完成后的等待时间
+
+
+@dataclass
+class Schedule:
+    """显式 wave 编排（可选）；若存在则忽略各 action 的 start 字段"""
+    waves: list[Wave] = field(default_factory=list)
+
+
 @dataclass
 class Experiment:
     name: str
@@ -146,18 +175,73 @@ class Experiment:
     stop_conditions: list[StopCondition]
     rca: RcaSpec = field(default_factory=RcaSpec)
     graph_feedback: GraphFeedbackSpec = field(default_factory=GraphFeedbackSpec)
-    backend: str = "chaosmesh"        # "chaosmesh" | "fis"
+    backend: str = "chaosmesh"        # "chaosmesh" | "fis" | "composite"
     enabled: bool = True              # False → 跳过执行（YAML 中 enabled: false）
     max_duration: str = "10m"
     save_to_bedrock_kb: bool = False
     yaml_source: str = ""
 
 
+@dataclass
+class CompositeExperiment(Experiment):
+    """
+    组合实验：继承 Experiment，扩展多 action 字段。
+    fault 字段继承自 Experiment，组合实验中为兼容性虚拟值（type="composite"）。
+    实际注入逻辑使用 actions 列表。
+    """
+    actions: list[FaultAction] = field(default_factory=list)
+    schedule: Optional[Schedule] = None
+
+
+# ─── 模块级辅助函数 ──────────────────────────────────────────────────────────
+
+def _expand_arn(arn: str) -> str:
+    """展开 ARN 中的 ${REGION} / ${ACCOUNT_ID} 占位符"""
+    if not arn:
+        return arn
+    from .config import REGION, ACCOUNT_ID
+    return arn.replace("${REGION}", REGION).replace("${ACCOUNT_ID}", ACCOUNT_ID)
+
+
+def _parse_checks(items) -> list[SteadyStateCheck]:
+    """解析 steady_state.before/after 列表"""
+    return [SteadyStateCheck(
+        metric=c['metric'],
+        threshold=c['threshold'],
+        window=c.get('window', '1m'),
+    ) for c in (items or [])]
+
+
+def _parse_stops(items) -> list[StopCondition]:
+    """解析 stop_conditions 列表"""
+    return [StopCondition(
+        metric=c['metric'],
+        threshold=c['threshold'],
+        window=c.get('window', '30s'),
+        action=c.get('action', 'abort'),
+        cloudwatch_alarm_arn=_expand_arn(c.get('cloudwatch_alarm_arn') or ""),
+    ) for c in (items or [])]
+
+
 # ─── YAML 加载 ───────────────────────────────────────────────────────────────
 
-def load_experiment(path: str) -> Experiment:
+def load_experiment(path: str, duration_override: Optional[str] = None) -> "Experiment | CompositeExperiment":
+    """
+    加载实验 YAML。
+
+    Args:
+        path: YAML 文件路径
+        duration_override: 若指定，覆盖实验中所有 action 的 duration（CLI --duration 参数）
+
+    Returns:
+        CompositeExperiment（有 faults 复数字段或 backend=composite）或普通 Experiment
+    """
     with open(path, 'r') as f:
         d = yaml.safe_load(f)
+
+    # 检测组合实验格式（有 faults 复数字段，或 backend == "composite"）
+    if 'faults' in d or d.get('backend') == 'composite':
+        return _load_composite_experiment(d, path, duration_override)
 
     target = d.get('target', {})
     fault_d = d.get('fault', {})
@@ -166,11 +250,14 @@ def load_experiment(path: str) -> Experiment:
     gf_d = d.get('graph_feedback', {})
     opts = d.get('options', {})
 
+    # CLI --duration 覆盖 YAML 中的 fault.duration
+    fault_duration = duration_override or fault_d.get('duration', '2m')
+
     fault = FaultSpec(
         type=fault_d['type'],
         mode=fault_d.get('mode', 'all'),
         value=str(fault_d.get('value', '100')),
-        duration=fault_d.get('duration', '2m'),
+        duration=fault_duration,
         latency=fault_d.get('latency'),
         loss=fault_d.get('loss'),
         corrupt=fault_d.get('corrupt'),
@@ -188,29 +275,6 @@ def load_experiment(path: str) -> Experiment:
         extra_params=fault_d.get('extra_params'),
     )
 
-    def parse_checks(items) -> list[SteadyStateCheck]:
-        return [SteadyStateCheck(
-            metric=c['metric'],
-            threshold=c['threshold'],
-            window=c.get('window', '1m'),
-        ) for c in (items or [])]
-
-    def _expand_arn(arn: str) -> str:
-        """展开 ARN 中的 ${REGION} / ${ACCOUNT_ID} 占位符"""
-        if not arn:
-            return arn
-        from .config import REGION, ACCOUNT_ID
-        return arn.replace("${REGION}", REGION).replace("${ACCOUNT_ID}", ACCOUNT_ID)
-
-    def parse_stops(items) -> list[StopCondition]:
-        return [StopCondition(
-            metric=c['metric'],
-            threshold=c['threshold'],
-            window=c.get('window', '30s'),
-            action=c.get('action', 'abort'),
-            cloudwatch_alarm_arn=_expand_arn(c.get('cloudwatch_alarm_arn') or ""),
-        ) for c in (items or [])]
-
     exp = Experiment(
         name=d['name'],
         description=d.get('description', ''),
@@ -218,9 +282,9 @@ def load_experiment(path: str) -> Experiment:
         target_namespace=target.get('namespace', 'default'),
         target_tier=target.get('tier', 'Tier1'),
         fault=fault,
-        steady_state_before=parse_checks(ss.get('before', [])),
-        steady_state_after=parse_checks(ss.get('after', [])),
-        stop_conditions=parse_stops(d.get('stop_conditions', [])),
+        steady_state_before=_parse_checks(ss.get('before', [])),
+        steady_state_after=_parse_checks(ss.get('after', [])),
+        stop_conditions=_parse_stops(d.get('stop_conditions', [])),
         rca=RcaSpec(
             enabled=rca_d.get('enabled', False),
             trigger_after=rca_d.get('trigger_after', '30s'),
@@ -256,3 +320,98 @@ def load_experiment(path: str) -> Experiment:
                 exp.fault.extra_params[key] = _expand_arn(val)
 
     return exp
+
+
+def _load_composite_experiment(
+    d: dict, path: str, duration_override: Optional[str] = None
+) -> CompositeExperiment:
+    """
+    解析组合实验 YAML（有 faults 复数字段）。
+
+    Args:
+        d: 已解析的 YAML dict
+        path: 原始文件路径（用于 yaml_source）
+        duration_override: 若指定，覆盖所有 action 的 duration
+    """
+    target = d.get('target', {})
+    ss = d.get('steady_state', {})
+    rca_d = d.get('rca', {})
+    gf_d = d.get('graph_feedback', {})
+    opts = d.get('options', {})
+
+    # 解析 actions
+    actions: list[FaultAction] = []
+    for fa in d.get('faults', []):
+        params = dict(fa.get('params', {}))  # 拷贝，避免修改原始数据
+        if duration_override:
+            params['duration'] = duration_override
+        actions.append(FaultAction(
+            id=fa['id'],
+            type=fa['type'],
+            backend=fa.get('backend', 'chaosmesh'),
+            params=params,
+            target_service=fa.get('target_service'),
+            target_namespace=fa.get('target_namespace'),
+            start=fa.get('start', 'immediate'),
+        ))
+
+    # 解析 schedule.waves（可选）
+    schedule: Optional[Schedule] = None
+    sched_d = d.get('schedule', {})
+    if sched_d and sched_d.get('waves'):
+        waves = [
+            Wave(
+                name=w.get('name', f'wave-{i}'),
+                action_ids=w.get('actions', []),
+                delay_after_previous=str(w.get('delay_after_previous', '0s')),
+            )
+            for i, w in enumerate(sched_d['waves'])
+        ]
+        schedule = Schedule(waves=waves)
+
+    # 计算兼容性虚拟 FaultSpec 的 duration：取所有 action duration 的最大值
+    max_dur = opts.get('max_duration', '10m')
+    for action in actions:
+        dur = action.params.get('duration')
+        if dur:
+            try:
+                if parse_duration(str(dur)) > parse_duration(max_dur):
+                    max_dur = str(dur)
+            except ValueError:
+                pass
+
+    # 兼容性虚拟 FaultSpec（用于 ExperimentResult.experiment_id 生成等场景）
+    dummy_fault = FaultSpec(
+        type='composite',
+        mode='all',
+        value='100',
+        duration=max_dur,
+    )
+
+    return CompositeExperiment(
+        name=d['name'],
+        description=d.get('description', ''),
+        target_service=target.get('service', ''),
+        target_namespace=target.get('namespace', 'default'),
+        target_tier=target.get('tier', 'Tier1'),
+        fault=dummy_fault,
+        steady_state_before=_parse_checks(ss.get('before', [])),
+        steady_state_after=_parse_checks(ss.get('after', [])),
+        stop_conditions=_parse_stops(d.get('stop_conditions', [])),
+        rca=RcaSpec(
+            enabled=rca_d.get('enabled', False),
+            trigger_after=rca_d.get('trigger_after', '30s'),
+            expected_root_cause=rca_d.get('expected_root_cause'),
+        ),
+        graph_feedback=GraphFeedbackSpec(
+            enabled=gf_d.get('enabled', True),
+            edges=gf_d.get('edges', ['Calls']),
+        ),
+        backend='composite',
+        enabled=d.get('enabled', True),
+        max_duration=opts.get('max_duration', '10m'),
+        save_to_bedrock_kb=opts.get('save_to_bedrock_kb', False),
+        yaml_source=path,
+        actions=actions,
+        schedule=schedule,
+    )

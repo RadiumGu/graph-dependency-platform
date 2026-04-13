@@ -68,6 +68,13 @@ class ExperimentRunner:
             signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
     def run(self, experiment: Experiment) -> ExperimentResult:
+        # 组合实验委托给 CompositeRunner
+        from .experiment import CompositeExperiment
+        if isinstance(experiment, CompositeExperiment):
+            from .composite_runner import CompositeRunner
+            cr = CompositeRunner(dry_run=self.dry_run, tags=self.tags)
+            return cr.run(experiment)
+
         result = ExperimentResult(experiment=experiment)
         result.start_time = datetime.now(timezone.utc)
         result.min_success_rate = 100.0

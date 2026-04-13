@@ -54,13 +54,23 @@ def cmd_run(args):
         print(f"❌ 文件不存在: {args.file}")
         sys.exit(1)
 
-    exp    = load_experiment(args.file)
+    duration_override = getattr(args, "duration", None)
+    exp    = load_experiment(args.file, duration_override=duration_override)
     tags   = parse_tags(getattr(args, "tags", None))
     runner = ExperimentRunner(dry_run=args.dry_run, tags=tags)
 
     logger.info(f"实验: {exp.name}")
     logger.info(f"目标: {exp.target_service} ({exp.target_tier})")
-    logger.info(f"故障: {exp.fault.type} {exp.fault.mode}={exp.fault.value} 持续 {exp.fault.duration}")
+
+    # 组合实验显示 action 列表
+    from runner.experiment import CompositeExperiment
+    if isinstance(exp, CompositeExperiment):
+        logger.info(f"类型: 组合实验 ({len(exp.actions)} actions)")
+        for a in exp.actions:
+            logger.info(f"  → {a.id}: {a.type} ({a.backend}) start={a.start}")
+    else:
+        logger.info(f"故障: {exp.fault.type} {exp.fault.mode}={exp.fault.value} 持续 {exp.fault.duration}")
+
     if args.dry_run:
         logger.info("⚡ [dry-run 模式] 不执行实际注入")
 
@@ -247,6 +257,158 @@ def cmd_hypothesis(args):
         print("用法: python main.py hypothesis {generate|list|export}")
 
 
+def cmd_compose(args):
+    """CLI 快速组合实验生成（--fault 参数模式）"""
+    import yaml
+    from datetime import datetime
+
+    target = args.target or "petsite"
+    namespace = args.namespace or "petadoptions"
+    duration_override = args.duration
+
+    # 解析 --fault 参数
+    faults = []
+    for i, fault_str in enumerate(args.fault or []):
+        fa = _parse_fault_arg(fault_str, i, duration_override)
+        faults.append(fa)
+
+    if not faults:
+        print("❌ 至少需要一个 --fault 参数")
+        sys.exit(1)
+
+    # 构建 YAML dict
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    exp_name = f"compose-{target}-{timestamp}"
+
+    yaml_dict = {
+        "name": exp_name,
+        "description": f"CLI compose: {len(faults)} actions on {target}",
+        "backend": "composite",
+        "target": {
+            "service": target,
+            "namespace": namespace,
+            "tier": "Tier0",
+        },
+        "faults": faults,
+        "steady_state": {
+            "before": [{"metric": "success_rate", "threshold": ">= 95%", "window": "1m"}],
+            "after": [
+                {"metric": "success_rate", "threshold": ">= 90%", "window": "5m"},
+                {"metric": "latency_p99", "threshold": "< 5000ms", "window": "5m"},
+            ],
+        },
+        "stop_conditions": [
+            {"metric": "success_rate", "threshold": "< 30%", "window": "60s", "action": "abort"},
+        ],
+        "rca": {"enabled": True, "trigger_after": "30s"},
+        "options": {"max_duration": args.max_duration or "15m"},
+    }
+
+    # 调度模式
+    if args.schedule == "sequential":
+        # 串行：每个 action 依赖前一个
+        for i in range(1, len(faults)):
+            faults[i]["start"] = f"after:{faults[i-1]['id']}"
+
+    yaml_output = yaml.dump(yaml_dict, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+    # 保存或执行
+    if args.save:
+        save_path = args.save
+    else:
+        save_dir = os.path.join(os.path.dirname(__file__), "experiments", "composite")
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, f"{exp_name}.yaml")
+
+    with open(save_path, "w") as f:
+        f.write(f"# 自动生成 by compose CLI — {datetime.now().strftime('%Y-%m-%d %H:%M')}\n")
+        f.write(yaml_output)
+    print(f"✅ 已生成: {save_path}")
+
+    if args.run:
+        print(f"\n▶️ 执行实验...")
+        from runner import load_experiment, ExperimentRunner
+        exp = load_experiment(save_path)
+        runner = ExperimentRunner(dry_run=args.dry_run, tags={})
+        result = runner.run(exp)
+        sys.exit(0 if result.status == "PASSED" else 1)
+    elif args.dry_run:
+        print(f"\n▶️ Dry-run 验证...")
+        from runner import load_experiment, ExperimentRunner
+        exp = load_experiment(save_path)
+        runner = ExperimentRunner(dry_run=True, tags={})
+        result = runner.run(exp)
+        sys.exit(0 if result.status == "PASSED" else 1)
+    else:
+        print(f"\n生成的 YAML:\n")
+        print(yaml_output)
+        print(f"\n执行命令: python3 main.py run --file {save_path}")
+
+
+def _parse_fault_arg(fault_str: str, index: int, duration_override: str = None) -> dict:
+    """
+    解析 --fault 参数字符串。
+
+    格式: type:key=val,key=val
+    短名简写: delay:3m:200ms → network_delay:duration=3m,latency=200ms
+    """
+    SHORT_NAMES = {
+        "delay": ("network_delay", {"latency": None}),
+        "loss": ("network_loss", {"loss": None}),
+        "cpu": ("pod_cpu_stress", {"load": None}),
+        "mem": ("pod_memory_stress", {"size": None}),
+        "kill": ("pod_kill", {}),
+    }
+
+    parts = fault_str.split(":", 1)
+    type_name = parts[0]
+
+    # 短名展开
+    if type_name in SHORT_NAMES:
+        real_type, extra_map = SHORT_NAMES[type_name]
+        type_name = real_type
+        # 简写参数（如 delay:3m:200ms）
+        if len(parts) > 1 and "=" not in parts[1]:
+            simple_parts = parts[1].split(":")
+            params = {"duration": simple_parts[0]} if simple_parts else {}
+            if len(simple_parts) > 1 and extra_map:
+                first_key = list(extra_map.keys())[0]
+                params[first_key] = simple_parts[1]
+            if duration_override:
+                params["duration"] = duration_override
+            return {
+                "id": f"action-{index}",
+                "type": type_name,
+                "backend": "chaosmesh",
+                "params": params,
+                "start": "immediate",
+            }
+
+    # 标准格式: type:key=val,key=val
+    params = {}
+    if len(parts) > 1:
+        for kv in parts[1].split(","):
+            if "=" in kv:
+                k, v = kv.split("=", 1)
+                params[k.strip()] = v.strip()
+
+    if duration_override:
+        params["duration"] = duration_override
+    if "duration" not in params:
+        params["duration"] = "2m"
+
+    # 自动推断 backend
+    backend = "fis" if type_name.startswith("fis_") else "chaosmesh"
+
+    return {
+        "id": f"action-{index}",
+        "type": type_name,
+        "backend": backend,
+        "params": params,
+        "start": "immediate",
+    }
+
+
 def cmd_dr_verify(args):
     """DR Plan 逐步验证"""
     import json as _json
@@ -371,6 +533,7 @@ def main():
     run_p = sub.add_parser("run", help="执行实验")
     run_p.add_argument("--file", required=True, help="实验 YAML 路径")
     run_p.add_argument("--dry-run", action="store_true", help="不实际注入，走完流程框架")
+    run_p.add_argument("--duration", default=None, help="覆盖 YAML 中所有 action 的 duration（如 30s, 2m）")
     run_p.add_argument("--tags", default=None, help="资源 tag 过滤 (格式: key=value,key2=value2)")
 
     # history
@@ -428,6 +591,19 @@ def main():
 
     # dr-verify
     drv_p = sub.add_parser("dr-verify", help="DR Plan 逐步验证")
+
+    # compose
+    compose_p = sub.add_parser("compose", help="CLI 快速组合实验")
+    compose_p.add_argument("--target", default=None, help="目标服务名")
+    compose_p.add_argument("--namespace", default=None, help="K8s namespace")
+    compose_p.add_argument("--fault", action="append", help="故障定义 (格式: type:key=val,key=val 或短名)")
+    compose_p.add_argument("--duration", default=None, help="全局 duration 覆盖")
+    compose_p.add_argument("--max-duration", default=None, help="max_duration 安全上限")
+    compose_p.add_argument("--schedule", default="parallel", choices=["parallel", "sequential"],
+                           help="编排模式: parallel（并行）/ sequential（串行）")
+    compose_p.add_argument("--save", default=None, help="保存 YAML 到指定路径")
+    compose_p.add_argument("--run", action="store_true", help="生成后立即执行")
+    compose_p.add_argument("--dry-run", action="store_true", help="生成后 dry-run 验证")
     drv_p.add_argument("--plan", required=True, help="DR Plan JSON 路径")
     drv_p.add_argument("--level", default="step", choices=["dry-run", "step"],
                        help="验证级别 (dry-run | step)")
@@ -465,6 +641,8 @@ def main():
         cmd_dr_verify(args)
     elif args.cmd == "dr-rehearsal":
         cmd_dr_rehearsal(args)
+    elif args.cmd == "compose":
+        cmd_compose(args)
     else:
         parser.print_help()
 

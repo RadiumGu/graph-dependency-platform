@@ -1,0 +1,95 @@
+# 组合实验示例：渐进式压力测试
+# 三个 wave 逐步加码，观察系统退化曲线
+# 用法: python3 main.py run --file experiments/composite/progressive-degradation.yaml --dry-run
+
+name: progressive-degradation
+description: "渐进式故障：轻微延迟 → 中度压力 → 严重故障"
+backend: composite
+
+target:
+  service: petsite
+  namespace: petadoptions
+  tier: Tier0
+
+faults:
+  - id: light-delay
+    type: network_delay
+    backend: chaosmesh
+    params:
+      mode: all
+      value: "100"
+      duration: "5m"
+      latency: "50ms"
+
+  - id: medium-delay
+    type: network_delay
+    backend: chaosmesh
+    target_service: petsearch
+    params:
+      mode: all
+      value: "100"
+      duration: "4m"
+      latency: "200ms"
+
+  - id: cpu-stress
+    type: pod_cpu_stress
+    backend: chaosmesh
+    params:
+      mode: all
+      value: "100"
+      duration: "4m"
+      workers: 2
+      load: 60
+
+  - id: heavy-loss
+    type: network_loss
+    backend: chaosmesh
+    params:
+      mode: all
+      value: "100"
+      duration: "3m"
+      loss: "30"
+
+  - id: pod-kill
+    type: pod_kill
+    backend: chaosmesh
+    params:
+      mode: fixed-percent
+      value: "50"
+      duration: "1m"
+
+schedule:
+  waves:
+    - name: "Wave 1: 轻微延迟"
+      actions: [light-delay]
+
+    - name: "Wave 2: 中度延迟 + CPU 压力"
+      actions: [medium-delay, cpu-stress]
+      delay_after_previous: "60s"
+
+    - name: "Wave 3: 严重故障"
+      actions: [heavy-loss, pod-kill]
+      delay_after_previous: "60s"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 85%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 20%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "90s"
+
+options:
+  max_duration: "20m"

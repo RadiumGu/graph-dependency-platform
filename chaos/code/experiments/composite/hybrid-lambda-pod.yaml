@@ -1,0 +1,61 @@
+# 组合实验示例：FIS + ChaosMesh 混合
+# Lambda 延迟 + Pod 网络丢包同时注入
+# 用法: python3 main.py run --file experiments/composite/hybrid-lambda-pod.yaml --dry-run
+
+name: hybrid-lambda-pod-fault
+description: "FIS Lambda 延迟 + ChaosMesh Pod 丢包，跨后端混合故障"
+backend: composite
+
+target:
+  service: petsite
+  namespace: petadoptions
+  tier: Tier0
+
+faults:
+  - id: lambda-slow
+    type: fis_lambda_delay
+    backend: fis
+    params:
+      duration: "3m"
+      extra_params:
+        function_arn: "arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:petstatusupdater"
+        delay_ms: 5000
+        percentage: 100
+    start: immediate
+
+  - id: pod-loss
+    type: network_loss
+    backend: chaosmesh
+    target_service: payforadoption
+    params:
+      mode: all
+      value: "100"
+      duration: "3m"
+      loss: "30"
+    start: immediate
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 5000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 30%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+
+options:
+  max_duration: "10m"

@@ -1,0 +1,59 @@
+# 组合实验示例：级联故障模拟
+# RDS failover + 网络延迟同时发生，验证应用层级联处理
+# 用法: python3 main.py run --file experiments/composite/cascade-db-to-app.yaml --dry-run
+
+name: cascade-db-to-app
+description: "数据库 failover + 网络延迟，验证级联故障处理"
+backend: composite
+
+target:
+  service: petsite
+  namespace: petadoptions
+  tier: Tier0
+
+faults:
+  - id: rds-failover
+    type: fis_rds_failover
+    backend: fis
+    params:
+      extra_params:
+        cluster_arn: "arn:aws:rds:${REGION}:${ACCOUNT_ID}:cluster:petsite-aurora-cluster"
+    start: immediate
+
+  - id: app-network-delay
+    type: network_delay
+    backend: chaosmesh
+    target_service: payforadoption
+    params:
+      mode: all
+      value: "100"
+      duration: "3m"
+      latency: "500ms"
+    start: "after:rds-failover:30s"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 5000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 30%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "60s"
+  expected_root_cause: petsite-aurora-cluster
+
+options:
+  max_duration: "15m"
