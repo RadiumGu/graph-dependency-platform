@@ -57,7 +57,7 @@ fi
 set -a; source "$ENV_FILE"; set +a
 
 # ── 必填变量校验 ───────────────────────────────────────────────────────────────
-required_vars=(ACCOUNT REGION FUNCTION_NAME ROLE_ARN SUBNET_IDS SG_IDS NEPTUNE_ENDPOINT)
+required_vars=(ACCOUNT REGION FUNCTION_NAME ROLE_ARN SUBNET_IDS SG_IDS NEPTUNE_ENDPOINT SCHEDULER_ROLE_ARN WINDOW_FLUSH_FUNCTION_ARN)
 all_set=1
 for var in "${required_vars[@]}"; do
   val="${!var}"
@@ -84,13 +84,21 @@ if ! $DRY_RUN; then
 
   # Copy source files preserving subdirectory structure (Lambda-compatible)
   cp "$SCRIPT_DIR"/*.py "$BUILD_DIR/" 2>/dev/null
-  for dir in core neptune collectors actions data; do
+  for dir in core neptune collectors actions data search; do
     if [ -d "$SCRIPT_DIR/$dir" ]; then
       cp -r "$SCRIPT_DIR/$dir" "$BUILD_DIR/"
     fi
   done
+  # Copy profiles directory (EnvironmentProfile dynamic loading)
+  PROFILES_DIR="$SCRIPT_DIR/../profiles"
+  if [ -d "$PROFILES_DIR" ]; then
+    cp -r "$PROFILES_DIR" "$BUILD_DIR/"
+    echo "Profiles included: $(ls "$PROFILES_DIR"/*.yaml 2>/dev/null | xargs -n1 basename)"
+  else
+    echo "⚠️  profiles/ 目录不存在，Profile 动态加载将回退到硬编码"
+  fi
   # Install dependencies
-  pip3 install requests -t "$BUILD_DIR" -q
+  pip3 install requests pyyaml -t "$BUILD_DIR" -q
   # Package
   cd "$BUILD_DIR"
   rm -f /tmp/rca-engine.zip
@@ -130,7 +138,10 @@ if ! $DRY_RUN; then
             EKS_CLUSTER=${EKS_CLUSTER:-},
             CLICKHOUSE_HOST=${CLICKHOUSE_HOST:-},
             BEDROCK_MODEL=${BEDROCK_MODEL:-global.anthropic.claude-sonnet-4-6},
-            BEDROCK_KB_ID=${BEDROCK_KB_ID:-}
+            BEDROCK_KB_ID=${BEDROCK_KB_ID:-},
+            BUFFER_TABLE_NAME=${BUFFER_TABLE_NAME:-gp-alert-buffer},
+            SCHEDULER_ROLE_ARN=$SCHEDULER_ROLE_ARN,
+            WINDOW_FLUSH_FUNCTION_ARN=$WINDOW_FLUSH_FUNCTION_ARN
         }" \
         --vpc-config "SubnetIds=$SUBNET_IDS,SecurityGroupIds=$SG_IDS" \
         --region "$REGION"
@@ -157,7 +168,10 @@ else
             BEDROCK_MODEL=${BEDROCK_MODEL:-global.anthropic.claude-sonnet-4-6},
             BEDROCK_KB_ID=${BEDROCK_KB_ID:-},
             SLACK_WEBHOOK_URL=$WEBHOOK_URL,
-            SLACK_CHANNEL=${SLACK_CHANNEL:-#rca-alerts}
+            SLACK_CHANNEL=${SLACK_CHANNEL:-#rca-alerts},
+            BUFFER_TABLE_NAME=${BUFFER_TABLE_NAME:-gp-alert-buffer},
+            SCHEDULER_ROLE_ARN=$SCHEDULER_ROLE_ARN,
+            WINDOW_FLUSH_FUNCTION_ARN=$WINDOW_FLUSH_FUNCTION_ARN
         }" \
         --region "$REGION" > /dev/null
     echo "Slack webhook configured."
@@ -208,3 +222,12 @@ echo ""
 echo "✅ 部署完成！"
 echo "SNS Topic ARN: $SNS_TOPIC_ARN"
 echo "Lambda ARN: arn:aws:lambda:${REGION}:${ACCOUNT}:function:${FUNCTION_NAME}"
+echo ""
+echo "=== IAM 权限提示 ==="
+echo "RCA Lambda Role ($ROLE_ARN) 需要以下额外权限（由 AlertBufferStack 创建的资源）："
+echo "  DynamoDB:"
+echo "    - dynamodb:PutItem, Query, GetItem  on  arn:aws:dynamodb:${REGION}:${ACCOUNT}:table/gp-alert-buffer"
+echo "  EventBridge Scheduler:"
+echo "    - scheduler:CreateSchedule, DeleteSchedule  on  *"
+echo "    - iam:PassRole  on  $SCHEDULER_ROLE_ARN"
+echo "请在 AWS Console 或通过 CDK 将上述权限附加到 $ROLE_ARN"
