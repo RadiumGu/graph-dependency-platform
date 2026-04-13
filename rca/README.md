@@ -66,6 +66,9 @@ CloudWatch Alarm
     ▼ SNS
 handler.py
     │
+    ├─ [Aggregation path] ───→ Phase 4 Alert Aggregation (see section below)
+    │   event_normalizer → alert_buffer → topology_correlator → decision_engine
+    │
     ├─ fault_classifier.py ──────────────────────────────→ P0/P1/P2 severity
     │
     ├─ rca_engine.py ── Multi-layer RCA ─────────────────────────────────────┐

@@ -65,6 +65,9 @@ CloudWatch Alarm
     ▼ SNS
 handler.py
     │
+    ├─ [聚合路径] ───→ Phase 4 告警聚合（详见下方章节）
+    │   event_normalizer → alert_buffer → topology_correlator → decision_engine
+    │
     ├─ fault_classifier.py ──────────────────────────────→ P0/P1/P2 分级
     │
     ├─ rca_engine.py ── 多层 RCA ──────────────────────────────────────┐
