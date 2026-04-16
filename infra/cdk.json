@@ -18,12 +18,12 @@
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,
     "@aws-cdk/core:target-partitions": ["aws", "aws-cn"],
-    "vpcId": "YOUR_VPC_ID",
-    "lambdaSgId": "YOUR_LAMBDA_SG_ID",
-    "neptuneEndpoint": "YOUR_NEPTUNE_CLUSTER_ENDPOINT",
+    "vpcId": "vpc-010ab37a3f9f74725",
+    "lambdaSgId": "sg-078f24929b25f09cd",
+    "neptuneEndpoint": "petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com",
     "neptunePort": "8182",
-    "clickhouseHost": "YOUR_CLICKHOUSE_HOST_IP",
-    "eksClusterName": "YOUR_EKS_CLUSTER_NAME",
-    "cfnStackNames": "YOUR_CFN_STACK1,YOUR_CFN_STACK2"
+    "clickhouseHost": "11.0.2.30",
+    "eksClusterName": "PetSite",
+    "cfnStackNames": "ServicesEks2,Applications"
   }
 }
