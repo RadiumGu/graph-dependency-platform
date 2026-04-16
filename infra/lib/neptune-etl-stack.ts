@@ -6,6 +6,7 @@ import * as lambdaEventSources from 'aws-cdk-lib/aws-lambda-event-sources';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as targets from 'aws-cdk-lib/aws-events-targets';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as eks from 'aws-cdk-lib/aws-eks';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -221,6 +222,17 @@ export class NeptuneEtlStack extends cdk.Stack {
       description: 'Trigger neptune-etl-from-aws every 15 minutes',
       schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
       targets: [new targets.LambdaFunction(awsEtlFn)],
+    });
+
+    // EKS Access Entry: allow ETL Lambda to call K8s API (read-only)
+    new eks.CfnAccessEntry(this, 'EtlLambdaEksAccessEntry', {
+      clusterName: eksClusterName,
+      principalArn: lambdaRole.roleArn,
+      type: 'STANDARD',
+      accessPolicies: [{
+        policyArn: 'arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy',
+        accessScope: { type: 'cluster' },
+      }],
     });
 
     // =========================================================
