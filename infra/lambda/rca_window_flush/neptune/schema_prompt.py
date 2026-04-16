@@ -144,7 +144,7 @@ FEW_SHOT_EXAMPLES = [
     },
     {
         "q": "上个月 petsite 发生过几次故障？",
-        "cypher": "MATCH (inc:Incident)-[:TriggeredBy]->(s:Microservice {name:'petsite'}) WHERE inc.start_time >= '2026-03-01' RETURN inc.id AS incident, inc.severity AS severity, inc.root_cause AS root_cause ORDER BY inc.start_time DESC",
+        "cypher": "MATCH (inc:Incident)-[:TriggeredBy]->(s:Microservice {name:'petsite'}) WHERE inc.start_time >= $since RETURN inc.id AS incident, inc.severity AS severity, inc.root_cause AS root_cause ORDER BY inc.start_time DESC",
     },
     {
         "q": "哪些服务从未做过混沌实验？",
