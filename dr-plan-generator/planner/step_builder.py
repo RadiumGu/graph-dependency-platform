@@ -412,9 +412,14 @@ class StepBuilder:
         from registry import registry_loader
         reg = registry_loader.get_registry()
         info = reg.get_type(resource_type)
-        validation_cmd = info.validation_template.format(
-            name=resource_name, target=target, type=resource_type
-        ) if info.validation_template else f"# TODO: Add validation for {resource_type} '{resource_name}'"
+        try:
+            validation_cmd = info.validation_template.format(
+                name=resource_name, target=target, type=resource_type
+            ) if info.validation_template else f"# TODO: Add validation for {resource_type} '{resource_name}'"
+        except (KeyError, IndexError):
+            # Template contains unescaped braces (e.g. jsonpath expressions).
+            # Fall back to a safe placeholder rather than crashing.
+            validation_cmd = f"# TODO: Add validation for {resource_type} '{resource_name}'"
 
         return DRStep(
             step_id=f"generic-{resource_name}",
