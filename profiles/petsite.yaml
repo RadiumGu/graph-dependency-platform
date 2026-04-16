@@ -1,0 +1,179 @@
+# profiles/petsite.yaml — 完整 Environment Profile
+# 全平台所有模块的环境特定配置集中在此
+
+# =====================================================
+# 1. 基本信息
+# =====================================================
+profile:
+  name: "PetSite"
+  description: "AWS Workshop PetSite 微服务架构"
+  version: "1.0"
+
+# =====================================================
+# 2. 服务注册表（Single Source of Truth）
+#    消除 4 个模块中的重复映射
+# =====================================================
+services:
+  petsite:
+    tier: Tier0
+    k8s_deployment: "petsite-deployment"
+    k8s_label: "petsite"
+    neptune_name: "petsite"
+    cloudwatch:
+      namespace: "AWS/ApplicationELB"
+      dimension_name: "TargetGroup"
+      dimension_value: "service-petsite"
+    deepflow_app: "petsite"
+
+  petsearch:
+    tier: Tier0
+    k8s_deployment: "search-service"
+    k8s_label: "search-service"
+    neptune_name: "petsearch"
+    cloudwatch:
+      namespace: "AWS/ApplicationELB"
+      dimension_name: "TargetGroup"
+      dimension_value: "search-service"
+    deepflow_app: "search-service"
+
+  payforadoption:
+    tier: Tier0
+    k8s_deployment: "pay-for-adoption"
+    k8s_label: "pay-for-adoption"
+    neptune_name: "payforadoption"
+    cloudwatch:
+      namespace: "AWS/ApplicationELB"
+      dimension_name: "TargetGroup"
+      dimension_value: "pay-for-adoption"
+    deepflow_app: "pay-for-adoption"
+
+  pethistory:
+    tier: Tier1
+    k8s_deployment: "pethistory-deployment"
+    k8s_label: "pethistory"
+    neptune_name: "pethistory"
+    aliases:
+      - "petadoptionshistory"
+      - "pethistory-service"
+    cloudwatch:
+      namespace: "AWS/ApplicationELB"
+      dimension_name: "TargetGroup"
+      dimension_value: "pethistory-service"
+    deepflow_app: "pethistory-deployment"
+
+  petstatusupdater:
+    tier: Tier2
+    type: lambda
+    lambda_name: "petstatusupdater"
+    neptune_name: "petstatusupdater"
+
+  petlistadoptions:
+    tier: Tier1
+    type: lambda
+    lambda_name: "petlistadoptions"
+    neptune_name: "petlistadoptions"
+    cloudwatch:
+      namespace: "AWS/ApplicationELB"
+      dimension_name: "TargetGroup"
+      dimension_value: "list-adoptions"
+
+# =====================================================
+# 3. AWS 资源映射
+#    消除 rca/collectors/aws_probers.py 硬编码
+# =====================================================
+aws_resources:
+  sqs_queues:
+    petsite: ["sqspetadoption", "petadoption"]
+    payforadoption: ["sqspetadoption"]
+
+  dynamodb_tables:
+    petsite: ["petadoption", "ddbpetadoption"]
+
+  lambda_functions:
+    petsite: ["petsite", "statusupdater", "StepFn"]
+    payforadoption: ["StepFn", "stepprice"]
+
+  s3_buckets:
+    incidents: "petsite-incidents"
+
+# =====================================================
+# 4. 应用配置（dr-plan-generator 使用）
+# =====================================================
+application:
+  domain: "petsite.example.com"
+  health_endpoint: "/health"
+  health_check_command: >
+    curl -sf https://{domain}{health_endpoint} | jq '.status'
+  alarm_prefix: "petsite"
+
+# =====================================================
+# 5. SSM 参数路径
+#    消除 step_builder、slack_notifier、action_executor 硬编码
+# =====================================================
+parameter_store:
+  prefix: "/petsite"
+  keys:
+    dynamodb_region: "/petsite/dynamodb-region"
+    slack_interact_url: "/petsite/slack/interact-url"
+    rca_rate_limit: "/petsite/rca/rate-limit/{service}"
+
+# =====================================================
+# 6. DNS 配置
+# =====================================================
+dns:
+  hosted_zone_id: "${ROUTE53_ZONE_ID}"
+  primary_record: "petsite.example.com"
+  ttl_normal: 300
+  ttl_pre_switchover: 60
+
+# =====================================================
+# 7. Kubernetes 配置
+# =====================================================
+kubernetes:
+  namespace: "petadoptions"
+  cluster_name: "${EKS_CLUSTER_NAME}"
+  context_source: "${K8S_CONTEXT_SOURCE}"
+  context_target: "${K8S_CONTEXT_TARGET}"
+
+# =====================================================
+# 8. Neptune 配置
+# =====================================================
+neptune:
+  endpoint: "${NEPTUNE_ENDPOINT}"
+  port: 8182
+  nl_query_examples:
+    - q: "petsite 依赖哪些数据库？"
+      cypher: >
+        MATCH (s:Microservice {name:'petsite'})-[:DependsOn]->(db)
+        WHERE db:RDSCluster OR db:DynamoDB
+        RETURN db.name AS database, labels(db)[0] AS type
+    - q: "payforadoption 的上游调用者有哪些？"
+      cypher: >
+        MATCH (caller)-[:Calls]->(s:Microservice {name:'payforadoption'})
+        RETURN caller.name AS caller, labels(caller)[0] AS type
+
+# =====================================================
+# 9. 监控配置
+# =====================================================
+monitoring:
+  cloudwatch_alarm_prefix: "petsite"
+  dashboard_name: "petsite-dashboard"
+
+# =====================================================
+# 10. Chaos 工程配置
+# =====================================================
+chaos:
+  rca_lambda_name: "petsite-rca-engine"
+  fis_stop_condition_prefix: "chaos-"
+  default_namespace: "petadoptions"
+  stop_condition_alarms:
+    - service: petstatusupdater
+      alarm_name: "chaos-petstatusupdater-sr-critical"
+      metric: "Errors"
+      namespace: "AWS/Lambda"
+      threshold: 5
+    - service: petlistadoptions
+      alarm_name: "chaos-petlistadoptions-sr-critical"
+      metric: "HTTPCode_Target_5XX_Count"
+      namespace: "AWS/ApplicationELB"
+      threshold: 10
