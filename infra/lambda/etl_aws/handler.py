@@ -557,6 +557,25 @@ def run_etl():
     except Exception as e:
         logger.warning(f"Step 8b-post Microservice.ip overwrite failed (non-fatal): {e}")
 
+    # ── Step 8a: Namespace nodes ────────────────────────────────────────────
+    ns_vid_map = {}
+    try:
+        seen_ns = {pod.get('namespace', 'default') for pod in eks_pods}
+        seen_ns.update({'default', 'petadoptions', 'awesomeshop'})
+        for ns_name in sorted(seen_ns):
+            ns_vid = upsert_vertex('Namespace', ns_name, {
+                'cluster': EKS_CLUSTER_NAME,
+            }, 'eks-etl')
+            ns_vid_map[ns_name] = ns_vid
+            stats['vertices'] += 1
+            if ns_vid and cluster_vid:
+                upsert_edge(ns_vid, cluster_vid, 'BelongsTo', {'source': 'eks-etl'})
+                stats['edges'] += 1
+        logger.info(f"Step 8a: {len(ns_vid_map)} Namespace nodes done")
+    except Exception as e:
+        logger.warning(f"Step 8a Namespace failed (non-fatal): {e}")
+
+
     # ── Step 8c: VPCs ────────────────────────────────────────────────────────
     try:
         vpcs = collect_vpcs(ec2_client)
@@ -738,7 +757,8 @@ def run_etl():
             p_vid   = pod_vid_map.get(pod['name'])
             if p_vid and svc_vid:
                 upsert_edge(p_vid, svc_vid, 'BelongsTo', {'source': 'eks-etl'})
-                stats['edges'] += 1
+                upsert_edge(svc_vid, p_vid, 'Routes', {'source': 'eks-etl'})
+                stats['edges'] += 2
 
         logger.info(f"T11: {len(k8s_svcs)} K8sService nodes + edges done")
     except Exception as e:
