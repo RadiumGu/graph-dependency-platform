@@ -82,6 +82,8 @@ services:
 #    消除 rca/collectors/aws_probers.py 硬编码
 # =====================================================
 aws_resources:
+  primary_region: "ap-northeast-1"
+
   sqs_queues:
     petsite: ["sqspetadoption", "petadoption"]
     payforadoption: ["sqspetadoption"]

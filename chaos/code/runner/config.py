@@ -20,11 +20,21 @@ ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "926093770964")
 
 # ─── Neptune ──────────────────────────────────────────────────────────────────
 
-NEPTUNE_HOST     = os.environ.get(
-    "NEPTUNE_HOST",
-    "petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com",
-)
-NEPTUNE_PORT     = int(os.environ.get("NEPTUNE_PORT", "8182"))
+# 从 profile 读 Neptune 默认配置，环境变量可 override
+try:
+    from profiles.profile_loader import EnvironmentProfile
+    _p = EnvironmentProfile()
+    _DEFAULT_NEPTUNE_HOST = _p.get(
+        "neptune.endpoint",
+        "petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com",
+    )
+    _DEFAULT_NEPTUNE_PORT = str(_p.get("neptune.port", 8182))
+except Exception:
+    _DEFAULT_NEPTUNE_HOST = "petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com"
+    _DEFAULT_NEPTUNE_PORT = "8182"
+
+NEPTUNE_HOST     = os.environ.get("NEPTUNE_HOST", _DEFAULT_NEPTUNE_HOST)
+NEPTUNE_PORT     = int(os.environ.get("NEPTUNE_PORT", _DEFAULT_NEPTUNE_PORT))
 NEPTUNE_ENDPOINT = f"https://{NEPTUNE_HOST}:{NEPTUNE_PORT}"
 
 # ─── FIS ──────────────────────────────────────────────────────────────────────

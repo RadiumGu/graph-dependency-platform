@@ -14,6 +14,12 @@ import signal
 import sys
 import os
 
+_PROJECT_ROOT = os.path.join(os.path.dirname(__file__), '..', '..')
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, os.path.abspath(_PROJECT_ROOT))
+
+from shared import get_region
+
 # 确保 code/ 在 path 上
 sys.path.insert(0, os.path.dirname(__file__))
 # 忽略 SIGPIPE：父进程（Slack agent/shell）关闭管道时，进程继续运行完成实验并写 DynamoDB
@@ -85,7 +91,7 @@ def cmd_history(args):
     import boto3, json
     from datetime import datetime, timezone, timedelta
 
-    ddb = boto3.client("dynamodb", region_name="ap-northeast-1")
+    ddb = boto3.client("dynamodb", region_name=get_region())
     try:
         resp = ddb.query(
             TableName="chaos-experiments",

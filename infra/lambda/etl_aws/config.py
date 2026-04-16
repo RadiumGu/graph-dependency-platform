@@ -70,25 +70,26 @@ EC2_RECOVERY_PRIORITY: dict          = _bc.get('ec2_recovery_priority', {})
 K8S_SERVICE_ALIAS: dict              = _bc.get('k8s_service_alias', {})
 BUSINESS_CAPABILITIES: list          = _bc.get('business_capabilities', [])
 MICROSERVICE_INFRA_DEPS: dict        = _bc.get('microservice_infra_deps', {})
-# 服务 namespace 映射：优先从 business_config 读，fallback 从 service_mappings.json
+# 服务 namespace 映射：从 service_mappings.json 加载（必须存在）
+# 部署前必须运行：python3 scripts/generate_service_mappings.py
 _sm_path = os.path.join(os.path.dirname(__file__), 'service_mappings.json')
-_sm_ns = {}
-if os.path.exists(_sm_path):
-    with open(_sm_path, encoding='utf-8') as _smf:
-        _sm_data = json.load(_smf)
-        _sm_ns_val = _sm_data.get('namespace', 'petadoptions')
-        # 为 tier_map 中所有服务生成 namespace 映射
-        for _sn in _sm_data.get('tier_map', {}):
-            _sm_ns[_sn] = _sm_ns_val
-MICROSERVICE_NAMESPACE: dict         = _bc.get('microservice_namespace', _sm_ns or {
-    'petsite': 'petadoptions', 'payforadoption': 'petadoptions',
-    'petlistadoptions': 'petadoptions', 'petsearch': 'petadoptions',
-    'pethistory': 'petadoptions', 'petstatusupdater': 'petadoptions',
-    'trafficgenerator': 'petadoptions',
+if not os.path.exists(_sm_path):
+    raise RuntimeError(
+        f"service_mappings.json not found at {_sm_path}. "
+        "Run 'python3 scripts/generate_service_mappings.py' before CDK deploy."
+    )
+with open(_sm_path, encoding='utf-8') as _smf:
+    _sm_data = json.load(_smf)
+_sm_ns_val = _sm_data['namespace']
+# 为 tier_map 中所有服务生成 namespace 映射
+_sm_ns = {_sn: _sm_ns_val for _sn in _sm_data['tier_map']}
+# awesomeshop 服务仍保留硬编码（不在 profile 中）
+_sm_ns.update({
     'auth-service': 'awesomeshop', 'gateway-service': 'awesomeshop',
     'order-service': 'awesomeshop', 'points-service': 'awesomeshop',
     'product-service': 'awesomeshop', 'frontend': 'awesomeshop',
 })
+MICROSERVICE_NAMESPACE: dict         = _bc.get('microservice_namespace', _sm_ns)
 SERVICE_DB_MAPPING: list             = _bc.get('service_db_mapping', [])
 TG_APP_LABEL_STATIC: dict            = _bc.get('tg_app_label_static', {})
 INFRA_DRIFT_RULES: dict              = _bc.get('infra_drift_rules', {})

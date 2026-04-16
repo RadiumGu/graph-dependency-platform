@@ -3,8 +3,16 @@ dynamodb_setup.py - chaos-experiments 表建表脚本（一次性执行）
 """
 import boto3
 import json
+import os
+import sys
 
-REGION = "ap-northeast-1"
+_PROJECT_ROOT = os.path.join(os.path.dirname(__file__), '..', '..', '..')
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, os.path.abspath(_PROJECT_ROOT))
+
+from shared import get_region
+
+REGION = get_region()
 TABLE  = "chaos-experiments"
 
 

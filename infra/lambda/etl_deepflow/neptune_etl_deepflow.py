@@ -53,24 +53,17 @@ ENVIRONMENT = os.environ.get('ENVIRONMENT', 'prod')
 INCLUDED_NAMESPACES = {'default', 'awesomeshop'}
 
 # ===== 服务映射（从 service_mappings.json 加载，由 profiles/petsite.yaml 生成） =====
+# 部署前必须运行：python3 scripts/generate_service_mappings.py
 _MAPPINGS_PATH = os.path.join(os.path.dirname(__file__), 'service_mappings.json')
-if os.path.exists(_MAPPINGS_PATH):
-    with open(_MAPPINGS_PATH, encoding='utf-8') as _f:
-        _MAPPINGS = json.loads(_f.read())
-    MICROSERVICE_RECOVERY_PRIORITY = _MAPPINGS.get('tier_map', {})
-    K8S_SERVICE_ALIAS = _MAPPINGS.get('k8s_alias', {})
-else:
-    # Fallback 硬编码（仅在 JSON 未生成时使用）
-    MICROSERVICE_RECOVERY_PRIORITY = {
-        'petsite': 'Tier0', 'petsearch': 'Tier0', 'payforadoption': 'Tier0',
-        'petlistadoptions': 'Tier1', 'pethistory': 'Tier1', 'petstatusupdater': 'Tier1',
-        'trafficgenerator': 'Tier2',
-    }
-    K8S_SERVICE_ALIAS = {
-        'pay-for-adoption': 'payforadoption', 'list-adoptions': 'petlistadoptions',
-        'search-service': 'petsearch', 'pethistory': 'pethistory',
-        'traffic-generator': 'trafficgenerator',
-    }
+if not os.path.exists(_MAPPINGS_PATH):
+    raise RuntimeError(
+        f"service_mappings.json not found at {_MAPPINGS_PATH}. "
+        "Run 'python3 scripts/generate_service_mappings.py' before CDK deploy."
+    )
+with open(_MAPPINGS_PATH, encoding='utf-8') as _f:
+    _MAPPINGS = json.loads(_f.read())
+MICROSERVICE_RECOVERY_PRIORITY = _MAPPINGS['tier_map']
+K8S_SERVICE_ALIAS = _MAPPINGS['k8s_alias']
 
 
 def get_aws_session():
