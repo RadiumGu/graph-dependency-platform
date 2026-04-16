@@ -49,7 +49,7 @@ EKS_CLUSTER_ARN = os.environ.get('EKS_CLUSTER_ARN',
 BATCH_SIZE = int(os.environ.get('BATCH_SIZE', '20'))
 ENVIRONMENT = os.environ.get('ENVIRONMENT', 'prod')
 
-# 只采集这些 namespace 的 pod（PetSite 业务 namespace）
+# 只采集这些 namespace 的 pod（从 service_mappings.json 读 + 默认 namespace）
 # deepflow、kube-system 等监控/基础设施 namespace 不纳入图，避免形成孤立分量
 INCLUDED_NAMESPACES = {'default', 'awesomeshop'}
 
@@ -66,6 +66,10 @@ with open(_MAPPINGS_PATH, encoding='utf-8') as _f:
 MICROSERVICE_RECOVERY_PRIORITY = _MAPPINGS['tier_map']
 K8S_SERVICE_ALIAS = _MAPPINGS['k8s_alias']
 SERVICE_TYPES = _MAPPINGS.get('service_types', {})
+# 从 profile 读主业务 namespace，并并入 INCLUDED_NAMESPACES
+_primary_ns = _MAPPINGS.get('namespace', 'default')
+if _primary_ns:
+    INCLUDED_NAMESPACES.add(_primary_ns)
 
 
 def get_aws_session():
