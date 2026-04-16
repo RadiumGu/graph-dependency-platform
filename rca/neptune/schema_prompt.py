@@ -20,8 +20,9 @@ GRAPH_SCHEMA = """
 - EKSCluster: name(str), version(str)
 - Namespace: name(str), cluster(str)
 - Pod: name(str), status(str), node_name(str), namespace(str), ip(str), restarts(int)
-- Microservice: name(str), recovery_priority(Tier0|Tier1|Tier2), fault_boundary(region|az), az(str), replica_count(int), role(str), port(int), service_type(k8s|lambda)
+- Microservice: name(str), recovery_priority(Tier0|Tier1|Tier2), fault_boundary(region|az|global), az(str), replica_count(int), role(str), port(int), service_type(k8s|lambda)
   - 注：service_type='lambda' 的服务（如 petstatusupdater）fault_boundary='region'，由 AWS 自动跨 AZ 管理，没有 az 和 replica_count 属性。这是正常情况，不是状态异常。K8s 服务 fault_boundary='az'，查询副本需要按 AZ 分组。
+  - fault_boundary 语义：'az' 表示 AZ 级服务（EC2/K8s Pod/EBS）；'region' 表示 Region 级服务（Lambda/DynamoDB/S3/SQS/SNS/API Gateway）；'global' 表示 Global 服务（IAM/Route53/CloudFront）。
 - K8sService: name(str), namespace(str), svc_type(str), cluster_ip(str), app_label(str)
 - Deployment: name(str), namespace(str), replicas(int), ready_replicas(int), strategy(str), app_label(str)
 - HPA: name(str), namespace(str), min_replicas(int), max_replicas(int), current_replicas(int), target_kind(str), target_name(str)

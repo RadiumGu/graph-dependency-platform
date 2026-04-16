@@ -1100,10 +1100,14 @@ def run_etl():
             for svc_name in MICROSERVICE_RECOVERY_PRIORITY.keys():
                 if svc_name in ('trafficgenerator',):
                     continue
+                # 按 service_type 选择正确的 fault_boundary
+                _svc_type = _sm_data.get('service_types', {}).get(svc_name, 'k8s')
                 svc_vid = upsert_vertex('Microservice', svc_name, {
                     'namespace': 'default', 'source': 'business-layer',
-                    'fault_boundary': 'az', 'region': REGION,
+                    'fault_boundary': 'region' if _svc_type == 'lambda' else 'az',
+                    'region': REGION,
                     'recovery_priority': MICROSERVICE_RECOVERY_PRIORITY.get(svc_name, 'Tier2'),
+                    'service_type': _svc_type,
                 }, 'manual')
                 if svc_vid:
                     upsert_edge(svc_vid, eks_vid, 'LocatedIn', {

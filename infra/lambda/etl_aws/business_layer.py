@@ -12,7 +12,7 @@ from neptune_client import (
 )
 from config import (
     BUSINESS_CAPABILITIES, MICROSERVICE_RECOVERY_PRIORITY,
-    MICROSERVICE_NAMESPACE,
+    MICROSERVICE_NAMESPACE, SERVICE_TYPES,
     K8S_SERVICE_ALIAS, EKS_CLUSTER_NAME, REGION,
 )
 
@@ -94,12 +94,14 @@ def upsert_business_capabilities() -> dict:
         for svc_name in cap.get('serves_services', []):
             sn = safe_str(svc_name)
             svc_priority = MICROSERVICE_RECOVERY_PRIORITY.get(svc_name, cap.get('recovery_priority', 'Tier2'))
+            _svc_type = SERVICE_TYPES.get(svc_name, 'k8s')
             svc_vid = upsert_vertex('Microservice', sn, {
                 'namespace': MICROSERVICE_NAMESPACE.get(svc_name, 'default'),
                 'source': 'business-layer',
-                'fault_boundary': 'az',
+                'fault_boundary': 'region' if _svc_type == 'lambda' else 'az',
                 'region': REGION,
                 'recovery_priority': svc_priority,
+                'service_type': _svc_type,
                 'log_source': f"cwlogs:///aws/containerinsights/{EKS_CLUSTER_NAME}/application?filter={sn}",
             }, 'manual')
             if not svc_vid:

@@ -17,23 +17,43 @@ ENVIRONMENT = os.environ.get('ENVIRONMENT', 'prod')
 
 # ===== AWS 服务故障边界（Fault Boundary）=====
 FAULT_BOUNDARY_MAP = {
-    'EC2Instance':      ('az',     None),
-    'RDSInstance':      ('az',     None),
-    'Subnet':           ('az',     None),
-    'AvailabilityZone': ('az',     None),
-    'LambdaFunction':   ('region', REGION),
-    'EKSCluster':       ('region', REGION),
-    'LoadBalancer':     ('region', REGION),
-    'DynamoDBTable':    ('region', REGION),
-    'SQSQueue':         ('region', REGION),
-    'SNSTopic':         ('region', REGION),
-    'S3Bucket':         ('region', REGION),
-    'ECRRepository':    ('region', REGION),
-    'StepFunction':     ('region', REGION),
-    'RDSCluster':       ('region', REGION),
-    'NeptuneCluster':   ('region', REGION),
-    'NeptuneInstance':  ('az',     None),
-    'Region':           ('region', REGION),
+    # ----- AZ 级（绑定单 AZ，跨 AZ 需自己做容灾）-----
+    'EC2Instance':            ('az',     None),
+    'RDSInstance':            ('az',     None),
+    'Subnet':                 ('az',     None),
+    'AvailabilityZone':       ('az',     None),
+    'NeptuneInstance':        ('az',     None),
+    'ElastiCacheNode':        ('az',     None),
+    'NATGateway':             ('az',     None),
+    'EBSVolume':              ('az',     None),
+    # ----- Region 级（AWS 自动跨 AZ 容灾）-----
+    'LambdaFunction':         ('region', REGION),
+    'EKSCluster':             ('region', REGION),
+    'LoadBalancer':           ('region', REGION),
+    'TargetGroup':            ('region', REGION),
+    'DynamoDBTable':          ('region', REGION),
+    'SQSQueue':               ('region', REGION),
+    'SNSTopic':               ('region', REGION),
+    'S3Bucket':               ('region', REGION),
+    'ECRRepository':          ('region', REGION),
+    'StepFunction':           ('region', REGION),
+    'RDSCluster':             ('region', REGION),
+    'NeptuneCluster':         ('region', REGION),
+    'Region':                 ('region', REGION),
+    'APIGateway':             ('region', REGION),
+    'ElastiCacheCluster':     ('region', REGION),
+    'EventBridgeBus':         ('region', REGION),
+    'KMSKey':                 ('region', REGION),
+    'SecretsManagerSecret':   ('region', REGION),
+    'SSMParameter':           ('region', REGION),
+    'ECSCluster':             ('region', REGION),
+    # ----- Global 级（跨 Region，Region 故障不影响）-----
+    'Route53HostedZone':      ('global', None),
+    'CloudFrontDistribution': ('global', None),
+    'IAMRole':                ('global', None),
+    'IAMPolicy':              ('global', None),
+    'IAMUser':                ('global', None),
+    'WAFWebACL':              ('global', None),  # WAF CloudFront scope; regional WAF 例外
 }
 
 # ===== 采集过滤規則（infrastructure-level, not business-specific）=====
@@ -90,6 +110,7 @@ _sm_ns.update({
     'product-service': 'awesomeshop', 'frontend': 'awesomeshop',
 })
 MICROSERVICE_NAMESPACE: dict         = _bc.get('microservice_namespace', _sm_ns)
+SERVICE_TYPES: dict                  = _sm_data.get('service_types', {})
 SERVICE_DB_MAPPING: list             = _bc.get('service_db_mapping', [])
 TG_APP_LABEL_STATIC: dict            = _bc.get('tg_app_label_static', {})
 INFRA_DRIFT_RULES: dict              = _bc.get('infra_drift_rules', {})
