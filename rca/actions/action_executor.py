@@ -28,7 +28,7 @@ AUDIT_LOG_GROUP = '/rca/audit'
 RATE_LIMIT_WINDOW = 1800  # 30分钟
 RATE_LIMIT_MAX = 3        # 最多3次
 
-from config import NEPTUNE_TO_DEPLOYMENT as SVC_TO_DEPLOYMENT
+from config import NEPTUNE_TO_DEPLOYMENT as SVC_TO_DEPLOYMENT, profile as _profile
 
 
 _k8s_apps_v1 = None
@@ -61,7 +61,8 @@ def _check_rate_limit(service: str) -> bool:
     返回 True = 允许执行，False = 超限
     """
     ssm = boto3.client('ssm', region_name=REGION)
-    param_name = f'/petsite/rca/rate-limit/{service}'
+    param_template = _profile.get('parameter_store.keys.rca_rate_limit', '/petsite/rca/rate-limit/{service}')
+    param_name = param_template.format(service=service)
     now = int(time.time())
     
     try:

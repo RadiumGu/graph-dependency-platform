@@ -30,9 +30,22 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 from textwrap import dedent
+
+# 确保项目根目录在 sys.path 中
+_PROJECT_ROOT = str(Path(__file__).resolve().parent.parent.parent)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from profiles.profile_loader import EnvironmentProfile
+from shared.service_registry import ServiceRegistry
+
+_profile = EnvironmentProfile()
+_registry = ServiceRegistry(_profile.get("services", {}))
+_K8S_NAMESPACE = _profile.get("chaos.default_namespace", _profile.k8s_namespace)
 
 # ─── 常量 ────────────────────────────────────────────────────────────────────
 
@@ -40,27 +53,15 @@ TODAY = datetime.now().strftime("%Y-%m-%d")
 BASE_DIR = Path(__file__).parent
 EXPERIMENTS_FIS = BASE_DIR / "experiments" / "fis"
 
-# 服务 → K8s label selector 映射
-SERVICE_SELECTOR = {
-    "petsite":          "app=petsite",
-    "petsearch":        "app=petsearch",
-    "pethistory":       "app=pethistory",
-    "payforadoption":   "app=pay-for-adoption",
-    "petlistadoptions": "app=petlistadoptions",
-    "petstatusupdater": "app=petstatusupdater",
-    "petfooddisp":      "app=petfooddisp",
-}
+# 服务 → K8s label selector 映射（从 profile 派生）
+SERVICE_SELECTOR = {}
+for _name, _cfg in _profile.get("services", {}).items():
+    k8s_label = _cfg.get("k8s_label", _cfg.get("k8s_deployment", _name))
+    SERVICE_SELECTOR[_name] = f"app={k8s_label}"
 
-# 服务 → Tier
-SERVICE_TIER = {
-    "petsite":          "Tier0",
-    "petsearch":        "Tier0",
-    "payforadoption":   "Tier0",
-    "pethistory":       "Tier1",
-    "petlistadoptions": "Tier1",
-    "petstatusupdater": "Tier1",
-    "petfooddisp":      "Tier1",
-}
+# 服务 → Tier（从 profile 派生）
+SERVICE_TIER = {_name: _cfg.get("tier", "Tier2")
+                for _name, _cfg in _profile.get("services", {}).items()}
 
 # 服务 → Lambda 函数名关键词（仅 Lambda 类）
 SERVICE_LAMBDA = {
@@ -78,7 +79,7 @@ EKS_POD_FAULTS = [
         "comment_tmpl": "# FIS Pod Action：Pod Delete（{service}）\n# 与 ChaosMesh pod-kill 对照：FIS 原生 Pod Delete，通过 K8s API 删除\n# 验证 FIS agent 路径 vs ChaosMesh 路径的行为差异",
         "extra_params_tmpl": lambda svc: {
             "cluster_name": "PetSite",
-            "namespace": "petadoptions",
+            "namespace": _K8S_NAMESPACE,
             "selector_type": "labelSelector",
             "selector_value": SERVICE_SELECTOR[svc],
             "kubernetes_service_account": "fis-service-account",
@@ -96,7 +97,7 @@ EKS_POD_FAULTS = [
         "comment_tmpl": "# FIS Pod Action：Network Latency（{service}）\n# 注入 500ms 延迟，验证上游超时和重试",
         "extra_params_tmpl": lambda svc: {
             "cluster_name": "PetSite",
-            "namespace": "petadoptions",
+            "namespace": _K8S_NAMESPACE,
             "selector_type": "labelSelector",
             "selector_value": SERVICE_SELECTOR[svc],
             "delay_ms": 500,
@@ -116,7 +117,7 @@ EKS_POD_FAULTS = [
         "comment_tmpl": "# FIS Pod Action：Network Packet Loss（{service}）\n# 30% 丢包，验证重试逻辑",
         "extra_params_tmpl": lambda svc: {
             "cluster_name": "PetSite",
-            "namespace": "petadoptions",
+            "namespace": _K8S_NAMESPACE,
             "selector_type": "labelSelector",
             "selector_value": SERVICE_SELECTOR[svc],
             "loss_percent": 30,
@@ -135,7 +136,7 @@ EKS_POD_FAULTS = [
         "comment_tmpl": "# FIS Pod Action：CPU Stress（{service}）\n# CPU 压力测试，验证节流和延迟",
         "extra_params_tmpl": lambda svc: {
             "cluster_name": "PetSite",
-            "namespace": "petadoptions",
+            "namespace": _K8S_NAMESPACE,
             "selector_type": "labelSelector",
             "selector_value": SERVICE_SELECTOR[svc],
             "workers": 2,
@@ -155,7 +156,7 @@ EKS_POD_FAULTS = [
         "comment_tmpl": "# FIS Pod Action：Memory Stress（{service}）\n# 内存压力，验证 OOM 行为",
         "extra_params_tmpl": lambda svc: {
             "cluster_name": "PetSite",
-            "namespace": "petadoptions",
+            "namespace": _K8S_NAMESPACE,
             "selector_type": "labelSelector",
             "selector_value": SERVICE_SELECTOR[svc],
             "workers": 1,
@@ -175,7 +176,7 @@ EKS_POD_FAULTS = [
         "comment_tmpl": "# FIS Pod Action：IO Stress（{service}）\n# 磁盘 IO 压力，验证写路径降级",
         "extra_params_tmpl": lambda svc: {
             "cluster_name": "PetSite",
-            "namespace": "petadoptions",
+            "namespace": _K8S_NAMESPACE,
             "selector_type": "labelSelector",
             "selector_value": SERVICE_SELECTOR[svc],
             "workers": 1,
@@ -195,7 +196,7 @@ EKS_POD_FAULTS = [
         "comment_tmpl": "# FIS Pod Action：Network Blackhole Port（{service} 8080）\n# 完全丢弃指定端口的流量（比丢包更极端 — 100% 黑洞）\n# 验证：上游服务的超时处理 + 熔断器行为",
         "extra_params_tmpl": lambda svc: {
             "cluster_name": "PetSite",
-            "namespace": "petadoptions",
+            "namespace": _K8S_NAMESPACE,
             "selector_type": "labelSelector",
             "selector_value": SERVICE_SELECTOR[svc],
             "traffic_type": "ingress",

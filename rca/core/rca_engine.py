@@ -17,7 +17,7 @@ REGION = os.environ.get('REGION', 'ap-northeast-1')
 CH_HOST = os.environ.get('CLICKHOUSE_HOST', '')
 CH_PORT = int(os.environ.get('CLICKHOUSE_PORT', '8123'))
 
-from config import CANONICAL as DEPLOYMENT_TO_SVC
+from config import CANONICAL as DEPLOYMENT_TO_SVC, NEPTUNE_TO_DEPLOYMENT
 
 def _ch_query(sql: str) -> list:
     """执行 ClickHouse 查询，返回行列表"""
@@ -39,14 +39,8 @@ def step1_deepflow_errors(affected_service: str, window_minutes: int = 30) -> li
     Step 1: 查 DeepFlow，找故障窗口内出现 5xx 的服务及最早时间
     返回: [{'service': ..., 'first_error': ..., 'error_count': ..., 'error_rate': ...}]
     """
-    # 服务名 → request_domain 前缀映射
-    svc_domain_map = {
-        'petsite':            'service-petsite',
-        'petsearch':          'search-service',
-        'payforadoption':     'pay-for-adoption',
-        'petlistadoptions':   'list-adoptions',
-        'petadoptionshistory': 'pethistory-service',
-    }
+    # 服务名 → request_domain 前缀映射（从 config 派生）
+    svc_domain_map = {v: k for k, v in NEPTUNE_TO_DEPLOYMENT.items()}
     
     sql = f"""
 SELECT 

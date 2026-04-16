@@ -144,8 +144,8 @@ neptune:
   nl_query_examples:
     - q: "petsite 依赖哪些数据库？"
       cypher: >
-        MATCH (s:Microservice {name:'petsite'})-[:DependsOn]->(db)
-        WHERE db:RDSCluster OR db:DynamoDB
+        MATCH (s:Microservice {name:'petsite'})-[:AccessesData]->(db)
+        WHERE db:RDSCluster OR db:DynamoDBTable
         RETURN db.name AS database, labels(db)[0] AS type
     - q: "payforadoption 的上游调用者有哪些？"
       cypher: >

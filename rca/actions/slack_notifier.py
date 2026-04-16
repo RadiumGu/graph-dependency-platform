@@ -7,6 +7,8 @@ slack_notifier.py - Slack 通知（Phase 2）
 import os, json, logging
 import urllib3
 
+from config import profile as _profile
+
 logger = logging.getLogger(__name__)
 http = urllib3.PoolManager()
 
@@ -121,7 +123,7 @@ def _get_interact_url():
     try:
         import boto3
         ssm = boto3.client('ssm', region_name=os.environ.get('REGION','ap-northeast-1'))
-        resp = ssm.get_parameter(Name='/petsite/slack/interact-url')
+        resp = ssm.get_parameter(Name=_profile.get('parameter_store.keys.slack_interact_url', '/petsite/slack/interact-url'))
         return resp['Parameter']['Value']
     except Exception:
         return ''

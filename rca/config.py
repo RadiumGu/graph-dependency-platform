@@ -1,45 +1,53 @@
 """
 config.py - 全局服务名规范映射
 
-K8s Deployment 名（DeepFlow request_domain 前缀）与 Neptune 服务名之间的
-唯一权威映射表。rca_engine.py 和 action_executor.py 均从此处导入，
-不再各自维护独立的映射字典。
-
-数据源说明：
-  - CANONICAL 是主映射（deployment → neptune_name）
-  - 少数 deployment 名存在别名（如 pethistory 有两个 deployment 名映射到同一服务），
-    在 CANONICAL 中均列出。
-  - NEPTUNE_TO_DEPLOYMENT 是反向映射（neptune_name → 首选 deployment 名），
-    自动从 CANONICAL 派生，以首次出现的 entry 为准。
+从 profiles/petsite.yaml 的 services 段加载，不再手工维护硬编码映射。
+所有模块统一从此处导入 CANONICAL / NEPTUNE_TO_DEPLOYMENT / NEPTUNE_TO_K8S_LABEL。
 """
 
-# K8s Deployment 名 / DeepFlow 服务前缀  →  Neptune 服务名
-CANONICAL: dict[str, str] = {
-    'petsite-deployment':    'petsite',
-    'service-petsite':       'petsite',
-    'search-service':        'petsearch',
-    'pay-for-adoption':      'payforadoption',
-    'list-adoptions':        'petlistadoptions',
-    'pethistory-deployment': 'petadoptionshistory',
-    'pethistory-service':    'petadoptionshistory',
-    'petfood':               'petfood',
-    'traffic-generator':     'trafficgenerator',
-}
+import os
+import sys
 
-# Neptune 服务名  →  首选 K8s Deployment 名（取 CANONICAL 中每个 neptune_name 的第一条）
+# 确保项目根目录在 sys.path 中（供 profiles/ 和 shared/ import 使用）
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
+from profiles.profile_loader import EnvironmentProfile
+from shared.service_registry import ServiceRegistry
+
+# 加载 profile 和 registry
+_profile = EnvironmentProfile()
+_registry = ServiceRegistry(_profile.get("services", {}))
+
+# ─── 派生映射（保持向后兼容的 dict 接口）─────────────────────────
+
+# K8s Deployment 名 / DeepFlow 服务前缀  →  Neptune 服务名
+CANONICAL: dict[str, str] = {}
+for _name, _cfg in _profile.get("services", {}).items():
+    neptune = _cfg.get("neptune_name", _name)
+    k8s_dep = _cfg.get("k8s_deployment", _name)
+    CANONICAL[k8s_dep] = neptune
+    # 加入 k8s_label 作为额外别名（如 service-petsite → petsite）
+    if "k8s_label" in _cfg and _cfg["k8s_label"] != k8s_dep:
+        CANONICAL[_cfg["k8s_label"]] = neptune
+    # 加入 aliases
+    for alias in _cfg.get("aliases", []):
+        CANONICAL[alias] = neptune
+
+# Neptune 服务名  →  首选 K8s Deployment 名
 NEPTUNE_TO_DEPLOYMENT: dict[str, str] = {}
 for _dep, _svc in CANONICAL.items():
     if _svc not in NEPTUNE_TO_DEPLOYMENT:
         NEPTUNE_TO_DEPLOYMENT[_svc] = _dep
 
-# Neptune 服务名  →  K8s Pod app label（用于 kubectl / K8s API 查询）
-# 大部分情况下和 deployment 名一致，少数需要特殊映射
-NEPTUNE_TO_K8S_LABEL: dict[str, str] = {
-    'petsite':              'petsite',
-    'petsearch':            'search-service',
-    'payforadoption':       'pay-for-adoption',
-    'petlistadoptions':     'list-adoptions',
-    'petadoptionshistory':  'pethistory',
-    'petfood':              'petfood',
-    'trafficgenerator':     'traffic-generator',
-}
+# Neptune 服务名  →  K8s Pod app label
+NEPTUNE_TO_K8S_LABEL: dict[str, str] = {}
+for _name, _cfg in _profile.get("services", {}).items():
+    neptune = _cfg.get("neptune_name", _name)
+    k8s_label = _cfg.get("k8s_label", _cfg.get("k8s_deployment", _name))
+    NEPTUNE_TO_K8S_LABEL[neptune] = k8s_label
+
+# 导出 registry 和 profile 供其他模块直接使用
+registry = _registry
+profile = _profile
