@@ -34,7 +34,7 @@ from collectors.ec2 import (
 from collectors.eks import (
     collect_eks_cluster, collect_eks_nodegroup_instances,
     collect_k8s_services, get_pod_ip_to_app_label, collect_eks_pods,
-    collect_k8s_deployments,
+    collect_k8s_deployments, collect_k8s_hpas,
     _K8S_SVC_ALIAS,
 )
 from collectors.alb import (
@@ -580,6 +580,30 @@ def run_etl():
     except Exception as e:
         logger.warning(f"Step 8a Namespace failed (non-fatal): {e}")
 
+    # ── Step 8a-post: Microservice → Namespace (OwnedBy) ────────────────────
+    try:
+        if ns_vid_map:
+            ms_rows = neptune_query(
+                "g.V().hasLabel('Microservice').project('vid','ns').by(id).by(values('namespace'))"
+            ).get('result', {}).get('data', {}).get('@value', [])
+            owned_count = 0
+            for row in ms_rows:
+                vals = row.get('@value', []) if isinstance(row, dict) else []
+                if len(vals) >= 4:
+                    ms_vid_raw = vals[1]
+                    ms_ns_raw  = vals[3]
+                    ms_vid_str = ms_vid_raw.get('@value', ms_vid_raw) if isinstance(ms_vid_raw, dict) else str(ms_vid_raw)
+                    ms_ns_str  = ms_ns_raw.get('@value', ms_ns_raw) if isinstance(ms_ns_raw, dict) else str(ms_ns_raw)
+                    ns_vid = ns_vid_map.get(ms_ns_str)
+                    if ns_vid and ms_vid_str:
+                        upsert_edge(str(ms_vid_str), str(ns_vid), 'OwnedBy', {'source': 'eks-etl'})
+                        owned_count += 1
+                        stats['edges'] += 1
+            logger.info(f"Step 8a-post: {owned_count} Microservice→Namespace OwnedBy edges")
+    except Exception as e:
+        logger.warning(f"Step 8a-post OwnedBy failed (non-fatal): {e}")
+
+
 
     # ── Step 8c: VPCs ────────────────────────────────────────────────────────
     try:
@@ -818,6 +842,33 @@ def run_etl():
         logger.info(f"T8f: {len(k8s_deploys)} Deployment nodes + Manages edges done")
     except Exception as e:
         logger.warning(f"T8f Deployment step failed (non-fatal): {e}")
+
+    # ── Step 8g: HPA nodes ───────────────────────────────────────────────────
+    try:
+        k8s_hpas = collect_k8s_hpas(eks_client)
+        for hpa in k8s_hpas:
+            hpa_vid = upsert_vertex('HPA', hpa['name'], {
+                'namespace':        hpa['namespace'],
+                'min_replicas':     hpa['min_replicas'],
+                'max_replicas':     hpa['max_replicas'],
+                'current_replicas': hpa['current_replicas'],
+                'desired_replicas': hpa['desired_replicas'],
+                'target_kind':      hpa['target_kind'],
+                'target_name':      hpa['target_name'],
+            }, 'eks-etl')
+            stats['vertices'] += 1
+
+            # HPA → Deployment (Manages)
+            if hpa['target_kind'] == 'Deployment':
+                dep_vid = deploy_vid_map.get(hpa['target_name'])
+                if dep_vid and hpa_vid:
+                    upsert_edge(hpa_vid, dep_vid, 'Manages', {'source': 'eks-etl'})
+                    stats['edges'] += 1
+
+        logger.info(f"T8g: {len(k8s_hpas)} HPA nodes done")
+    except Exception as e:
+        logger.warning(f"T8g HPA step failed (non-fatal): {e}")
+
 
 
     # ── Step 9: SQS ───────────────────────────────────────────────────────────

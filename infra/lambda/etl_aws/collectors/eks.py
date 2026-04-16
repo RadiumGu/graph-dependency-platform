@@ -285,3 +285,48 @@ def collect_k8s_deployments(eks_client) -> list:
     except Exception as e:
         logger.warning(f"collect_k8s_deployments: {e}")
         return []
+
+
+def collect_k8s_hpas(eks_client) -> list:
+    """Collect K8s HorizontalPodAutoscalers from all namespaces."""
+    try:
+        token = _get_eks_token()
+        if not token:
+            return []
+        cluster_info = eks_client.describe_cluster(name=EKS_CLUSTER_NAME)['cluster']
+        endpoint = cluster_info['endpoint']
+        ctx = _ssl_ctx_no_verify()
+        api_req = _ureq.Request(
+            f'{endpoint}/apis/autoscaling/v2/horizontalpodautoscalers',
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        with _ureq.urlopen(api_req, context=ctx, timeout=10) as resp:
+            data = _json.loads(resp.read())
+
+        SKIP_NS = {'kube-system', 'kube-public', 'kube-node-lease',
+                   'amazon-cloudwatch', 'amazon-guardduty', 'cert-manager',
+                   'chaos-mesh', 'deepflow'}
+        hpas = []
+        for h in data.get('items', []):
+            meta = h['metadata']
+            ns = meta.get('namespace', 'default')
+            if ns in SKIP_NS:
+                continue
+            spec = h.get('spec', {})
+            status = h.get('status', {})
+            target_ref = spec.get('scaleTargetRef', {})
+            hpas.append({
+                'name':           meta['name'],
+                'namespace':      ns,
+                'target_kind':    target_ref.get('kind', ''),
+                'target_name':    target_ref.get('name', ''),
+                'min_replicas':   spec.get('minReplicas', 1),
+                'max_replicas':   spec.get('maxReplicas', 1),
+                'current_replicas': status.get('currentReplicas', 0),
+                'desired_replicas': status.get('desiredReplicas', 0),
+            })
+        logger.info(f"K8s HPAs collected: {len(hpas)}")
+        return hpas
+    except Exception as e:
+        logger.warning(f"collect_k8s_hpas: {e}")
+        return []

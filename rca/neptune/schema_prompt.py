@@ -6,7 +6,7 @@ Schema 基于 Neptune 实际数据自动对齐（2026-04-16）。
 """
 
 GRAPH_SCHEMA = """
-## 节点类型（30 种）
+## 节点类型（31 种）
 
 ### 基础设施层
 - Region: name(str), region_name(str)
@@ -23,6 +23,7 @@ GRAPH_SCHEMA = """
 - Microservice: name(str), recovery_priority(Tier0|Tier1|Tier2), fault_boundary(str), az(str), replica_count(int), role(str), port(int)
 - K8sService: name(str), namespace(str), svc_type(str), cluster_ip(str), app_label(str)
 - Deployment: name(str), namespace(str), replicas(int), ready_replicas(int), strategy(str), app_label(str)
+- HPA: name(str), namespace(str), min_replicas(int), max_replicas(int), current_replicas(int), target_kind(str), target_name(str)
 
 ### 网络层
 - LoadBalancer: name(str), dns(str), lb_type(str), scheme(str)
@@ -56,7 +57,7 @@ GRAPH_SCHEMA = """
 - Incident: id(str), severity(P0|P1|P2), root_cause(str), resolution(str), start_time(str), status(str), affected_service(str)
 - ChaosExperiment: experiment_id(str), fault_type(str), result(passed|failed), recovery_time_sec(int), degradation_rate(float), timestamp(str)
 
-## 边类型（27 种）
+## 边类型（28 种）
 
 ### 拓扑/位置关系
 - (:Region)-[:Contains]->(:AvailabilityZone)
@@ -76,6 +77,7 @@ GRAPH_SCHEMA = """
 ### 归属关系
 - (:EC2Instance)-[:BelongsTo]->(:EKSCluster)
 - (:Namespace)-[:BelongsTo]->(:EKSCluster)
+- (:Microservice)-[:OwnedBy]->(:Namespace)
 - (:RDSInstance)-[:BelongsTo]->(:RDSCluster)
 - (:NeptuneInstance)-[:BelongsTo]->(:NeptuneCluster)
 - (:Database)-[:BelongsTo]->(:RDSCluster)
