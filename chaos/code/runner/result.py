@@ -88,3 +88,53 @@ class ExperimentResult:
             return 0.0
         baseline = self.steady_state_before.success_rate
         return max(0.0, round(baseline - self.min_success_rate, 2))
+
+    def has_real_metrics(self) -> bool:
+        """
+        判断是否有真实流量数据（DeepFlow 可达且有请求）。
+        total_requests=0 且 success_rate=100.0 是 DeepFlow 不可达时的 fallback 值，
+        此时指标不可信，不应据此判断依赖关系。
+        """
+        snap = self.steady_state_before
+        if snap is None:
+            return False
+        return snap.total_requests > 0
+
+    def is_conclusive(self) -> bool:
+        """
+        判断实验结果是否有充分数据支撑。
+        以下任一情况视为 inconclusive：
+        1. steady_state_after 为空或指标全 null（Phase 5 没采集到数据）
+        2. 观测快照为 0（Phase 3 没有有效观测点）
+        3. steady_state_before 无真实流量
+        """
+        after = self.steady_state_after
+        if after is None:
+            return False
+        if after.success_rate is None and after.latency_p99_ms is None:
+            return False
+        if after.total_requests == 0 and after.success_rate == 100.0:
+            return False  # DeepFlow fallback 值
+        if len(self.snapshots) == 0:
+            return False
+        if not self.has_real_metrics():
+            return False
+        return True
+
+    @property
+    def data_quality(self) -> str:
+        """
+        数据质量分级：
+        - complete: 所有阶段数据完整
+        - partial: 有数据但部分缺失（观测点少或恢复时间可疑）
+        - inconclusive: 关键数据缺失，结论不可信
+        """
+        if not self.is_conclusive():
+            return "inconclusive"
+        if (self.recovery_seconds is not None
+                and self.recovery_seconds <= 1.0
+                and len(self.snapshots) < 3):
+            return "partial"
+        if len(self.snapshots) < 3:
+            return "partial"
+        return "complete"

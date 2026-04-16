@@ -488,12 +488,20 @@ class ExperimentRunner:
         result.status = "PASSED" if all_passed else "FAILED"
         result.end_time = datetime.now(timezone.utc)
 
+        # 数据完备性检查：PASSED 但数据不足 → 降级为 INCONCLUSIVE
+        if result.status == "PASSED" and not result.is_conclusive():
+            result.status = "INCONCLUSIVE"
+            logger.warning(
+                f"⚠️  实验 {result.experiment_id} 稳态检查全部通过但数据不完备 "
+                f"(data_quality={result.data_quality})，降级为 INCONCLUSIVE"
+            )
+
         slog.info("experiment_completed", experiment=exp.name, status=result.status,
                   duration_seconds=result.duration_seconds,
                   recovery_seconds=result.recovery_seconds,
                   min_success_rate=result.min_success_rate)
 
-        icon = "✅ PASSED" if all_passed else "❌ FAILED"
+        icon = "✅ PASSED" if result.status == "PASSED" else ("⚠️ INCONCLUSIVE" if result.status == "INCONCLUSIVE" else "❌ FAILED")
         logger.info(
             f"{icon} | 实验 {result.experiment_id} 完成 "
             f"| 耗时 {result.duration_seconds:.0f}s "
@@ -520,6 +528,7 @@ class ExperimentRunner:
                 'result': result.status.lower(),
                 'recovery_time_sec': int(result.recovery_seconds or 0),
                 'degradation_rate': round(result.degradation_rate() / 100.0, 4),
+                'data_quality': result.data_quality,
                 'timestamp': result.end_time.isoformat() if result.end_time else '',
             })
             logger.info(f"Experiment {result.experiment_id} synced to Neptune")

@@ -32,6 +32,7 @@ def write_experiment(experiment: dict[str, Any]) -> None:
     result = experiment.get('result', '').replace("'", "\\'")
     recovery_time = int(experiment.get('recovery_time_sec') or 0)
     degradation = float(experiment.get('degradation_rate') or 0.0)
+    data_quality = str(experiment.get('data_quality', 'unknown')).replace("'", "\\'")
     timestamp = str(experiment.get('timestamp', '')).replace("'", "\\'")
 
     if not exp_id or not service:
@@ -46,11 +47,13 @@ def write_experiment(experiment: dict[str, Any]) -> None:
         f"  exp.result = '{result}',"
         f"  exp.recovery_time_sec = {recovery_time},"
         f"  exp.degradation_rate = {degradation},"
+        f"  exp.data_quality = '{data_quality}',"
         f"  exp.timestamp = '{timestamp}'"
         f" ON MATCH SET"
         f"  exp.result = '{result}',"
         f"  exp.recovery_time_sec = {recovery_time},"
-        f"  exp.degradation_rate = {degradation}"
+        f"  exp.degradation_rate = {degradation},"
+        f"  exp.data_quality = '{data_quality}'"
     )
     try:
         query_opencypher(node_cypher)
