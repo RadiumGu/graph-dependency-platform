@@ -742,16 +742,24 @@ def run_etl():
 
             ms_alias = svc.get('ms_alias', '')
             if ms_alias:
-                ms_r = neptune_query(
-                    f"g.V().hasLabel('Microservice','LambdaFunction').has('name','{ms_alias}').id().next()"
-                ).get('result', {}).get('data', {}).get('@value')
-                if ms_r and k_vid:
-                    ms_vid = ms_r[0].get('@value', ms_r[0]) if isinstance(ms_r[0], dict) else ms_r[0]
-                    upsert_edge(k_vid, str(ms_vid), 'Implements', {'source': 'eks-etl'})
-                    stats['edges'] += 1
+                try:
+                    ms_r = neptune_query(
+                        f"g.V().hasLabel('Microservice','LambdaFunction').has('name','{ms_alias}').id().fold()"
+                    ).get('result', {}).get('data', {}).get('@value', [])
+                    # fold() returns [[values]] — unwrap
+                    if ms_r and isinstance(ms_r[0], dict):
+                        inner = ms_r[0].get('@value', [])
+                        if inner:
+                            ms_vid = inner[0].get('@value', inner[0]) if isinstance(inner[0], dict) else inner[0]
+                            upsert_edge(k_vid, str(ms_vid), 'Implements', {'source': 'eks-etl'})
+                            stats['edges'] += 1
+                except Exception as e:
+                    logger.debug(f"K8sService {svc['name']} Implements edge skip: {e}")
 
         app_label_to_svc_vid = {svc['app_label']: k8s_svc_vid_map.get(svc['name'])
-                                 for svc in k8s_svcs if svc['name'] not in SKIP_K8S_SVCS}
+                                 for svc in k8s_svcs
+                                 if svc['name'] not in SKIP_K8S_SVCS
+                                 and svc.get('namespace') not in SKIP_K8S_NS}
         for pod in eks_pods:
             svc_vid = app_label_to_svc_vid.get(pod.get('service_name', ''))
             p_vid   = pod_vid_map.get(pod['name'])
