@@ -1,0 +1,57 @@
+# 由 HypothesisAgent 生成 — 2026-04-02 06:28
+# 假设 H005: petsearch Tier0 搜索服务：EBS IO 完全暂停下的存储不可用韧性
+# 故障域: data | 后端: fis
+# FIS Action: aws:ebs:pause-volume-io
+# 注意: extra_params 中 ${PLACEHOLDER} 需要替换为实际值
+
+name: petsearch-fis-ebs-pause-io-h005-20260402
+description: "petsearch Tier0 搜索服务：EBS IO 完全暂停下的存储不可用韧性"
+
+target:
+  service: petsearch
+  namespace: default
+  tier: Tier0
+
+fault:
+  type: fis_ebs_pause_io
+  duration: "1m"
+  extra_params:
+    volume_arns: "arn:aws:ec2:ap-northeast-1:926093770964:volume/vol-02dd343b42abe48d5"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 5000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "30s"
+    action: abort
+  - metric: latency_p99
+    threshold: "> 8000ms"
+    window: "30s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+
+graph_feedback:
+  enabled: true
+  edges:
+    - Calls
+
+backend: fis
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

@@ -1,0 +1,48 @@
+# FIS EC2：ASG Insufficient Instance Capacity Error
+# 直接对 ASG 注入容量不足错误 — 比 ec2:api 级更精准
+# 验证：EKS nodegroup 扩容完全失败时，Pod Pending + 调度器行为
+
+name: fis-ec2-asg-insufficient-capacity
+description: "Inject ASG InsufficientInstanceCapacity error, verify Pod scheduling behavior when scale-out blocked"
+backend: fis
+
+target:
+  service: eks-asg
+  namespace: ec2
+  tier: Tier1
+
+fault:
+  type: fis_ec2_asg_insufficient_capacity
+  mode: all
+  value: "100"
+  duration: "10m"
+  extra_params:
+    # asg_arn 需要填入 EKS nodegroup 对应的 ASG ARN — 运行前确认
+    asg_arn: "arn:aws:autoscaling:ap-northeast-1:926093770964:autoScalingGroup:cc525594-a4ca-46f2-ab27-5ec1bc8277a6:autoScalingGroupName/eks-petsiteNodegroupworkers1a60-ZJElxYDbKT8H-8ccea529-d21b-f8e5-1c82-1f0367d29249"
+    percentage: 100
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "120s"
+    action: abort
+
+rca:
+  enabled: false
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "15m"
+  save_to_bedrock_kb: false

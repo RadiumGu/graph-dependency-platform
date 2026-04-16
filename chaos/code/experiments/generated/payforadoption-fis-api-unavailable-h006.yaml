@@ -1,0 +1,57 @@
+# 由 HypothesisAgent 生成 — 2026-04-02 06:28
+# 假设 H006: payforadoption Tier0 支付服务：AWS API 完全不可用时的降级策略
+# 故障域: dependencies | 后端: fis
+# FIS Action: aws:fis:inject-api-unavailable-error
+# 注意: extra_params 中 ${PLACEHOLDER} 需要替换为实际值
+
+name: payforadoption-fis-api-unavailable-h006-20260402
+description: "payforadoption Tier0 支付服务：AWS API 完全不可用时的降级策略"
+
+target:
+  service: payforadoption
+  namespace: default
+  tier: Tier0
+
+fault:
+  type: fis_api_unavailable
+  duration: "3m"
+  extra_params:
+    role_arn: "arn:aws:iam::926093770964:role/ServicesEks2-petsiteNodegroupworkers1aNodeGroupRole-YXpfPBKFoRCE"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 5000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "30s"
+    action: abort
+  - metric: latency_p99
+    threshold: "> 8000ms"
+    window: "30s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+
+graph_feedback:
+  enabled: true
+  edges:
+    - Calls
+
+backend: fis
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

@@ -1,0 +1,51 @@
+# FIS 场景：AZ 网络中断 — 1c 子网
+# 补全现有只有 1a 的 network-disrupt 实验
+# 验证当 1c 整个子网不可达时，流量是否全部切到 1a
+
+name: fis-network-disrupt-az-1c
+description: "Disrupt subnet connectivity in AZ ap-northeast-1c (via Network ACL), verify AZ failover"
+backend: fis
+
+target:
+  service: petsite
+  namespace: network
+  tier: Tier0
+
+fault:
+  type: fis_network_disrupt
+  mode: all
+  value: "100"
+  duration: "5m"
+  extra_params:
+    service_name: "ap-northeast-1c"
+    resource_type: "ec2:subnet"
+    scope: "availability-zone"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 5000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "30s"
+    action: abort
+
+rca:
+  enabled: false
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "15m"
+  save_to_bedrock_kb: false

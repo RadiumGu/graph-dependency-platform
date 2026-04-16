@@ -1,0 +1,55 @@
+# FIS Pod Action：Network Blackhole Port（petsite 8080）
+# 完全丢弃指定端口的流量（比丢包更极端 — 100% 黑洞）
+# 验证：上游服务的超时处理 + 熔断器行为
+
+name: fis-eks-pod-blackhole-petsite
+description: "Blackhole port 8080 traffic on petsite pods, verify upstream timeout and circuit breaker"
+backend: fis
+
+target:
+  service: petsite
+  namespace: eks-pod
+  tier: Tier0
+
+fault:
+  type: fis_eks_pod_network_blackhole
+  mode: all
+  value: "100"
+  duration: "5m"
+  extra_params:
+    cluster_name: "PetSite"
+    namespace: "petadoptions"
+    selector_type: "labelSelector"
+    selector_value: "app=petsite"
+    traffic_type: "ingress"
+    port: 8080
+    protocol: "tcp"
+    kubernetes_service_account: "fis-service-account"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 80%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 30%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: petsite
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

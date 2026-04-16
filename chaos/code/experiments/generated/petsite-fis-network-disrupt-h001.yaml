@@ -1,0 +1,58 @@
+# 由 HypothesisAgent 生成 — 2026-04-02 06:28
+# 假设 H001: petsite Tier0 网络层故障：AZ 级网络中断下的服务可用性
+# 故障域: network | 后端: fis
+# FIS Action: aws:network:disrupt-connectivity
+# 注意: extra_params 中 ${PLACEHOLDER} 需要替换为实际值
+
+name: petsite-fis-network-disrupt-h001-20260402
+description: "petsite Tier0 网络层故障：AZ 级网络中断下的服务可用性"
+
+target:
+  service: petsite
+  namespace: default
+  tier: Tier0
+
+fault:
+  type: fis_network_disrupt
+  duration: "2m"
+  extra_params:
+    subnet_arn: "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-0f801fa79077eb277"
+    scope: "availability-zone"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 5000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "30s"
+    action: abort
+  - metric: latency_p99
+    threshold: "> 8000ms"
+    window: "30s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+
+graph_feedback:
+  enabled: true
+  edges:
+    - Calls
+
+backend: fis
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

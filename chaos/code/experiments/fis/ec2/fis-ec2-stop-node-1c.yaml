@@ -1,0 +1,49 @@
+# FIS EC2 — 自动生成 2026-04-13
+name: fis-ec2-stop-node-1c
+description: "Stop EKS worker node in AZ 1c, verify cross-AZ failover and Pod rescheduling"
+backend: fis
+
+target:
+  service: eks-nodegroup
+  namespace: ec2
+  tier: Tier0
+
+fault:
+  type: fis_ec2_stop
+  mode: all
+  value: "100"
+  duration: "5m"
+  extra_params:
+    service_name: "PetSite"
+    resource_type: "ec2:instance"
+    availability_zone: "ap-northeast-1c"
+    selection_mode: "COUNT(1)"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "60s"
+    action: abort
+    cloudwatch_alarm_arn: "arn:aws:cloudwatch:${REGION}:${ACCOUNT_ID}:alarm:chaos-eks-sr-critical"
+
+rca:
+  enabled: true
+  trigger_after: "60s"
+  expected_root_cause: eks-node
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "20m"
+  save_to_bedrock_kb: false

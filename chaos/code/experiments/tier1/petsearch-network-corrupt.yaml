@@ -1,0 +1,50 @@
+# ChaosMesh：Network Corrupt（petsearch）
+# 注入网络包损坏（CRC 校验失败等），与 delay/loss 不同的故障模式
+# 验证：TCP 重传机制 + 应用层是否正确处理损坏数据
+
+name: petsearch-network-corrupt
+description: "Inject 30% network packet corruption on petsearch, verify TCP checksum error handling"
+backend: chaosmesh
+
+target:
+  service: petsearch
+  namespace: petadoptions
+  tier: Tier1
+
+fault:
+  type: network_corrupt
+  mode: all
+  value: ""
+  duration: "3m"
+  extra_params:
+    corrupt: "30"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 85%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: petsearch
+
+graph_feedback:
+  enabled: true
+  edges:
+    - Calls
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

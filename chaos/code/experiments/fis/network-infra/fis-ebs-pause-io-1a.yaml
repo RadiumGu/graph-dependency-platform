@@ -1,0 +1,49 @@
+# FIS 场景：EBS IO 完全暂停
+# 比 fis-ebs-io-latency 更极端：完全暂停 EBS 卷的 IO
+# 验证应用在存储完全不可用时的行为（Pod OOMKill? CrashLoop? 优雅降级?）
+
+name: fis-ebs-pause-io-1a
+description: "Pause all IO on EBS volumes attached to EKS nodes in AZ 1a, verify storage failure handling"
+backend: fis
+
+target:
+  service: eks-storage
+  namespace: storage
+  tier: Tier0
+
+fault:
+  type: fis_ebs_pause_io
+  mode: all
+  value: "100"
+  duration: "3m"
+  extra_params:
+    service_name: "ap-northeast-1a"
+    resource_type: "ec2:volume"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 80%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 30%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "60s"
+  expected_root_cause: ebs-io-failure
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

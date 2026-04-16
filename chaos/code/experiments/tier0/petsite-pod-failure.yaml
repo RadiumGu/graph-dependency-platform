@@ -1,0 +1,48 @@
+# ChaosMesh：Pod Failure（petsite）
+# 与 pod_kill 区别：pod_failure 注入故障使 Pod 不可用但不删除
+# 验证：Pod 不响应时 readinessProbe 是否摘除流量
+
+name: petsite-pod-failure
+description: "Inject pod failure on petsite, verify readiness probe removes traffic"
+backend: chaosmesh
+
+target:
+  service: petsite
+  namespace: petadoptions
+  tier: Tier0
+
+fault:
+  type: pod_failure
+  mode: fixed-percent
+  value: "50"
+  duration: "3m"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "30s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: petsite
+
+graph_feedback:
+  enabled: true
+  edges:
+    - Calls
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

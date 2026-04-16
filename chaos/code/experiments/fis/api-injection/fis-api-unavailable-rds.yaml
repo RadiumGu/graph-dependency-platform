@@ -1,0 +1,50 @@
+# FIS 场景：AWS API Service Unavailable 注入
+# 对 RDS/Aurora 相关操作注入 503 Unavailable
+# 验证：应用在无法连接 RDS API 时的降级行为（连接池重建、failover 触发等）
+
+name: fis-api-unavailable-rds
+description: "Inject AWS API 503 unavailable for RDS operations, verify application degradation behavior"
+backend: fis
+
+target:
+  service: aurora
+  namespace: api-injection
+  tier: Tier1
+
+fault:
+  type: fis_api_unavailable
+  mode: all
+  value: "100"
+  duration: "5m"
+  extra_params:
+    resource_type: "iam:role"
+    role_arn: "arn:aws:iam::926093770964:role/ServicesEks2-petsiteNodegroupworkers1aNodeGroupRole-YXpfPBKFoRCE"
+    percentage: 50
+    service: "rds"
+    operations: "DescribeDBClusters,DescribeDBInstances"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: false
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

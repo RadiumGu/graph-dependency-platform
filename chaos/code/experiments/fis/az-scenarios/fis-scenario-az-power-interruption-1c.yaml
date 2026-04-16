@@ -1,0 +1,48 @@
+# FIS AZ Scenario — 自动生成 2026-04-13
+name: fis-scenario-az-power-interruption-1c
+description: "AZ 1c power interruption scenario: EC2 stop + EBS pause IO + RDS failover, verify multi-AZ HA"
+backend: fis
+
+target:
+  service: eks-nodegroup
+  namespace: az
+  tier: Tier0
+
+fault:
+  type: fis_scenario_az_power_interruption
+  mode: all
+  value: "100"
+  duration: "5m"
+  extra_params:
+    availability_zone: "ap-northeast-1c"
+    service_name: "PetSite"
+    rds_cluster_arn: ""   # TargetResolver 运行时填充
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 80%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 30%"
+    window: "60s"
+    action: abort
+    cloudwatch_alarm_arn: "arn:aws:cloudwatch:${REGION}:${ACCOUNT_ID}:alarm:chaos-eks-sr-critical"
+
+rca:
+  enabled: true
+  trigger_after: "60s"
+  expected_root_cause: eks-node
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "20m"
+  save_to_bedrock_kb: false

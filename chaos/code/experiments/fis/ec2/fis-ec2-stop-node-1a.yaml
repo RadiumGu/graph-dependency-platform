@@ -1,0 +1,56 @@
+# FIS 场景：EC2 实例停止（EKS 工作节点 — 1a）
+# 与 fis-eks-terminate-node 区别：stop 后实例保留，可以 start 恢复
+# terminate 是永久销毁需要 ASG 重建，stop 验证的是实例恢复路径
+# 验证：Pod eviction → 重调度 → 实例 restart 后 Pod 回迁行为
+
+name: fis-ec2-stop-node-1a
+description: "Stop 1 EC2 instance in workers-1a, verify Pod rescheduling and instance recovery"
+backend: fis
+
+target:
+  service: eks-nodegroup
+  namespace: ec2
+  tier: Tier0
+
+fault:
+  type: fis_ec2_stop
+  mode: all
+  value: "100"
+  duration: "5m"
+  extra_params:
+    resource_type: "ec2:instance"
+    tags:
+      "eks:nodegroup-name": "petsiteNodegroupworkers1a60-ZJElxYDbKT8H"
+      "eks:cluster-name": "PetSite"
+    selection_mode: "COUNT(1)"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 5000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "60s"
+  expected_root_cause: ec2-instance-stop
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "15m"
+  save_to_bedrock_kb: false

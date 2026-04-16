@@ -1,0 +1,51 @@
+# FIS 场景：VPC Endpoint 中断
+# 参考: aws:network:disrupt-vpc-endpoint
+# 中断 VPC Endpoint 连接（如 S3 Gateway Endpoint、ECR PrivateLink 等）
+# 验证：Pod 拉取镜像失败? Lambda 调用 DynamoDB 失败? 降级行为?
+# ⚠️ 需要先确认 VPC 中存在哪些 VPC Endpoint
+
+name: fis-vpc-endpoint-disrupt
+description: "Disrupt VPC endpoint connectivity, verify application behavior without PrivateLink access"
+backend: fis
+
+target:
+  service: vpc-endpoint
+  namespace: network
+  tier: Tier1
+
+fault:
+  type: fis_vpc_endpoint_disrupt
+  mode: all
+  value: "100"
+  duration: "5m"
+  extra_params:
+    # vpc_endpoint_arn 需要运行前确认 — 优先测 ECR/S3 endpoint
+    # 可通过 aws ec2 describe-vpc-endpoints 获取
+    resource_type: "ec2:vpc-endpoint"
+    service_name: "com.amazonaws.ap-northeast-1.s3"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 80%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 30%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: false
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

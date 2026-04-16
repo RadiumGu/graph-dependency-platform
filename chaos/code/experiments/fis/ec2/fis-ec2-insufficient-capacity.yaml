@@ -1,0 +1,50 @@
+# FIS EC2：Insufficient Instance Capacity Error
+# 模拟 InsufficientInstanceCapacity 错误 — ASG 扩容请求被 EC2 拒绝
+# 验证：HPA 触发扩容 → ASG 扩容失败时的降级行为 + 告警
+
+name: fis-ec2-insufficient-capacity
+description: "Inject InsufficientInstanceCapacity error, verify ASG scale-out failure handling and alerting"
+backend: fis
+
+target:
+  service: eks-asg
+  namespace: ec2
+  tier: Tier1
+
+fault:
+  type: fis_ec2_insufficient_capacity
+  mode: all
+  value: "100"
+  duration: "10m"
+  extra_params:
+    resource_type: "iam:role"
+    role_arn: "arn:aws:iam::926093770964:role/ServicesEks2-petsiteNodegroupworkers1aNodeGroupRole-YXpfPBKFoRCE"
+    percentage: 100
+    service: "ec2"
+    operations: "RunInstances"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "120s"
+    action: abort
+
+rca:
+  enabled: false
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "15m"
+  save_to_bedrock_kb: false

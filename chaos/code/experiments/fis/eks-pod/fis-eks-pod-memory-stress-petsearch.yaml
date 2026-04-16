@@ -1,0 +1,54 @@
+# FIS Pod Action：Memory Stress（petsearch）
+# 对 petsearch Pod 注入 80% 内存压力
+# 验证 OOMKill 触发 → Pod 重启行为 + 搜索降级
+
+name: fis-eks-pod-memory-stress-petsearch
+description: "Inject 80% memory stress on petsearch pods via FIS, verify OOM handling and degradation"
+backend: fis
+
+target:
+  service: petsearch
+  namespace: eks-pod
+  tier: Tier0
+
+fault:
+  type: fis_eks_pod_memory_stress
+  mode: all
+  value: "100"
+  duration: "5m"
+  extra_params:
+    cluster_name: "PetSite"
+    namespace: "petadoptions"
+    selector_type: "labelSelector"
+    selector_value: "app=petsearch"
+    workers: 1
+    memory_percent: 80
+    kubernetes_service_account: "fis-service-account"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 80%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: petsearch
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

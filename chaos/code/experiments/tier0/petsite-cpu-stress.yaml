@@ -1,0 +1,50 @@
+# ChaosMesh：CPU Stress（petsite — 真正的 K8s Pod，非 Lambda）
+# petstatusupdater 是 Lambda 跑不了，改为对 petsite 注入 CPU 压力
+
+name: petsite-cpu-stress
+description: "Inject CPU stress on petsite pods, verify HPA scaling and response degradation"
+backend: chaosmesh
+
+target:
+  service: petsite
+  namespace: petadoptions
+  tier: Tier0
+
+fault:
+  type: pod_cpu_stress
+  mode: all
+  value: ""
+  duration: "5m"
+  extra_params:
+    workers: 2
+    load: 80
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 85%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: petsite
+
+graph_feedback:
+  enabled: true
+  edges:
+    - Calls
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

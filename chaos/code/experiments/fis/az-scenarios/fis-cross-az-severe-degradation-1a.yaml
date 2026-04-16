@@ -1,0 +1,59 @@
+# FIS 场景：Cross-AZ 严重劣化（500ms + 50% 流量）
+# 模拟严重灰色故障 — 不是完全中断但显著劣化
+# 验证：告警系统是否能区分灰色 vs 黑色故障，是否触发 AZ 疏散
+
+name: fis-cross-az-severe-degradation-1a
+description: "Inject 500ms latency on 50% of cross-AZ flows from 1a, simulating severe gray failure"
+backend: fis
+
+target:
+  service: petsite
+  namespace: az-scenario
+  tier: Tier0
+
+fault:
+  type: fis_eks_pod_network_latency
+  mode: all
+  value: "100"
+  duration: "10m"
+  extra_params:
+    cluster_name: "PetSite"
+    namespace: "petadoptions"
+    selector_type: "labelSelector"
+    selector_value: "app=petsite"
+    availability_zone: "ap-northeast-1a"
+    sources: "ap-northeast-1c"
+    delay_ms: 500
+    flows_percent: 50
+    kubernetes_service_account: "fis-service-account"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 85%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 8000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 40%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "60s"
+  expected_root_cause: network-cross-az-degradation
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "15m"
+  save_to_bedrock_kb: false

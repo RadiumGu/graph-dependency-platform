@@ -1,0 +1,53 @@
+# FIS Lambda — 自动生成 2026-04-13
+# ⚠️ petadoptionshistory 是 Step Functions 内的步骤，不是独立 Lambda
+# 使用 petsite-rca-interaction 或 petsite-rca-engine 作为替代验证目标
+name: fis-lambda-delay-petadoptionshistory
+description: "Inject 2s invocation delay into petsite-rca-interaction Lambda (proxy for adoptions history path), verify history query resilience"
+backend: fis
+
+target:
+  service: petadoptionshistory
+  namespace: lambda
+  tier: Tier1
+
+fault:
+  type: fis_lambda_delay
+  mode: all
+  value: "100"
+  duration: "5m"
+  extra_params:
+    service_name: "rca-interaction"   # 匹配 petsite-rca-interaction
+    resource_type: "lambda:function"
+    delay_ms: 2000
+    percentage: 100
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 85%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 40%"
+    window: "30s"
+    action: abort
+    cloudwatch_alarm_arn: "arn:aws:cloudwatch:${REGION}:${ACCOUNT_ID}:alarm:chaos-petstatusupdater-sr-critical"
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: petadoptionshistory
+
+graph_feedback:
+  enabled: true
+  edges:
+    - DependsOn
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

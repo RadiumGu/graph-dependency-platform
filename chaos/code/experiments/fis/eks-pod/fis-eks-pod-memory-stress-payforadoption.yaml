@@ -1,0 +1,52 @@
+# FIS EKS Pod Action — 自动生成 2026-04-13
+name: fis-eks-pod-memory-stress-payforadoption
+description: "Inject memory stress into payforadoption pods, verify OOM resilience"
+backend: fis
+
+target:
+  service: payforadoption
+  namespace: eks-pod
+  tier: Tier0
+
+fault:
+  type: fis_eks_pod_memory_stress
+  mode: all
+  value: "100"
+  duration: "5m"
+  extra_params:
+    cluster_name: "PetSite"
+    namespace: "petadoptions"
+    selector_type: "labelSelector"
+    selector_value: "app=pay-for-adoption"
+    kubernetes_service_account: "fis-service-account"
+    workers: 1
+    percent: 80
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "30s"
+    action: abort
+    cloudwatch_alarm_arn: "arn:aws:cloudwatch:${REGION}:${ACCOUNT_ID}:alarm:chaos-eks-sr-critical"
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: payforadoption
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "15m"
+  save_to_bedrock_kb: false

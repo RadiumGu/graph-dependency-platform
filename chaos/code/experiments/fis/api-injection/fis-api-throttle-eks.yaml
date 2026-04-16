@@ -1,0 +1,53 @@
+# FIS 场景：AWS API 限流注入
+# 参考: aws:fis:inject-api-throttle-error
+# 对 EKS 相关 IAM Role 注入 AWS API 限流，模拟 API rate limit 场景
+# 验证：ASG 扩容、EKS API 调用、Service Account token refresh 等在限流下的表现
+# ⚠️ 需要提供 FIS role 有权限操作的 target IAM role ARN
+
+name: fis-api-throttle-eks
+description: "Inject AWS API throttle errors for EKS node role, verify cluster behavior under API rate limiting"
+backend: fis
+
+target:
+  service: eks-control-plane
+  namespace: api-injection
+  tier: Tier0
+
+fault:
+  type: fis_api_throttle
+  mode: all
+  value: "100"
+  duration: "5m"
+  extra_params:
+    resource_type: "iam:role"
+    # role_arn 需要填入 EKS node IAM role ARN — 运行前确认
+    role_arn: "arn:aws:iam::926093770964:role/ServicesEks2-petsiteNodegroupworkers1aNodeGroupRole-YXpfPBKFoRCE"
+    percentage: 50                         # 50% API 调用被限流
+    service: "ec2"                         # 限流 EC2 API（影响 ASG 操作）
+    operations: "DescribeInstances,RunInstances"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: false
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

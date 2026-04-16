@@ -1,0 +1,50 @@
+# ChaosMesh：Container Kill（petsite）
+# 杀死 Pod 中的指定 container，验证 Pod 重启 vs 整个 Pod 重建的区别
+
+name: petsite-container-kill
+description: "Kill petsite container, verify container restart behavior within Pod"
+backend: chaosmesh
+
+target:
+  service: petsite
+  namespace: petadoptions
+  tier: Tier0
+
+fault:
+  type: container_kill
+  mode: fixed-percent
+  value: "50"
+  duration: "2m"
+  extra_params:
+    container_names:
+      - "petsite"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "30s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: petsite
+
+graph_feedback:
+  enabled: true
+  edges:
+    - Calls
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

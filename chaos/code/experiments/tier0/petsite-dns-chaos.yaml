@@ -1,0 +1,50 @@
+# ChaosMesh：DNS Chaos（petsite）
+# 注入 DNS 解析失败，模拟 DNS 服务故障
+# 验证：服务发现失败时的降级行为、DNS 缓存效果
+
+name: petsite-dns-chaos
+description: "Inject DNS resolution errors on petsite, verify service discovery failure handling"
+backend: chaosmesh
+
+target:
+  service: petsite
+  namespace: petadoptions
+  tier: Tier0
+
+fault:
+  type: dns_chaos
+  mode: all
+  value: ""
+  duration: "3m"
+  extra_params:
+    dns_action: "error"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 80%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 30%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: dns
+
+graph_feedback:
+  enabled: true
+  edges:
+    - Calls
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

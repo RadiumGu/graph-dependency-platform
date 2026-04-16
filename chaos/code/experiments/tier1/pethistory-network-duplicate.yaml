@@ -1,0 +1,49 @@
+# ChaosMesh：Network Duplicate（pethistory）
+# 注入网络包重复，验证应用层幂等性
+
+name: pethistory-network-duplicate
+description: "Inject 30% network packet duplication on pethistory, verify application idempotency"
+backend: chaosmesh
+
+target:
+  service: pethistory
+  namespace: petadoptions
+  tier: Tier1
+
+fault:
+  type: network_duplicate
+  mode: all
+  value: ""
+  duration: "3m"
+  extra_params:
+    duplicate: "30"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 85%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: pethistory
+
+graph_feedback:
+  enabled: true
+  edges:
+    - Calls
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

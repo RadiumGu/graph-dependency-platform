@@ -1,0 +1,325 @@
+{
+  "generated_at": "2026-04-01T22:28:50.011203+00:00",
+  "generator": "hypothesis-agent-v1",
+  "model": "global.anthropic.claude-sonnet-4-6",
+  "graph_snapshot": {
+    "services": 14
+  },
+  "hypotheses": [
+    {
+      "id": "H002",
+      "title": "payforadoption Tier0 核心支付链路：RDS 主备故障转移韧性验证",
+      "description": "payforadoption 是支付核心路径（Tier0），历史故障事件高达 15+ 次，历史实验显示 fis_rds_reboot 曾 PASSED，但尚未测试更严苛的主备 Failover 场景。RDS Failover 会导致 30~120s 的连接中断，验证应用连接池的重连机制、事务回滚逻辑和用户侧错误处理是否符合预期。此为 data 故障域，与已验证的 http_chaos/pod_kill 形成互补。",
+      "steady_state": "payforadoption 支付请求成功率 >= 99.5%，数据库查询 P95 < 500ms，无数据丢失或重复扣款",
+      "fault_scenario": "fis_rds_failover 触发 payforadoption 依赖的 RDS Aurora 集群主备切换，观察应用层连接重建行为，持续观察窗口 5 分钟",
+      "expected_impact": "Failover 期间（约 30~60s）支付请求将出现数据库连接错误，成功率下降至 70% 以下；连接池重连后成功率应在 2 分钟内恢复至 99% 以上；期间不应出现重复扣款",
+      "failure_domain": "data",
+      "target_services": [
+        "payforadoption"
+      ],
+      "target_resources": [
+        "rds-cluster"
+      ],
+      "backend": "fis",
+      "priority": 1,
+      "priority_scores": {
+        "business_impact": 10,
+        "blast_radius": 7,
+        "feasibility": 9,
+        "learning_value": 7
+      },
+      "status": "draft",
+      "linked_experiments": [],
+      "generated_by": "hypothesis-agent-v1",
+      "generated_at": "2026-04-01T22:28:43.757440+00:00",
+      "source_context": {
+        "topology_services": 14,
+        "incidents": 81
+      }
+    },
+    {
+      "id": "H006",
+      "title": "payforadoption Tier0 支付服务：AWS API 完全不可用时的降级策略",
+      "description": "payforadoption 历史故障事件频率最高（15次+），且依赖容器镜像仓库（ECR）。本假设模拟 AWS API 服务不可用（503）场景，验证 payforadoption 在调用 AWS SDK（如 DynamoDB、Secrets Manager、参数存储等）时是否有正确的超时设置、熔断器和降级策略，避免因 AWS API 抖动引发级联支付失败。",
+      "steady_state": "payforadoption 支付成功率 >= 99.5%，AWS SDK 调用成功率 >= 99.9%，无支付事务卡死（hanging transaction）",
+      "fault_scenario": "fis_api_unavailable 向 payforadoption 的 AWS API 调用注入 503 不可用错误，覆盖关键 AWS 服务 API 调用，持续 3 分钟",
+      "expected_impact": "AWS API 不可用期间，依赖外部 AWS 服务的支付操作将失败；若有本地缓存或降级策略，部分功能可维持；SDK 应触发重试并最终返回用户可见的错误（而非超时挂起）；成功率应在故障解除后 1 分钟内恢复",
+      "failure_domain": "dependencies",
+      "target_services": [
+        "payforadoption"
+      ],
+      "target_resources": [
+        "aws-api-endpoint"
+      ],
+      "backend": "fis",
+      "priority": 2,
+      "priority_scores": {
+        "business_impact": 10,
+        "blast_radius": 6,
+        "feasibility": 7,
+        "learning_value": 9
+      },
+      "status": "draft",
+      "linked_experiments": [],
+      "generated_by": "hypothesis-agent-v1",
+      "generated_at": "2026-04-01T22:28:43.757458+00:00",
+      "source_context": {
+        "topology_services": 14,
+        "incidents": 81
+      }
+    },
+    {
+      "id": "H001",
+      "title": "petsite Tier0 网络层故障：AZ 级网络中断下的服务可用性",
+      "description": "petsite 是最高优先级 Tier0 服务，历史记录显示 pod_kill 存在多次 FAILED/ERROR（共4次异常），说明计算层已有已知脆弱性。本假设转向网络故障域，通过 FIS 中断 petsite 所在 Subnet 的网络连通性，模拟 AZ 级网络事件，验证流量切换和服务降级能力。结合历史故障事件（petsite 出现3次），此场景具有高度现实意义。",
+      "steady_state": "petsite 端到端请求成功率 >= 99%，P99 响应延迟 < 2000ms，健康检查连续通过",
+      "fault_scenario": "fis_network_disrupt 中断 petsite 所在 Subnet 网络连通性，持续 3 分钟，模拟单 AZ 网络故障",
+      "expected_impact": "petsite 在故障 AZ 的实例无法接收流量，负载均衡器应在 30s 内将流量切换至健康 AZ；期间成功率可能短暂跌至 85% 以下，恢复后应回升至 99% 以上",
+      "failure_domain": "network",
+      "target_services": [
+        "petsite"
+      ],
+      "target_resources": [
+        "subnet"
+      ],
+      "backend": "fis",
+      "priority": 3,
+      "priority_scores": {
+        "business_impact": 9,
+        "blast_radius": 5,
+        "feasibility": 8,
+        "learning_value": 8
+      },
+      "status": "draft",
+      "linked_experiments": [],
+      "generated_by": "hypothesis-agent-v1",
+      "generated_at": "2026-04-01T22:28:43.757420+00:00",
+      "source_context": {
+        "topology_services": 14,
+        "incidents": 81
+      }
+    },
+    {
+      "id": "H004",
+      "title": "petlistadoptions Tier1 列表服务：RDS Failover 重试验证（修复历史 ERROR）",
+      "description": "petlistadoptions（Tier1）历史实验中 fis_rds_failover 以 ERROR 状态结束（非 FAILED），说明实验本身执行失败而非服务表现差。本假设在修正实验配置后重新执行 RDS Failover，验证 petlistadoptions 的数据库连接韧性。同时，该服务 network_loss 有 2 次 ABORTED，需要在稳定环境下确认数据层韧性基线。",
+      "steady_state": "petlistadoptions 宠物列表查询成功率 >= 99%，数据库连接池活跃连接数正常（无连接泄漏），响应 P95 < 1000ms",
+      "fault_scenario": "fis_rds_failover 触发 petlistadoptions 依赖的 RDS 实例主备切换，确保 FIS 实验目标配置正确（修复历史 ERROR 原因），持续观察窗口 5 分钟",
+      "expected_impact": "Failover 切换期间（30~90s）列表查询返回 5xx 错误，成功率跌至 60% 以下；连接池重连机制应在 2 分钟内恢复服务；期间上游调用方（petsite）应触发降级返回空列表而非崩溃",
+      "failure_domain": "data",
+      "target_services": [
+        "petlistadoptions"
+      ],
+      "target_resources": [
+        "rds-instance"
+      ],
+      "backend": "fis",
+      "priority": 4,
+      "priority_scores": {
+        "business_impact": 7,
+        "blast_radius": 7,
+        "feasibility": 9,
+        "learning_value": 9
+      },
+      "status": "draft",
+      "linked_experiments": [],
+      "generated_by": "hypothesis-agent-v1",
+      "generated_at": "2026-04-01T22:28:43.757450+00:00",
+      "source_context": {
+        "topology_services": 14,
+        "incidents": 81
+      }
+    },
+    {
+      "id": "H005",
+      "title": "petsearch Tier0 搜索服务：EBS IO 完全暂停下的存储不可用韧性",
+      "description": "petsearch（Tier0）历史实验中 fis_ebs_io_latency 连续 2 次 PASSED，验证了延迟场景下的韧性。本假设升级测试强度，使用 fis_ebs_pause_io 完全暂停 EBS IO，模拟存储卷完全不可用的极端场景，验证 petsearch 是否有本地缓存、读副本或降级搜索逻辑来规避单点存储失败。",
+      "steady_state": "petsearch 搜索请求成功率 >= 99%，搜索结果返回 P95 < 800ms，ElasticSearch/OpenSearch 集群状态为 Green",
+      "fault_scenario": "fis_ebs_pause_io 完全暂停 petsearch 依赖的 EBS 卷 IO，持续 2 分钟，模拟存储硬件完全故障",
+      "expected_impact": "EBS IO 暂停期间搜索写入操作将失败，读操作若依赖 page cache 可能短暂维持；若无降级机制，搜索成功率将跌至 0%；实验结束后数据一致性不应受损，服务应在 3 分钟内自动恢复",
+      "failure_domain": "data",
+      "target_services": [
+        "petsearch"
+      ],
+      "target_resources": [
+        "ebs-volume"
+      ],
+      "backend": "fis",
+      "priority": 5,
+      "priority_scores": {
+        "business_impact": 9,
+        "blast_radius": 6,
+        "feasibility": 7,
+        "learning_value": 8
+      },
+      "status": "draft",
+      "linked_experiments": [],
+      "generated_by": "hypothesis-agent-v1",
+      "generated_at": "2026-04-01T22:28:43.757454+00:00",
+      "source_context": {
+        "topology_services": 14,
+        "incidents": 81
+      }
+    },
+    {
+      "id": "H007",
+      "title": "EKS 节点终止：Tier0 服务跨节点重调度与业务连续性",
+      "description": "petsite 和 petsearch 均为 Tier0 服务，当前基础设施状态显示副本数为 0（待恢复部署后适用）。通过 FIS 终止 EKS 节点，验证 K8s 调度器在节点失联时能否在剩余节点上快速重建 Tier0 服务的 Pod，并验证 PodDisruptionBudget（PDB）是否正确配置防止同时驱逐导致服务中断。",
+      "steady_state": "petsite 和 petsearch 请求成功率 >= 99%，EKS 节点组健康节点数 >= 2，Pod 均匀分布在多个节点上",
+      "fault_scenario": "fis_eks_terminate_node 终止 EKS 节点组中承载 petsite/petsearch Pod 的一个节点实例，观察 Pod 重调度时间和服务可用性，持续观察 10 分钟",
+      "expected_impact": "节点终止后，该节点上的 Pod 将进入 Terminating 状态，K8s 应在 2 分钟内在其他节点重建 Pod；期间如果 PDB 配置正确，服务成功率下降应 < 10%；Auto Scaling Group 应在 5 分钟内补充新节点",
+      "failure_domain": "compute",
+      "target_services": [
+        "petsite",
+        "petsearch"
+      ],
+      "target_resources": [
+        "eks-node-group"
+      ],
+      "backend": "fis",
+      "priority": 6,
+      "priority_scores": {
+        "business_impact": 9,
+        "blast_radius": 4,
+        "feasibility": 9,
+        "learning_value": 7
+      },
+      "status": "draft",
+      "linked_experiments": [],
+      "generated_by": "hypothesis-agent-v1",
+      "generated_at": "2026-04-01T22:28:43.757462+00:00",
+      "source_context": {
+        "topology_services": 14,
+        "incidents": 81
+      }
+    },
+    {
+      "id": "H010",
+      "title": "级联故障验证：petsite Tier0 对 petlistadoptions/petsearch 依赖失败时的熔断降级",
+      "description": "petsite（Tier0）作为宠物领养平台入口，依赖 petlistadoptions 和 petsearch 提供数据。本假设模拟 AWS API 内部错误（500）注入 petlistadoptions 的 API 调用，验证 petsite 是否实现了熔断器模式：当依赖服务返回 500 时，petsite 应快速失败并返回降级内容（如缓存数据或空列表），而非将错误放大传递给终端用户，避免 Tier1 故障升级为 Tier0 不可用。",
+      "steady_state": "petsite 整体页面加载成功率 >= 99%，即使 petlistadoptions 出现部分错误，petsite 核心页面（首页、搜索页）应继续可用；错误率 < 1%",
+      "fault_scenario": "fis_api_internal_error 向 petlistadoptions 的 API 调用注入 500 内部错误，错误率 100%，持续 3 分钟，观察级联故障传播至 petsite 的影响范围",
+      "expected_impact": "petlistadoptions 返回 500 期间，petsite 列表功能失败；若熔断器正确配置，petsite 应在 5 次连续失败后打开熔断器，返回降级数据（如'暂无数据'）而非 500；petsite 整体成功率下降应 < 5%；3 分钟后 petlistadoptions 恢复，熔断器应在 30s 内自动半开并完全恢复",
+      "failure_domain": "dependencies",
+      "target_services": [
+        "petsite",
+        "petlistadoptions"
+      ],
+      "target_resources": [
+        "aws-api-endpoint",
+        "service-endpoint"
+      ],
+      "backend": "fis",
+      "priority": 7,
+      "priority_scores": {
+        "business_impact": 9,
+        "blast_radius": 3,
+        "feasibility": 6,
+        "learning_value": 10
+      },
+      "status": "draft",
+      "linked_experiments": [],
+      "generated_by": "hypothesis-agent-v1",
+      "generated_at": "2026-04-01T22:28:43.757473+00:00",
+      "source_context": {
+        "topology_services": 14,
+        "incidents": 81
+      }
+    },
+    {
+      "id": "H003",
+      "title": "petstatusupdater SQS 消息队列：死信队列积压时的消费者韧性",
+      "description": "petstatusupdater（Tier1）依赖两个 SQS 队列（主队列 sqspetadoption 和 DLQ sqspetadoptiondlq）。历史实验中 fis_lambda_delay 连续出现 3 次 ERROR，说明 Lambda 延迟注入存在环境问题，本假设改为测试 AWS API 限流场景。当 SQS API 被限流（429）时，验证消费者退避重试逻辑是否正确，以及消息是否会异常路由至 DLQ。这是尚未测试过的故障模式。",
+      "steady_state": "petstatusupdater 消息处理成功率 >= 99%，DLQ 消息数量为 0，消息端到端处理延迟 < 30s",
+      "fault_scenario": "fis_api_throttle 向 petstatusupdater 的 SQS API 调用注入 429 限流错误，持续 5 分钟，覆盖 ReceiveMessage 和 DeleteMessage 操作",
+      "expected_impact": "SQS 限流期间消息处理速率下降，部分消息可能触发可见性超时重新入队；正确实现退避重试的场景下，DLQ 不应有消息积压；限流解除后处理延迟应在 5 分钟内恢复正常",
+      "failure_domain": "dependencies",
+      "target_services": [
+        "petstatusupdater"
+      ],
+      "target_resources": [
+        "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+        "ServicesEks2-sqspetadoptiondlqEEEFF2AC-EQwBtdEFe8jQ"
+      ],
+      "backend": "fis",
+      "priority": 8,
+      "priority_scores": {
+        "business_impact": 6,
+        "blast_radius": 8,
+        "feasibility": 8,
+        "learning_value": 7
+      },
+      "status": "draft",
+      "linked_experiments": [],
+      "generated_by": "hypothesis-agent-v1",
+      "generated_at": "2026-04-01T22:28:43.757446+00:00",
+      "source_context": {
+        "topology_services": 14,
+        "incidents": 81
+      }
+    },
+    {
+      "id": "H008",
+      "title": "pethistory Tier1 历史服务：VPC Endpoint 中断下的依赖服务访问",
+      "description": "pethistory（Tier1）依赖 pet-adoptions-history，历史故障事件出现 7 次，但已验证的实验仅有 network_delay（2次 PASSED）。本假设测试更底层的 VPC Endpoint 中断场景，验证当 pethistory 通过 VPC Endpoint 访问 AWS 服务（如 S3、DynamoDB）时，中断 Endpoint 是否导致依赖链断裂，以及是否有正确的公网回退或降级逻辑。",
+      "steady_state": "pethistory 历史记录查询成功率 >= 99%，通过 VPC Endpoint 的 AWS 服务调用延迟 P95 < 200ms，无超时错误",
+      "fault_scenario": "fis_vpc_endpoint_disrupt 中断 pethistory 所在 VPC 的 Endpoint 连接，模拟 AWS 内部服务访问中断，持续 3 分钟",
+      "expected_impact": "VPC Endpoint 中断期间，pethistory 对 AWS 服务（S3/DynamoDB）的调用将失败或回退到公网（延迟增加 300~500ms）；若无公网回退，依赖 AWS 服务的历史查询成功率跌至 0%；中断解除后应在 1 分钟内自动恢复",
+      "failure_domain": "network",
+      "target_services": [
+        "pethistory"
+      ],
+      "target_resources": [
+        "vpc-endpoint"
+      ],
+      "backend": "fis",
+      "priority": 9,
+      "priority_scores": {
+        "business_impact": 6,
+        "blast_radius": 8,
+        "feasibility": 7,
+        "learning_value": 7
+      },
+      "status": "draft",
+      "linked_experiments": [],
+      "generated_by": "hypothesis-agent-v1",
+      "generated_at": "2026-04-01T22:28:43.757466+00:00",
+      "source_context": {
+        "topology_services": 14,
+        "incidents": 81
+      }
+    },
+    {
+      "id": "H009",
+      "title": "petstatusupdater 资源压力：SQS 消费者 CPU 压力下的消息处理延迟",
+      "description": "petstatusupdater（Tier1）负责从 SQS 消费宠物状态更新消息，是异步处理链路的关键节点。历史 fis_lambda_delay 多次 ERROR 表明 Lambda 场景存在问题。本假设改为测试 EKS Pod 级别的 CPU 资源压力，模拟消费者进程在高 CPU 压力下的消息处理能力退化，验证是否会因处理超时导致消息可见性窗口到期后重复消费（at-least-once 语义验证）。",
+      "steady_state": "petstatusupdater SQS 消息消费速率 >= 正常基线，消息处理成功率 >= 99%，DLQ 消息数量为 0，无重复处理记录",
+      "fault_scenario": "fis_eks_pod_cpu_stress 向 petstatusupdater Pod 注入 80% CPU 压力，持续 5 分钟，观察消息处理延迟和 DLQ 积压变化",
+      "expected_impact": "CPU 压力导致消息处理时间延长，若处理时间超过 SQS 可见性超时（默认 30s），消息将重新入队并触发重复消费；正确实现幂等消费的系统 DLQ 应保持为 0；CPU 压力解除后消息堆积应在 5 分钟内清空",
+      "failure_domain": "resources",
+      "target_services": [
+        "petstatusupdater"
+      ],
+      "target_resources": [
+        "eks-pod",
+        "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj"
+      ],
+      "backend": "fis",
+      "priority": 10,
+      "priority_scores": {
+        "business_impact": 6,
+        "blast_radius": 8,
+        "feasibility": 8,
+        "learning_value": 6
+      },
+      "status": "draft",
+      "linked_experiments": [],
+      "generated_by": "hypothesis-agent-v1",
+      "generated_at": "2026-04-01T22:28:43.757469+00:00",
+      "source_context": {
+        "topology_services": 14,
+        "incidents": 81
+      }
+    }
+  ]
+}

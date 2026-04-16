@@ -1,0 +1,53 @@
+# FIS 场景：Lambda HTTP Integration Response 篡改
+# 对 petstatusupdater Lambda 注入 HTTP 集成响应异常
+# 模拟 Lambda 返回非预期的 HTTP 状态码（如 502）
+# 验证：调用方的错误处理、重试逻辑、降级路径
+
+name: fis-lambda-http-response-petstatusupdater
+description: "Inject HTTP integration response error for petstatusupdater Lambda, verify caller error handling"
+backend: fis
+
+target:
+  service: petstatusupdater
+  namespace: lambda
+  tier: Tier1
+
+fault:
+  type: fis_lambda_http_response
+  mode: all
+  value: "100"
+  duration: "5m"
+  extra_params:
+    service_name: "statusupdater"
+    resource_type: "lambda:function"
+    function_arn: "arn:aws:lambda:ap-northeast-1:926093770964:function:ServicesEks2-statusupdaterservicelambdafn37242E00-0SHsIkrhwJ32"
+    percentage: 50
+    # FIS 会篡改 Lambda 的 HTTP 集成响应
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 80%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: petstatusupdater
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

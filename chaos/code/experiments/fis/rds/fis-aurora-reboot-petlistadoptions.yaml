@@ -1,0 +1,54 @@
+# FIS RDS — 自动生成 2026-04-13
+# petlistadoptions 和 payforadoption 共用同一个 Aurora 集群: serviceseks2-databaseb269d8bb
+name: fis-aurora-reboot-petlistadoptions
+description: "Reboot Aurora DB instance (serviceseks2 cluster), verify petlistadoptions reconnect & connection pool recovery"
+backend: fis
+
+target:
+  service: petlistadoptions
+  namespace: rds
+  tier: Tier1
+
+fault:
+  type: fis_rds_reboot
+  mode: all
+  value: "100"
+  duration: "5m"
+  extra_params:
+    service_name: "petlistadoptions"
+    resource_type: "rds:cluster"
+    # TargetResolver 走 rds:fallback 路径，会匹配 serviceseks2-databaseb269d8bb
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 85%"
+      window: "5m"
+    - metric: latency_p99
+      threshold: "< 8000ms"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 30%"
+    window: "60s"
+    action: abort
+    cloudwatch_alarm_arn: "arn:aws:cloudwatch:${REGION}:${ACCOUNT_ID}:alarm:chaos-rds-sr-critical"
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: petlistadoptions
+
+graph_feedback:
+  enabled: true
+  edges:
+    - DependsOn
+
+options:
+  max_duration: "15m"
+  save_to_bedrock_kb: false

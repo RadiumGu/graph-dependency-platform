@@ -1,0 +1,46 @@
+# ChaosMesh：Time Chaos（pethistory）
+# 对 Pod 内时钟偏移 -5 分钟
+# 验证：时间戳依赖的逻辑（日志排序、缓存过期、token 校验）是否受影响
+
+name: pethistory-time-chaos
+description: "Inject -5min clock skew on pethistory, verify timestamp-dependent logic"
+backend: chaosmesh
+
+target:
+  service: pethistory
+  namespace: petadoptions
+  tier: Tier2
+
+fault:
+  type: time_chaos
+  mode: all
+  value: ""
+  duration: "3m"
+  extra_params:
+    time_offset: "-5m"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 80%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: false
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "10m"
+  save_to_bedrock_kb: false

@@ -1,0 +1,53 @@
+# FIS EKS Pod Action — 自动生成 2026-04-13
+name: fis-eks-pod-latency-pethistory
+description: "Inject 500ms pod-level network latency into pethistory, verify timeout handling"
+backend: fis
+
+target:
+  service: pethistory
+  namespace: eks-pod
+  tier: Tier1
+
+fault:
+  type: fis_eks_pod_network_latency
+  mode: all
+  value: "100"
+  duration: "3m"
+  extra_params:
+    cluster_name: "PetSite"
+    namespace: "petadoptions"
+    selector_type: "labelSelector"
+    selector_value: "app=pethistory"
+    kubernetes_service_account: "fis-service-account"
+    delay_ms: 500
+    flows_percent: 100
+    interface: DEFAULT
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 85%"
+      window: "5m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 40%"
+    window: "30s"
+    action: abort
+    cloudwatch_alarm_arn: "arn:aws:cloudwatch:${REGION}:${ACCOUNT_ID}:alarm:chaos-eks-sr-critical"
+
+rca:
+  enabled: true
+  trigger_after: "30s"
+  expected_root_cause: pethistory
+
+graph_feedback:
+  enabled: false
+
+options:
+  max_duration: "15m"
+  save_to_bedrock_kb: false
