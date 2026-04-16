@@ -20,7 +20,7 @@ from config import (
     REGION, EKS_CLUSTER_NAME,
     EC2_RECOVERY_PRIORITY, LAMBDA_RECOVERY_PRIORITY,
     MICROSERVICE_RECOVERY_PRIORITY, MICROSERVICE_INFRA_DEPS,
-    MICROSERVICE_NAMESPACE,
+    MICROSERVICE_NAMESPACE, SERVICE_TYPES,
     SERVICE_DB_MAPPING, OPS_TOOL_EDGES, TG_APP_LABEL_STATIC,
 )
 from neptune_client import (
@@ -1017,13 +1017,8 @@ def run_etl():
     # ── Step 13b: Microservice → Infra direct deps ────────────────────────────
     ts_now = int(time.time())
     for svc_name, deps in MICROSERVICE_INFRA_DEPS.items():
-        # 从 service_mappings.json 反查服务类型（lambda vs k8s）
-        _svc_type = 'k8s'
-        try:
-            _sm_services = _sm_data.get('service_types', {})
-            _svc_type = _sm_services.get(svc_name, 'k8s')
-        except NameError:
-            pass
+        # 从 config 中读 service type（lambda vs k8s）
+        _svc_type = SERVICE_TYPES.get(svc_name, 'k8s')
         svc_vid = upsert_vertex('Microservice', svc_name, {
             'namespace': MICROSERVICE_NAMESPACE.get(svc_name, 'default'),
             'source': 'business-layer',
@@ -1101,7 +1096,7 @@ def run_etl():
                 if svc_name in ('trafficgenerator',):
                     continue
                 # 按 service_type 选择正确的 fault_boundary
-                _svc_type = _sm_data.get('service_types', {}).get(svc_name, 'k8s')
+                _svc_type = SERVICE_TYPES.get(svc_name, 'k8s')
                 svc_vid = upsert_vertex('Microservice', svc_name, {
                     'namespace': 'default', 'source': 'business-layer',
                     'fault_boundary': 'region' if _svc_type == 'lambda' else 'az',
@@ -1109,7 +1104,8 @@ def run_etl():
                     'recovery_priority': MICROSERVICE_RECOVERY_PRIORITY.get(svc_name, 'Tier2'),
                     'service_type': _svc_type,
                 }, 'manual')
-                if svc_vid:
+                if svc_vid and _svc_type != 'lambda':
+                    # Lambda 服务不在 EKS 里，不写 LocatedIn 边
                     upsert_edge(svc_vid, eks_vid, 'LocatedIn', {
                         'source': 'aws-etl', 'last_updated': ts_now
                     })
@@ -1250,6 +1246,25 @@ def run_etl():
         )
     except Exception as e:
         logger.warning(f"Step 17d placeholder cleanup failed (non-fatal): {e}")
+
+    # ── Step 17e: Lambda 服务清理（删除 az/replica_count 属性、LocatedIn->EKS 边）──
+    try:
+        _lambda_svcs = [n for n, t in SERVICE_TYPES.items() if t == 'lambda']
+        if _lambda_svcs:
+            lambda_names_list = ','.join(f"'{n}'" for n in _lambda_svcs)
+            # 删 az 属性和 replica_count
+            neptune_query(
+                f"g.V().hasLabel('Microservice').has('name',within({lambda_names_list}))"
+                f".properties('az','replica_count','replicas').drop().iterate()"
+            )
+            # 删 LocatedIn→EKSCluster 边
+            neptune_query(
+                f"g.V().hasLabel('Microservice').has('name',within({lambda_names_list}))"
+                f".outE('LocatedIn').where(__.inV().hasLabel('EKSCluster')).drop().iterate()"
+            )
+            logger.info(f"Step 17e: cleaned Lambda service (az/replicas/LocatedIn) for {_lambda_svcs}")
+    except Exception as e:
+        logger.warning(f"Step 17e Lambda cleanup failed (non-fatal): {e}")
 
     logger.info(f"=== neptune-etl-from-aws complete: {stats} ===")
     return stats
