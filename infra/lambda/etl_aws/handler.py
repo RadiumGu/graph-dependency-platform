@@ -544,6 +544,10 @@ def run_etl():
 
     # ── Step 8b-post: 覆盖写入 Microservice.ip（只保留当前 Running Pod IP）────────
     try:
+        # 1) Drop ALL existing ip properties on Microservice (清除历史堆积)
+        neptune_query("g.V().hasLabel('Microservice').properties('ip').drop().iterate()")
+
+        # 2) 重新写入当前 Running Pod IP
         ms_current_ips: dict[str, set] = {}
         for pod in eks_pods:
             if pod['status'] == 'Running' and pod.get('service_name') and pod.get('pod_ip'):
@@ -554,6 +558,7 @@ def run_etl():
             if ms_vid:
                 ip_str = safe_str(','.join(sorted(ips)))
                 neptune_query(f"g.V('{ms_vid}').property(single,'ip','{ip_str}')")
+        logger.info(f"Step 8b-post: {len(ms_current_ips)} Microservice IP overwritten")
     except Exception as e:
         logger.warning(f"Step 8b-post Microservice.ip overwrite failed (non-fatal): {e}")
 
