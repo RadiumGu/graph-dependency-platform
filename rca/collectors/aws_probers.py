@@ -23,7 +23,8 @@ from typing import Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 logger = logging.getLogger(__name__)
-REGION = os.environ.get('REGION', 'ap-northeast-1')
+from shared import get_region
+REGION = get_region()
 
 # ─────────────────────────────────────────────
 # Data model

@@ -21,7 +21,8 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-REGION = os.environ.get('REGION', 'ap-northeast-1')
+from shared import get_region
+REGION = get_region()
 EKS_CLUSTER = os.environ.get('EKS_CLUSTER', '')
 K8S_NAMESPACE = os.environ.get('K8S_NAMESPACE', 'default')
 AUDIT_LOG_GROUP = '/rca/audit'

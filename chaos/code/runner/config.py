@@ -5,10 +5,17 @@ config.py - 中心化配置
 环境变量优先，内置合理默认值。
 """
 import os
+import sys
+
+_PROJECT_ROOT = os.path.join(os.path.dirname(__file__), '..', '..', '..')
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, os.path.abspath(_PROJECT_ROOT))
+
+from shared import get_region
 
 # ─── AWS 基础 ─────────────────────────────────────────────────────────────────
 
-REGION     = os.environ.get("AWS_DEFAULT_REGION", "ap-northeast-1")
+REGION     = get_region()
 ACCOUNT_ID = os.environ.get("AWS_ACCOUNT_ID", "926093770964")
 
 # ─── Neptune ──────────────────────────────────────────────────────────────────

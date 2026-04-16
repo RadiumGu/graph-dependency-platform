@@ -24,7 +24,8 @@ from chunker import chunk_text  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-REGION = os.environ.get('REGION', 'ap-northeast-1')
+from shared import get_region
+REGION = get_region()
 BUCKET = os.environ.get('INCIDENT_VECTOR_BUCKET', 'gp-incident-kb')
 INDEX = 'incidents-v1'
 VECTOR_DIMENSION = 1024

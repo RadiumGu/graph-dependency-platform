@@ -5,13 +5,20 @@ All configuration is read from environment variables with sensible defaults.
 """
 
 import os
+import sys
+
+_PROJECT_ROOT = os.path.join(os.path.dirname(__file__), '..')
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, os.path.abspath(_PROJECT_ROOT))
+
+from shared import get_region
 
 # Neptune connection
 NEPTUNE_ENDPOINT: str = os.environ.get("NEPTUNE_ENDPOINT", "")
 NEPTUNE_PORT: int = int(os.environ.get("NEPTUNE_PORT", "8182"))
 
 # AWS region
-REGION: str = os.environ.get("REGION", "ap-northeast-1")
+REGION: str = get_region()
 
 # Bedrock LLM for optional summary generation
 BEDROCK_MODEL: str = os.environ.get(

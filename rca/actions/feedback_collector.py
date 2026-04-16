@@ -22,7 +22,8 @@ from typing import Optional
 import boto3
 
 logger = logging.getLogger(__name__)
-REGION = os.environ.get('REGION', 'ap-northeast-1')
+from shared import get_region
+REGION = get_region()
 
 # Slack 交互回调中的反馈按钮定义
 FEEDBACK_BUTTONS: list[dict] = [

@@ -8,6 +8,7 @@ import os, json, logging
 import urllib3
 
 from config import profile as _profile
+from shared import get_region
 
 logger = logging.getLogger(__name__)
 http = urllib3.PoolManager()
@@ -122,7 +123,7 @@ def _get_interact_url():
     """从 SSM 获取 interaction endpoint URL"""
     try:
         import boto3
-        ssm = boto3.client('ssm', region_name=os.environ.get('REGION','ap-northeast-1'))
+        ssm = boto3.client('ssm', region_name=get_region())
         resp = ssm.get_parameter(Name=_profile.get('parameter_store.keys.slack_interact_url', '/petsite/slack/interact-url'))
         return resp['Parameter']['Value']
     except Exception:

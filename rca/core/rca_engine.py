@@ -13,7 +13,8 @@ from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
-REGION = os.environ.get('REGION', 'ap-northeast-1')
+from shared import get_region
+REGION = get_region()
 CH_HOST = os.environ.get('CLICKHOUSE_HOST', '')
 CH_PORT = int(os.environ.get('CLICKHOUSE_PORT', '8123'))
 

@@ -30,7 +30,8 @@ import boto3
 
 logger = logging.getLogger(__name__)
 
-REGION = os.environ.get('REGION', 'ap-northeast-1')
+from shared import get_region
+REGION = get_region()
 TABLE_NAME = os.environ.get('ALERT_BUFFER_TABLE', 'gp-alert-buffer')
 SCHEDULER_ROLE_ARN = os.environ.get('SCHEDULER_ROLE_ARN', '')
 FLUSH_LAMBDA_ARN = os.environ.get('WINDOW_FLUSH_LAMBDA_ARN', '')

@@ -6,9 +6,18 @@ step building, and phase assembly into a complete DRPlan.
 """
 
 import logging
+import os
+import sys
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+
+_PROJECT_ROOT = os.path.join(os.path.dirname(__file__), '..', '..')
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, os.path.abspath(_PROJECT_ROOT))
+
+from profiles.profile_loader import EnvironmentProfile
+_profile = EnvironmentProfile()
 
 from models import DRPhase, DRPlan, DRStep
 
@@ -258,7 +267,7 @@ class PlanGenerator:
                 validation=(
                     "aws route53 list-resource-record-sets "
                     "--hosted-zone-id $ZONE_ID "
-                    "--query 'ResourceRecordSets[?Name==`petsite.example.com.`].TTL'"
+                    f"--query 'ResourceRecordSets[?Name==`{_profile.domain}.`].TTL'"
                 ),
                 expected_result="60",
                 rollback_command=(
@@ -395,9 +404,9 @@ class PlanGenerator:
                 action="run_end_to_end_smoke_test",
                 command=(
                     "# Run end-to-end smoke test against target endpoint\n"
-                    "curl -sf https://petsite.example.com/health | jq '.status'"
+                    f"curl -sf https://{_profile.domain}{_profile.health_endpoint} | jq '.status'"
                 ),
-                validation="curl -sf https://petsite.example.com/health | jq '.status'",
+                validation=f"curl -sf https://{_profile.domain}{_profile.health_endpoint} | jq '.status'",
                 expected_result="ok",
                 rollback_command="# Initiate rollback plan if validation fails",
                 estimated_time=120,

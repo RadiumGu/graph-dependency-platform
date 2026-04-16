@@ -15,7 +15,8 @@ from collectors import infra_collector
 from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
-REGION = os.environ.get('REGION', 'ap-northeast-1')
+from shared import get_region
+REGION = get_region()
 BEDROCK_MODEL = os.environ.get('BEDROCK_MODEL', 'global.anthropic.claude-sonnet-4-6')
 KB_ID = os.environ.get('BEDROCK_KB_ID', '')
 

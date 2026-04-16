@@ -6,7 +6,16 @@ and swapping each step's command with its rollback_command.
 """
 
 import logging
+import os
+import sys
 from typing import List
+
+_PROJECT_ROOT = os.path.join(os.path.dirname(__file__), '..', '..')
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, os.path.abspath(_PROJECT_ROOT))
+
+from profiles.profile_loader import EnvironmentProfile
+_profile = EnvironmentProfile()
 
 from models import DRPhase, DRPlan, DRStep
 
@@ -98,11 +107,11 @@ class RollbackGenerator:
             action="verify_rollback_complete",
             command=(
                 "# Verify traffic is back on original source\n"
-                f"curl -sf https://petsite.example.com/health | jq '.status'\n"
+                f"curl -sf https://{_profile.domain}{_profile.health_endpoint} | jq '.status'\n"
                 f"# Verify source region is serving requests\n"
                 f"aws sts get-caller-identity --region {plan.source}"
             ),
-            validation=f"curl -sf https://petsite.example.com/health | jq '.status'",
+            validation=f"curl -sf https://{_profile.domain}{_profile.health_endpoint} | jq '.status'",
             expected_result="ok",
             rollback_command="# No further rollback available — escalate to incident commander",
             estimated_time=120,

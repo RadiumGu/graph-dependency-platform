@@ -13,7 +13,8 @@ logger = logging.getLogger(__name__)
 
 NEPTUNE_ENDPOINT = os.environ.get('NEPTUNE_ENDPOINT', '')
 NEPTUNE_PORT = int(os.environ.get('NEPTUNE_PORT', '8182'))
-REGION = os.environ.get('REGION', 'ap-northeast-1')
+from shared import get_region
+REGION = get_region()
 
 # RDS Combined CA bundle — downloaded once per container lifetime
 _RDS_CA_PATH = '/tmp/rds-combined-ca-bundle.pem'

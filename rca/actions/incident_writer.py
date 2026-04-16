@@ -10,7 +10,8 @@ import os, re, json, logging, time, uuid
 import boto3
 
 logger = logging.getLogger(__name__)
-REGION = os.environ.get('REGION', 'ap-northeast-1')
+from shared import get_region
+REGION = get_region()
 
 # AWS 资源 ID 正则（实体提取用）
 _EC2_PATTERN = re.compile(r'\bi-[0-9a-f]{8,17}\b')

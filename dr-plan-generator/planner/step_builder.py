@@ -6,7 +6,16 @@ validation, expected_result, and rollback_command.
 """
 
 import logging
+import os
+import sys
 from typing import Any, Dict, Optional
+
+_PROJECT_ROOT = os.path.join(os.path.dirname(__file__), '..', '..')
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, os.path.abspath(_PROJECT_ROOT))
+
+from profiles.profile_loader import EnvironmentProfile
+_profile = EnvironmentProfile()
 
 from models import DRStep
 
@@ -192,7 +201,7 @@ class StepBuilder:
             command=(
                 f"# DynamoDB Global Table: switch write endpoint to {target}\n"
                 f"# Update application config (env var / Parameter Store)\n"
-                f"aws ssm put-parameter --name '/petsite/dynamodb-region' "
+                f"aws ssm put-parameter --name '{_profile.ssm_dynamodb_region_key}' "
                 f"--value '{target}' --overwrite --region {target}"
             ),
             validation=(
@@ -202,7 +211,7 @@ class StepBuilder:
             ),
             expected_result="ACTIVE",
             rollback_command=(
-                f"aws ssm put-parameter --name '/petsite/dynamodb-region' "
+                f"aws ssm put-parameter --name '{_profile.ssm_dynamodb_region_key}' "
                 f"--value '{source}' --overwrite --region {source}"
             ),
             estimated_time=60,
@@ -287,7 +296,7 @@ class StepBuilder:
                 f"--hosted-zone-id $ZONE_ID "
                 f"--change-batch file://dns-failover.json"
             ),
-            validation=f"dig +short petsite.example.com",
+            validation=f"dig +short {_profile.domain}",
             expected_result="<target ALB DNS>",
             rollback_command=(
                 f"aws route53 change-resource-record-sets "
