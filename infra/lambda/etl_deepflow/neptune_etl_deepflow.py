@@ -65,6 +65,7 @@ with open(_MAPPINGS_PATH, encoding='utf-8') as _f:
     _MAPPINGS = json.loads(_f.read())
 MICROSERVICE_RECOVERY_PRIORITY = _MAPPINGS['tier_map']
 K8S_SERVICE_ALIAS = _MAPPINGS['k8s_alias']
+SERVICE_TYPES = _MAPPINGS.get('service_types', {})
 
 
 def get_aws_session():
@@ -738,10 +739,13 @@ def batch_fetch_dependency_and_update(service_names: list, l7_metrics: dict,
         svc_ip = ip_map_by_name.get(name, '')
         l7 = l7_metrics.get(svc_ip, {})
         priority = MICROSERVICE_RECOVERY_PRIORITY.get(name, 'Tier2')
+        svc_type = SERVICE_TYPES.get(name, 'k8s')
+        fb = 'region' if svc_type == 'lambda' else 'az'
         props = [f".property(single,'metrics_updated_at',{ts})",
                  f".property(single,'environment','{ENVIRONMENT}')",
                  f".property(single,'recovery_priority','{priority}')",
-                 f".property(single,'fault_boundary','az')",
+                 f".property(single,'fault_boundary','{fb}')",
+                 f".property(single,'service_type','{svc_type}')",
                  f".property(single,'region','{REGION}')"]
         for key in ['p50_latency_ms', 'p99_latency_ms', 'rps', 'error_rate']:
             v = l7.get(key, -1)

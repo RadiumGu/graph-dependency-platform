@@ -1027,7 +1027,8 @@ def run_etl():
         svc_vid = upsert_vertex('Microservice', svc_name, {
             'namespace': MICROSERVICE_NAMESPACE.get(svc_name, 'default'),
             'source': 'business-layer',
-            'fault_boundary': 'az', 'region': REGION,
+            'fault_boundary': 'region' if _svc_type == 'lambda' else 'az',
+            'region': REGION,
             'recovery_priority': MICROSERVICE_RECOVERY_PRIORITY.get(svc_name, 'Tier2'),
             'service_type': _svc_type,
         }, 'manual')
