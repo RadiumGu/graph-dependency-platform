@@ -1,0 +1,154 @@
+# registry/plan_policy.yaml — DR Plan 生成策略配置（默认）
+# 可被 custom_policy.yaml / custom_policy.md 覆盖
+# CLI --set 拥有最高优先级
+
+# === 通用策略 ===
+general:
+  # 默认每步估算时间（秒），可被资源类型覆盖
+  default_estimated_time: 60
+
+  # 同层无依赖步骤是否并行执行
+  parallel_within_layer: true
+
+  # Phase 间是否需要 gate check
+  phase_gate_check: true
+
+  # 命令中使用的全局变量映射
+  variables:
+    ZONE_ID: "${ROUTE53_ZONE_ID}"
+    CLUSTER_NAME: "${EKS_CLUSTER_NAME}"
+    DR_REGION: "${DR_TARGET_REGION}"
+
+# === Scope 特定策略 ===
+scope_policies:
+  az:
+    # AZ scope 是否跳过 regional/global 资源的切换步骤
+    skip_regional_resources: true
+    # 是否为 regional 资源生成"验证步骤"（不切换，只确认健康）
+    verify_regional_resources: true
+    # Preflight 附加检查
+    extra_preflight_checks: []
+
+  region:
+    skip_regional_resources: false
+    # 跨 Region 数据同步前置检查
+    data_sync_checks:
+      - type: RDSCluster
+        check: "replication_lag < 1000ms"
+      - type: DynamoDBTable
+        check: "global_table_status == ACTIVE"
+    # 跨 Region 执行上下文
+    execution_contexts:
+      source:
+        aws_profile: "prod-source"
+        k8s_context: "source-eks"
+      target:
+        aws_profile: "prod-target"
+        k8s_context: "target-eks"
+
+  service:
+    skip_regional_resources: true
+    # 单服务 scope 时包含下游依赖的深度
+    dependency_depth: 2
+
+# === Phase 策略 ===
+phase_policies:
+  phase-0:
+    timeout_minutes: 5
+    check_graph_freshness: true
+    freshness_threshold_seconds: 3600
+
+  phase-1:
+    # 数据层切换需要审批
+    requires_approval: true
+    # 数据库串行切换更安全
+    max_parallel: 1
+
+  phase-2:
+    requires_approval: false
+    # 计算层可以较高并行度
+    max_parallel: 3
+    readiness_timeout_seconds: 300
+
+  phase-readiness:
+    # Phase 2.5: Target Readiness Gate
+    requires_approval: false
+    timeout_minutes: 15
+    # 硬阻断：任一步骤失败 → 禁止进入 Phase 3
+    gate_type: hard_block
+    auto_retry: 3
+    retry_interval_seconds: 30
+
+  phase-3:
+    # DNS 切换需要审批
+    requires_approval: true
+    max_parallel: 1
+    dns_propagation_wait_seconds: 60
+
+  phase-4:
+    timeout_minutes: 10
+    # 端到端验证脚本（可选）
+    e2e_validation_scripts: []
+
+  phase-trigger:
+    # Phase -1: Switchover Decision Trigger (可选)
+    requires_approval: true
+    timeout_minutes: 10
+
+# === 资源类型估算时间与审批覆盖 ===
+resource_overrides:
+  RDSCluster:
+    estimated_time: 120        # RDS failover 通常 ~2 分钟
+    requires_approval: true
+
+  DynamoDBTable:
+    estimated_time: 30         # Global Table 切换很快
+    requires_approval: false
+
+  Route53Record:
+    estimated_time: 90         # DNS 传播需要时间
+    requires_approval: true
+
+  EKSDeployment:
+    estimated_time: 60
+    requires_approval: false
+
+  ALB:
+    estimated_time: 45
+    requires_approval: false
+
+  NLB:
+    estimated_time: 45
+    requires_approval: false
+
+  LambdaFunction:
+    estimated_time: 15
+    requires_approval: false
+
+  SQSQueue:
+    estimated_time: 10
+    requires_approval: false
+
+  S3Bucket:
+    estimated_time: 10
+    requires_approval: false
+
+# === 回滚策略 ===
+rollback_policy:
+  # 所有步骤必须有回滚命令
+  require_rollback_for_all: true
+
+  # 不可自动回滚的操作（标记为需人工介入）
+  non_reversible_actions:
+    - "promote_read_replica"    # RDS promote 后原 primary 需重建
+    - "detach_global_cluster"   # Aurora Global detach 不可自动回滚
+
+  rollback_requires_approval: true
+  rollback_timeout_minutes: 60
+
+# === 通知策略 ===
+notification:
+  notify_on_phase_start: true
+  notify_on_phase_end: true
+  notify_on_failure: true
+  channels: []
