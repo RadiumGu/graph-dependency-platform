@@ -98,7 +98,7 @@ def collect_eks_nodegroup_instances(eks_client, ec2_client) -> list:
 
 
 def collect_k8s_services(eks_client) -> list:
-    """Collect K8s Services from the default namespace via K8s API."""
+    """Collect K8s Services from all namespaces via K8s API."""
     try:
         token = _get_eks_token()
         if not token:
@@ -107,7 +107,7 @@ def collect_k8s_services(eks_client) -> list:
         endpoint = cluster_info['endpoint']
         ctx = _ssl_ctx_no_verify()
         api_req = _ureq.Request(
-            f'{endpoint}/api/v1/namespaces/default/services',
+            f'{endpoint}/api/v1/services',
             headers={'Authorization': f'Bearer {token}'}
         )
         with _ureq.urlopen(api_req, context=ctx, timeout=10) as resp:
@@ -129,7 +129,7 @@ def collect_k8s_services(eks_client) -> list:
                 'app_label':  app_label,
                 'ms_alias':   ms_alias,
             })
-        logger.info(f"K8s Services (default ns): {len(services)}")
+        logger.info(f"K8s Services (all ns): {len(services)}")
         return services
     except Exception as e:
         logger.warning(f"collect_k8s_services: {e}")

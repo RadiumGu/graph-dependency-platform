@@ -689,8 +689,11 @@ def run_etl():
         k8s_svcs = collect_k8s_services(eks_client)
         k8s_svc_vid_map = {}
         SKIP_K8S_SVCS = {'kubernetes', 'xray-service'}
+        SKIP_K8S_NS = {'kube-system', 'kube-public', 'kube-node-lease',
+                       'amazon-cloudwatch', 'amazon-guardduty', 'cert-manager',
+                       'chaos-mesh', 'deepflow'}
         for svc in k8s_svcs:
-            if svc['name'] in SKIP_K8S_SVCS:
+            if svc['name'] in SKIP_K8S_SVCS or svc.get('namespace') in SKIP_K8S_NS:
                 continue
             k_vid = upsert_vertex('K8sService', svc['name'], {
                 'namespace':  svc['namespace'],

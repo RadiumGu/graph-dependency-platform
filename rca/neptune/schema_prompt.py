@@ -6,7 +6,7 @@ Schema 基于 Neptune 实际数据自动对齐（2026-04-16）。
 """
 
 GRAPH_SCHEMA = """
-## 节点类型（27 种）
+## 节点类型（28 种）
 
 ### 基础设施层
 - Region: name(str), region_name(str)
@@ -20,6 +20,7 @@ GRAPH_SCHEMA = """
 - EKSCluster: name(str), version(str)
 - Pod: name(str), status(str), node_name(str), namespace(str), ip(str), restarts(int)
 - Microservice: name(str), recovery_priority(Tier0|Tier1|Tier2), fault_boundary(str), az(str), replica_count(int), role(str), port(int)
+- K8sService: name(str), namespace(str), svc_type(str), cluster_ip(str), app_label(str)
 
 ### 网络层
 - LoadBalancer: name(str), dns(str), lb_type(str), scheme(str)
@@ -53,7 +54,7 @@ GRAPH_SCHEMA = """
 - Incident: id(str), severity(P0|P1|P2), root_cause(str), resolution(str), start_time(str), status(str), affected_service(str)
 - ChaosExperiment: experiment_id(str), fault_type(str), result(passed|failed), recovery_time_sec(int), degradation_rate(float), timestamp(str)
 
-## 边类型（21 种）
+## 边类型（24 种）
 
 ### 拓扑/位置关系
 - (:Region)-[:Contains]->(:AvailabilityZone)
@@ -83,6 +84,8 @@ GRAPH_SCHEMA = """
 ### 运行关系
 - (:Microservice)-[:RunsOn]->(:Pod)
 - (:Pod)-[:RunsOn]->(:EC2Instance)
+- (:K8sService)-[:Implements]->(:Microservice|:LambdaFunction)
+- (:Pod)-[:BelongsTo]->(:K8sService)
 
 ### 网络/路由关系
 - (:LoadBalancer)-[:HasRule]->(:ListenerRule)
@@ -119,6 +122,8 @@ GRAPH_SCHEMA = """
 ### 运维关系
 - (:Incident)-[:TriggeredBy]->(:Microservice)
 - (:Incident)-[:AffectedService]->(:Microservice)
+- (:Incident)-[:Involves]->(:Microservice)  // Incident 的 root_cause 服务关联（用于历史相似匹配）
+- (:Incident)-[:MentionsResource]->(:Microservice|:EC2Instance)  // Incident 描述中提取的实体关联
 - (:Microservice)-[:TestedBy]->(:ChaosExperiment)
 
 ## 已知服务名（PetSite 应用）
@@ -132,7 +137,7 @@ FEW_SHOT_EXAMPLES = [
     },
     {
         "q": "petsite 的所有下游依赖有哪些？",
-        "cypher": "MATCH (s:Microservice {name:'petsite'})-[:Calls|AccessesData|PublishesTo|InvokesVia|DependsOn]->(d) RETURN d.name AS dependency, labels(d)[0] AS type, type(r) AS relation",
+        "cypher": "MATCH (s:Microservice {name:'petsite'})-[r:Calls|AccessesData|PublishesTo|InvokesVia|DependsOn]->(d) RETURN d.name AS dependency, labels(d)[0] AS type, type(r) AS relation",
     },
     {
         "q": "AZ ap-northeast-1a 有哪些服务？",
