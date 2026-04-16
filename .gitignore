@@ -1,1 +1,26 @@
 __pycache__/
+
+# CDK build artifacts
+infra/cdk.out/
+infra/node_modules/
+infra/cdk.context.json
+
+# Python
+*.pyc
+.venv/
+.pytest_cache/
+.mypy_cache/
+
+# pyvis 生成的前端资源（运行时产物）
+/lib/bindings/
+/lib/tom-select/
+/lib/vis-*/
+
+# IDE / OS
+.DS_Store
+.vscode/
+.idea/
+
+# Local temp
+*.log
+/tmp_*
