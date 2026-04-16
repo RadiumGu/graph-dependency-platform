@@ -32,6 +32,7 @@ def main():
         "tier_map": {},
         "k8s_alias": {},      # k8s_label → neptune_name
         "neptune_to_k8s": {}, # neptune_name → k8s_deployment
+        "service_types": {},  # neptune_name → 'lambda' | 'k8s'
         "namespace": profile.get("kubernetes", {}).get("namespace", "default"),
         "region": profile.get("aws_resources", {}).get("primary_region", "ap-northeast-1"),
     }
@@ -39,6 +40,7 @@ def main():
     for name, cfg in services.items():
         neptune = cfg.get("neptune_name", name)
         mappings["tier_map"][neptune] = cfg.get("tier", "Tier2")
+        mappings["service_types"][neptune] = cfg.get("type", "k8s")
         
         k8s_dep = cfg.get("k8s_deployment", name)
         k8s_label = cfg.get("k8s_label", k8s_dep)

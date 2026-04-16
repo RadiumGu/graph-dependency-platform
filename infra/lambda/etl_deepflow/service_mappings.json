@@ -23,6 +23,14 @@
     "petstatusupdater": "petstatusupdater",
     "petlistadoptions": "petlistadoptions"
   },
+  "service_types": {
+    "petsite": "k8s",
+    "petsearch": "k8s",
+    "payforadoption": "k8s",
+    "pethistory": "k8s",
+    "petstatusupdater": "lambda",
+    "petlistadoptions": "lambda"
+  },
   "namespace": "petadoptions",
   "region": "ap-northeast-1"
 }

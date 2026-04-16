@@ -1017,11 +1017,19 @@ def run_etl():
     # ── Step 13b: Microservice → Infra direct deps ────────────────────────────
     ts_now = int(time.time())
     for svc_name, deps in MICROSERVICE_INFRA_DEPS.items():
+        # 从 service_mappings.json 反查服务类型（lambda vs k8s）
+        _svc_type = 'k8s'
+        try:
+            _sm_services = _sm_data.get('service_types', {})
+            _svc_type = _sm_services.get(svc_name, 'k8s')
+        except NameError:
+            pass
         svc_vid = upsert_vertex('Microservice', svc_name, {
             'namespace': MICROSERVICE_NAMESPACE.get(svc_name, 'default'),
             'source': 'business-layer',
             'fault_boundary': 'az', 'region': REGION,
             'recovery_priority': MICROSERVICE_RECOVERY_PRIORITY.get(svc_name, 'Tier2'),
+            'service_type': _svc_type,
         }, 'manual')
         if not svc_vid:
             continue
