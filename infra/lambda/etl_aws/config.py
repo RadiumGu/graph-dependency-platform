@@ -70,6 +70,15 @@ EC2_RECOVERY_PRIORITY: dict          = _bc.get('ec2_recovery_priority', {})
 K8S_SERVICE_ALIAS: dict              = _bc.get('k8s_service_alias', {})
 BUSINESS_CAPABILITIES: list          = _bc.get('business_capabilities', [])
 MICROSERVICE_INFRA_DEPS: dict        = _bc.get('microservice_infra_deps', {})
+MICROSERVICE_NAMESPACE: dict         = _bc.get('microservice_namespace', {
+    'petsite': 'petadoptions', 'payforadoption': 'petadoptions',
+    'petlistadoptions': 'petadoptions', 'petsearch': 'petadoptions',
+    'pethistory': 'petadoptions', 'petstatusupdater': 'petadoptions',
+    'trafficgenerator': 'petadoptions',
+    'auth-service': 'awesomeshop', 'gateway-service': 'awesomeshop',
+    'order-service': 'awesomeshop', 'points-service': 'awesomeshop',
+    'product-service': 'awesomeshop', 'frontend': 'awesomeshop',
+})
 SERVICE_DB_MAPPING: list             = _bc.get('service_db_mapping', [])
 TG_APP_LABEL_STATIC: dict            = _bc.get('tg_app_label_static', {})
 INFRA_DRIFT_RULES: dict              = _bc.get('infra_drift_rules', {})

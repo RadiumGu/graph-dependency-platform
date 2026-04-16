@@ -20,6 +20,7 @@ from config import (
     REGION, EKS_CLUSTER_NAME,
     EC2_RECOVERY_PRIORITY, LAMBDA_RECOVERY_PRIORITY,
     MICROSERVICE_RECOVERY_PRIORITY, MICROSERVICE_INFRA_DEPS,
+    MICROSERVICE_NAMESPACE,
     SERVICE_DB_MAPPING, OPS_TOOL_EDGES, TG_APP_LABEL_STATIC,
 )
 from neptune_client import (
@@ -540,6 +541,21 @@ def run_etl():
 
     logger.info(f"Step 8b: {len(eks_pods)} pods, {len(SERVICE_DB_MAPPING)} DB mappings")
 
+    # ── Step 8b-post: 覆盖写入 Microservice.ip（只保留当前 Running Pod IP）────────
+    try:
+        ms_current_ips: dict[str, set] = {}
+        for pod in eks_pods:
+            if pod['status'] == 'Running' and pod.get('service_name') and pod.get('pod_ip'):
+                ms_name = _K8S_SVC_ALIAS.get(pod['service_name'], pod['service_name'])
+                ms_current_ips.setdefault(ms_name, set()).add(pod['pod_ip'])
+        for ms_name, ips in ms_current_ips.items():
+            ms_vid = find_vertex_by_name(ms_name)
+            if ms_vid:
+                ip_str = safe_str(','.join(sorted(ips)))
+                neptune_query(f"g.V('{ms_vid}').property(single,'ip','{ip_str}')")
+    except Exception as e:
+        logger.warning(f"Step 8b-post Microservice.ip overwrite failed (non-fatal): {e}")
+
     # ── Step 8c: VPCs ────────────────────────────────────────────────────────
     try:
         vpcs = collect_vpcs(ec2_client)
@@ -874,7 +890,8 @@ def run_etl():
     ts_now = int(time.time())
     for svc_name, deps in MICROSERVICE_INFRA_DEPS.items():
         svc_vid = upsert_vertex('Microservice', svc_name, {
-            'namespace': 'default', 'source': 'business-layer',
+            'namespace': MICROSERVICE_NAMESPACE.get(svc_name, 'default'),
+            'source': 'business-layer',
             'fault_boundary': 'az', 'region': REGION,
             'recovery_priority': MICROSERVICE_RECOVERY_PRIORITY.get(svc_name, 'Tier2'),
         }, 'manual')
@@ -918,6 +935,21 @@ def run_etl():
         stats['edges'] += 1
     except Exception as e:
         logger.warning(f"statusupdater→DynamoDB edge failed: {e}")
+
+    # ── Step 13b-post: sync has_db_dependency ──────────────────────────────────
+    try:
+        neptune_query(
+            "g.V().hasLabel('Microservice')"
+            ".where(__.out('AccessesData','ConnectsTo').hasLabel('RDSCluster','DynamoDBTable','Database'))"
+            ".property(single,'has_db_dependency',true)"
+        )
+        neptune_query(
+            "g.V().hasLabel('Microservice')"
+            ".not(__.out('AccessesData','ConnectsTo').hasLabel('RDSCluster','DynamoDBTable','Database'))"
+            ".property(single,'has_db_dependency',false)"
+        )
+    except Exception as e:
+        logger.warning(f"has_db_dependency sync failed: {e}")
 
     # ── Step 13c: Microservice → EKSCluster LocatedIn ────────────────────────
     try:
@@ -1064,6 +1096,19 @@ def run_etl():
         )
     except Exception as e:
         logger.warning(f"Step 17c Microservice aws-etl cleanup failed (non-fatal): {e}")
+
+    # ── Step 17d: 清理占位符值 -1 ──────────────────────────────────────────
+    try:
+        neptune_query(
+            "g.V().hasLabel('Microservice').has('error_rate',-1.0)"
+            ".sideEffect(__.properties('error_rate').drop()).iterate()"
+        )
+        neptune_query(
+            "g.V().hasLabel('Microservice').has('replica_count',-1)"
+            ".sideEffect(__.properties('replica_count').drop()).iterate()"
+        )
+    except Exception as e:
+        logger.warning(f"Step 17d placeholder cleanup failed (non-fatal): {e}")
 
     logger.info(f"=== neptune-etl-from-aws complete: {stats} ===")
     return stats

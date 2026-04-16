@@ -35,6 +35,24 @@ def get_vertex_id(label: str, name: str):
     return vid
 
 
+# 数值属性白名单 — 这些属性在 Neptune 中保持原始 int/float 类型
+NUMERIC_PROPS = {
+    'restarts', 'port', 'replica_count', 'error_rate', 'p50_latency',
+    'p99_latency', 'rps', 'replicas', 'ready_replicas', 'updated_replicas',
+    'available', 'min_replicas', 'max_replicas', 'current_replicas',
+    'desired_replicas', 'subscriptions_confirmed', 'memory_size_mb',
+    'concurrent_executions', 'priority', 'recovery_time_sec',
+    'degradation_rate', 'last_updated',
+}
+
+
+def _format_prop_val(k: str, v) -> str:
+    """Format a property value for Gremlin: numeric stays unquoted, else quoted string."""
+    if k in NUMERIC_PROPS and isinstance(v, (int, float)):
+        return str(v)
+    return f"'{safe_str(v)}'"
+
+
 def upsert_vertex(label: str, name: str, extra_props: dict, managed_by: str = 'manual'):
     """upsert 节点，返回 vertex ID 并写入缓存"""
     n = safe_str(name)
@@ -51,13 +69,15 @@ def upsert_vertex(label: str, name: str, extra_props: dict, managed_by: str = 'm
     props_create = f"'name': '{n}', 'managedBy': '{mb}', 'source': 'aws-etl'"
     props_match = f"'managedBy': '{mb}', 'source': 'aws-etl'"
     for k, v in all_props.items():
-        ks = safe_str(k); vs = safe_str(v)
-        props_create += f", '{ks}': '{vs}'"
-        props_match  += f", '{ks}': '{vs}'"
+        ks = safe_str(k)
+        fv = _format_prop_val(k, v)
+        props_create += f", '{ks}': {fv}"
+        props_match  += f", '{ks}': {fv}"
     prop_chain = f".property(single,'managedBy','{mb}').property(single,'source','aws-etl')"
     for k, v in all_props.items():
-        ks = safe_str(k); vs = safe_str(v)
-        prop_chain += f".property(single,'{ks}','{vs}')"
+        ks = safe_str(k)
+        fv = _format_prop_val(k, v)
+        prop_chain += f".property(single,'{ks}',{fv})"
     prop_chain += f".property(single,'last_updated',{ts_now})"
     gremlin = (
         f"g.mergeV([(T.label): '{label}', 'name': '{n}'])"

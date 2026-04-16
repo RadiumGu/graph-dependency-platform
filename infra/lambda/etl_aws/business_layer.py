@@ -12,6 +12,7 @@ from neptune_client import (
 )
 from config import (
     BUSINESS_CAPABILITIES, MICROSERVICE_RECOVERY_PRIORITY,
+    MICROSERVICE_NAMESPACE,
     K8S_SERVICE_ALIAS, EKS_CLUSTER_NAME, REGION,
 )
 
@@ -94,7 +95,7 @@ def upsert_business_capabilities() -> dict:
             sn = safe_str(svc_name)
             svc_priority = MICROSERVICE_RECOVERY_PRIORITY.get(svc_name, cap.get('recovery_priority', 'Tier2'))
             svc_vid = upsert_vertex('Microservice', sn, {
-                'namespace': 'default',
+                'namespace': MICROSERVICE_NAMESPACE.get(svc_name, 'default'),
                 'source': 'business-layer',
                 'fault_boundary': 'az',
                 'region': REGION,

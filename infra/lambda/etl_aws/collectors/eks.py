@@ -233,6 +233,7 @@ def collect_eks_pods(eks_client, ec2_client) -> list:
             'reason': reason,
             'node_name': node,
             'az': az,
+            'pod_ip': status.get('podIP', ''),
         })
     logger.info(f"EKS pods collected: {len(pods)}")
     return pods
