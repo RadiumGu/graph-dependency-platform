@@ -225,10 +225,14 @@ export class NeptuneEtlStack extends cdk.Stack {
     });
 
     // EKS Access Entry: allow ETL Lambda to call K8s API (read-only)
+    // 同时绑 kubernetesGroups (映射到自定义 ClusterRole neptune-etl-reader)
+    // 和 AmazonEKSViewPolicy (防御性，提供 namespace-scoped 只读)
+    // ClusterRoleBinding 在 one-observability-demo/PetAdoptions/k8s-manifests/06-rbac.yaml
     new eks.CfnAccessEntry(this, 'EtlLambdaEksAccessEntry', {
       clusterName: eksClusterName,
       principalArn: lambdaRole.roleArn,
       type: 'STANDARD',
+      kubernetesGroups: ['neptune-etl-readers'],
       accessPolicies: [{
         policyArn: 'arn:aws:eks::aws:cluster-access-policy/AmazonEKSViewPolicy',
         accessScope: { type: 'cluster' },
