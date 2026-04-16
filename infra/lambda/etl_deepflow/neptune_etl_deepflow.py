@@ -51,35 +51,26 @@ ENVIRONMENT = os.environ.get('ENVIRONMENT', 'prod')
 # 只采集这些 namespace 的 pod（PetSite 业务 namespace）
 # deepflow、kube-system 等监控/基础设施 namespace 不纳入图，避免形成孤立分量
 INCLUDED_NAMESPACES = {'default', 'awesomeshop'}
-# ===== PetSite 服务恢复优先级（基于代码分析）=====
-# Tier0: 核心收益路径，宕机直接影响用户无法领养宠物
-# Tier1: 重要功能，宕机导致体验降级但主流程仍可运行
-# Tier2: 辅助功能
-MICROSERVICE_RECOVERY_PRIORITY = {
-    # Tier0 - 核心领养流程
-    'petsite':           'Tier0',
-    'petsearch':         'Tier0',
-    'payforadoption':    'Tier0',
-    # Tier1 - 重要但非阻塞
-    'petlistadoptions':  'Tier1',
-    'pethistory':        'Tier1',   # petadoptionshistory-py 实际部署为 pethistory-service
-    'petstatusupdater':  'Tier1',
-    # petadoptionshistory — 已移除，K8s 无此服务
-    # petfood             — 已移除，后端服务未部署
-    # Tier2 - 辅助
-    'trafficgenerator':  'Tier2',
-}
 
-# K8s pod app label → Neptune 微服务名映射
-# K8s 部署使用 kebab-case（pay-for-adoption），但 Neptune/DeepFlow 用 PetSite 代码约定名
-K8S_SERVICE_ALIAS = {
-    'pay-for-adoption': 'payforadoption',
-    'list-adoptions':   'petlistadoptions',
-    'search-service':   'petsearch',
-    'pethistory':       'pethistory',
-    'traffic-generator': 'trafficgenerator',
-    # petsite pod label 已是 'petsite'，无需 alias
-}
+# ===== 服务映射（从 service_mappings.json 加载，由 profiles/petsite.yaml 生成） =====
+_MAPPINGS_PATH = os.path.join(os.path.dirname(__file__), 'service_mappings.json')
+if os.path.exists(_MAPPINGS_PATH):
+    with open(_MAPPINGS_PATH, encoding='utf-8') as _f:
+        _MAPPINGS = json.loads(_f.read())
+    MICROSERVICE_RECOVERY_PRIORITY = _MAPPINGS.get('tier_map', {})
+    K8S_SERVICE_ALIAS = _MAPPINGS.get('k8s_alias', {})
+else:
+    # Fallback 硬编码（仅在 JSON 未生成时使用）
+    MICROSERVICE_RECOVERY_PRIORITY = {
+        'petsite': 'Tier0', 'petsearch': 'Tier0', 'payforadoption': 'Tier0',
+        'petlistadoptions': 'Tier1', 'pethistory': 'Tier1', 'petstatusupdater': 'Tier1',
+        'trafficgenerator': 'Tier2',
+    }
+    K8S_SERVICE_ALIAS = {
+        'pay-for-adoption': 'payforadoption', 'list-adoptions': 'petlistadoptions',
+        'search-service': 'petsearch', 'pethistory': 'pethistory',
+        'traffic-generator': 'trafficgenerator',
+    }
 
 
 def get_aws_session():

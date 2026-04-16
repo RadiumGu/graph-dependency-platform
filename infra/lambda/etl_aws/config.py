@@ -70,7 +70,17 @@ EC2_RECOVERY_PRIORITY: dict          = _bc.get('ec2_recovery_priority', {})
 K8S_SERVICE_ALIAS: dict              = _bc.get('k8s_service_alias', {})
 BUSINESS_CAPABILITIES: list          = _bc.get('business_capabilities', [])
 MICROSERVICE_INFRA_DEPS: dict        = _bc.get('microservice_infra_deps', {})
-MICROSERVICE_NAMESPACE: dict         = _bc.get('microservice_namespace', {
+# 服务 namespace 映射：优先从 business_config 读，fallback 从 service_mappings.json
+_sm_path = os.path.join(os.path.dirname(__file__), 'service_mappings.json')
+_sm_ns = {}
+if os.path.exists(_sm_path):
+    with open(_sm_path, encoding='utf-8') as _smf:
+        _sm_data = json.load(_smf)
+        _sm_ns_val = _sm_data.get('namespace', 'petadoptions')
+        # 为 tier_map 中所有服务生成 namespace 映射
+        for _sn in _sm_data.get('tier_map', {}):
+            _sm_ns[_sn] = _sm_ns_val
+MICROSERVICE_NAMESPACE: dict         = _bc.get('microservice_namespace', _sm_ns or {
     'petsite': 'petadoptions', 'payforadoption': 'petadoptions',
     'petlistadoptions': 'petadoptions', 'petsearch': 'petadoptions',
     'pethistory': 'petadoptions', 'petstatusupdater': 'petadoptions',

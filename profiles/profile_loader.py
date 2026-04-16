@@ -29,6 +29,10 @@ class EnvironmentProfile:
         with open(path, encoding="utf-8") as f:
             self._data: dict = yaml.safe_load(f)
 
+        # Schema 校验（加载时即发现错误）
+        from profiles.schema import validate_profile
+        validate_profile(self._data)
+
     # --- 便捷访问 ---
 
     @property
