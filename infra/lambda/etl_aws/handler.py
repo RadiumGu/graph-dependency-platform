@@ -34,6 +34,7 @@ from collectors.ec2 import (
 from collectors.eks import (
     collect_eks_cluster, collect_eks_nodegroup_instances,
     collect_k8s_services, get_pod_ip_to_app_label, collect_eks_pods,
+    collect_k8s_deployments,
     _K8S_SVC_ALIAS,
 )
 from collectors.alb import (
@@ -742,6 +743,49 @@ def run_etl():
         logger.info(f"T11: {len(k8s_svcs)} K8sService nodes + edges done")
     except Exception as e:
         logger.warning(f"T11 K8sService step failed (non-fatal): {e}")
+
+    # ── Step 8f: K8s Deployment nodes ────────────────────────────────────────
+    try:
+        k8s_deploys = collect_k8s_deployments(eks_client)
+        deploy_vid_map = {}
+
+        for dep in k8s_deploys:
+            dep_vid = upsert_vertex('Deployment', dep['name'], {
+                'namespace':        dep['namespace'],
+                'replicas':         dep['replicas'],
+                'ready_replicas':   dep['ready_replicas'],
+                'updated_replicas': dep['updated_replicas'],
+                'available':        dep['available'],
+                'strategy':         dep['strategy'],
+                'app_label':        dep['app_label'],
+            }, 'eks-etl')
+            deploy_vid_map[dep['name']] = dep_vid
+            stats['vertices'] += 1
+
+            # Deployment → Microservice (Manages)
+            if dep['ms_alias']:
+                ms_vid = find_vertex_by_name(dep['ms_alias'])
+                if ms_vid and dep_vid:
+                    upsert_edge(dep_vid, ms_vid, 'Manages', {'source': 'eks-etl'})
+                    stats['edges'] += 1
+                    neptune_query(
+                        f"g.V('{ms_vid}').property(single,'replica_count',{dep['replicas']})"
+                    )
+
+        # Deployment -[Manages]-> Pod (via app_label)
+        deploy_app_map = {dep['app_label']: deploy_vid_map.get(dep['name'])
+                          for dep in k8s_deploys if dep['app_label']}
+        for pod in eks_pods:
+            dep_vid = deploy_app_map.get(pod.get('service_name', ''))
+            p_vid = pod_vid_map.get(pod['name'])
+            if p_vid and dep_vid:
+                upsert_edge(dep_vid, p_vid, 'Manages', {'source': 'eks-etl'})
+                stats['edges'] += 1
+
+        logger.info(f"T8f: {len(k8s_deploys)} Deployment nodes + Manages edges done")
+    except Exception as e:
+        logger.warning(f"T8f Deployment step failed (non-fatal): {e}")
+
 
     # ── Step 9: SQS ───────────────────────────────────────────────────────────
     sqs_queues = collect_sqs_queues(sqs_client)

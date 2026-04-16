@@ -237,3 +237,51 @@ def collect_eks_pods(eks_client, ec2_client) -> list:
         })
     logger.info(f"EKS pods collected: {len(pods)}")
     return pods
+
+
+def collect_k8s_deployments(eks_client) -> list:
+    """Collect K8s Deployments from all namespaces via K8s API."""
+    try:
+        token = _get_eks_token()
+        if not token:
+            return []
+        cluster_info = eks_client.describe_cluster(name=EKS_CLUSTER_NAME)['cluster']
+        endpoint = cluster_info['endpoint']
+        ctx = _ssl_ctx_no_verify()
+        api_req = _ureq.Request(
+            f'{endpoint}/apis/apps/v1/deployments',
+            headers={'Authorization': f'Bearer {token}'}
+        )
+        with _ureq.urlopen(api_req, context=ctx, timeout=10) as resp:
+            data = _json.loads(resp.read())
+
+        SKIP_NS = {'kube-system', 'kube-public', 'kube-node-lease',
+                   'amazon-cloudwatch', 'amazon-guardduty', 'cert-manager',
+                   'chaos-mesh', 'deepflow'}
+        deployments = []
+        for d in data.get('items', []):
+            meta = d['metadata']
+            ns = meta.get('namespace', 'default')
+            if ns in SKIP_NS:
+                continue
+            spec = d.get('spec', {})
+            status = d.get('status', {})
+            labels = spec.get('selector', {}).get('matchLabels', {})
+            app_label = labels.get('app', labels.get('app.kubernetes.io/name', ''))
+            ms_alias = _K8S_SVC_ALIAS.get(app_label, app_label)
+            deployments.append({
+                'name':             meta['name'],
+                'namespace':        ns,
+                'app_label':        app_label,
+                'ms_alias':         ms_alias,
+                'replicas':         spec.get('replicas', 1),
+                'ready_replicas':   status.get('readyReplicas', 0),
+                'updated_replicas': status.get('updatedReplicas', 0),
+                'available':        status.get('availableReplicas', 0),
+                'strategy':         spec.get('strategy', {}).get('type', 'RollingUpdate'),
+            })
+        logger.info(f"K8s Deployments collected: {len(deployments)}")
+        return deployments
+    except Exception as e:
+        logger.warning(f"collect_k8s_deployments: {e}")
+        return []
