@@ -53,6 +53,12 @@ with st.sidebar:
             st.session_state["pending_question"] = q
 
     st.markdown("---")
+    with st.expander("📖 查询示例参考（Few-shot）", expanded=False):
+        from neptune.schema_prompt import FEW_SHOT_EXAMPLES
+        for i, ex in enumerate(FEW_SHOT_EXAMPLES, 1):
+            st.markdown(f"**{i}. {ex['q']}**")
+            st.code(ex['cypher'], language='cypher')
+
     st.markdown("**工作原理**")
     st.markdown(
         """
