@@ -129,8 +129,8 @@ if user_input:
     with st.chat_message("assistant"):
         with st.spinner("AI 正在生成查询并执行…"):
             try:
-                from neptune.nl_query import NLQueryEngine
-                engine = NLQueryEngine()
+                from engines.factory import make_nlquery_engine
+                engine = make_nlquery_engine()
                 result = engine.query(user_input)
             except Exception as exc:
                 result = {"error": str(exc), "cypher": ""}
