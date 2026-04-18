@@ -35,9 +35,11 @@ _AGENT_RULES = (
     "1. 先思考问题涉及哪些节点/关系。如不确定，调用 get_schema_section。\n"
     "2. 生成 Cypher 后先调用 validate_cypher 校验；通过后再调用 execute_cypher。\n"
     "3. 不得直接拼接未经 validate_cypher 的查询。\n"
-    "4. 如果结果为空且你怀疑关系名写错了（尤其 AccessesData vs DependsOn），换一个常见关系名重试最多 1 次。\n"
-    "5. 微服务访问数据库（RDS / DynamoDB / S3）用 AccessesData，不是 DependsOn。\n"
-    "6. 最后用 2-4 句中文总结结果，直接给结论。"
+    "4. 必须完整保留问题中的所有过滤条件（如 severity='P0'、tier='Tier0'、name='petsite' 等），不得泛化。"
+    "例：问“所有 P0 故障”必须生成 WHERE inc.severity = 'P0'，不得返回全部 Incident。\n"
+    "5. 如果结果为空且你怀疑关系名写错了（尤其 AccessesData vs DependsOn），换一个常见关系名重试最多 1 次。\n"
+    "6. 微服务访问数据库（RDS / DynamoDB / S3）用 AccessesData，不是 DependsOn。\n"
+    "7. 最后用 2-4 句中文总结结果，直接给结论。"
 )
 
 
