@@ -427,6 +427,8 @@ cd chaos/code && PYTHONPATH=.:../.. RUN_GOLDEN=1 pytest ../../tests/test_hypothe
 7. ✅ `docs/migration/decisions/hypothesis-migration-adr.md` 落地
 8. ✅ `report.md § 9` 写完，含延迟/成本/缓存命中率数据
 9. ✅ orchestrator.py 成功调用 `make_hypothesis_engine()` 获取 strands 实例，下游 runner 消费无异常
+10. ✅ **Retrospective 已交**：`experiments/strands-poc/retros/hypothesis-retro.md` 写完（模板见 `TASK-phase3-shared-notes.md § 8`），重点交付 § 6 Top 3 建议 + § 7 给架构审阅猫的模板修改建议
+11. ✅ sessions_send 给架构审阅猫一条 `[RETRO] hypothesis 完成，Top 3: ...` 消息
 
 ---
 

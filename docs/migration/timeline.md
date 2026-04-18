@@ -19,12 +19,12 @@ modules:
     notes: "Phase 2 L1 POC 完成（2026-04-18）；direct 20/20, strands 19/20"
 
   - name: hypothesis-agent
-    direct_file: rca/agents/hypothesis_direct.py
-    freeze_date: ~
-    delete_date: ~
+    direct_file: chaos/code/agents/hypothesis_direct.py
+    freeze_date: 2026-04-18
+    delete_date: 2026-08-18
     owner: "@programming-cat"
-    status: "planned"
-    notes: "Phase 3 Week 4-6；需先建立 15-20 个假设场景 golden set"
+    status: "frozen"
+    notes: "Phase 3 Module 1 完成（2026-04-18）；direct 18/20、strands 16/20（已交 ADR + retro）。冻结期内禁止修改 direct，除非 P0-bugfix label。"
 
   - name: learning-agent
     direct_file: rca/agents/learning_direct.py
