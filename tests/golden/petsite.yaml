@@ -1,0 +1,133 @@
+# Smart Query Golden Query Set — PetSite
+#
+# 用途：Smart Query 准确率回归基线。
+# 执行方式：
+#   cd rca && PYTHONPATH=.:.. RUN_GOLDEN=1 pytest ../tests/test_golden_accuracy.py -v
+# 默认 skip（真调 Bedrock + Neptune 有成本）。
+#
+# 每条 case 结构：
+#   - id: 唯一 ID（q001, q002, ...）
+#   - question: 用户自然语言提问
+#   - cypher_must_contain: 生成的 cypher 必含的子串列表（大小写敏感）
+#   - cypher_must_not_contain: 生成的 cypher 禁含的子串（常用于抓关系误用）
+#   - result_min_rows: 结果最少行数（整数；0 表示可空）
+#   - result_must_contain_any: 结果 JSON 字符串化后必含的任一子串（or 语义）
+#
+# 维护规则：
+#   - 新增时优先从用户真实使用日志中挑高价值问题
+#   - 每条 case 必须在 Neptune 上可执行且有期望数据
+#   - 20 条起步，后续按问题分布扩充
+
+cases:
+  # --- 基础拓扑 ---
+  - id: q001
+    question: "petsite 依赖哪些数据库？"
+    cypher_must_contain: ["Microservice", "petsite", "AccessesData"]
+    cypher_must_not_contain: ["DependsOn"]
+    result_min_rows: 1
+    result_must_contain_any: ["DynamoDB", "RDS"]
+
+  - id: q002
+    question: "payforadoption 的上游调用者有哪些？"
+    cypher_must_contain: ["Calls", "payforadoption"]
+    result_min_rows: 1
+
+  - id: q003
+    question: "AZ ap-northeast-1a 有哪些服务？"
+    cypher_must_contain: ["ap-northeast-1a", "Microservice"]
+    result_min_rows: 1
+
+  # --- Tier / 优先级 ---
+  - id: q004
+    question: "列出所有 Tier0 服务"
+    cypher_must_contain: ["Tier0", "recovery_priority"]
+    result_min_rows: 1
+
+  - id: q005
+    question: "按 Tier 排序列出所有服务"
+    cypher_must_contain: ["Microservice", "ORDER BY"]
+    result_min_rows: 5
+
+  # --- AccessesData vs DependsOn 消歧 ---
+  - id: q006
+    question: "哪些服务访问 DynamoDB 表？"
+    cypher_must_contain: ["AccessesData", "DynamoDBTable"]
+    cypher_must_not_contain: ["DependsOn"]
+    result_min_rows: 1
+
+  - id: q007
+    question: "哪些服务依赖 ECR 镜像？"
+    cypher_must_contain: ["DependsOn", "ECRRepository"]
+    result_min_rows: 1
+
+  - id: q008
+    question: "petsite 用了哪些 SQS 队列？"
+    cypher_must_contain: ["petsite"]
+    result_min_rows: 0
+
+  # --- Lambda 服务 ---
+  - id: q009
+    question: "哪些服务是 Lambda 实现的？"
+    cypher_must_contain: ["service_type", "lambda"]
+    result_min_rows: 1
+
+  - id: q010
+    question: "Region 级故障边界的服务有哪些？"
+    cypher_must_contain: ["fault_boundary", "region"]
+    result_min_rows: 1
+
+  # --- 混沌实验 ---
+  - id: q011
+    question: "哪些服务从未做过混沌实验？"
+    cypher_must_contain: ["NOT", "TestedBy", "ChaosExperiment"]
+    result_min_rows: 0
+
+  - id: q012
+    question: "最近的混沌实验结果如何？"
+    cypher_must_contain: ["ChaosExperiment"]
+    result_min_rows: 1
+
+  # --- Incident ---
+  - id: q013
+    question: "最近 10 条 incident 及其受影响服务"
+    cypher_must_contain: ["Incident", "AffectedService"]
+    result_min_rows: 0
+
+  - id: q014
+    question: "所有 P0 故障及其根因"
+    cypher_must_contain: ["P0", "root_cause"]
+    result_min_rows: 0
+
+  # --- 网络拓扑 ---
+  - id: q015
+    question: "LoadBalancer 背后转发到哪些服务？"
+    cypher_must_contain: ["LoadBalancer", "ForwardsTo"]
+    result_min_rows: 1
+
+  - id: q016
+    question: "petsite 的完整基础设施路径"
+    cypher_must_contain: ["petsite", "RunsOn", "LocatedIn"]
+    result_min_rows: 1
+
+  # --- 多 AZ 聚合 ---
+  - id: q017
+    question: "每个 AZ 上运行着多少 Pod？"
+    cypher_must_contain: ["Pod", "AvailabilityZone", "count"]
+    result_min_rows: 1
+
+  - id: q018
+    question: "petsite 的副本分布在哪些 AZ？"
+    cypher_must_contain: ["petsite", "Pod", "AvailabilityZone"]
+    result_min_rows: 1
+
+  # --- BusinessCapability ---
+  - id: q019
+    question: "RDS 挂了影响哪些业务能力？"
+    cypher_must_contain: ["BusinessCapability", "RDS"]
+    result_min_rows: 0
+
+  # --- 下游综合 ---
+  - id: q020
+    question: "petsite 的所有下游依赖有哪些？"
+    cypher_must_contain: ["petsite"]
+    result_min_rows: 1
