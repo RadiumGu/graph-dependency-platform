@@ -203,15 +203,152 @@ Smart Query L2 的 caching 实现被后续模块参考。Phase 3 启动前确认
 3. ❌ **不要只测"功能正确"不测"命中率"** — 6.3 门槛里命中率是硬指标
 4. ❌ **不要无脑缓存 Chaos Runner / DR Executor 的全 system prompt** — 必须拆稳定段 + 可变段
 5. ❌ **不要在 Phase 3 跑一半发现缓存不生效才回头修** — 每模块 Week 1 必须跑 `verify_cache_<module>.py` 脚本证明缓存命中
+6. ❌ **不要把任务合并即视为结束** — Week 3 冻结前必须交付 retrospective（见 § 8）
 
 ---
 
-## 8. 参考文档
+## 8. 每模块必交 Retrospective（Week 3 硬件）
+
+### 8.1 目的
+
+Phase 3 6 个模块串行迁移，**前一个模块的教训是下一个模块 TASK 的输入**。无 retro 机制时，架构审阅猫只能盲用同一模板写 6 次 TASK，前个模块踩的坑下个再踩一遍。
+
+### 8.2 何时交
+
+Week 3 PR 7（freeze direct + ADR）合并前必须交，**与 ADR 同时提交**。
+
+### 8.3 文件位置
+
+```
+experiments/strands-poc/retros/<module>-retro.md
+```
+
+注意：`experiments/` 不进 git（见项目 `.gitignore`），两点影响：
+- retro 只需本地保留，不担心内部角色称谓泄漏
+- 但架构审阅猫写下个模块 TASK 前要能读到这份文件，因此必须放在共享路径（虽不 git，但本机共享可读）
+
+### 8.4 固定模板
+
+```markdown
+# <Module> Migration Retrospective
+
+> 作者：编程猫
+> 完成日期：YYYY-MM-DD
+> 目标读者：架构审阅猫（写下个模块 TASK 时读）
+
+## 1. 模块信息
+
+- Module: hypothesis-agent
+- Duration: planned 3w, actual ?w?d
+- PRs: ?/7 (merged / revert / reopen)
+- Start / End Commit: xxx → yyy
+- Golden baseline: direct N/M, strands N/M
+- Cache hit ratio: direct XX%, strands YY%
+- Cost savings vs no-cache: ZZ%
+
+## 2. TASK 质量反馈（给架构审阅猫的直接输入 ★★）
+
+### 2.1 让我困惑过的描述
+- 条目 1: …
+- 条目 2: …
+
+### 2.2 漏了应该提醒的陷阱
+- 条目 1: …
+- 条目 2: …
+
+### 2.3 多余或过严的约束
+- …
+
+### 2.4 下个 TASK 建议加的字段
+- …
+
+## 3. 技术教训
+
+### 3.1 踩到的坑（编号与对后续模块的建议配对）
+- 坑 1: <描述> → <对后续模块的建议>
+- 坑 2: …
+
+### 3.2 Golden Set 构建经验
+- 实际耗时（scenarios 编写 / direct 采样 / 人工 review）：
+- direct 采样 3 次是否够？
+- `must_not_include` 人工 review 的判断依据主要来自：领域知识 / 同事讨论 / 日志回看？
+- 行为约束式 golden vs 精确匹配的实际效果：
+
+### 3.3 Prompt Caching
+- 稳态命中率：
+- 与预期差异（增/减）：
+- 对"部分缓存"模块（Runner/DR）的启示：
+- profile 改动导致 cache invalidation 的实际冲击：
+
+### 3.4 Strands SDK 使用失败点
+- `cache_prompt` / `cache_tools` 行为是否符合文档？
+- ReAct 多轮的 tool selection 有没有意外（不该调的 tool 被调 / 陷入循环）？
+- BedrockModel 的 retry / timeout 表现如何？
+- 与 L0/L1/L2 的 Strands 使用差异（新版本特性？）？
+
+### 3.5 图谱依赖（Neptune 查询等）
+- 查询性能是否是瓶颈？
+- 有没有新增 tool 的必要（如新查询类型）？
+
+## 4. 跨猫协作
+
+- sessions_send 消息格式够用吗？
+- TASK 引用的跨文件 path 有没有不准（像模块 1 的 direct_file 路径就没指对）？
+- heartbeat / stalled 检测是否触发过？因什么触发？
+- 需要找大乖乖确认的决策有几个？它们本可以写进 TASK 吗？
+- L1/L2 的哪些设计决策在本模块被推翻？
+
+## 5. 时间 / 成本
+
+- 哪个阶段耗时最长？原因？
+- 哪些步骤可以在下个模块并行而不是串行？
+- 总 Bedrock 成本（纯测试开销，不含主生产流量）：
+
+## 6. 给下个模块的 Top 3 建议 ⭐⭐⭐
+
+1. **<一句话标题>**
+   描述 + 为什么重要 + 具体到每一步的操作
+
+2. **<一句话标题>**
+   …
+
+3. **<一句话标题>**
+   …
+
+## 7. 给架构审阅猫的写 TASK 模板修改建议
+
+具体到 `TASK-phase3-shared-notes.md` 或 `TASK-phase3-<next-module>.md` 的哪一节应该加/改什么：
+- …
+
+---
+
+*架构审阅猫在写下个模块 TASK 前必须 read 本文件，并在下个 TASK 的相应章节落实 § 6 Top 3 建议。*
+```
+
+### 8.5 编程猫的交付清单
+
+- [ ] retro 文件已写在 `experiments/strands-poc/retros/<module>-retro.md`
+- [ ] sessions_send 给架构审阅猫一条简要消息：
+      `[RETRO] <module> 完成，留意 Top 3：1. xxx 2. yyy 3. zzz，全文见 retros/<module>-retro.md`
+- [ ] 若有 P0 级发现（影响后续所有模块），同时更新 `TASK-phase3-shared-notes.md` 并 commit
+
+### 8.6 架构审阅猫的消费义务
+
+写下个模块 TASK 前，打开上个模块的 retro，重点读：
+1. § 2 TASK 质量反馈 → 决定下个 TASK 的描述方式要不要调整
+2. § 3.1 踩到的坑 → 新增相关硬约束或验收项
+3. § 6 Top 3 建议 → 改进下个 TASK 的核心思路
+4. § 7 模板修改建议 → 直接改 `TASK-phase3-shared-notes.md`
+
+---
+
+## 9. 参考文档
 
 - `TASK-L2-prompt-caching.md` — Smart Query L2 缓存接入完整任务（模板）
 - `migration-strategy.md § 6.4` — 整体 caching 集成规范
 - `report.md § 8` — Smart Query L2 实测效果（Phase 3 启动前补充）
 - AWS 官方：<https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html>
+- 各模块 retro：`experiments/strands-poc/retros/<module>-retro.md`（编程猫 Week 3 产出）
 
 ---
 

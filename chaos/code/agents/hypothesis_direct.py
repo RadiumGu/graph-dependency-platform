@@ -1,6 +1,10 @@
 """
 hypothesis_direct.py — Direct Bedrock Hypothesis 引擎（Phase 3 Module 1）。
 
+🔒 FROZEN: 2026-04-18 (delete_date: 2026-08-18)
+冻结期内不得修改此文件，除非 PR 带 P0-bugfix label。
+见 docs/migration/decisions/hypothesis-migration-adr.md。
+
 从 hypothesis_agent.py rename 而来，类名 HypothesisAgent → DirectBedrockHypothesis。
 继承 engines.base.HypothesisBase，新增 generate_with_meta() / prioritize_with_meta()
 返回带迁移元数据的 dict；原 .generate() / .prioritize() / .save() / .load() API 保留，
