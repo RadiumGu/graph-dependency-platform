@@ -45,3 +45,36 @@ class NLQueryBase(ABC):
 # - class ChaosPolicyGuardBase(ABC): ...
 # - class ChaosRunnerBase(ABC): ...
 # - class DRExecutorBase(ABC): ...
+
+
+class HypothesisBase(ABC):
+    """Chaos 混沌工程假设生成引擎基类（Phase 3 Module 1）。
+
+    generate() / prioritize() 返回 dict 规范，字段跟 NLQueryBase 对齐：
+      - hypotheses: list  # 业务产出，generate() 有值；prioritize() 可为空
+      - prioritized: list # 有排序的版本，generate() 为空；prioritize() 有值
+      - engine: str       # "direct" | "strands"
+      - model_used: str | None
+      - latency_ms: int
+      - token_usage: dict | None  # {input,output,total,cache_read,cache_write}
+      - trace: list[dict]         # Strands tool-call 链；direct 为 []
+      - error: str | None         # 成功时可缺省或 None
+
+    为兼容现有调用方（orchestrator / learning_agent / main 直接拿 list[Hypothesis]），
+    具体子类可额外提供返回 list 的代理方法，由 shim 类包装。
+    """
+
+    def __init__(self, profile: Any = None) -> None:
+        self.profile = profile
+
+    @abstractmethod
+    def generate(
+        self,
+        max_hypotheses: int = 50,
+        service_filter: str | None = None,
+    ) -> dict:
+        """生成混沌工程假设列表（包含迁移元数据的 dict形式）。"""
+
+    @abstractmethod
+    def prioritize(self, hypotheses: list) -> dict:
+        """对已有假设列表排序，返回带排序结果的 dict。"""
