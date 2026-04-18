@@ -2,6 +2,17 @@
 Smart Query — 自然语言图查询
 
 NL → openCypher → 执行 → AI 摘要，聊天式 UI。
+
+支持两种 NLQuery 引擎，通过环境变量 `NLQUERY_ENGINE` 切换（默认 direct）：
+  - direct  → rca/neptune/nl_query_direct.py  直调 Bedrock（Sonnet/Opus）+ 空结果重试
+  - strands → rca/neptune/nl_query_strands.py AWS Strands Agents（ReAct 多轮 + tool-call trace）
+
+引擎由 rca/engines/factory.py 的 make_nlquery_engine() 统一构造；
+页面代码不依赖具体实现，只面向抽象基类 NLQueryBase（rca/engines/base.py）。
+两引擎均启用 Bedrock Prompt Caching（system prompt + tool schemas）。
+
+切换方式：
+  NLQUERY_ENGINE=strands streamlit run demo/pages/2_Smart_Query.py
 """
 import json
 import os
