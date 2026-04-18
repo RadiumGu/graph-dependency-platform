@@ -280,8 +280,9 @@ neptune:
     ## 已知服务名（PetSite 应用）
     petsite, petsearch, payforadoption, petlistadoptions, pethistory, petstatusupdater, trafficgenerator, artillery, artillery-write, auth-service, gateway-service, order-service, points-service, product-service
 
-  # Few-shot 示例（Wave 2 将扩到 25-30 条）
+  # Few-shot 示例（Wave 2 扩到 25+ 条，2026-04-18）
   nl_query_examples:
+    # --- 基础查询（Wave 1 进入的 10 条） ---
     - q: "petsite 依赖哪些数据库？"
       cypher: "MATCH (s:Microservice {name:'petsite'})-[:AccessesData]->(db) WHERE db:RDSCluster OR db:DynamoDBTable RETURN db.name AS database, labels(db)[0] AS type"
     - q: "petsite 的所有下游依赖有哪些？"
@@ -302,6 +303,64 @@ neptune:
       cypher: "MATCH (r:RDSCluster)-[:HasSG]->(sg:SecurityGroup) RETURN r.name AS cluster, sg.name AS security_group, sg.sg_id AS sg_id"
     - q: "petsite 用了哪些 ECR 镜像？"
       cypher: "MATCH (s:Microservice {name:'petsite'})-[:DependsOn]->(ecr:ECRRepository) RETURN ecr.name AS repository, ecr.uri AS uri"
+
+    # --- AccessesData vs DependsOn 歧义消除 ---
+    - q: "哪些服务写 DynamoDB？"
+      cypher: "MATCH (s:Microservice)-[:AccessesData]->(t:DynamoDBTable) RETURN s.name AS service, t.name AS table"
+    - q: "petsite 依赖哪些 SQS 队列？"
+      cypher: "MATCH (s:Microservice {name:'petsite'})-[:DependsOn]->(q:SQSQueue) RETURN q.name AS queue, q.is_dlq AS is_dlq"
+    - q: "哪些服务同时访问 RDS 和 DynamoDB？"
+      cypher: "MATCH (s:Microservice)-[:AccessesData]->(r:RDSCluster) WITH s MATCH (s)-[:AccessesData]->(d:DynamoDBTable) RETURN DISTINCT s.name AS service"
+
+    # --- Tier / recovery_priority 排序模式 ---
+    - q: "按 Tier 排序列出所有服务"
+      cypher: "MATCH (s:Microservice) RETURN s.name AS service, s.recovery_priority AS tier ORDER BY CASE s.recovery_priority WHEN 'Tier0' THEN 0 WHEN 'Tier1' THEN 1 WHEN 'Tier2' THEN 2 ELSE 3 END, s.name"
+    - q: "列出所有 Tier0 服务"
+      cypher: "MATCH (s:Microservice) WHERE s.recovery_priority = 'Tier0' RETURN s.name AS service, s.fault_boundary AS fault_boundary, s.service_type AS service_type"
+
+    # --- Lambda 特殊处理（service_type='lambda'，fault_boundary='region'） ---
+    - q: "哪些服务是 Lambda 实现的？"
+      cypher: "MATCH (s:Microservice) WHERE s.service_type = 'lambda' RETURN s.name AS service, s.fault_boundary AS fault_boundary"
+    - q: "Region 级服务（非 AZ 级）有哪些？"
+      cypher: "MATCH (s:Microservice) WHERE s.fault_boundary = 'region' RETURN s.name AS service, s.service_type AS service_type, s.recovery_priority AS priority"
+    - q: "petstatusupdater 调用哪些 Lambda 或 DynamoDB？"
+      cypher: "MATCH (l:LambdaFunction {name:'petstatusupdater'})-[:AccessesData|:Invokes]->(d) RETURN d.name AS target, labels(d)[0] AS type"
+
+    # --- 按 AZ 分组 / 多 AZ 聚合 ---
+    - q: "每个 AZ 上运行着多少 Pod？"
+      cypher: "MATCH (p:Pod)-[:LocatedIn]->(az:AvailabilityZone) RETURN az.name AS az, count(p) AS pod_count ORDER BY az.name"
+    - q: "petsite 的副本分布在哪些 AZ？"
+      cypher: "MATCH (s:Microservice {name:'petsite'})-[:RunsOn]->(p:Pod)-[:LocatedIn]->(az:AvailabilityZone) RETURN az.name AS az, count(p) AS replica_count ORDER BY az.name"
+
+    # --- BusinessCapability 影响面 ---
+    - q: "RDS 挂了影响哪些业务能力？"
+      cypher: "MATCH (bc:BusinessCapability)-[:DependsOn]->(r:RDSCluster) RETURN bc.name AS capability, bc.recovery_priority AS priority, r.name AS cluster"
+    - q: "实现 订单 能力的服务有哪些？"
+      cypher: "MATCH (s)-[:Implements]->(bc:BusinessCapability) WHERE bc.name CONTAINS '订单' OR bc.name CONTAINS 'order' OR bc.name CONTAINS 'Order' RETURN s.name AS service, labels(s)[0] AS type, bc.name AS capability"
+
+    # --- Incident + AffectedService 联合 ---
+    - q: "最近 10 条 incident 及其受影响服务"
+      cypher: "MATCH (inc:Incident)-[:AffectedService]->(s:Microservice) RETURN inc.id AS incident, inc.severity AS severity, inc.start_time AS start_time, collect(DISTINCT s.name) AS affected_services ORDER BY inc.start_time DESC LIMIT 10"
+    - q: "哪些服务出过 P0 故障？"
+      cypher: "MATCH (inc:Incident {severity:'P0'})-[:AffectedService|:TriggeredBy]->(s:Microservice) RETURN DISTINCT s.name AS service, count(inc) AS p0_count ORDER BY p0_count DESC"
+
+    # --- 否定查询 / NOT EXISTS ---
+    - q: "哪些服务没有 Tier0 标记？"
+      cypher: "MATCH (s:Microservice) WHERE s.recovery_priority IS NULL OR s.recovery_priority <> 'Tier0' RETURN s.name AS service, s.recovery_priority AS priority"
+    - q: "哪些 Tier0 服务不在任何混沌实验覆盖中？"
+      cypher: "MATCH (s:Microservice {recovery_priority:'Tier0'}) WHERE NOT (s)-[:TestedBy]->(:ChaosExperiment) RETURN s.name AS service"
+
+    # --- 跨层级拓扑 ---
+    - q: "petsite 的 Pod 所在的 EC2 和所属 VPC 网段"
+      cypher: "MATCH (s:Microservice {name:'petsite'})-[:RunsOn]->(p:Pod)-[:RunsOn]->(e:EC2Instance)-[:LocatedIn]->(sub:Subnet)-[:LocatedIn]->(vpc:VPC) RETURN p.name AS pod, e.instance_id AS ec2, sub.subnet_id AS subnet, vpc.vpc_id AS vpc"
+    - q: "LoadBalancer 背后转发到哪些服务？"
+      cypher: "MATCH (lb:LoadBalancer)-[:ForwardsTo|:RoutesTo]->(tg:TargetGroup)-[:ForwardsTo]->(s:Microservice) RETURN lb.name AS lb, lb.dns AS dns, tg.name AS target_group, s.name AS service"
+
+    # --- 混沌实验 / 恢复时间统计 ---
+    - q: "最近 20 次混沌实验结果与息复时间"
+      cypher: "MATCH (s:Microservice)-[:TestedBy]->(ce:ChaosExperiment) RETURN s.name AS service, ce.experiment_id AS experiment, ce.fault_type AS fault, ce.result AS result, ce.recovery_time_sec AS recovery_sec ORDER BY ce.timestamp DESC LIMIT 20"
+    - q: "混沌实验息复时间超过 300 秒的服务"
+      cypher: "MATCH (s:Microservice)-[:TestedBy]->(ce:ChaosExperiment) WHERE ce.recovery_time_sec > 300 RETURN DISTINCT s.name AS service, max(ce.recovery_time_sec) AS max_recovery ORDER BY max_recovery DESC"
 
   # Wave 4 空结果重试提示用
   common_relations:
