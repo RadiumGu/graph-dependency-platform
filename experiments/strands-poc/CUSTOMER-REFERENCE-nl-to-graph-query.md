@@ -491,6 +491,55 @@ def build_agent_for_question(question: str, profile):
 
 ---
 
+### 9.1 Bedrock Prompt Caching 降本（强烈推荐）
+
+开启 Prompt Caching 后月度账单再降 *40-60%*，实测数据（2026-04-18, 20 条 golden 完整跑一轮）：
+
+| 引擎 | Cache Hit Ratio | 月度成本（未缓存）| 月度成本（启用缓存）| 节省 |
+|------|----------------|----------|----------|------|
+| Direct Bedrock | *99.6%* | ~$441 | ~$229 | *-48%* |
+| Strands Agent  | *90.9%* | ~$1312 | ~$505 | *-62%* |
+
+技术实现极简：
+
+**Strands 版**（一行配置）：
+```python
+BedrockModel(
+    model_id="global.anthropic.claude-sonnet-4-6",
+    region_name="ap-northeast-1",
+    cache_prompt="default",   # system prompt 缓存
+    cache_tools="default",    # tool schema 缓存
+)
+```
+
+**Direct Bedrock 版**（改一个字段）：
+```python
+bedrock.invoke_model(body=json.dumps({
+    "system": [{
+        "type": "text",
+        "text": system_prompt,
+        "cache_control": {"type": "ephemeral"},  # ← 新增，5 分钟 TTL
+    }],
+    "messages": [{"role": "user", "content": question}],
+}))
+```
+
+关键前提条件：
+- system prompt 必须 > 1024 tokens（~3000 chars），Sonnet/Opus 的最低缓存 size。大多数包含完整 schema + 15+ few-shot 的生产配置都远远超过。
+- Profile 改动 → system prompt 改 → 缓存失效，下次调用付 125% write 成本后重新稳态。高频改 profile 的场景实际节省略低；企业场景的 profile 通常周级以上改动，不影响。
+- `_summarize` 或其他结果依赖的调用 *不能*加缓存（前缀不稳定）。项目里这是硬约束。
+
+成本对比（Sonnet 4.6 官方单价）：
+
+| | Regular Input | Cache Write | Cache Read | Output |
+|---|---|---|---|---|
+| 单价 / 1M tokens | $3.00 | $3.75 | $0.30 | $15 |
+| 稳态占比 | 不变 | 1 次 write 后摊至小量 | 10% 价代替 90% input | 不变 |
+
+**结论**：Caching 是当前 Bedrock Agent 场景的"免费午餐"——代码改动 < 10 行，月度账单降 40-60%。特别对 Agent ReAct 多轮场景（每轮都重发 system + tool schema）收益最明显。
+
+---
+
 ## 10. 参考资料
 
 - [AWS Strands Agents 官网](https://strandsagents.com/) — 文档、教程、示例
