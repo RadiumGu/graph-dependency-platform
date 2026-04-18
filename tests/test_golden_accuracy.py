@@ -85,6 +85,22 @@ def results_accumulator():
         p50 = latencies[len(latencies) // 2] if latencies else 0
         p99 = latencies[int(len(latencies) * 0.99)] if latencies else 0
         tokens_total = sum((r.get("token_usage") or {}).get("total", 0) or 0 for r in rows)
+        # L2 cache hit 统计
+        cache_reads = [
+            (r.get("token_usage") or {}).get("cache_read") for r in rows
+        ]
+        cache_writes = [
+            (r.get("token_usage") or {}).get("cache_write") for r in rows
+        ]
+        sum_read = sum(x for x in cache_reads if x)
+        sum_write = sum(x for x in cache_writes if x)
+        sum_input = sum((r.get("token_usage") or {}).get("input", 0) or 0 for r in rows)
+        # hit ratio = cache_read / (cache_read + non_cache_input)
+        if any(x for x in cache_reads if x is not None):
+            denom = sum_read + sum_input
+            hit_ratio_str = f"{sum_read / denom:.1%}" if denom else "N/A"
+        else:
+            hit_ratio_str = "N/A"
 
         lines = [
             f"# Smart Query Golden Baseline — engine: {engine_name}",
@@ -100,6 +116,9 @@ def results_accumulator():
             f"| Latency p50 | {p50} ms |",
             f"| Latency p99 | {p99} ms |",
             f"| Total tokens (approx) | {tokens_total} |",
+            f"| Cache read tokens | {sum_read} |",
+            f"| Cache write tokens | {sum_write} |",
+            f"| Avg Cache Hit Ratio | {hit_ratio_str} |",
             "",
             "## Failures",
             "",
