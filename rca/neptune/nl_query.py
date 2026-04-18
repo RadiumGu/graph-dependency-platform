@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 from shared import get_region
 REGION = get_region()
 MODEL = os.environ.get('BEDROCK_MODEL', 'global.anthropic.claude-sonnet-4-6')
+# Wave 5: 复杂问题升级用的重模型（准确率更高，成本 5-10x）
+MODEL_HEAVY = os.environ.get('BEDROCK_MODEL_HEAVY', 'global.anthropic.claude-opus-4-7')
 
 
 # 空结果 "合理空" 的语义信号词（Wave 4）——命中这些词的问题不触发重试，
@@ -143,6 +145,30 @@ class NLQueryEngine:
             logger.warning(f"NLQuery retry generation failed: {e}")
             return ""
 
+    def _select_model(self, question: str) -> str:
+        """根据问题复杂度选模型（Wave 5）。
+
+        命中任何 profile.complex_keywords.zh / .en 关键词 → 用重模型（Opus）。
+        否则使用默认模型（Sonnet）。
+        """
+        profile = getattr(self, "profile", None)
+        if profile is None:
+            return MODEL
+        ck = profile.neptune_complex_keywords or {}
+        needles = list(ck.get("zh") or []) + list(ck.get("en") or [])
+        if not needles:
+            return MODEL
+        ql = question.lower()
+        for kw in needles:
+            kw_l = kw.lower()
+            if kw_l and kw_l in ql:
+                logger.info(
+                    "NLQuery upgrading model to %s (matched complex keyword: %s)",
+                    MODEL_HEAVY, kw,
+                )
+                return MODEL_HEAVY
+        return MODEL
+
     def _generate_cypher(self, question: str) -> str:
         """调用 Bedrock Claude 将自然语言问题转成 openCypher 查询。
 
@@ -152,8 +178,9 @@ class NLQueryEngine:
         Returns:
             openCypher 查询字符串（已去除 markdown 代码块包裹）
         """
+        model_id = self._select_model(question)
         resp = self.bedrock.invoke_model(
-            modelId=MODEL,
+            modelId=model_id,
             body=json.dumps({
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": 1024,
