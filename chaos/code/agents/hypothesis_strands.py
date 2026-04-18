@@ -121,6 +121,10 @@ class StrandsHypothesisAgent(HypothesisBase):
             f"{schema}\n"
             f"{_AGENT_RULES}"
         )
+        # L2 Prompt Caching: 足够长才能触发缓存（低于 3000 chars 会静默忽略）。
+        assert len(self.system_prompt) > 3000, (
+            f"Hypothesis system prompt too short for caching: {len(self.system_prompt)} chars"
+        )
 
     # ------------------------------------------------------------
     # Public API (dict forms)
@@ -220,6 +224,7 @@ class StrandsHypothesisAgent(HypothesisBase):
 
     def _build_agent(self, model_id: str):
         from strands import Agent  # type: ignore
+        # Prompt Caching: system prompt + tool schema 都缓存，与 Smart Query L2 一致。
         model = build_bedrock_model(model_id=model_id, region=DEFAULT_REGION)
         return Agent(
             model=model,
