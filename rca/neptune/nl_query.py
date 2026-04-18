@@ -24,6 +24,15 @@ REGION = get_region()
 MODEL = os.environ.get('BEDROCK_MODEL', 'global.anthropic.claude-sonnet-4-6')
 
 
+# 空结果 "合理空" 的语义信号词（Wave 4）——命中这些词的问题不触发重试，
+# 因为用户原本就在查找不存在/未发生的事情，空结果是正确答案。
+_NEGATION_HINTS = (
+    "从未", "没有", "未做", "未被", "未出现", "未触发", "未曾", "不曾",
+    "不存在", "无", "零次", "不在",
+    "never", "without", "not exist", "no ", "none", "zero",
+)
+
+
 class NLQueryEngine:
     """自然语言图查询引擎：NL → openCypher → Neptune → 摘要。"""
 
@@ -47,6 +56,7 @@ class NLQueryEngine:
               "cypher": str,
               "results": list,
               "summary": str,
+              "retried": bool,  # Wave 4: 是否空结果重试过
             }
             或出错时：{"error": str, "cypher": str}
         """
@@ -69,6 +79,33 @@ class NLQueryEngine:
             logger.warning(f"NLQuery execution failed: {e} | cypher={cypher[:200]}")
             return {"error": str(e), "cypher": cypher}
 
+        # Wave 4: 空结果自动重试（跳过“合理空”的否定查询）
+        retried = False
+        if not results and self._should_retry_on_empty(question):
+            retry_cypher = self._retry_with_hint(question, cypher)
+            if retry_cypher:
+                safe2, reason2 = query_guard.is_safe(retry_cypher)
+                if safe2:
+                    retry_cypher = query_guard.ensure_limit(retry_cypher)
+                    if retry_cypher == cypher:
+                        logger.debug("NLQuery retry produced identical cypher; skip exec")
+                    else:
+                        try:
+                            retry_results = nc.results(retry_cypher)
+                        except Exception as e:
+                            logger.warning(f"NLQuery retry failed: {e} | cypher={retry_cypher[:200]}")
+                            retry_results = []
+                        if retry_results:
+                            logger.info(
+                                "NLQuery empty-result retry succeeded: %d rows (was 0)",
+                                len(retry_results),
+                            )
+                            cypher = retry_cypher
+                            results = retry_results
+                            retried = True
+                else:
+                    logger.debug(f"NLQuery retry blocked by guard: {reason2}")
+
         summary = self._summarize(question, results)
 
         return {
@@ -76,7 +113,35 @@ class NLQueryEngine:
             "cypher": cypher,
             "results": results,
             "summary": summary,
+            "retried": retried,
         }
+
+    def _should_retry_on_empty(self, question: str) -> bool:
+        """判断空结果是否值得重试。否定查询（“从未做过”等）不重试。"""
+        ql = question.lower()
+        return not any(hint in ql for hint in _NEGATION_HINTS)
+
+    def _retry_with_hint(self, question: str, prev_cypher: str) -> str:
+        """带关系提示和上次结果重新生成 cypher。
+
+        Returns:
+            重试后的 cypher；生成失败返回空字符串。
+        """
+        relations = getattr(self, "profile", None)
+        relations = relations.neptune_common_relations if relations else []
+        if not relations:
+            return ""
+        hint = (
+            f"\n\n注意：上次生成的查询返回空结果，请检查关系名是否正确。"
+            f"\n常用关系：{', '.join(relations)}"
+            f"\n上次生成的查询：{prev_cypher}"
+            f"\n请重新生成一个可能返回结果的查询（注意：微服务访问数据库用 AccessesData，不是 DependsOn）。"
+        )
+        try:
+            return self._generate_cypher(question + hint)
+        except Exception as e:
+            logger.warning(f"NLQuery retry generation failed: {e}")
+            return ""
 
     def _generate_cypher(self, question: str) -> str:
         """调用 Bedrock Claude 将自然语言问题转成 openCypher 查询。
