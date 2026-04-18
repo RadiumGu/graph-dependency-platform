@@ -59,16 +59,37 @@ with st.sidebar:
             st.markdown(f"**{i}. {ex['q']}**")
             st.code(ex['cypher'], language='cypher')
 
+    st.markdown("**引擎**")
+    import os
+    _active_engine = (os.environ.get("NLQUERY_ENGINE") or "direct").lower()
+    st.caption(f"当前：`{_active_engine}`（切换需重启）")
+
     st.markdown("**工作原理**")
-    st.markdown(
-        """
+    if _active_engine == "strands":
+        st.markdown(
+            """
+*Strands Agent (ReAct)*
 1. 自然语言问题
-2. Claude Sonnet 生成 openCypher
-3. 安全校验（拦截写操作）
-4. Neptune 执行查询
-5. Claude 生成中文摘要
+2. 根据关键词选模型：Sonnet / *Opus*（命中“完整/影响/路径”等词升 Opus）
+3. Agent 调用 `validate_cypher`校验安全
+4. Agent 调用 `execute_cypher` — 内部强制 `query_guard.is_safe()` 拦截写操作
+5. 必要时 Agent 自主调 `get_schema_section` 补充 schema 上下文
+6. Agent 生成中文摘要 + 结果表格
+每个回答下方可展开 *🔍 Tool Trace* 看完整 @tool 调用链。
 """
-    )
+        )
+    else:
+        st.markdown(
+            """
+*Direct Bedrock*
+1. 自然语言问题
+2. Claude Sonnet 生成 openCypher（复杂问题自动升 *Opus*）
+3. `query_guard.is_safe()` 安全校验（拦截写操作 + 超深遍历）
+4. Neptune 执行查询（自动补 LIMIT）
+5. 空结果时自动重试一次（带关系名提示，否定查询跳过）
+6. Claude 生成中文摘要
+"""
+        )
     if st.button("🗑️ 清空对话", use_container_width=True):
         st.session_state["chat_history"] = []
         st.rerun()
