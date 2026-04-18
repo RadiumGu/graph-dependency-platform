@@ -20,13 +20,21 @@ DEFAULT_MODEL = os.environ.get("BEDROCK_MODEL", "global.anthropic.claude-sonnet-
 HEAVY_MODEL = os.environ.get("BEDROCK_MODEL_HEAVY", "global.anthropic.claude-opus-4-7")
 
 
-def build_bedrock_model(model_id: str | None = None, region: str | None = None) -> Any:
+def build_bedrock_model(
+    model_id: str | None = None,
+    region: str | None = None,
+    max_tokens: int | None = None,
+) -> Any:
     """构造 Strands BedrockModel。
 
     懒导入 strands —— 让 Phase 1 在未装 strands 的环境仍能 import factory。
+
+    Args:
+        max_tokens: 覆盖默认 4096。大批量产出场景（max_hypotheses >= 20）建议 16384，
+            避免 MaxTokensReachedException（Phase 3 Module 1 retro 坑 4）。
     """
     from strands.models import BedrockModel  # type: ignore
-    return BedrockModel(
+    kwargs = dict(
         model_id=model_id or DEFAULT_MODEL,
         region_name=region or DEFAULT_REGION,
         # L2 Prompt Caching: 在 system prompt + tool schema 处注入 cachePoint。
@@ -34,6 +42,9 @@ def build_bedrock_model(model_id: str | None = None, region: str | None = None) 
         cache_prompt="default",
         cache_tools="default",
     )
+    if max_tokens is not None:
+        kwargs["max_tokens"] = int(max_tokens)
+    return BedrockModel(**kwargs)
 
 
 # TODO(phase-2): OTel / CloudWatch 接入
