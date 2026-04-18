@@ -29,6 +29,10 @@ def build_bedrock_model(model_id: str | None = None, region: str | None = None) 
     return BedrockModel(
         model_id=model_id or DEFAULT_MODEL,
         region_name=region or DEFAULT_REGION,
+        # L2 Prompt Caching: 在 system prompt + tool schema 处注入 cachePoint。
+        # Strands 自动走 Bedrock Converse API 的 cachePoint，默认 ephemeral (5min TTL)。
+        cache_prompt="default",
+        cache_tools="default",
     )
 
 

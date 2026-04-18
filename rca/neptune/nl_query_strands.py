@@ -56,6 +56,11 @@ class StrandsNLQueryEngine(NLQueryBase):
         ensure_telemetry()  # STRANDS_TELEMETRY=console|otlp 时激活
         self.bedrock = boto3.client("bedrock-runtime", region_name=DEFAULT_REGION)
         self.system_prompt = build_system_prompt(self.profile) + _AGENT_RULES
+        # L2 Prompt Caching: system prompt 太短 → Bedrock 静默跳过缓存。
+        # Sonnet/Opus 最低缓存 ~1024 tokens ≈ 3000 chars。
+        assert len(self.system_prompt) > 3000, (
+            f"system prompt too short for prompt caching: {len(self.system_prompt)} chars"
+        )
 
     # ------------------------------------------------------------
     # Public API
@@ -170,10 +175,18 @@ class StrandsNLQueryEngine(NLQueryBase):
             usage = summary.get("accumulated_usage") or {}
             it = int(usage.get("inputTokens", 0) or 0)
             ot = int(usage.get("outputTokens", 0) or 0)
-            tt = int(usage.get("totalTokens", it + ot) or 0)
-            if it == 0 and ot == 0:
+            cr = int(usage.get("cacheReadInputTokens", 0) or 0)
+            cw = int(usage.get("cacheWriteInputTokens", 0) or 0)
+            tt = int(usage.get("totalTokens", it + ot + cr + cw) or 0)
+            if it == 0 and ot == 0 and cr == 0 and cw == 0:
                 return None
-            return {"input": it, "output": ot, "total": tt}
+            return {
+                "input": it,
+                "output": ot,
+                "total": tt,
+                "cache_read": cr,
+                "cache_write": cw,
+            }
         except Exception as e:
             logger.debug("token usage extraction failed: %r", e)
             return None
