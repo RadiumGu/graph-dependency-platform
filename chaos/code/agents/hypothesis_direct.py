@@ -85,8 +85,15 @@ def _invoke_llm(prompt: str, max_tokens: int = 8192) -> str:
     return result["content"][0]["text"]
 
 
-def _invoke_llm_tracked(prompt: str, max_tokens: int = 8192) -> tuple[str, dict]:
+def _invoke_llm_tracked(
+    prompt: str,
+    max_tokens: int = 8192,
+    system_prompt: str | None = None,
+) -> tuple[str, dict]:
     """带 token_usage 采集的版本。保持与 _invoke_llm 行为一致，只是额外抽 usage。
+
+    当 system_prompt 提供且 ≥ 3000 chars 时，自动对 system 加 cache_control=ephemeral
+    → Prompt Caching 生效。
 
     Returns: (text, {"input": int, "output": int, "total": int,
                     "cache_read": int, "cache_write": int})
@@ -97,14 +104,23 @@ def _invoke_llm_tracked(prompt: str, max_tokens: int = 8192) -> tuple[str, dict]
         region_name=BEDROCK_REGION,
         config=_BotocoreConfig(retries={"mode": "adaptive", "max_attempts": 5}),
     )
-    resp = client.invoke_model(
-        modelId=BEDROCK_MODEL,
-        body=json.dumps({
-            "anthropic_version": "bedrock-2023-05-31",
-            "max_tokens": max_tokens,
-            "messages": [{"role": "user", "content": prompt}],
-        }),
-    )
+    body: dict = {
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": max_tokens,
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if system_prompt and len(system_prompt) > 3000:
+        body["system"] = [
+            {
+                "type": "text",
+                "text": system_prompt,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+    elif system_prompt:
+        # 太短不能缓存，就晦黑直接当普通 system
+        body["system"] = system_prompt
+    resp = client.invoke_model(modelId=BEDROCK_MODEL, body=json.dumps(body))
     result = json.loads(resp["body"].read())
     text = result["content"][0]["text"]
     u = result.get("usage") or {}
@@ -150,8 +166,11 @@ class DirectBedrockHypothesis(HypothesisBase):
         self._incidents = None
         self._infra_snapshot = None
 
-    def _invoke_llm_tracked(self, prompt: str, max_tokens: int = 8192) -> tuple[str, dict]:
-        text, usage = _invoke_llm_tracked(prompt, max_tokens=max_tokens)
+    def _invoke_llm_tracked(self, prompt: str, max_tokens: int = 8192,
+                            system_prompt: str | None = None) -> tuple[str, dict]:
+        text, usage = _invoke_llm_tracked(
+            prompt, max_tokens=max_tokens, system_prompt=system_prompt,
+        )
         prev = self._last_tokens or {"input": 0, "output": 0, "total": 0, "cache_read": 0, "cache_write": 0}
         self._last_tokens = {
             k: prev.get(k, 0) + usage.get(k, 0)
@@ -261,11 +280,14 @@ class DirectBedrockHypothesis(HypothesisBase):
             service_names = [s["name"] for s in topology]
             infra_snapshot = self._query_infra_snapshot(service_names)
 
-            prompt = self._build_generate_prompt(
-                topology, incidents, history, max_hypotheses, infra_snapshot
+            prompt_stable = self._build_generate_system_stable()
+            prompt_user = self._build_generate_user_dynamic(
+                topology, incidents, history, max_hypotheses, infra_snapshot,
             )
-            logger.info("调用 Bedrock LLM 生成假设...")
-            llm_response, usage = self._invoke_llm_tracked(prompt)
+            logger.info("调用 Bedrock LLM 生成假设... (system_cache=%d chars)", len(prompt_stable))
+            llm_response, usage = self._invoke_llm_tracked(
+                prompt_user, system_prompt=prompt_stable,
+            )
 
             raw_list = _extract_json(llm_response)
             hypotheses = []
@@ -301,7 +323,170 @@ class DirectBedrockHypothesis(HypothesisBase):
         self, topology: list, incidents: list, history: list, max_hypotheses: int,
         infra_snapshot: dict = None,
     ) -> str:
-        # 简化 history 为摘要
+        """兼容旧 API（单 prompt 版，用于非缓存路径），等价于将 system_stable + user_dynamic 拼接。"""
+        return (
+            self._build_generate_system_stable()
+            + "\n\n"
+            + self._build_generate_user_dynamic(
+                topology, incidents, history, max_hypotheses, infra_snapshot,
+            )
+        )
+
+    @staticmethod
+    def _build_generate_system_stable() -> str:
+        """Prompt Caching 的稳定前缀（规则 + 示例 + fault type 详解）。不依赖本次输入。
+
+        长度要求 > 3000 chars 以满足 Sonnet/Opus 最低缓存门槛。
+        """
+        valid_faults_str = ", ".join(VALID_FAULT_TYPES)
+        return f"""你是混沌工程假设专家。根据用户提供的服务拓扑 / 历史实验 / 历史故障 / 实时基础设施快照生成混沌工程假设。
+
+## 核心规则
+1. 覆盖 5 大故障域：compute, data, network, dependencies, resources
+2. 每个假设必须包含：稳态假设、故障场景、预期影响、验证标准
+3. 优先关注 Tier0/Tier1 服务
+4. 考虑级联故障（A 依赖 B，B 故障时 A 如何表现）
+5. 避免生成已经验证过的重复假设
+6. fault_scenario 中的故障类型必须是以下之一: {valid_faults_str}
+7. backend 字段: 对 Lambda/RDS 等 AWS 资源用 "fis"，对 K8s Pod 用 "chaosmesh"
+8. 按 JSON 数组格式输出，每个元素包含以下字段:
+   id, title, description, steady_state, fault_scenario, expected_impact,
+   failure_domain, target_services (数组), target_resources (数组), backend
+
+## 故障类型详解
+- pod_kill：删除一部分 Pod，验证副本自愈 / HPA 扩容 / PDB 保护。适用于有多副本的 StatefulSet/Deployment。
+- pod_failure：让 Pod 单独停掉不被重新调度，验证跨 AZ failover。比 pod_kill 持久，影响更大。
+- network_delay：网络延迟注入，验证超时重试 / 降级 策略。适用于上下游依赖 / 数据库查询场景。
+- network_loss：网络丢包，验证重传 / 熔断。比 delay 更恶劣，适合测试 TCP 层鲁棒性。
+- network_partition：设置网络隔离，完全切断 AZ 或服务间通信。验证 split-brain / quorum 行为。
+- pod_cpu_stress / pod_memory_stress：资源压力注入，验证 HPA 扩容 / OOM kill / limit 保护。
+- dns_chaos：DNS 响应异常或超时，验证服务依赖 DNS 解析的鲁棒性。
+- http_chaos：HTTP 层注入延迟/错误/篑改，验证 SDK retry / timeout / circuit-breaker。
+
+## Tier 分级实验标准
+- Tier0：只在非工作时间做；假设 blast_radius <= 10%；before/after steady state 均 SR>=95%；自动 RCA
+- Tier1：工作时间可做；blast_radius <= 30%；SR>=90%；自动 RCA
+- Tier2：时间不限；blast_radius <= 50%；SR>=80%；RCA 不强制
+
+## 输出示例
+```json
+[
+  {{
+    "id": "H001",
+    "title": "petsite pod_kill 验证 HPA 快速扩容",
+    "description": "删除 50% petsite Pod，观察 HPA 是否在 60s 内将副本恢复到 desired，且期间 ALB 健康检查没有全部失败。",
+    "steady_state": "SR>=99%, p99<500ms",
+    "fault_scenario": "pod_kill 50% petsite Pod 持续 2min",
+    "expected_impact": "SR 暂降到 97%，HPA 在 60s 内恢复副本",
+    "failure_domain": "compute",
+    "target_services": ["petsite"],
+    "target_resources": ["pod"],
+    "backend": "chaosmesh"
+  }}
+]
+```
+
+## 实时基础设施提示（通用字句）
+- 利用实际 Pod 数量决定 fault mode/value（例如 2 副本服务用 fixed:1 而非 fixed-percent:50）
+- 单节点部署的服务，pod_kill 会导致完全不可用，需要更保守的实验参数
+- 有 AWS 资源（Lambda/RDS）的服务可以同时设计 FIS 实验
+- 没有 running Pod 的服务跳过 Chaos Mesh 类假设
+- 不要给没有历史流量的服务做后期验证实验，优先选择有非空 Pod + 有 ALB 流量的服务
+
+## 命名规范
+- id 预留为 "H{{NNN}}" 格式但无须人工指定，调用方会重新编号
+- target_services 是服务名字符串数组、target_resources 是 pod/lambda/rds/dynamodb 之类的资源类型
+- description 和中文摘要都用简体中文
+
+## 假设质量评价维度
+后续 prioritize 阶段会对假设按以下 4 个维度评分，这里先告诉你方便你产出的假设本身就很有评分相关的质量：
+- business_impact (1-10)：业务影响。Tier0 级别的初始红线服务得 8-10，Tier1 准关键服务 6-7，Tier2 得 4-5。假设描述清楚地关联业务指标（订单成功率 / 登录延迟）能拿高分。
+- blast_radius (1-10)：爆炸半径。越小越好，因此 10 分 = 单节点或单 Pod 摩挣，1 分 = 全 region 中断。假设中指定 fixed-percent 比例、duration 短、有明确的 targeted pod selector 的容易拿高分。
+- feasibility (1-10)：技术可行性。有现成 FIS action / Chaos Mesh CRD 的假设得 8-10；需要写自定义 probe / 外部工具的得 4-6；不可实施的 ≤ 3。
+- learning_value (1-10)：学习价值。历史未验证过的故障场景得 8-10；验证过但基础设施有变化的得 5-6；完全重复历史实验的得 1-3。
+
+你要出的是假设本身，不要直接写分数。但你心里要有这个标尺，避免产出不可实施 / 重复 / 没有业务指标的假设。
+
+## 下游消费者的假定
+生成的 Hypothesis 列表会被下游 runner 模块消费；它会按 target_services/target_resources 解析成 K8s namespace/label 或 AWS ARN，再用 backend 指定的手段（chaosmesh/fis）注入故障。所以必须：
+- target_services 里的名字要完全匹配 Neptune 拓扑中的 Microservice 节点 name，不要自习似的别名
+- target_resources 用小写英文关键字：pod / lambda / rds / dynamodb / sqs / ec2 / node 等
+- fault_scenario 中的故障类型要是前面列出的 VALID_FAULT_TYPES之一，其他信息（比例、时长）用自然语描述
+
+## 不要做的事（Do NOT）
+1. 不要对 Tier2 服务生成 Tier0 级别的破坏性实验（优先级和爆炸半径不匹配）
+2. 不要在一个假设里同时注入多种 fault（一个 Hypothesis = 一个故障变量）
+3. 不要构造“理论上可能但拓扑中不存在的服务”假设（都在 Neptune 数据里有满足的节点）
+4. 不要将 RDS 集群或 DynamoDB 表写成 target_resources=["pod"]（才不匹配 backend）
+5. 不要生成 duration 超过 15 分钟的实验，blast radius 控制
+6. 不要输出解释或中英文夹杂的描述，只用简体中文 + JSON
+7. 不要引用拓扑里没出现的服务名，寄托 topology.services 里出现过的才写
+
+## Few-shot 示例（输入 → 理想输出风格）
+### 示例 1：单服务 pod_kill
+输入：topology 中 petsite Tier0 服务，3 副本分布在 2 AZ，无历史实验
+理想输出：
+```json
+{{
+  "id": "H001", "title": "petsite 混部署验证 HPA",
+  "description": "删除 1 个 petsite Pod，观察 HPA 是否在 60s 内补上副本",
+  "steady_state": "SR>=99%",
+  "fault_scenario": "pod_kill mode=fixed value=1 duration=2m",
+  "expected_impact": "SR 暂降 1-2%，60s 内恢复",
+  "failure_domain": "compute",
+  "target_services": ["petsite"],
+  "target_resources": ["pod"],
+  "backend": "chaosmesh"
+}}
+```
+
+### 示例 2：依赖性故障
+topology：petsite -> payforadoption (Tier1) 的调用关系，历史无此组合实验
+理想输出：
+```json
+{{
+  "id": "H002", "title": "payforadoption 网络延迟验证 petsite 降级",
+  "description": "在 payforadoption Pod 的 egress 注入 500ms 延迟，观察 petsite 调用 timeout 后是否降级",
+  "steady_state": "petsite SR>=95%",
+  "fault_scenario": "network_delay latency=500ms duration=3m",
+  "expected_impact": "临时 SR 降到 93%，降级生效后回升",
+  "failure_domain": "network",
+  "target_services": ["payforadoption"],
+  "target_resources": ["pod"],
+  "backend": "chaosmesh"
+}}
+```
+
+### 示例 3：Lambda 服务
+topology：statusupdater 是 Lambda，依赖 DynamoDB pets 表
+理想输出：
+```json
+{{
+  "id": "H003", "title": "statusupdater Lambda throttle 验证降级",
+  "description": "对 statusupdater Lambda 设置 reserved concurrency=1，观察上游扩量的究极而进行操作",
+  "steady_state": "Lambda invocation SR>=99%",
+  "fault_scenario": "lambda_throttle concurrency=1 duration=5m",
+  "expected_impact": "SR 降到 50%，触发 SQS 中的 DLQ 积压告警",
+  "failure_domain": "compute",
+  "target_services": ["statusupdater"],
+  "target_resources": ["lambda"],
+  "backend": "fis"
+}}
+```
+
+## Tool 名词表
+- pod_kill / pod_failure: K8s Pod 层故障，需要 chaosmesh backend
+- network_delay / network_loss / network_partition: Pod 网络注入，chaosmesh
+- pod_cpu_stress / pod_memory_stress: 资源压力，chaosmesh
+- dns_chaos: DNS 响应异常，chaosmesh
+- http_chaos: HTTP 层注入，chaosmesh
+所有 AWS 原生服务（Lambda/RDS/DynamoDB/SQS）用 fis backend，存于 FIS experiment templates 中有定义的故障。
+"""
+
+    def _build_generate_user_dynamic(
+        self, topology: list, incidents: list, history: list,
+        max_hypotheses: int, infra_snapshot: dict = None,
+    ) -> str:
         history_summary = []
         for item in history[:30]:
             history_summary.append({
@@ -309,63 +494,16 @@ class DirectBedrockHypothesis(HypothesisBase):
                 "fault": item.get("fault_type", {}).get("S", ""),
                 "status": item.get("status", {}).get("S", ""),
             })
-
-        valid_faults_str = ", ".join(VALID_FAULT_TYPES)
-
-        # 构建基础设施快照描述
-        infra_section = ""
+        infra_block = ""
         if infra_snapshot:
-            infra_section = f"""
-## 实时基础设施状态（来自 TargetResolver）
-{json.dumps(infra_snapshot, ensure_ascii=False, indent=2)}
-
-注意：
-- 利用实际 Pod 数量决定 fault mode/value（例如 2 副本服务用 fixed:1 而非 fixed-percent:50）
-- 单节点部署的服务，pod_kill 会导致完全不可用，需要更保守的实验参数
-- 有 AWS 资源（Lambda/RDS）的服务可以同时设计 FIS 实验
-- 没有 running Pod 的服务跳过 Chaos Mesh 类假设
-"""
-
-        return f"""你是混沌工程假设专家。基于以下服务拓扑和依赖关系，生成混沌工程假设。
-
-## 服务拓扑
-{json.dumps(topology, ensure_ascii=False, indent=2)}
-{infra_section}
-## 历史实验结果
-{json.dumps(history_summary, ensure_ascii=False, indent=2)}
-
-## 历史故障事件
-{json.dumps(incidents, ensure_ascii=False, indent=2)}
-
-## 要求
-1. 覆盖 5 大故障域：compute, data, network, dependencies, resources
-2. 每个假设必须包含：稳态假设、故障场景、预期影响、验证标准
-3. 优先关注 Tier0/Tier1 服务
-4. 考虑级联故障（A 依赖 B，B 故障时 A 如何表现）
-5. 避免生成已经验证过的重复假设
-6. 最多生成 {max_hypotheses} 个假设
-7. fault_scenario 中的故障类型必须是以下之一: {valid_faults_str}
-8. backend 字段: 对 Lambda/RDS 等 AWS 资源用 "fis"，对 K8s Pod 用 "chaosmesh"
-9. 按 JSON 数组格式输出，每个元素包含以下字段:
-   id, title, description, steady_state, fault_scenario, expected_impact,
-   failure_domain, target_services (数组), target_resources (数组), backend
-
-```json
-[
-  {{
-    "id": "H001",
-    "title": "示例标题",
-    "description": "详细描述",
-    "steady_state": "成功率 >= 99%",
-    "fault_scenario": "pod_kill 50% petsite Pod",
-    "expected_impact": "成功率短暂下降后自动恢复",
-    "failure_domain": "compute",
-    "target_services": ["petsite"],
-    "target_resources": ["pod"],
-    "backend": "chaosmesh"
-  }}
-]
-```"""
+            infra_block = f"\n## 实时基础设施状态\n{json.dumps(infra_snapshot, ensure_ascii=False, indent=2)}\n"
+        return (
+            f"## 服务拓扑\n{json.dumps(topology, ensure_ascii=False, indent=2)}\n"
+            f"{infra_block}"
+            f"## 历史实验结果\n{json.dumps(history_summary, ensure_ascii=False, indent=2)}\n\n"
+            f"## 历史故障事件\n{json.dumps(incidents, ensure_ascii=False, indent=2)}\n\n"
+            f"## 本次要求\n最多生成 {max_hypotheses} 个假设。直接输出 JSON 数组。"
+        )
 
     # ── 优先级排序 ───────────────────────────────────────────────────
 
