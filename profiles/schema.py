@@ -64,11 +64,31 @@ class KubernetesConfig(BaseModel):
     deployment_map: Dict[str, str] = Field(default_factory=dict)
 
 
+class NeptuneGuardRules(BaseModel):
+    """Neptune 查询安全规则。"""
+    forbidden_operations: List[str] = Field(
+        default_factory=lambda: ["CREATE", "DELETE", "DETACH", "SET", "MERGE", "REMOVE", "DROP", "CALL"]
+    )
+    max_hop_depth: int = 6
+    default_limit: int = 200
+
+
+class NeptuneComplexKeywords(BaseModel):
+    """复杂问题触发词（切重模型用）。"""
+    zh: List[str] = Field(default_factory=list)
+    en: List[str] = Field(default_factory=list)
+
+
 class NeptuneConfig(BaseModel):
     """Neptune 配置。"""
     endpoint: Optional[str] = None
     port: int = 8182
     nl_query_examples: List[Dict[str, str]] = Field(default_factory=list)
+    # Wave 1 (2026-04-18): Smart Query 游击提升 - schema 和规则从 profile 读
+    graph_schema_text: Optional[str] = None
+    common_relations: List[str] = Field(default_factory=list)
+    guard_rules: NeptuneGuardRules = Field(default_factory=NeptuneGuardRules)
+    complex_keywords: NeptuneComplexKeywords = Field(default_factory=NeptuneComplexKeywords)
 
 
 class MonitoringConfig(BaseModel):

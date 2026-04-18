@@ -27,9 +27,13 @@ MODEL = os.environ.get('BEDROCK_MODEL', 'global.anthropic.claude-sonnet-4-6')
 class NLQueryEngine:
     """自然语言图查询引擎：NL → openCypher → Neptune → 摘要。"""
 
-    def __init__(self) -> None:
+    def __init__(self, profile=None) -> None:
         self.bedrock = boto3.client('bedrock-runtime', region_name=REGION)
-        self.system_prompt = build_system_prompt()
+        if profile is None:
+            from profiles.profile_loader import EnvironmentProfile
+            profile = EnvironmentProfile()
+        self.profile = profile
+        self.system_prompt = build_system_prompt(self.profile)
 
     def query(self, question: str) -> dict:
         """执行自然语言查询，返回包含 cypher、结果和摘要的字典。
