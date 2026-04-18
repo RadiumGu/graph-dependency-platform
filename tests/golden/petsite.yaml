@@ -94,9 +94,9 @@ cases:
     result_min_rows: 0
 
   - id: q014
-    question: "所有 P0 故障及其根因"
-    cypher_must_contain: ["P0", "root_cause"]
-    result_min_rows: 0
+    question: "所有严重故障（P1 及以上）及其根因"
+    cypher_must_contain: ["severity", "root_cause"]
+    result_min_rows: 1
 
   # --- 网络拓扑 ---
   - id: q015
