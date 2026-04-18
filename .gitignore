@@ -24,3 +24,6 @@ infra/cdk.context.json
 # Local temp
 *.log
 /tmp_*
+
+# Internal experiments directory (not for public)
+experiments/
