@@ -50,31 +50,49 @@ class NLQueryBase(ABC):
 class HypothesisBase(ABC):
     """Chaos 混沌工程假设生成引擎基类（Phase 3 Module 1）。
 
-    generate() / prioritize() 返回 dict 规范，字段跟 NLQueryBase 对齐：
-      - hypotheses: list  # 业务产出，generate() 有值；prioritize() 可为空
-      - prioritized: list # 有排序的版本，generate() 为空；prioritize() 有值
+    *核心契约*：子类实现 generate_with_meta() / prioritize_with_meta()，返回 dict：
+      - hypotheses: list  # 业务产出，generate 有值；prioritize 可为空
+      - prioritized: list # 有排序的版本，generate 为空；prioritize 有值
       - engine: str       # "direct" | "strands"
       - model_used: str | None
       - latency_ms: int
       - token_usage: dict | None  # {input,output,total,cache_read,cache_write}
       - trace: list[dict]         # Strands tool-call 链；direct 为 []
-      - error: str | None         # 成功时可缺省或 None
+      - error: str | None
 
-    为兼容现有调用方（orchestrator / learning_agent / main 直接拿 list[Hypothesis]），
-    具体子类可额外提供返回 list 的代理方法，由 shim 类包装。
+    *向后兼容*：提供默认 generate()/prioritize() 包装 _with_meta()，返回 list
+    （现版调用方 orchestrator / learning_agent / main 无改动）。
     """
+
+    ENGINE_NAME = "base"
 
     def __init__(self, profile: Any = None) -> None:
         self.profile = profile
 
     @abstractmethod
-    def generate(
+    def generate_with_meta(
         self,
         max_hypotheses: int = 50,
         service_filter: str | None = None,
     ) -> dict:
-        """生成混沌工程假设列表（包含迁移元数据的 dict形式）。"""
+        """生成假设，返回带元数据的 dict。子类必填全部关键字段。"""
 
     @abstractmethod
-    def prioritize(self, hypotheses: list) -> dict:
-        """对已有假设列表排序，返回带排序结果的 dict。"""
+    def prioritize_with_meta(self, hypotheses: list) -> dict:
+        """排序假设，返回带元数据的 dict。子类必填全部关键字段。"""
+
+    # —— 向后兼容默认实现（调用 元数据版后剩下 list） ——
+
+    def generate(
+        self,
+        max_hypotheses: int = 50,
+        service_filter: str | None = None,
+    ) -> list:
+        """向后兼容：直接返回 list[Hypothesis]。"""
+        return self.generate_with_meta(
+            max_hypotheses=max_hypotheses, service_filter=service_filter,
+        ).get("hypotheses", [])
+
+    def prioritize(self, hypotheses: list) -> list:
+        """向后兼容：直接返回 list[Hypothesis]。"""
+        return self.prioritize_with_meta(hypotheses).get("prioritized", hypotheses)
