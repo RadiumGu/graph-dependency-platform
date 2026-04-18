@@ -26,7 +26,7 @@ class NLQueryBase(ABC):
       - latency_ms: int
       - token_usage: dict | None   # {"input","output","total"}；拿不到填 None
       - trace: list[dict]    # direct 固定 []；strands 填 tool-call 链
-      - error: str | None
+      - error: str | None   # 成功时可缺省或设 None
     """
 
     def __init__(self, profile: Any = None) -> None:
