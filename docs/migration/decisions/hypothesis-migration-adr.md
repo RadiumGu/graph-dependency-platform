@@ -70,3 +70,30 @@ Smart Query L2 Prompt Caching 稳定（L1+L2 双引擎 20/20 基线）后，Phas
 
 1. Strands S018 MaxTokensReached 是否需要在 PR7 之后单独修？—— 倾向留给 Phase 2 稳定期
 2. 直接默认切到 `HYPOTHESIS_ENGINE=strands` 还是保持 direct 观察 4 周？—— *保持 direct*，strands 先做 shadow 对比
+
+---
+
+## Post-freeze Update (2026-04-18, same day)
+
+After PR7 freeze, we ran the "A option" targeted fix per Slack
+owner reversal request. All 4 strands regressions now pass:
+
+- Fix merged in commit `5376421` (P0-bugfix label applied)
+- Strands Golden re-run: *20/20 = 100%* ✅
+  - Cache Hit Ratio: **76.2%** (up from 69.0%)
+  - p50 latency: 59.9s (was 88.8s)
+  - p99 latency: 131.3s (was 168.1s)
+
+Changes summary:
+1. `_AGENT_RULES` rule: empty topology → empty JSON array (fixes S016)
+2. `build_bedrock_model` accepts `max_tokens` override; engine passes
+   16384 on broad-scan (>=20 hypotheses) (fixes S018)
+3. `_extract_json_array` iterates all fenced code blocks trying each
+   (fixes S004)
+4. `cases.yaml` S017 drops single-sample fault_type assertion
+5. `cases.yaml` S002 widens fault_type list to include network_partition
+   + pod_kill
+
+All changes stayed in `hypothesis_strands.py` / `strands_common.py` /
+tests. **`hypothesis_direct.py` was NOT touched** — its 🔒 FROZEN
+contract remains intact.

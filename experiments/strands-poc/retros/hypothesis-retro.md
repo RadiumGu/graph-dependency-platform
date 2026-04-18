@@ -12,10 +12,10 @@
 - **Start / End Commit**: `c9f0059` (PR1) → `de5f11c` (prioritize cache)（PR7 待合）
 - **Golden baseline**:
   - direct *18/20 = 90%* ✅（≥18/20 门槛）
-  - strands *16/20 = 80%* ❌（未达）
+  - strands *20/20 = 100%* ✅（P0-bugfix `5376421` 后，2026-04-18 同日完成）
 - **Cache hit ratio**:
   - direct 66.3%（prioritize 加缓存前）→ 预估合并后 ~85%
-  - strands 69.0%
+  - strands 76.2%（上一版 69.0% → 修后）
 - **Cost savings vs no-cache（估算）**:
   - direct generate+prioritize 一次性调用，prioritize 缓存前单次节省 ~40%；合并后 ~60%
   - strands 多 cycle + 缓存 internal reuse，稳态 ~65%
