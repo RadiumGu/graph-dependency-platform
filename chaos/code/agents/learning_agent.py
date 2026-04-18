@@ -296,7 +296,12 @@ JSON 数组，每个元素: {{"priority": 1, "category": "coverage|resilience|pr
         new_hypotheses = []
         if report.coverage_gaps:
             try:
-                agent = HypothesisAgent()
+                import os as _os, sys as _sys
+                _rca = _os.path.join(_os.path.dirname(__file__), "..", "..", "..", "rca")
+                if _os.path.abspath(_rca) not in _sys.path:
+                    _sys.path.insert(0, _os.path.abspath(_rca))
+                from engines.factory import make_hypothesis_engine
+                agent = make_hypothesis_engine()
                 for gap in report.coverage_gaps[:3]:
                     generated = agent.generate(max_hypotheses=3, service_filter=gap.service)
                     # 只保留覆盖缺失域的

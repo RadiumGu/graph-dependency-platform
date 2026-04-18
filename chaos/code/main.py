@@ -17,6 +17,10 @@ import os
 _PROJECT_ROOT = os.path.join(os.path.dirname(__file__), '..', '..')
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, os.path.abspath(_PROJECT_ROOT))
+# 让 engines 包可 import（它在 rca/engines/）
+_RCA_ROOT = os.path.join(_PROJECT_ROOT, "rca")
+if os.path.abspath(_RCA_ROOT) not in sys.path:
+    sys.path.insert(0, os.path.abspath(_RCA_ROOT))
 
 from shared import get_region
 
@@ -215,9 +219,10 @@ def cmd_learn(args):
 
 def cmd_hypothesis(args):
     """假设生成 / 列表 / 导出"""
-    from agents import HypothesisAgent
+    from agents import HypothesisAgent  # 需 .load() / .to_experiment_yamls() 等附属方法
+    from engines.factory import make_hypothesis_engine
 
-    agent = HypothesisAgent()
+    agent = make_hypothesis_engine()
     action = args.hypothesis_action
 
     if action == "generate":
