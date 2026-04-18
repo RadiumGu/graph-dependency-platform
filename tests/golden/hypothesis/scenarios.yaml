@@ -1,0 +1,201 @@
+# Hypothesis Golden Scenarios — 纯输入定义
+# Phase 3 Module 1 的 Golden Set 输入侧。每条只描述"给引擎什么 + 合理范围"，
+# 不规定具体 fault_type，避免硬编码 LLM 行为。
+#
+# 运行方式：
+#   先用 direct 引擎对每条场景跑 3 次，统计分布 → 生成 cases.yaml 草稿，
+#   人工 review 后 commit（脚本见 experiments/strands-poc/sample_for_golden.py）。
+#
+# 每条场景：
+#   id: 唯一 ID
+#   desc: 人类可读描述
+#   service_filter: 可选，收窄 generate 输入
+#   max_hypotheses: 上限
+#   expected:
+#     min_hypotheses: 最少产出数量（行为约束）
+#     max_hypotheses: 最多产出数量
+#     failure_domain_must_include_any: list[str]  # 至少要覆盖其中任一
+#     fault_type_must_include_any: list[str]       # 至少要用到其中任一（sample 后填）
+#     must_not_include:                            # 绝对不能出现的组合
+#       - {service: ..., fault: ..., reason: ...}
+#     tier_must_equal: str | null                  # 期望所有假设 target tier
+
+scenarios:
+  # ===== 单服务聚焦 =====
+  - id: S001
+    desc: "petsite（Tier0, K8s, 多副本）全方位混沌假设"
+    service_filter: petsite
+    max_hypotheses: 10
+    expected:
+      min_hypotheses: 3
+      max_hypotheses: 10
+      failure_domain_must_include_any: [compute, network]
+      tier_must_equal: Tier0
+
+  - id: S002
+    desc: "payforadoption（Tier1）混沌假设"
+    service_filter: payforadoption
+    max_hypotheses: 8
+    expected:
+      min_hypotheses: 2
+      max_hypotheses: 8
+      tier_must_equal: Tier1
+
+  - id: S003
+    desc: "petsearch（Tier0，数据依赖型）"
+    service_filter: petsearch
+    max_hypotheses: 8
+    expected:
+      min_hypotheses: 2
+      max_hypotheses: 8
+      failure_domain_must_include_any: [dependencies, data]
+
+  - id: S004
+    desc: "petlistadoptions（Tier1）"
+    service_filter: petlistadoptions
+    max_hypotheses: 6
+    expected:
+      min_hypotheses: 2
+      max_hypotheses: 6
+
+  - id: S005
+    desc: "pethistory（Tier2，异步日志型）"
+    service_filter: pethistory
+    max_hypotheses: 6
+    expected:
+      min_hypotheses: 2
+      max_hypotheses: 6
+      tier_must_equal: Tier2
+
+  - id: S006
+    desc: "trafficgenerator（Tier2，压测工具）"
+    service_filter: trafficgenerator
+    max_hypotheses: 5
+    expected:
+      min_hypotheses: 1
+      max_hypotheses: 5
+
+  - id: S007
+    desc: "petstatusupdater（Lambda + DynamoDB）"
+    service_filter: petstatusupdater
+    max_hypotheses: 6
+    expected:
+      min_hypotheses: 2
+      max_hypotheses: 6
+      # Lambda 服务 backend 应该主要是 fis
+      backend_must_include_any: [fis]
+      # 绝对不应该对 Lambda 提 pod_* 系列假设
+      must_not_include:
+        - match: pod_kill
+          reason: "petstatusupdater 是 Lambda，没有 Pod"
+
+  # ===== 全局场景 =====
+  - id: S008
+    desc: "无 filter 广度覆盖（系统级）"
+    service_filter: null
+    max_hypotheses: 20
+    expected:
+      min_hypotheses: 8
+      max_hypotheses: 20
+      failure_domain_must_include_any: [compute, network, dependencies, resources]
+
+  - id: S009
+    desc: "无 filter 小数量聚焦（高优先级）"
+    service_filter: null
+    max_hypotheses: 5
+    expected:
+      min_hypotheses: 3
+      max_hypotheses: 5
+
+  - id: S010
+    desc: "无 filter 中等数量（覆盖 5 failure domains）"
+    service_filter: null
+    max_hypotheses: 15
+    expected:
+      min_hypotheses: 6
+      max_hypotheses: 15
+
+  # ===== 数据层 =====
+  - id: S011
+    desc: "product-service（数据库依赖）"
+    service_filter: product-service
+    max_hypotheses: 5
+    expected:
+      min_hypotheses: 1
+      max_hypotheses: 5
+
+  - id: S012
+    desc: "order-service（订单核心）"
+    service_filter: order-service
+    max_hypotheses: 6
+    expected:
+      min_hypotheses: 2
+      max_hypotheses: 6
+
+  - id: S013
+    desc: "points-service（积分服务）"
+    service_filter: points-service
+    max_hypotheses: 5
+    expected:
+      min_hypotheses: 1
+      max_hypotheses: 5
+
+  - id: S014
+    desc: "gateway-service（网关入口）"
+    service_filter: gateway-service
+    max_hypotheses: 8
+    expected:
+      min_hypotheses: 2
+      max_hypotheses: 8
+      failure_domain_must_include_any: [network, compute]
+
+  - id: S015
+    desc: "auth-service（认证）"
+    service_filter: auth-service
+    max_hypotheses: 5
+    expected:
+      min_hypotheses: 1
+      max_hypotheses: 5
+
+  # ===== 非法输入 =====
+  - id: S016
+    desc: "不存在的 service（错误分支）"
+    service_filter: nonexistent-service-xyz
+    max_hypotheses: 5
+    expected:
+      min_hypotheses: 0
+      max_hypotheses: 0
+      should_error: true
+
+  # ===== 边界 =====
+  - id: S017
+    desc: "max_hypotheses=1（极小）"
+    service_filter: petsite
+    max_hypotheses: 1
+    expected:
+      min_hypotheses: 1
+      max_hypotheses: 1
+
+  - id: S018
+    desc: "max_hypotheses=30（接近 Opus 阈值）"
+    service_filter: null
+    max_hypotheses: 30
+    expected:
+      min_hypotheses: 10
+      max_hypotheses: 30
+
+  - id: S019
+    desc: "artillery（压测类服务，Tier2）"
+    service_filter: artillery
+    max_hypotheses: 5
+    expected:
+      min_hypotheses: 1
+      max_hypotheses: 5
+
+  - id: S020
+    desc: "artillery-write"
+    service_filter: artillery-write
+    max_hypotheses: 5
+    expected:
+      min_hypotheses: 1
+      max_hypotheses: 5
