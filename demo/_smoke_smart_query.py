@@ -41,6 +41,9 @@ def run_for(engine_name: str) -> dict:
             "cypher_head": (out.get("cypher") or "")[:140],
             "trace_tools": [t.get("tool") for t in (out.get("trace") or [])],
             "retried": out.get("retried"),
+            "strands_cycles": out.get("strands_cycles"),
+            "token_usage": out.get("token_usage"),
+            "latency_ms_agent": out.get("latency_ms_agent"),
             "error": out.get("error"),
         })
     return {"engine_class": type(eng).__name__, "runs": rows}

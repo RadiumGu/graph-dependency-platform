@@ -23,7 +23,7 @@ from typing import Any
 import boto3
 
 from engines.base import NLQueryBase
-from engines.strands_common import DEFAULT_MODEL, DEFAULT_REGION, HEAVY_MODEL, build_bedrock_model
+from engines.strands_common import DEFAULT_MODEL, DEFAULT_REGION, HEAVY_MODEL, build_bedrock_model, ensure_telemetry
 from neptune import strands_tools as st_tools
 from neptune.schema_prompt import build_system_prompt
 
@@ -53,6 +53,7 @@ class StrandsNLQueryEngine(NLQueryBase):
         if self.profile is None:
             from profiles.profile_loader import EnvironmentProfile
             self.profile = EnvironmentProfile()
+        ensure_telemetry()  # STRANDS_TELEMETRY=console|otlp 时激活
         self.bedrock = boto3.client("bedrock-runtime", region_name=DEFAULT_REGION)
         self.system_prompt = build_system_prompt(self.profile) + _AGENT_RULES
 
@@ -98,10 +99,13 @@ class StrandsNLQueryEngine(NLQueryBase):
 
         summary = self._extract_agent_text(resp) or self._fallback_summary(results)
         tokens = self._extract_token_usage(resp)
+        strands_cycles = self._extract_cycles(resp)
 
         return self._pack(
             question, cypher=cypher, results=results, summary=summary,
             model=model_id, t0=t0, trace=trace, tokens=tokens,
+            extra={"strands_cycles": strands_cycles,
+                   "latency_ms_agent": self._extract_agent_latency_ms(resp)},
         )
 
     # ------------------------------------------------------------
@@ -131,6 +135,13 @@ class StrandsNLQueryEngine(NLQueryBase):
                 return HEAVY_MODEL
         return DEFAULT_MODEL
 
+    def _extract_cycles(self, resp: Any) -> int | None:
+        try:
+            m = getattr(resp, "metrics", None)
+            return int(getattr(m, "cycle_count", 0) or 0) or None
+        except Exception:
+            return None
+
     def _extract_agent_text(self, resp: Any) -> str:
         """从 Strands AgentResult 抽取文本摘要。"""
         try:
@@ -146,16 +157,35 @@ class StrandsNLQueryEngine(NLQueryBase):
         return str(resp).strip() if resp else ""
 
     def _extract_token_usage(self, resp: Any) -> dict | None:
-        """尽力抽 token usage；拿不到就返回 None（NLQueryBase 契约允许）。"""
+        """从 Strands AgentResult 中获取 token usage。
+
+        Strands 1.36+: resp.metrics.get_summary()['accumulated_usage'] 提供
+        精确的 inputTokens/outputTokens/totalTokens。
+        """
         try:
-            meta = getattr(resp, "metrics", None) or getattr(resp, "metadata", None)
-            if not meta:
+            metrics = getattr(resp, "metrics", None)
+            if metrics is None:
                 return None
-            it = int(meta.get("input_tokens", 0) or meta.get("inputTokens", 0) or 0)
-            ot = int(meta.get("output_tokens", 0) or meta.get("outputTokens", 0) or 0)
+            summary = metrics.get_summary()
+            usage = summary.get("accumulated_usage") or {}
+            it = int(usage.get("inputTokens", 0) or 0)
+            ot = int(usage.get("outputTokens", 0) or 0)
+            tt = int(usage.get("totalTokens", it + ot) or 0)
             if it == 0 and ot == 0:
                 return None
-            return {"input": it, "output": ot, "total": it + ot}
+            return {"input": it, "output": ot, "total": tt}
+        except Exception as e:
+            logger.debug("token usage extraction failed: %r", e)
+            return None
+
+    def _extract_agent_latency_ms(self, resp: Any) -> int | None:
+        """Strands 内部报告的 accumulated latency（可与我们脚手架的 wall-clock 对比）。"""
+        try:
+            metrics = getattr(resp, "metrics", None)
+            if metrics is None:
+                return None
+            summary = metrics.get_summary()
+            return int((summary.get("accumulated_metrics") or {}).get("latencyMs", 0) or 0) or None
         except Exception:
             return None
 
@@ -166,8 +196,9 @@ class StrandsNLQueryEngine(NLQueryBase):
 
     def _pack(self, question: str, *, cypher: str, results: list, summary: str,
               model: str, t0: float, trace: list | None = None,
-              tokens: dict | None = None, error: str | None = None) -> dict:
-        return {
+              tokens: dict | None = None, error: str | None = None,
+              extra: dict | None = None) -> dict:
+        out = {
             "question": question,
             "cypher": cypher,
             "results": results,
@@ -180,3 +211,6 @@ class StrandsNLQueryEngine(NLQueryBase):
             "trace": list(trace or []),
             "error": error,
         }
+        if extra:
+            out.update({k: v for k, v in extra.items() if v is not None})
+        return out
