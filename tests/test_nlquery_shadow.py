@@ -52,6 +52,10 @@ def test_shadow_compare(direct_engine, strands_engine, capsys):
     diffs: list[dict] = []
     latency_direct: list[int] = []
     latency_strands: list[int] = []
+    cache_stats = {
+        "direct": {"read": 0, "write": 0, "input": 0},
+        "strands": {"read": 0, "write": 0, "input": 0},
+    }
 
     print("\n=== Shadow comparison: direct vs strands ===")
     print(f"{'id':<6} {'direct(ms)':>10} {'strands(ms)':>12} {'mult':>6} {'rows_d/rows_s':>15}  {'verdict'}")
@@ -83,6 +87,11 @@ def test_shadow_compare(direct_engine, strands_engine, capsys):
 
         latency_direct.append(ld)
         latency_strands.append(ls)
+        for name, out in (("direct", out_d), ("strands", out_s)):
+            tu = out.get("token_usage") or {}
+            cache_stats[name]["read"] += int(tu.get("cache_read") or 0)
+            cache_stats[name]["write"] += int(tu.get("cache_write") or 0)
+            cache_stats[name]["input"] += int(tu.get("input") or 0)
         diffs.append({"id": case["id"], "cypher_same": cypher_same, "rows_same": rows_same,
                        "cyd": cyd, "cys": cys, "rd": rd, "rs": rs, "ld": ld, "ls": ls})
 
@@ -94,6 +103,12 @@ def test_shadow_compare(direct_engine, strands_engine, capsys):
         p99_s = sorted(latency_strands)[int(len(latency_strands) * 0.99)]
         print(f"\np50 direct={p50_d:.0f}ms  strands={p50_s:.0f}ms  mult={p50_s / p50_d:.2f}x")
         print(f"p99 direct={p99_d:.0f}ms  strands={p99_s:.0f}ms  mult={p99_s / p99_d:.2f}x")
+
+    # L2 cache hit ratio
+    for name, cs in cache_stats.items():
+        denom = cs["read"] + cs["input"]
+        ratio = f"{cs['read'] / denom:.1%}" if denom else "N/A"
+        print(f"{name}: cache_read={cs['read']}  write={cs['write']}  non-cache_input={cs['input']}  hit_ratio={ratio}")
 
     same_cypher = sum(1 for d in diffs if d["cypher_same"])
     same_rows = sum(1 for d in diffs if d["rows_same"])
