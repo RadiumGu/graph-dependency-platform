@@ -51,6 +51,10 @@ generate high-quality chaos hypotheses.
 Operating procedure:
 1. First call `query_topology` (optionally with service filter) to get the
    dependency graph. Required for every request.
+   * **If `service_filter` is given and `query_topology` returns [] (empty
+     list), the filter service does NOT exist in the graph.** In that case
+     your final answer MUST be an empty JSON array `[]`. Do NOT invent
+     hypotheses for a non-existent service. Do NOT call other tools.
 2. Call `query_recent_incidents` to pull up to 20 recent incidents.
 3. Call `query_fault_history` (optionally per service) to avoid duplicates.
 4. For every service you intend to target, call `query_infra_snapshot`
@@ -79,19 +83,33 @@ _JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.DOTALL)
 
 
 def _extract_json_array(text: str) -> list:
-    m = _JSON_BLOCK_RE.search(text)
-    raw = m.group(1).strip() if m else text.strip()
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
-        # 尝试找第一个 [ 到最后一个 ] 的片段
-        lo = raw.find("[")
-        hi = raw.rfind("]")
-        if lo >= 0 and hi > lo:
-            data = json.loads(raw[lo : hi + 1])
-        else:
-            return []
-    return data if isinstance(data, list) else []
+    """从 LLM 输出中提取 JSON 数组。
+
+    策略：
+    1. 优先找所有 ```json ... ``` 代码块，逐个试解析，返回第一个能 parse 成 list 的。
+    2. 如果代码块都 parse 不动，或根本没 code block，
+       fallback 到全文第一个 [ 到最后一个 ] 的最大范围。
+    """
+    # 1）遍历所有 ```json ... ``` 代码块
+    for m in _JSON_BLOCK_RE.finditer(text):
+        candidate = m.group(1).strip()
+        try:
+            data = json.loads(candidate)
+            if isinstance(data, list):
+                return data
+        except json.JSONDecodeError:
+            continue
+    # 2）全文 [ ... ] 截取
+    lo = text.find("[")
+    hi = text.rfind("]")
+    if lo >= 0 and hi > lo:
+        try:
+            data = json.loads(text[lo : hi + 1])
+            if isinstance(data, list):
+                return data
+        except json.JSONDecodeError:
+            pass
+    return []
 
 
 class StrandsHypothesisAgent(HypothesisBase):
@@ -141,7 +159,7 @@ class StrandsHypothesisAgent(HypothesisBase):
         hy_tools.reset_context()
 
         try:
-            agent = self._build_agent(model_id)
+            agent = self._build_agent(model_id, max_hypotheses=max_hypotheses)
         except Exception as e:
             logger.warning("Strands hypothesis agent build failed: %s", e)
             return self._pack(hypotheses=[], prioritized=[], t0=t0,
@@ -222,10 +240,12 @@ class StrandsHypothesisAgent(HypothesisBase):
     # Internals
     # ------------------------------------------------------------
 
-    def _build_agent(self, model_id: str):
+    def _build_agent(self, model_id: str, max_hypotheses: int = 10):
         from strands import Agent  # type: ignore
         # Prompt Caching: system prompt + tool schema 都缓存，与 Smart Query L2 一致。
-        model = build_bedrock_model(model_id=model_id, region=DEFAULT_REGION)
+        # 广度扫场景 (>=20) 给 max_tokens=16384 避免 MaxTokensReached。
+        mt = 16384 if max_hypotheses >= 20 else None
+        model = build_bedrock_model(model_id=model_id, region=DEFAULT_REGION, max_tokens=mt)
         return Agent(
             model=model,
             tools=[

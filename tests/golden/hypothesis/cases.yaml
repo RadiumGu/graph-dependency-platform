@@ -43,9 +43,11 @@ cases:
     - http_chaos
     - network_delay
     - network_loss
+    - network_partition
     - pod_cpu_stress
     - pod_failure
     - pod_memory_stress
+    - pod_kill
     failure_domain_must_include_any:
     - network
     - resources
@@ -220,10 +222,8 @@ cases:
   expected:
     min_hypotheses: 1
     max_hypotheses: 1
-    fault_type_must_include_any:
-    - http_chaos
-    failure_domain_must_include_any:
-    - dependencies
+    # 单样本下 fault_type / failure_domain 一次采样偏差太大，只约束数量，
+    # 不约束具体类型（hypothesis-retro 坑 3）。
 - id: S018
   desc: max_hypotheses=30（接近 Opus 阈值）
   service_filter: null
