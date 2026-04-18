@@ -1,14 +1,3 @@
-# HypothesisAgent Golden Cases
-# 由 experiments/strands-poc/sample_for_golden.py 采样生成（direct 引擎 × 2 runs/场景），
-# 人工 review 后固化。行为约束式断言：fault_type_must_include_any / failure_domain_must_include_any
-# 取至少出现一次的并集；must_not_include 从 scenarios.yaml 合并。
-# 断言门槛：20 cases 合计 pass ≥ 18/20。
-#
-# Sample 覆盖现实：Neptune Microservices 14 个（pethistory, petsite, payforadoption,
-# petlistadoptions, petstatusupdater, trafficgenerator, gateway-service, auth-service,
-# artillery, order-service, points-service, petsearch, artillery-write, product-service），
-# 其中部分服务 callers/resources 为空，LLM 合理返回 0 个假设（已标注 min_hypotheses: 0）。
-
 cases:
 - id: S001
   desc: petsite（Tier0, K8s, 多副本）全方位混沌假设
@@ -30,6 +19,26 @@ cases:
     - pod_cpu_stress
     - pod_failure
     - pod_memory_stress
+  _sample_stats:
+    min_hypotheses_seen: 10
+    max_hypotheses_seen: 10
+    fault_types:
+      http_chaos: 4
+      network_loss: 3
+      network_partition: 2
+      pod_memory_stress: 2
+      pod_failure: 2
+      dns_chaos: 2
+      pod_cpu_stress: 2
+      network_delay: 2
+      pod_kill: 1
+    failure_domains:
+      network: 7
+      dependencies: 5
+      resources: 4
+      compute: 4
+    backends:
+      chaosmesh: 20
 - id: S002
   desc: payforadoption（Tier1）混沌假设
   service_filter: payforadoption
@@ -51,17 +60,41 @@ cases:
     - resources
     - dependencies
     - compute
+  _sample_stats:
+    min_hypotheses_seen: 8
+    max_hypotheses_seen: 8
+    fault_types:
+      http_chaos: 3
+      dns_chaos: 2
+      pod_cpu_stress: 2
+      pod_memory_stress: 2
+      network_delay: 2
+      network_loss: 2
+      pod_failure: 2
+      network_partition: 1
+    failure_domains:
+      network: 6
+      resources: 4
+      dependencies: 4
+      compute: 2
+    backends:
+      chaosmesh: 16
 - id: S003
   desc: petsearch（Tier0，数据依赖型）
   service_filter: petsearch
   max_hypotheses: 8
   expected:
-    min_hypotheses: 0
+    min_hypotheses: 2
     max_hypotheses: 8
     failure_domain_must_include_any:
     - dependencies
     - data
-    notes: sparse topology / broad scan — may legitimately produce 0
+  _sample_stats:
+    min_hypotheses_seen: 0
+    max_hypotheses_seen: 0
+    fault_types: {}
+    failure_domains: {}
+    backends: {}
 - id: S004
   desc: petlistadoptions（Tier1）
   service_filter: petlistadoptions
@@ -77,6 +110,25 @@ cases:
     failure_domain_must_include_any:
     - network
     - resources
+  _sample_stats:
+    min_hypotheses_seen: 6
+    max_hypotheses_seen: 6
+    fault_types:
+      dns_chaos: 2
+      network_delay: 2
+      pod_memory_stress: 2
+      pod_cpu_stress: 2
+      http_chaos: 1
+      network_partition: 1
+      network_loss: 1
+      pod_kill: 1
+    failure_domains:
+      network: 6
+      resources: 4
+      dependencies: 1
+      compute: 1
+    backends:
+      chaosmesh: 12
 - id: S005
   desc: pethistory（Tier2，异步日志型）
   service_filter: pethistory
@@ -96,14 +148,35 @@ cases:
     - dependencies
     - network
     - resources
+  _sample_stats:
+    min_hypotheses_seen: 6
+    max_hypotheses_seen: 6
+    fault_types:
+      dns_chaos: 2
+      http_chaos: 2
+      network_loss: 2
+      pod_cpu_stress: 2
+      pod_memory_stress: 2
+      network_partition: 2
+    failure_domains:
+      dependencies: 4
+      network: 4
+      resources: 4
+    backends:
+      chaosmesh: 12
 - id: S006
   desc: trafficgenerator（Tier2，压测工具）
   service_filter: trafficgenerator
   max_hypotheses: 5
   expected:
-    min_hypotheses: 0
+    min_hypotheses: 1
     max_hypotheses: 5
-    notes: sparse topology / broad scan — may legitimately produce 0
+  _sample_stats:
+    min_hypotheses_seen: 0
+    max_hypotheses_seen: 0
+    fault_types: {}
+    failure_domains: {}
+    backends: {}
 - id: S007
   desc: petstatusupdater（Lambda + DynamoDB）
   service_filter: petstatusupdater
@@ -125,19 +198,42 @@ cases:
     - network
     - dependencies
     - resources
+  _sample_stats:
+    min_hypotheses_seen: 6
+    max_hypotheses_seen: 6
+    fault_types:
+      http_chaos: 3
+      network_partition: 2
+      dns_chaos: 2
+      network_delay: 2
+      pod_memory_stress: 1
+      pod_cpu_stress: 1
+      向: 1
+    failure_domains:
+      network: 5
+      dependencies: 4
+      resources: 3
+    backends:
+      fis: 8
+      chaosmesh: 4
 - id: S008
   desc: 无 filter 广度覆盖（系统级）
   service_filter: null
   max_hypotheses: 20
   expected:
-    min_hypotheses: 0
+    min_hypotheses: 8
     max_hypotheses: 20
     failure_domain_must_include_any:
     - compute
     - network
     - dependencies
     - resources
-    notes: sparse topology / broad scan — may legitimately produce 0
+  _sample_stats:
+    min_hypotheses_seen: 0
+    max_hypotheses_seen: 0
+    fault_types: {}
+    failure_domains: {}
+    backends: {}
 - id: S009
   desc: 无 filter 小数量聚焦（高优先级）
   service_filter: null
@@ -154,57 +250,104 @@ cases:
     - resources
     - dependencies
     - network
+  _sample_stats:
+    min_hypotheses_seen: 5
+    max_hypotheses_seen: 5
+    fault_types:
+      pod_memory_stress: 2
+      pod_cpu_stress: 2
+      dns_chaos: 2
+      http_chaos: 2
+      network_partition: 1
+      pod_failure: 1
+    failure_domains:
+      resources: 4
+      dependencies: 3
+      network: 2
+      compute: 1
+    backends:
+      chaosmesh: 10
 - id: S010
   desc: 无 filter 中等数量（覆盖 5 failure domains）
   service_filter: null
   max_hypotheses: 15
   expected:
-    min_hypotheses: 0
+    min_hypotheses: 6
     max_hypotheses: 15
-    notes: sparse topology / broad scan — may legitimately produce 0
+  _sample_stats:
+    min_hypotheses_seen: 0
+    max_hypotheses_seen: 0
+    fault_types: {}
+    failure_domains: {}
+    backends: {}
 - id: S011
   desc: product-service（数据库依赖）
   service_filter: product-service
   max_hypotheses: 5
   expected:
-    min_hypotheses: 0
+    min_hypotheses: 1
     max_hypotheses: 5
-    notes: sparse topology / broad scan — may legitimately produce 0
+  _sample_stats:
+    min_hypotheses_seen: 0
+    max_hypotheses_seen: 0
+    fault_types: {}
+    failure_domains: {}
+    backends: {}
 - id: S012
   desc: order-service（订单核心）
   service_filter: order-service
   max_hypotheses: 6
   expected:
-    min_hypotheses: 0
+    min_hypotheses: 2
     max_hypotheses: 6
-    notes: sparse topology / broad scan — may legitimately produce 0
+  _sample_stats:
+    min_hypotheses_seen: 0
+    max_hypotheses_seen: 0
+    fault_types: {}
+    failure_domains: {}
+    backends: {}
 - id: S013
   desc: points-service（积分服务）
   service_filter: points-service
   max_hypotheses: 5
   expected:
-    min_hypotheses: 0
+    min_hypotheses: 1
     max_hypotheses: 5
-    notes: sparse topology / broad scan — may legitimately produce 0
+  _sample_stats:
+    min_hypotheses_seen: 0
+    max_hypotheses_seen: 0
+    fault_types: {}
+    failure_domains: {}
+    backends: {}
 - id: S014
   desc: gateway-service（网关入口）
   service_filter: gateway-service
   max_hypotheses: 8
   expected:
-    min_hypotheses: 0
+    min_hypotheses: 2
     max_hypotheses: 8
     failure_domain_must_include_any:
     - network
     - compute
-    notes: sparse topology / broad scan — may legitimately produce 0
+  _sample_stats:
+    min_hypotheses_seen: 0
+    max_hypotheses_seen: 0
+    fault_types: {}
+    failure_domains: {}
+    backends: {}
 - id: S015
   desc: auth-service（认证）
   service_filter: auth-service
   max_hypotheses: 5
   expected:
-    min_hypotheses: 0
+    min_hypotheses: 1
     max_hypotheses: 5
-    notes: sparse topology / broad scan — may legitimately produce 0
+  _sample_stats:
+    min_hypotheses_seen: 0
+    max_hypotheses_seen: 0
+    fault_types: {}
+    failure_domains: {}
+    backends: {}
 - id: S016
   desc: 不存在的 service（错误分支）
   service_filter: nonexistent-service-xyz
@@ -224,27 +367,55 @@ cases:
     - http_chaos
     failure_domain_must_include_any:
     - dependencies
+  _sample_stats:
+    min_hypotheses_seen: 1
+    max_hypotheses_seen: 1
+    fault_types:
+      http_chaos: 2
+    failure_domains:
+      dependencies: 2
+    backends:
+      chaosmesh: 2
 - id: S018
   desc: max_hypotheses=30（接近 Opus 阈值）
   service_filter: null
   max_hypotheses: 30
   expected:
-    min_hypotheses: 0
+    min_hypotheses: 10
     max_hypotheses: 30
-    notes: sparse topology / broad scan — may legitimately produce 0
+  _sample_stats:
+    min_hypotheses_seen: 0
+    max_hypotheses_seen: 0
+    fault_types: {}
+    failure_domains: {}
+    backends: {}
 - id: S019
   desc: artillery（压测类服务，Tier2）
   service_filter: artillery
   max_hypotheses: 5
   expected:
-    min_hypotheses: 0
+    min_hypotheses: 1
     max_hypotheses: 5
-    notes: sparse topology / broad scan — may legitimately produce 0
+  _sample_stats:
+    min_hypotheses_seen: 0
+    max_hypotheses_seen: 0
+    fault_types: {}
+    failure_domains: {}
+    backends: {}
 - id: S020
   desc: artillery-write
   service_filter: artillery-write
   max_hypotheses: 5
   expected:
-    min_hypotheses: 0
+    min_hypotheses: 1
     max_hypotheses: 5
-    notes: sparse topology / broad scan — may legitimately produce 0
+  _sample_stats:
+    min_hypotheses_seen: 0
+    max_hypotheses_seen: 0
+    fault_types: {}
+    failure_domains: {}
+    backends: {}
+_metadata:
+  sampled_at: 2026-04-18 12:00:54 UTC
+  runs_per_scenario: 2
+  engine: direct
