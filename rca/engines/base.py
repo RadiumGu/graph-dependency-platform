@@ -24,7 +24,8 @@ class NLQueryBase(ABC):
       - engine: str          # "direct" | "strands"
       - model_used: str | None
       - latency_ms: int
-      - token_usage: dict | None   # {"input","output","total"}；拿不到填 None
+      - token_usage: dict | None   # {"input","output","total","cache_read","cache_write"}
+                                     # L2 加 cache_* 字段（L1 调用方不依赖，getter 保护）
       - trace: list[dict]    # direct 固定 []；strands 填 tool-call 链
       - error: str | None   # 成功时可缺省或设 None
     """

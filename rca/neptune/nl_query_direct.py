@@ -59,6 +59,11 @@ class DirectBedrockNLQuery(NLQueryBase):
             from profiles.profile_loader import EnvironmentProfile
             self.profile = EnvironmentProfile()
         self.system_prompt = build_system_prompt(self.profile)
+        # L2 Prompt Caching 要求 system prompt 足够长（Sonnet/Opus 最低 1024 tokens～3000 chars）。
+        # 低于该值 Bedrock 会静默忽略缓存，且不报错。
+        assert len(self.system_prompt) > 3000, (
+            f"system prompt too short for prompt caching: {len(self.system_prompt)} chars"
+        )
 
     def query(self, question: str) -> dict:
         """执行自然语言查询。返回字段见 NLQueryBase 文档字串。"""
@@ -209,28 +214,43 @@ class DirectBedrockNLQuery(NLQueryBase):
         """
         model_id = self._select_model(question)
         self._last_model = model_id
+        # L2 Prompt Caching: system 改为 list 格式 + cache_control=ephemeral（TTL 5min）。
+        # 前缀 system_prompt 稳定 → 第 2 次以后的调用会命中缓存。
         resp = self.bedrock.invoke_model(
             modelId=model_id,
             body=json.dumps({
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": 1024,
-                "system": self.system_prompt,
+                "system": [
+                    {
+                        "type": "text",
+                        "text": self.system_prompt,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
                 "messages": [{"role": "user", "content": question}],
             }),
         )
         body = json.loads(resp['body'].read())
         text = body['content'][0]['text'].strip()
 
-        # 采集 token usage（Bedrock Anthropic schema）
+        # 采集 token usage（Bedrock Anthropic schema）— L2 加 cache_read / cache_write
         usage = body.get('usage') or {}
         if usage:
             it = int(usage.get('input_tokens', 0) or 0)
             ot = int(usage.get('output_tokens', 0) or 0)
-            prev = self._last_tokens or {"input": 0, "output": 0, "total": 0}
+            cr = int(usage.get('cache_read_input_tokens', 0) or 0)
+            cw = int(usage.get('cache_creation_input_tokens', 0) or 0)
+            prev = self._last_tokens or {
+                "input": 0, "output": 0, "total": 0, "cache_read": 0, "cache_write": 0,
+            }
             self._last_tokens = {
                 "input": prev["input"] + it,
                 "output": prev["output"] + ot,
-                "total": prev["input"] + prev["output"] + it + ot,
+                "cache_read": prev.get("cache_read", 0) + cr,
+                "cache_write": prev.get("cache_write", 0) + cw,
+                # total 保留原语义：input + output之和添加 cache tokens 作为总需求量
+                "total": prev["input"] + prev["output"] + prev.get("cache_read", 0) + prev.get("cache_write", 0) + it + ot + cr + cw,
             }
 
         # 去除 LLM 可能包裹的 markdown 代码块
