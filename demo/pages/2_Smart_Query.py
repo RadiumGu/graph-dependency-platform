@@ -110,6 +110,8 @@ def _render_engine_meta_and_trace(data: dict) -> None:
         meta_bits.append(f"latency=`{data['latency_ms']}ms`")
     if data.get("retried"):
         meta_bits.append("retried=`true`")
+    if data.get("strands_cycles"):
+        meta_bits.append(f"cycles=`{data['strands_cycles']}`")
     tu = data.get("token_usage") or {}
     if tu.get("total"):
         meta_bits.append(

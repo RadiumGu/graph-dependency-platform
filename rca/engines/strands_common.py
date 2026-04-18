@@ -34,3 +34,46 @@ def build_bedrock_model(model_id: str | None = None, region: str | None = None) 
 
 # TODO(phase-2): OTel / CloudWatch 接入
 # 参考 experiments/strands-poc/spike.py 的 _LAST_CALLS hack；L1 要用 Strands 原生 callbacks。
+
+
+_TELEMETRY_STATE: dict = {"initialized": False}
+
+
+def ensure_telemetry() -> None:
+    """按 env 开关初始化 Strands OTel telemetry（幂等）。
+
+    环境变量：
+      STRANDS_TELEMETRY=off    → noop（默认）
+      STRANDS_TELEMETRY=console → 开启 ConsoleSpanExporter（日志可见）
+      STRANDS_TELEMETRY=otlp    → 开启 OTLPSpanExporter
+        目标端点由标准 OTEL_EXPORTER_OTLP_ENDPOINT 、
+        OTEL_EXPORTER_OTLP_HEADERS 控制（ADOT / CloudWatch Agent / 第三方均可）。
+
+    CloudWatch 接法：
+      1. 单独跑 aws-otel-collector / ADOT，配置 OTLP→CloudWatch Logs/X-Ray exporter；
+      2. STRANDS_TELEMETRY=otlp + OTEL_EXPORTER_OTLP_ENDPOINT 指向 collector。
+      通过标准 OTLP pipe 解耦，无需特别 CloudWatch adapter。
+    """
+    if _TELEMETRY_STATE["initialized"]:
+        return
+    mode = (os.environ.get("STRANDS_TELEMETRY") or "off").lower()
+    if mode in ("", "off", "0", "false", "no"):
+        _TELEMETRY_STATE["initialized"] = True
+        return
+    try:
+        from strands.telemetry import StrandsTelemetry  # type: ignore
+        st = StrandsTelemetry()
+        if mode == "console":
+            st.setup_console_exporter()
+        elif mode == "otlp":
+            st.setup_otlp_exporter()
+        else:
+            import logging
+            logging.getLogger(__name__).warning(
+                "STRANDS_TELEMETRY=%s unknown; falling back to console", mode)
+            st.setup_console_exporter()
+    except Exception as e:  # 任何失败都不能拖垮查询路径
+        import logging
+        logging.getLogger(__name__).warning("Strands telemetry setup failed: %r", e)
+    finally:
+        _TELEMETRY_STATE["initialized"] = True
