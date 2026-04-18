@@ -1,0 +1,72 @@
+name: migration-checks
+
+# Strands 迁移 CI 关卡 (Phase 1 启用占位，Phase 3 起才有实际阻断作用)
+#   - check-deadlines: 对 docs/migration/timeline.md 里过了 delete_date 的 direct_file
+#     在仓库中仍存在时阻断 CI
+#   - check-frozen:    阻止 PR 修改 🔒 FROZEN 标记文件（除非带 P0-bugfix label）
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  check-deadlines:
+    name: Migration deadline check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PyYAML
+        run: pip install pyyaml
+      - name: Run check_migration_deadlines.py
+        run: python3 scripts/check_migration_deadlines.py
+
+  check-frozen:
+    name: Frozen-file edit guard
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Block edits to frozen files
+        shell: bash
+        run: |
+          set -e
+          # Grep 仓库内带 FROZEN 标记的文件；支持 🔒 FROZEN 或 "# FROZEN: <date>"
+          frozen=$(git grep -lE "(🔒 ?FROZEN|^# FROZEN:)" -- 'rca/**' 'chaos/**' 'dr-plan-generator/**' 2>/dev/null || true)
+          if [ -z "$frozen" ]; then
+            echo "No frozen files declared; skip."
+            exit 0
+          fi
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          changed=$(git diff --name-only "$base..$head")
+          echo "Frozen files in repo:"
+          echo "$frozen" | sed 's/^/  - /'
+          echo
+          echo "Files changed in this PR:"
+          echo "$changed" | sed 's/^/  - /'
+          echo
+          violations=""
+          for f in $frozen; do
+            if echo "$changed" | grep -qx "$f"; then
+              violations="$violations\n  - $f"
+            fi
+          done
+          if [ -n "$violations" ]; then
+            # P0-bugfix label 可豁免
+            labels=$(jq -r '.pull_request.labels[].name' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
+            if echo "$labels" | grep -qx "P0-bugfix"; then
+              echo "Frozen files edited but PR carries 'P0-bugfix' label; allowing."
+              exit 0
+            fi
+            echo -e "❌ The following frozen files must not be edited without 'P0-bugfix' label:$violations"
+            exit 1
+          fi
+          echo "✅ No frozen files touched."
