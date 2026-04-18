@@ -156,6 +156,49 @@ if user_input:
             else:
                 st.info("查询返回空结果。")
 
+            # Engine 元数据 + Tool Trace（Strands L1 POC）
+            meta_bits = []
+            if result.get("engine"):
+                meta_bits.append(f"engine=`{result['engine']}`")
+            if result.get("model_used"):
+                meta_bits.append(f"model=`{result['model_used']}`")
+            if result.get("latency_ms") is not None:
+                meta_bits.append(f"latency=`{result['latency_ms']}ms`")
+            if result.get("retried"):
+                meta_bits.append("retried=`true`")
+            tu = result.get("token_usage") or {}
+            if tu.get("total"):
+                meta_bits.append(f"tokens=`{tu.get('total')}` (in={tu.get('input', 0)}, out={tu.get('output', 0)})")
+            if meta_bits:
+                st.caption(" · ".join(meta_bits))
+
+            trace = result.get("trace") or []
+            if trace:
+                with st.expander(f"🔍 Tool Trace（{len(trace)} 次调用）"):
+                    for i, t in enumerate(trace, 1):
+                        tool_name = t.get("tool", "?")
+                        if tool_name == "execute_cypher":
+                            if t.get("blocked"):
+                                st.markdown(f"**{i}. {tool_name}** 🚫 blocked — {t.get('reason', '')}")
+                            elif t.get("error"):
+                                st.markdown(f"**{i}. {tool_name}** ❌ error — `{t.get('error', '')}`")
+                            else:
+                                st.markdown(f"**{i}. {tool_name}** — rows=`{t.get('rows', 0)}`")
+                                cypher = t.get("cypher") or t.get("cypher_preview", "")
+                                if cypher:
+                                    st.code(cypher, language="cypher")
+                        elif tool_name == "validate_cypher":
+                            safe = t.get("safe")
+                            icon = "✅" if safe else "⚠️"
+                            st.markdown(f"**{i}. {tool_name}** {icon} — {t.get('reason', '')}")
+                        elif tool_name == "get_schema_section":
+                            st.markdown(
+                                f"**{i}. {tool_name}** — section=`{t.get('section', 'all')}`, chars={t.get('chars', 0)}"
+                            )
+                        else:
+                            st.markdown(f"**{i}. {tool_name}**")
+                            st.json(t)
+
     st.session_state["chat_history"].append(
         {"role": "assistant", "data": result}
     )
