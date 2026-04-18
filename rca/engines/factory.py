@@ -49,3 +49,33 @@ def make_nlquery_engine(profile: Any = None) -> NLQueryBase:
             return NLQueryEngine(profile=profile)
         except TypeError:
             return NLQueryEngine()
+
+
+def make_hypothesis_engine(profile: Any = None) -> "NLQueryBase":  # type: ignore[name-defined]
+    """构造 HypothesisAgent 引擎，切换 env：HYPOTHESIS_ENGINE=direct|strands。
+
+    默认 direct；strands 不可用 → warning + 回退 direct。
+    """
+    from engines.base import HypothesisBase  # 延迟导入避免循环
+    engine = (os.environ.get("HYPOTHESIS_ENGINE") or "direct").lower()
+    if engine == "strands":
+        try:
+            from chaos.code.agents.hypothesis_strands import StrandsHypothesisAgent  # type: ignore
+            return StrandsHypothesisAgent(profile=profile)  # type: ignore[return-value]
+        except ImportError as e:
+            logger.warning(
+                "Strands HypothesisAgent 不可用 (%s)；回退 direct。", e,
+            )
+        except Exception as e:
+            logger.warning("Strands HypothesisAgent 构造失败 (%r)；回退 direct。", e)
+
+    try:
+        from chaos.code.agents.hypothesis_direct import DirectBedrockHypothesis  # type: ignore
+        return DirectBedrockHypothesis(profile=profile)  # type: ignore[return-value]
+    except ImportError:
+        # PR2 rename 前的过渡期：回退到现版 HypothesisAgent
+        from chaos.code.agents.hypothesis_agent import HypothesisAgent  # type: ignore
+        try:
+            return HypothesisAgent(profile=profile)  # type: ignore[call-arg,return-value]
+        except TypeError:
+            return HypothesisAgent()  # type: ignore[return-value]
