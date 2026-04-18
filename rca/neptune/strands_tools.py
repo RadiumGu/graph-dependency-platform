@@ -115,7 +115,7 @@ def execute_cypher(cypher: str) -> str:
             _calls.append({"tool": "execute_cypher", "error": repr(e)[:200]})
         return f"ERROR: execution failed — {e!r}"
     with _lock:
-        _calls.append({"tool": "execute_cypher", "cypher": cypher2[:200], "rows": len(rows)})
+        _calls.append({"tool": "execute_cypher", "cypher": cypher2, "cypher_preview": cypher2[:200], "rows": len(rows)})
     return json.dumps(rows, ensure_ascii=False, default=str)[:4000]
 
 
