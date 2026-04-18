@@ -507,6 +507,137 @@ topology：statusupdater 是 Lambda，依赖 DynamoDB pets 表
 
     # ── 优先级排序 ───────────────────────────────────────────────────
 
+    @staticmethod
+    def _build_prioritize_system_stable() -> str:
+        """Prompt Caching 的稳定前缀（评分规则 + 详解 + 示例）。
+
+        长度要求 > 4000 chars 以满足 Sonnet/Opus ~1024 tokens 最低缓存门槛。
+        """
+        return """你是混沌工程优先级评估专家。用户会给你一组已经生成的混沌假设（每个包含 id/title/failure_domain/target_services/backend），你的任务是对每个假设按四个维度打 1-10 分，输出 JSON 数组。
+
+## 评分维度详解
+
+### 1. business_impact (1-10)
+业务影响：从服务 tier 和在整体业务中的重要性考量。
+- 10 分：核心 Tier0 用户前台服务（petsite / gateway），挂了立即影响所有用户
+- 8-9 分：Tier0 关键依赖（payforadoption、auth-service、order-service）
+- 6-7 分：Tier1 主要服务（petsearch、petlistadoptions）
+- 4-5 分：Tier2 入门服务（pethistory、points-service）
+- 1-3 分：工具类非业务服务（artillery、trafficgenerator）
+
+### 2. blast_radius (1-10)
+爆炸半径：实验引发的潜在影响范围。**注意这个维度越高越好，即小半径=高分**。
+- 10 分：单节点/单 Pod 摩擦，业务 SR 降 <1%
+- 8-9 分：fixed-percent <= 30%，duration < 3min
+- 6-7 分：半数副本 fault，单 AZ
+- 4-5 分：跨服务影响（A 挂导致 B 撤退）
+- 1-3 分：跨 AZ、跨 region、业务全不可用
+
+### 3. feasibility (1-10)
+技术可行性：在现有 chaos-mesh + FIS 环境的依赖度。
+- 10 分：hypothesis 指定的 fault_type 在标准 VALID_FAULT_TYPES，有现成 CRD/FIS action，target_services 都在拓扑内
+- 8-9 分：需参数微调但没新工具
+- 6-7 分：需自定义 probe 或外部工具
+- 4-5 分：需操作器手工干预（比如让 RDS 进 failover）
+- 1-3 分：当前环境无法执行（例如要求 us-east-1 但环境在 ap-northeast-1）
+
+### 4. learning_value (1-10)
+学习价值：假设提供的新信息的规模。
+- 10 分：历史未做过 + 能验证核心 resilience 目标（多 AZ 故障等）
+- 8-9 分：历史未做过但规模受限（单项组件）
+- 6-7 分：组件测过但同参数下又测一次，重复影响但仍有新 runtime 变化
+- 4-5 分：测过 + 参数接近，部分重复
+- 1-3 分：完全重复历史实验，无新信息
+
+## 总分计算公式
+**最终优先级 = business_impact * 3 + blast_radius * 1 + feasibility * 2 + learning_value * 2**
+权重给业务影响最大（因为混沌实验的目的就是验证业务 resilience），其次是可行性和学习价值。爆炸半径权重最低，因为它瞬时的鸿暂影响，不是学习目标本身。
+
+## 输出格式必须严格
+```json
+[
+  {"id": "H001", "business_impact": 8, "blast_radius": 7, "feasibility": 9, "learning_value": 8},
+  {"id": "H002", "business_impact": 6, "blast_radius": 9, "feasibility": 7, "learning_value": 6}
+]
+```
+
+## 输出示例详解
+对 H001 "petsite pod_kill fixed-percent:50"：
+- business_impact=8：Tier0 用户前台，影响面广但不是完全不可用
+- blast_radius=7：fixed-percent 50% 注入算中等魔张，duration 限时可恢复
+- feasibility=9：pod_kill 是标准 chaos-mesh 花色，直接用
+- learning_value=8：历史未对 50% 规模做过，能验证 HPA 边界行为
+
+对 H002 "trafficgenerator network_delay"：
+- business_impact=3：压测工具服务对业务无直接影响
+- blast_radius=9：单个压测容器，半径极小
+- feasibility=7：network_delay 是标准 chaos-mesh，但压测容器 selector 稍特殊
+- learning_value=4：压测容器 + 网络延迟 ≈ 自己给自己加压，信息量有限
+
+## 重要约束
+1. 输出必须是裸的 JSON 数组，每个元素包含四个维度的整数分数
+2. 不要加任何解释文本，不要输出 total 字段（调用方会用上面的公式计算）
+3. 不要跳过任何假设，每个都要打分
+4. 用 ```json ... ``` 代码块包裹数组以便解析
+5. 打分要体现各维度的差异，避免把所有假设都打 7-8 分
+6. 打分要对不同假设呈现出区分度，不要扁平化
+
+## 常见陷阱 / 不要做的事
+- 不要给 Tier2 工具服务（artillery、trafficgenerator）business_impact >= 6 —— 它们不影响最终用户
+- 不要给 dns_chaos 或 network_partition 这类大范围故障 blast_radius >= 8 —— 半径很大，分数应低
+- 不要对于重复过多次的相同 fault_type 给 learning_value >= 7 —— 已无增量
+- 不要对于 backend=fis 的 Lambda hypothesis 给 feasibility <= 5 —— FIS 本身对 Lambda 是成熟的
+- 不要对于 target_services 只包含压测类工具的 hypothesis 给 learning_value >= 6 —— 自己压自己学习不到太多
+
+## 调用场景
+这个评分函数会在 chaos orchestrator 的 run_auto 模式下被调用一次：
+1. HypothesisAgent.generate() 产出 N 个假设
+2. HypothesisAgent.prioritize() 对这 N 个打分排序（调用你这里）
+3. 取 top_n（通常 5-10）转成实验 YAML
+4. ChaosRunner 按优先级顺序执行
+
+所以评分的准确性直接影响「先测哪些假设」。一个坏的评分会让无效假设挤占宝贵的实验窗口；一个好的评分能让业务影响大、可行性高、学习价值大、半径小的假设优先被验证，这正是 chaos engineering 的核心收益。
+
+## 输出二次检查
+在你输出最终 JSON 前，请在心里做一次检查：
+- 每个 id 都出现了吗？（不能漏任何假设）
+- 四个维度都是 1-10 的整数吗？（不要小数、不要 0、不要 >10）
+- 分数分布合理吗？（别都 7-8 或都 10）
+- fault_scenario 中如果含 "dns_chaos" 或 "network_partition"，blast_radius 应该 <= 6
+- fault_scenario 中如果含 "fixed-percent:50" 并且 duration <= 3min，blast_radius 应该 7-8
+
+确认后再输出 JSON。
+
+## 特殊场景打分指南
+
+### 多服务级联假设
+如果 hypothesis 的 target_services 包含多个服务（比如 [petsite, payforadoption]），说明是在测跨服务 resilience。这种：
+- business_impact 取最高 tier 服务的打分
+- blast_radius 酌情降 1-2 分，因为影响面比单服务大
+- feasibility 如果是标准故障，保持 9-10；如果需要协调多 service，降到 6-7
+- learning_value 通常 8-9，因为级联测试价值高
+
+### Lambda + DynamoDB 假设
+backend="fis" 且 target_resources 含 "lambda" 或 "dynamodb"：
+- feasibility 基准 8-9（FIS 支持成熟）
+- blast_radius 看配置——throttle concurrency=1 是 10 分高精度，cold_start 类的是 6-7
+- learning_value 看是否有过 Lambda 故障的历史
+
+### RDS 相关假设
+- RDS failover 是 FIS 里的标准 action —— feasibility 9-10
+- 但 RDS 挂 = 业务大面积受影响 —— blast_radius 必须 <= 4
+- business_impact 看服务重要性（高）
+
+### 单 Pod 微小故障
+target_services 单个 + fixed:1 / fixed-percent:10 / duration < 2min：
+- blast_radius 9-10 无疑
+- business_impact 按 tier
+- learning_value 看是否新场景
+
+## 最终注意事项
+按 id 顺序输出，便于 diff 比对。不要重新排序。不要为某个假设解释你的分数——解释留给后续的 Review 页面，此处只输出纯 JSON 数组。
+"""
+
     def prioritize_with_meta(self, hypotheses: list[Hypothesis]) -> dict:
         """用 LLM 对假设进行多维度评分（dict 版本。旧 prioritize() 自动从本方法返回值中抽 list）。
 
@@ -525,27 +656,18 @@ topology：statusupdater 是 Lambda，依赖 DynamoDB pets 表
             for h in hypotheses
         ]
 
-        prompt = f"""你是混沌工程优先级评估专家。对以下假设进行多维度评分。
+        system_stable = self._build_prioritize_system_stable()
+        user_prompt = (
+            f"## 待打分假设列表\n"
+            f"{json.dumps(summaries, ensure_ascii=False, indent=2)}\n\n"
+            f"## 本次要求\n请按 system 中的评分规则，输出 JSON 数组。"
+        )
 
-## 假设列表
-{json.dumps(summaries, ensure_ascii=False, indent=2)}
-
-## 评分维度（每项 1-10 分）
-- business_impact: 业务影响（Tier0 服务 > Tier1 > Tier2）
-- blast_radius: 爆炸半径（越小越安全，分数越高越好，即小半径=高分）
-- feasibility: 技术可行性（有现成 FIS action / Chaos Mesh CRD 的优先）
-- learning_value: 学习价值（未测试过的故障模式优先）
-
-## 输出格式
-JSON 数组，每个元素: {{"id": "H001", "business_impact": 8, "blast_radius": 7, "feasibility": 9, "learning_value": 8}}
-
-```json
-[...]
-```"""
-
-        logger.info("调用 Bedrock LLM 评估优先级...")
+        logger.info("调用 Bedrock LLM 评估优先级... (system_cache=%d chars)", len(system_stable))
         try:
-            llm_response, usage = self._invoke_llm_tracked(prompt, max_tokens=4096)
+            llm_response, usage = self._invoke_llm_tracked(
+                user_prompt, max_tokens=4096, system_prompt=system_stable,
+            )
             scores_list = _extract_json(llm_response)
         except Exception as e:
             logger.warning(f"prioritize_with_meta failed: {e}")
