@@ -117,6 +117,40 @@ class EnvironmentProfile:
         deploy_map = self._data.get("kubernetes", {}).get("deployment_map", {})
         return deploy_map.get(service_name, service_name)
 
+    # --- Neptune / Smart Query (Wave 1, 2026-04-18) ---
+
+    @property
+    def neptune_graph_schema_text(self) -> str:
+        """Neptune 图 schema 文本，注入 LLM system prompt。"""
+        return self._data.get("neptune", {}).get("graph_schema_text", "") or ""
+
+    @property
+    def neptune_few_shot_examples(self) -> list:
+        """NL->Cypher few-shot 示例列表。"""
+        return self._data.get("neptune", {}).get("nl_query_examples", []) or []
+
+    @property
+    def neptune_common_relations(self) -> list:
+        """通用关系名称列表（空结果重试提示用）。"""
+        return self._data.get("neptune", {}).get("common_relations", []) or []
+
+    @property
+    def neptune_guard_rules(self) -> dict:
+        """查询安全规则。"""
+        defaults = {
+            "forbidden_operations": ["CREATE", "DELETE", "DETACH", "SET", "MERGE", "REMOVE", "DROP", "CALL"],
+            "max_hop_depth": 6,
+            "default_limit": 200,
+        }
+        defaults.update(self._data.get("neptune", {}).get("guard_rules", {}) or {})
+        return defaults
+
+    @property
+    def neptune_complex_keywords(self) -> dict:
+        """复杂问题触发词字典：{'zh': [...], 'en': [...]}."""
+        ck = self._data.get("neptune", {}).get("complex_keywords", {}) or {}
+        return {"zh": list(ck.get("zh") or []), "en": list(ck.get("en") or [])}
+
     def get(self, dotted_key: str, default: Any = None) -> Any:
         """点分路径访问。
 
