@@ -119,11 +119,16 @@ class WorkflowOrchestrator:
         cooldown: int = 60,
         dry_run: bool = False,
     ) -> SuiteResult:
-        """端到端: HypothesisAgent → 生成 YAML → 执行 suite。"""
-        from agents import HypothesisAgent
+        """端到端: HypothesisAgent (factory) → 生成 YAML → 执行 suite。"""
+        import sys as _sys
+        _rca = os.path.join(os.path.dirname(__file__), "..", "..", "rca")
+        if os.path.abspath(_rca) not in _sys.path:
+            _sys.path.insert(0, os.path.abspath(_rca))
+        from agents import HypothesisAgent  # 保留：需 .load()/.to_experiment_yamls() 等附属方法
+        from engines.factory import make_hypothesis_engine
 
         dry = dry_run or self.dry_run
-        agent = HypothesisAgent()
+        agent = make_hypothesis_engine()
 
         logger.info(f"Auto 模式: 生成最多 {max_hypotheses} 个假设, 取 top {top_n}")
         hypotheses = agent.generate(max_hypotheses=max_hypotheses)
