@@ -36,26 +36,26 @@ modules:
 
   - name: rca-layer2-probers
     direct_file: rca/collectors/layer2_direct.py
-    freeze_date: ~
-    delete_date: ~
+    freeze_date: 2026-04-19
+    delete_date: 2026-08-19
     owner: "@programming-cat"
-    status: "active"
-    notes: "Phase 3 Module 3 PR1-5 完成（2026-04-19）；Direct 6/6、Strands 6/6。灰度中。缓存 token 报告待调查。"
+    status: "frozen"
+    notes: "Phase 3 Module 3 PR1-5 完成（2026-04-19）；Direct 6/6、Strands 6/6。灰度切换完成。"
 
   - name: chaos-policy-guard
     direct_file: chaos/code/policy/guard_direct.py
-    freeze_date: ~
-    delete_date: ~
+    freeze_date: 2026-04-19
+    delete_date: 2026-08-19
     owner: "@programming-cat"
-    status: "active"
-    notes: "Phase 3 Module 4 完成（2026-04-19）；Direct 12/12、Strands 12/12。Shadow 一致性 12/12。缓存方案 A 启用（1839 tokens）。灰度中。"
+    status: "frozen"
+    notes: "Phase 3 Module 4 完成（2026-04-19）；Direct 12/12、Strands 12/12。Shadow 12/12。缓存方案 A（1839 tokens）。"
 
   - name: chaos-runner
     direct_file: chaos/code/runner/runner_direct.py
     freeze_date: 2026-04-20
     delete_date: 2026-08-20
     owner: "@programming-cat"
-    status: "active"
+    status: "frozen"
     notes: "Phase 3 Week 16-18；L1 Golden 6/6 both engines；dry_run double gate；7 tools"
 
   - name: dr-executor
@@ -63,7 +63,7 @@ modules:
     freeze_date: 2026-04-21
     delete_date: 2026-08-21
     owner: "@programming-cat"
-    status: "active"
+    status: "frozen"
     notes: "Phase 3 最终模块；L1 Golden 2/2 both engines；8 tools + failure strategy + partial caching"
 
 tags:
