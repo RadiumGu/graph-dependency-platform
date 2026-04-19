@@ -209,13 +209,28 @@ def _extract_token_usage(result) -> dict | None:
         metrics = result.metrics
         if not metrics:
             return None
-        usage = metrics.get("usage", {})
+        # accumulated_usage has the totals
+        usage = getattr(metrics, 'accumulated_usage', None) or {}
+        # Look for cache tokens in cycle-level usage
+        cache_read = usage.get('cacheReadInputTokens', 0)
+        cache_write = usage.get('cacheWriteInputTokens', 0)
+        # Also check agent_invocations for cache tokens
+        if (not cache_read and not cache_write) and hasattr(metrics, 'agent_invocations'):
+            for inv in metrics.agent_invocations:
+                inv_usage = getattr(inv, 'usage', {}) or {}
+                cache_read += inv_usage.get('cacheReadInputTokens', 0)
+                cache_write += inv_usage.get('cacheWriteInputTokens', 0)
+                # Also check individual cycles
+                for cycle in getattr(inv, 'cycles', []):
+                    c_usage = getattr(cycle, 'usage', {}) or {}
+                    cache_read += c_usage.get('cacheReadInputTokens', 0)
+                    cache_write += c_usage.get('cacheWriteInputTokens', 0)
         return {
-            "input": usage.get("inputTokens", 0),
-            "output": usage.get("outputTokens", 0),
-            "total": usage.get("totalTokens", 0),
-            "cache_read": usage.get("cacheReadInputTokens", 0),
-            "cache_write": usage.get("cacheWriteInputTokens", 0),
+            "input": usage.get('inputTokens', 0),
+            "output": usage.get('outputTokens', 0),
+            "total": usage.get('totalTokens', 0),
+            "cache_read": cache_read,
+            "cache_write": cache_write,
         }
     except Exception:
         return None
@@ -225,18 +240,21 @@ def _extract_trace(result) -> list[dict]:
     """Extract tool call trace from Strands agent result."""
     trace = []
     try:
-        state = result.state
-        if not state or not hasattr(state, "messages"):
-            return trace
-        for msg in state.messages:
-            if hasattr(msg, "content"):
-                for block in msg.content:
-                    if hasattr(block, "toolUse"):
-                        tu = block.toolUse
-                        trace.append({
-                            "tool": tu.get("name", ""),
-                            "input": tu.get("input", {}),
-                        })
+        metrics = result.metrics
+        if metrics and hasattr(metrics, 'tool_metrics'):
+            for tool_name, tm in (metrics.tool_metrics or {}).items():
+                trace.append({"tool": tool_name, "count": getattr(tm, 'count', 1)})
+        if not trace:
+            # Fallback: check state messages
+            state = result.state
+            if isinstance(state, dict):
+                for msg in state.get('messages', []):
+                    content = msg.get('content', [])
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and 'toolUse' in block:
+                                tu = block['toolUse']
+                                trace.append({"tool": tu.get('name', ''), "input": tu.get('input', {})})
     except Exception:
         pass
     return trace
