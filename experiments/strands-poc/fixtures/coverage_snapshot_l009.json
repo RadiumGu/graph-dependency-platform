@@ -1,0 +1,8087 @@
+{
+  "id": "l009",
+  "description": "边界：全量 86 条实验",
+  "experiment_count": 86,
+  "experiments": [
+    {
+      "target_service": {
+        "S": "eks-nodegroup"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "experiment_id": {
+        "S": "exp-eks-nodegroup-fis-eks-terminate-node-20260413-040353"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "rca_expected": {
+        "S": "eks-node"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "end_time": {
+        "S": "2026-04-13T04:19:55.330713+00:00"
+      },
+      "recovery_seconds": {
+        "N": "301.1"
+      },
+      "experiment_name": {
+        "S": "fis-eks-terminate-node-1c"
+      },
+      "fault_type": {
+        "S": "fis_eks_terminate_node"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_duration": {
+        "S": "10m"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "target_namespace": {
+        "S": "eks"
+      },
+      "start_time": {
+        "S": "2026-04-13T04:03:53.852197+00:00"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "duration_seconds": {
+        "N": "961.5"
+      },
+      "ttl": {
+        "N": "1807590013"
+      },
+      "rca_status": {
+        "S": "buffered"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-nodegroup-fis-eks-terminate-node-20260413-040353-report.md"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "yaml_source": {
+        "S": "/home/ubuntu/tech/chaos/code/experiments/fis/eks-node/fis-eks-terminate-node-1c.yaml"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "ttl": {
+        "N": "1807553183"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "end_time": {
+        "S": "2026-04-12T18:06:06.396191+00:00"
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "yaml_source": {
+        "S": "/home/ubuntu/tech/chaos/code/experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "duration_seconds": {
+        "N": "188.3"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "start_time": {
+        "S": "2026-04-12T18:02:58.140427+00:00"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "impact_max_latency_p99": {
+        "N": "981.7"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "981.6"
+          }
+        }
+      },
+      "rca_status": {
+        "S": "buffered"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "505.8"
+          }
+        }
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0-20260312"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260412-180258"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260412-180258-report.md"
+      }
+    },
+    {
+      "fault_value": {
+        "S": "50"
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "yaml_source": {
+        "S": "/home/ubuntu/tech/chaos/code/experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260412-174743-report.md"
+      },
+      "duration_seconds": {
+        "N": "187.9"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "ttl": {
+        "N": "1807552269"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260412-174743"
+      },
+      "rca_status": {
+        "S": "buffered"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0-20260312"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "end_time": {
+        "S": "2026-04-12T17:50:51.285019+00:00"
+      },
+      "start_time": {
+        "S": "2026-04-12T17:47:43.381315+00:00"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "target_namespace": {
+        "S": "default"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "experiment_id": {
+        "S": "exp-petsearch-fis-ebs-pause-io-20260402-073854"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "impact_max_latency_p99": {
+        "N": "3.2"
+      },
+      "ttl": {
+        "N": "1806651710"
+      },
+      "experiment_name": {
+        "S": "petsearch-fis-ebs-pause-io-h005-20260402"
+      },
+      "duration_seconds": {
+        "N": "148.7"
+      },
+      "target_service": {
+        "S": "petsearch"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsearch-fis-ebs-pause-io-20260402-073854-report.md"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "fault_duration": {
+        "S": "1m"
+      },
+      "fault_type": {
+        "S": "fis_ebs_pause_io"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "yaml_source": {
+        "S": "experiments/generated/petsearch-fis-ebs-pause-io-h005.yaml"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "2.6"
+          }
+        }
+      },
+      "rca_actual": {
+        "S": "petsearch"
+      },
+      "end_time": {
+        "S": "2026-04-02T07:41:22.746056+00:00"
+      },
+      "rca_match": {
+        "BOOL": false
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "start_time": {
+        "S": "2026-04-02T07:38:54.013521+00:00"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "492.2"
+          }
+        }
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      }
+    },
+    {
+      "target_namespace": {
+        "S": "default"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "duration_seconds": {
+        "N": "238.6"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.9"
+          }
+        }
+      },
+      "ttl": {
+        "N": "1806651413"
+      },
+      "start_time": {
+        "S": "2026-04-02T07:32:37.186088+00:00"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "experiment_name": {
+        "S": "petlistadoptions-fis-rds-failover-h004-20260402"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "impact_max_latency_p99": {
+        "N": "2.5"
+      },
+      "experiment_id": {
+        "S": "exp-petlistadoptions-fis-rds-failover-20260402-073237"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petlistadoptions-fis-rds-failover-20260402-073237-report.md"
+      },
+      "fault_type": {
+        "S": "fis_rds_failover"
+      },
+      "yaml_source": {
+        "S": "experiments/generated/petlistadoptions-fis-rds-failover-h004.yaml"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.7"
+          }
+        }
+      },
+      "end_time": {
+        "S": "2026-04-02T07:36:35.799505+00:00"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_service": {
+        "S": "petlistadoptions"
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      }
+    },
+    {
+      "target_namespace": {
+        "S": "default"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "impact_max_latency_p99": {
+        "N": "2.2"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.8"
+          }
+        }
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.8"
+          }
+        }
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "ttl": {
+        "N": "1806650755"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-fis-rds-failover-20260402-072036"
+      },
+      "rca_match": {
+        "BOOL": false
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "fault_type": {
+        "S": "fis_rds_failover"
+      },
+      "end_time": {
+        "S": "2026-04-02T07:24:36.902748+00:00"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "yaml_source": {
+        "S": "experiments/generated/payforadoption-fis-rds-failover-h002.yaml"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "experiment_name": {
+        "S": "payforadoption-fis-rds-failover-h002-20260402"
+      },
+      "duration_seconds": {
+        "N": "240.6"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-fis-rds-failover-20260402-072036-report.md"
+      },
+      "start_time": {
+        "S": "2026-04-02T07:20:36.278057+00:00"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      }
+    },
+    {
+      "backend": {
+        "S": "fis"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_latency"
+      },
+      "end_time": {
+        "S": "2026-04-02T07:06:52.242258+00:00"
+      },
+      "ttl": {
+        "N": "1806649633"
+      },
+      "impact_max_latency_p99": {
+        "N": "1158.3"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1149.4"
+          }
+        }
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "start_time": {
+        "S": "2026-04-02T06:54:33.929771+00:00"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_duration": {
+        "S": "10m"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "experiment_name": {
+        "S": "fis-cross-az-severe-degradation-1a"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "544.5"
+          }
+        }
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-network-latency-20260402-065433"
+      },
+      "rca_expected": {
+        "S": "network-cross-az-degradation"
+      },
+      "recovery_seconds": {
+        "N": "77"
+      },
+      "rca_match": {
+        "BOOL": false
+      },
+      "yaml_source": {
+        "S": "experiments/fis/az-scenarios/fis-cross-az-severe-degradation-1a.yaml"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "az-scenario"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "duration_seconds": {
+        "N": "738.3"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-network-latency-20260402-065433-report.md"
+      }
+    },
+    {
+      "yaml_source": {
+        "S": "experiments/fis/az-scenarios/fis-az-app-slowdown-1c.yaml"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "start_time": {
+        "S": "2026-04-02T06:40:54.619614+00:00"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "impact_min_success_rate": {
+        "N": "66.67"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_latency"
+      },
+      "duration_seconds": {
+        "N": "661.3"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-network-latency-20260402-064054-report.md"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-network-latency-20260402-064054"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "722.2"
+          }
+        }
+      },
+      "end_time": {
+        "S": "2026-04-02T06:51:55.887377+00:00"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "fault_duration": {
+        "S": "10m"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "experiment_name": {
+        "S": "fis-az-app-slowdown-1c"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "impact_max_latency_p99": {
+        "N": "1200.4"
+      },
+      "rca_match": {
+        "BOOL": false
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1029.6"
+          }
+        }
+      },
+      "ttl": {
+        "N": "1806648753"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "az-scenario"
+      },
+      "rca_expected": {
+        "S": "network-intra-az"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      }
+    },
+    {
+      "backend": {
+        "S": "fis"
+      },
+      "experiment_name": {
+        "S": "fis-az-app-slowdown-1a"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_latency"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/az-scenarios/fis-az-app-slowdown-1a.yaml"
+      },
+      "ttl": {
+        "N": "1806647933"
+      },
+      "impact_max_latency_p99": {
+        "N": "2219.1"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_duration": {
+        "S": "10m"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "end_time": {
+        "S": "2026-04-02T06:38:34.233167+00:00"
+      },
+      "start_time": {
+        "S": "2026-04-02T06:26:18.535383+00:00"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "629.3"
+          }
+        }
+      },
+      "recovery_seconds": {
+        "N": "77"
+      },
+      "duration_seconds": {
+        "N": "735.7"
+      },
+      "rca_match": {
+        "BOOL": false
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1304.3"
+          }
+        }
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-network-latency-20260402-062618-report.md"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-network-latency-20260402-062618"
+      },
+      "target_namespace": {
+        "S": "az-scenario"
+      },
+      "rca_expected": {
+        "S": "network-intra-az"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "end_time": {
+        "S": "2026-04-02T06:23:56.254348+00:00"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-network-packet-loss-20260402-061255-report.md"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_expected": {
+        "S": "network-cross-az"
+      },
+      "duration_seconds": {
+        "N": "660.3"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/az-scenarios/fis-cross-az-traffic-slowdown-1c.yaml"
+      },
+      "impact_min_success_rate": {
+        "N": "80"
+      },
+      "ttl": {
+        "N": "1806647057"
+      },
+      "impact_max_latency_p99": {
+        "N": "1274.9"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "97.14"
+          },
+          "latency_p99_ms": {
+            "N": "934.9"
+          }
+        }
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-network-packet-loss-20260402-061255"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1155.6"
+          }
+        }
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_packet_loss"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "fault_duration": {
+        "S": "10m"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "rca_match": {
+        "BOOL": false
+      },
+      "experiment_name": {
+        "S": "fis-cross-az-traffic-slowdown-1c"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "az-scenario"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      },
+      "start_time": {
+        "S": "2026-04-02T06:12:55.920611+00:00"
+      }
+    },
+    {
+      "backend": {
+        "S": "fis"
+      },
+      "rca_expected": {
+        "S": "network-cross-az"
+      },
+      "end_time": {
+        "S": "2026-04-02T06:10:36.357359+00:00"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/az-scenarios/fis-cross-az-traffic-slowdown-1a.yaml"
+      },
+      "duration_seconds": {
+        "N": "733.8"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1779.8"
+          }
+        }
+      },
+      "impact_max_latency_p99": {
+        "N": "1780"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-network-packet-loss-20260402-055822"
+      },
+      "experiment_name": {
+        "S": "fis-cross-az-traffic-slowdown-1a"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-network-packet-loss-20260402-055822-report.md"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_packet_loss"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "start_time": {
+        "S": "2026-04-02T05:58:22.570421+00:00"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_duration": {
+        "S": "10m"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "ttl": {
+        "N": "1806646255"
+      },
+      "rca_match": {
+        "BOOL": false
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "az-scenario"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "recovery_seconds": {
+        "N": "77.1"
+      }
+    },
+    {
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "end_time": {
+        "S": "2026-04-02T05:51:23.444003+00:00"
+      },
+      "experiment_name": {
+        "S": "fis-network-disrupt-az-1c"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "recovery_seconds": {
+        "N": "31.4"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "ttl": {
+        "N": "1806645101"
+      },
+      "rca_enabled": {
+        "BOOL": false
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-network-disrupt-20260402-054458-report.md"
+      },
+      "start_time": {
+        "S": "2026-04-02T05:44:58.821871+00:00"
+      },
+      "target_namespace": {
+        "S": "network"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/network-infra/fis-network-disrupt-az-1c.yaml"
+      },
+      "fault_type": {
+        "S": "fis_network_disrupt"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-network-disrupt-20260402-054458"
+      },
+      "duration_seconds": {
+        "N": "384.6"
+      }
+    },
+    {
+      "experiment_name": {
+        "S": "fis-network-disrupt-az-1a"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/network-infra/fis-network-disrupt-az-1a.yaml"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "recovery_seconds": {
+        "N": "31.4"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "duration_seconds": {
+        "N": "384.4"
+      },
+      "rca_enabled": {
+        "BOOL": false
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "end_time": {
+        "S": "2026-04-02T05:42:39.965615+00:00"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "start_time": {
+        "S": "2026-04-02T05:36:15.562333+00:00"
+      },
+      "ttl": {
+        "N": "1806644577"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-network-disrupt-20260402-053615-report.md"
+      },
+      "target_namespace": {
+        "S": "network"
+      },
+      "fault_type": {
+        "S": "fis_network_disrupt"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-network-disrupt-20260402-053615"
+      }
+    },
+    {
+      "target_service": {
+        "S": "eks-nodegroup"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "rca_expected": {
+        "S": "eks-node"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-nodegroup-fis-eks-terminate-node-20260402-052200-report.md"
+      },
+      "experiment_name": {
+        "S": "fis-eks-terminate-node-1c"
+      },
+      "fault_type": {
+        "S": "fis_eks_terminate_node"
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "experiment_id": {
+        "S": "exp-eks-nodegroup-fis-eks-terminate-node-20260402-052200"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_duration": {
+        "S": "10m"
+      },
+      "start_time": {
+        "S": "2026-04-02T05:22:00.338176+00:00"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "target_namespace": {
+        "S": "eks"
+      },
+      "duration_seconds": {
+        "N": "657.6"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "end_time": {
+        "S": "2026-04-02T05:32:57.899955+00:00"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-node/fis-eks-terminate-node-1c.yaml"
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "ttl": {
+        "N": "1806643994"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      }
+    },
+    {
+      "target_service": {
+        "S": "eks-nodegroup"
+      },
+      "ttl": {
+        "N": "1806643139"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "rca_expected": {
+        "S": "eks-node"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "fis_eks_terminate_node"
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "start_time": {
+        "S": "2026-04-02T05:07:44.353943+00:00"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-node/fis-eks-terminate-node-1a.yaml"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_duration": {
+        "S": "10m"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "target_namespace": {
+        "S": "eks"
+      },
+      "experiment_id": {
+        "S": "exp-eks-nodegroup-fis-eks-terminate-node-20260402-050744"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-nodegroup-fis-eks-terminate-node-20260402-050744-report.md"
+      },
+      "experiment_name": {
+        "S": "fis-eks-terminate-node-1a"
+      },
+      "duration_seconds": {
+        "N": "657.7"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "end_time": {
+        "S": "2026-04-02T05:18:42.095910+00:00"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      }
+    },
+    {
+      "duration_seconds": {
+        "N": "683"
+      },
+      "fault_duration": {
+        "S": "10m"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "experiment_name": {
+        "S": "fis-ec2-asg-insufficient-capacity"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "experiment_id": {
+        "S": "exp-eks-asg-fis-ec2-asg-insufficient-capacity-20260402-045455"
+      },
+      "target_service": {
+        "S": "eks-asg"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "end_time": {
+        "S": "2026-04-02T05:06:18.057006+00:00"
+      },
+      "rca_enabled": {
+        "BOOL": false
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "fis_ec2_asg_insufficient_capacity"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/ec2/fis-ec2-asg-insufficient-capacity.yaml"
+      },
+      "target_namespace": {
+        "S": "ec2"
+      },
+      "start_time": {
+        "S": "2026-04-02T04:54:55.066076+00:00"
+      },
+      "ttl": {
+        "N": "1806642393"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-asg-fis-ec2-asg-insufficient-capacity-20260402-045455-report.md"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "recovery_seconds": {
+        "N": "31.5"
+      }
+    },
+    {
+      "duration_seconds": {
+        "N": "683"
+      },
+      "fault_duration": {
+        "S": "10m"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/ec2/fis-ec2-insufficient-capacity.yaml"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-asg-fis-ec2-insufficient-capacity-20260402-044114-report.md"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "target_service": {
+        "S": "eks-asg"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "ttl": {
+        "N": "1806641574"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "rca_enabled": {
+        "BOOL": false
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "fis_ec2_insufficient_capacity"
+      },
+      "start_time": {
+        "S": "2026-04-02T04:41:14.444490+00:00"
+      },
+      "target_namespace": {
+        "S": "ec2"
+      },
+      "end_time": {
+        "S": "2026-04-02T04:52:37.447711+00:00"
+      },
+      "experiment_id": {
+        "S": "exp-eks-asg-fis-ec2-insufficient-capacity-20260402-044114"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "recovery_seconds": {
+        "N": "31.5"
+      },
+      "experiment_name": {
+        "S": "fis-ec2-insufficient-capacity"
+      }
+    },
+    {
+      "target_service": {
+        "S": "eks-nodegroup"
+      },
+      "experiment_name": {
+        "S": "fis-ec2-stop-node-1a"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "start_time": {
+        "S": "2026-04-02T04:29:13.522055+00:00"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "target_namespace": {
+        "S": "ec2"
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/ec2/fis-ec2-stop-node-1a.yaml"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "fault_type": {
+        "S": "fis_ec2_stop"
+      },
+      "rca_expected": {
+        "S": "ec2-instance-stop"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "ttl": {
+        "N": "1806640529"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "experiment_id": {
+        "S": "exp-eks-nodegroup-fis-ec2-stop-20260402-042913"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "end_time": {
+        "S": "2026-04-02T04:35:10.850147+00:00"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-nodegroup-fis-ec2-stop-20260402-042913-report.md"
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "duration_seconds": {
+        "N": "357.3"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      }
+    },
+    {
+      "target_service": {
+        "S": "eks-nodegroup"
+      },
+      "start_time": {
+        "S": "2026-04-02T04:20:00.811701+00:00"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "yaml_source": {
+        "S": "experiments/fis/ec2/fis-ec2-reboot-node-1a.yaml"
+      },
+      "fault_type": {
+        "S": "fis_ec2_reboot"
+      },
+      "target_namespace": {
+        "S": "ec2"
+      },
+      "experiment_name": {
+        "S": "fis-ec2-reboot-node-1a"
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "experiment_id": {
+        "S": "exp-eks-nodegroup-fis-ec2-reboot-20260402-042000"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-nodegroup-fis-ec2-reboot-20260402-042000-report.md"
+      },
+      "ttl": {
+        "N": "1806639972"
+      },
+      "end_time": {
+        "S": "2026-04-02T04:25:58.077960+00:00"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "rca_expected": {
+        "S": "ec2-instance-reboot"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "duration_seconds": {
+        "N": "357.3"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      }
+    },
+    {
+      "target_service": {
+        "S": "eks-nodegroup"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "yaml_source": {
+        "S": "experiments/fis/ec2/fis-ec2-reboot-node-1a.yaml"
+      },
+      "fault_type": {
+        "S": "fis_ec2_reboot"
+      },
+      "duration_seconds": {
+        "N": "357.5"
+      },
+      "target_namespace": {
+        "S": "ec2"
+      },
+      "experiment_name": {
+        "S": "fis-ec2-reboot-node-1a"
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-nodegroup-fis-ec2-reboot-20260402-041456-report.md"
+      },
+      "start_time": {
+        "S": "2026-04-02T04:14:56.817771+00:00"
+      },
+      "recovery_seconds": {
+        "N": "1.3"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "experiment_id": {
+        "S": "exp-eks-nodegroup-fis-ec2-reboot-20260402-041456"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "ttl": {
+        "N": "1806639671"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "rca_expected": {
+        "S": "ec2-instance-reboot"
+      },
+      "end_time": {
+        "S": "2026-04-02T04:20:54.285573+00:00"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-storage-fis-ebs-pause-io-20260402-040657-report.md"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/network-infra/fis-ebs-pause-io-1a.yaml"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "duration_seconds": {
+        "N": "252.6"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "rca_expected": {
+        "S": "ebs-io-failure"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "recovery_seconds": {
+        "N": "16.4"
+      },
+      "target_service": {
+        "S": "eks-storage"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "start_time": {
+        "S": "2026-04-02T04:06:57.661485+00:00"
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "fault_type": {
+        "S": "fis_ebs_pause_io"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "experiment_name": {
+        "S": "fis-ebs-pause-io-1a"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "ttl": {
+        "N": "1806639086"
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "end_time": {
+        "S": "2026-04-02T04:11:10.301425+00:00"
+      },
+      "target_namespace": {
+        "S": "storage"
+      },
+      "experiment_id": {
+        "S": "exp-eks-storage-fis-ebs-pause-io-20260402-040657"
+      }
+    },
+    {
+      "backend": {
+        "S": "fis"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "start_time": {
+        "S": "2026-04-02T03:58:14.160794+00:00"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "rca_expected": {
+        "S": "petsearch"
+      },
+      "target_service": {
+        "S": "petsearch"
+      },
+      "end_time": {
+        "S": "2026-04-02T04:04:38.723551+00:00"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "target_namespace": {
+        "S": "eks"
+      },
+      "experiment_name": {
+        "S": "fis-ebs-io-latency"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsearch-fis-ebs-io-latency-20260402-035814-report.md"
+      },
+      "impact_max_latency_p99": {
+        "N": "8.1"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/network-infra/fis-ebs-io-latency.yaml"
+      },
+      "rca_actual": {
+        "S": "petsearch"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "experiment_id": {
+        "S": "exp-petsearch-fis-ebs-io-latency-20260402-035814"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "5"
+          }
+        }
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "ttl": {
+        "N": "1806638696"
+      },
+      "recovery_seconds": {
+        "N": "31.5"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "3.7"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "fis_ebs_io_latency"
+      },
+      "duration_seconds": {
+        "N": "384.6"
+      }
+    },
+    {
+      "experiment_name": {
+        "S": "fis-aurora-reboot"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "ttl": {
+        "N": "1806638173"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "start_time": {
+        "S": "2026-04-02T03:51:56.704104+00:00"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/rds/fis-aurora-reboot.yaml"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "end_time": {
+        "S": "2026-04-02T03:55:55.146148+00:00"
+      },
+      "recovery_seconds": {
+        "N": "1.1"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.2"
+          }
+        }
+      },
+      "duration_seconds": {
+        "N": "238.4"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "target_namespace": {
+        "S": "rds"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-fis-rds-reboot-20260402-035156-report.md"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-fis-rds-reboot-20260402-035156"
+      },
+      "fault_type": {
+        "S": "fis_rds_reboot"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1"
+          }
+        }
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "impact_max_latency_p99": {
+        "N": "1.4"
+      }
+    },
+    {
+      "yaml_source": {
+        "S": "experiments/fis/api-injection/fis-api-throttle-eks.yaml"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "target_service": {
+        "S": "eks-control-plane"
+      },
+      "ttl": {
+        "N": "1806637724"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "start_time": {
+        "S": "2026-04-02T03:42:05.529195+00:00"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "end_time": {
+        "S": "2026-04-02T03:48:28.513504+00:00"
+      },
+      "recovery_seconds": {
+        "N": "31.4"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "experiment_id": {
+        "S": "exp-eks-control-plane-fis-api-throttle-20260402-034205"
+      },
+      "rca_enabled": {
+        "BOOL": false
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "duration_seconds": {
+        "N": "383"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "fault_type": {
+        "S": "fis_api_throttle"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "experiment_name": {
+        "S": "fis-api-throttle-eks"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-control-plane-fis-api-throttle-20260402-034205-report.md"
+      },
+      "target_namespace": {
+        "S": "api-injection"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "yaml_source": {
+        "S": "experiments/fis/api-injection/fis-api-internal-error-eks.yaml"
+      },
+      "duration_seconds": {
+        "N": "382.9"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "target_service": {
+        "S": "eks-control-plane"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "recovery_seconds": {
+        "N": "31.4"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "rca_enabled": {
+        "BOOL": false
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "end_time": {
+        "S": "2026-04-02T03:39:10.714006+00:00"
+      },
+      "fault_type": {
+        "S": "fis_api_internal_error"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "start_time": {
+        "S": "2026-04-02T03:32:47.859297+00:00"
+      },
+      "experiment_id": {
+        "S": "exp-eks-control-plane-fis-api-internal-error-20260402-033247"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "target_namespace": {
+        "S": "api-injection"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-control-plane-fis-api-internal-error-20260402-033247-report.md"
+      },
+      "ttl": {
+        "N": "1806637167"
+      },
+      "experiment_name": {
+        "S": "fis-api-internal-error-eks"
+      }
+    },
+    {
+      "backend": {
+        "S": "fis"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/lambda/fis-lambda-http-response-petstatusupdater.yaml"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "rca_actual": {
+        "S": "petstatusupdater"
+      },
+      "experiment_id": {
+        "S": "exp-petstatusupdater-fis-lambda-http-response-20260402-032156"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "recovery_seconds": {
+        "N": "1.1"
+      },
+      "target_namespace": {
+        "S": "lambda"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "start_time": {
+        "S": "2026-04-02T03:21:56.478696+00:00"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "fis_lambda_http_response"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petstatusupdater-fis-lambda-http-response-20260402-032156-report.md"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "rca_expected": {
+        "S": "petstatusupdater"
+      },
+      "target_service": {
+        "S": "petstatusupdater"
+      },
+      "end_time": {
+        "S": "2026-04-02T03:27:51.028864+00:00"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "ttl": {
+        "N": "1806636488"
+      },
+      "duration_seconds": {
+        "N": "354.6"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "experiment_name": {
+        "S": "fis-lambda-http-response-petstatusupdater"
+      }
+    },
+    {
+      "backend": {
+        "S": "fis"
+      },
+      "end_time": {
+        "S": "2026-04-02T03:16:52.951066+00:00"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "experiment_name": {
+        "S": "fis-lambda-delay-petstatusupdater"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "fault_type": {
+        "S": "fis_lambda_delay"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/lambda/fis-lambda-delay-petstatusupdater.yaml"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "rca_actual": {
+        "S": "petstatusupdater"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "recovery_seconds": {
+        "N": "1.1"
+      },
+      "target_namespace": {
+        "S": "lambda"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "experiment_id": {
+        "S": "exp-petstatusupdater-fis-lambda-delay-20260402-031056"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "rca_expected": {
+        "S": "petstatusupdater"
+      },
+      "target_service": {
+        "S": "petstatusupdater"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "duration_seconds": {
+        "N": "356.1"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "ttl": {
+        "N": "1806635852"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petstatusupdater-fis-lambda-delay-20260402-031056-report.md"
+      },
+      "start_time": {
+        "S": "2026-04-02T03:10:56.898229+00:00"
+      }
+    },
+    {
+      "backend": {
+        "S": "fis"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.3"
+          }
+        }
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-io-stress-payforadoption.yaml"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "end_time": {
+        "S": "2026-04-02T03:07:16.658740+00:00"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.1"
+          }
+        }
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-io-stress-payforadoption"
+      },
+      "impact_max_latency_p99": {
+        "N": "1.7"
+      },
+      "duration_seconds": {
+        "N": "359.1"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "ttl": {
+        "N": "1806635253"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "start_time": {
+        "S": "2026-04-02T03:01:17.595297+00:00"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-fis-eks-pod-io-stress-20260402-030117-report.md"
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-fis-eks-pod-io-stress-20260402-030117"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_io_stress"
+      }
+    },
+    {
+      "backend": {
+        "S": "fis"
+      },
+      "end_time": {
+        "S": "2026-04-02T02:58:55.770060+00:00"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.3"
+          }
+        }
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-loss-payforadoption"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "ttl": {
+        "N": "1806634756"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-loss-payforadoption.yaml"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_packet_loss"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-fis-eks-pod-network-packet-loss-20260402-025258-report.md"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-fis-eks-pod-network-packet-loss-20260402-025258"
+      },
+      "start_time": {
+        "S": "2026-04-02T02:52:58.145160+00:00"
+      },
+      "duration_seconds": {
+        "N": "357.6"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "impact_max_latency_p99": {
+        "N": "1.8"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.2"
+          }
+        }
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      }
+    },
+    {
+      "backend": {
+        "S": "fis"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "impact_max_latency_p99": {
+        "N": "8.9"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_latency"
+      },
+      "end_time": {
+        "S": "2026-04-02T02:50:40.177931+00:00"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsearch-fis-eks-pod-network-latency-20260402-024444-report.md"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "rca_expected": {
+        "S": "petsearch"
+      },
+      "target_service": {
+        "S": "petsearch"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "recovery_seconds": {
+        "N": "1.1"
+      },
+      "start_time": {
+        "S": "2026-04-02T02:44:44.528459+00:00"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "ttl": {
+        "N": "1806634257"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-latency-petsearch"
+      },
+      "rca_actual": {
+        "S": "petsearch"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "5.2"
+          }
+        }
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "duration_seconds": {
+        "N": "355.6"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "4.7"
+          }
+        }
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-latency-petsearch.yaml"
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "experiment_id": {
+        "S": "exp-petsearch-fis-eks-pod-network-latency-20260402-024444"
+      }
+    },
+    {
+      "experiment_name": {
+        "S": "fis-eks-pod-memory-stress-petsearch"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsearch-fis-eks-pod-memory-stress-20260402-023526-report.md"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "2.8"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_memory_stress"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-memory-stress-petsearch.yaml"
+      },
+      "impact_max_latency_p99": {
+        "N": "6.2"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "rca_expected": {
+        "S": "petsearch"
+      },
+      "target_service": {
+        "S": "petsearch"
+      },
+      "experiment_id": {
+        "S": "exp-petsearch-fis-eks-pod-memory-stress-20260402-023526"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "ttl": {
+        "N": "1806633702"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "4.6"
+          }
+        }
+      },
+      "end_time": {
+        "S": "2026-04-02T02:41:24.641308+00:00"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_actual": {
+        "S": "petsearch"
+      },
+      "duration_seconds": {
+        "N": "357.8"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      },
+      "start_time": {
+        "S": "2026-04-02T02:35:26.864618+00:00"
+      }
+    },
+    {
+      "backend": {
+        "S": "fis"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "end_time": {
+        "S": "2026-04-02T02:33:08.614493+00:00"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-delete-petsite.yaml"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-delete-petsite"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "recovery_seconds": {
+        "N": "1.1"
+      },
+      "duration_seconds": {
+        "N": "240.3"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "start_time": {
+        "S": "2026-04-02T02:29:08.350475+00:00"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-delete-20260402-022908"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_delete"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-delete-20260402-022908-report.md"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "ttl": {
+        "N": "1806633206"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-cpu-stress-petsite.yaml"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-cpu-stress-20260402-021840-report.md"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_cpu_stress"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-cpu-stress-20260402-021840"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "duration_seconds": {
+        "N": "445.4"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "start_time": {
+        "S": "2026-04-02T02:18:40.085357+00:00"
+      },
+      "ttl": {
+        "N": "1806632781"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "recovery_seconds": {
+        "N": "92"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "end_time": {
+        "S": "2026-04-02T02:26:05.488506+00:00"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-cpu-stress-petsite"
+      }
+    },
+    {
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-cpu-stress-petsite.yaml"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-cpu-stress-20260402-021142"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "recovery_seconds": {
+        "N": "76.7"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_cpu_stress"
+      },
+      "ttl": {
+        "N": "1806632355"
+      },
+      "start_time": {
+        "S": "2026-04-02T02:11:42.650522+00:00"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "duration_seconds": {
+        "N": "435.1"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-cpu-stress-20260402-021142-report.md"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-cpu-stress-petsite"
+      },
+      "end_time": {
+        "S": "2026-04-02T02:18:57.737853+00:00"
+      }
+    },
+    {
+      "end_time": {
+        "S": "2026-04-02T02:16:21.149780+00:00"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-blackhole-petsite.yaml"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "duration_seconds": {
+        "N": "450.8"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-network-blackhole-20260402-020850-report.md"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-network-blackhole-20260402-020850"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-blackhole-petsite"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_blackhole"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "recovery_seconds": {
+        "N": "92"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "ttl": {
+        "N": "1806632199"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "start_time": {
+        "S": "2026-04-02T02:08:50.382449+00:00"
+      }
+    },
+    {
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-cpu-stress-petsite.yaml"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-cpu-stress-20260402-020531-report.md"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-cpu-stress-20260402-020531"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "recovery_seconds": {
+        "N": "1.5"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "end_time": {
+        "S": "2026-04-02T02:11:33.356801+00:00"
+      },
+      "ttl": {
+        "N": "1806631909"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_cpu_stress"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "start_time": {
+        "S": "2026-04-02T02:05:31.153282+00:00"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "duration_seconds": {
+        "N": "362.2"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-cpu-stress-petsite"
+      }
+    },
+    {
+      "duration_seconds": {
+        "N": "359.5"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-blackhole-petsite.yaml"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "start_time": {
+        "S": "2026-04-02T02:03:29.105637+00:00"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-blackhole-petsite"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "recovery_seconds": {
+        "N": "1.1"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-network-blackhole-20260402-020329"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "ttl": {
+        "N": "1806631782"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_blackhole"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-network-blackhole-20260402-020329-report.md"
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "end_time": {
+        "S": "2026-04-02T02:09:28.644582+00:00"
+      }
+    },
+    {
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-network-blackhole-20260402-015718-report.md"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-blackhole-petsite.yaml"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "start_time": {
+        "S": "2026-04-02T01:57:18.346991+00:00"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-blackhole-petsite"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-network-blackhole-20260402-015718"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "duration_seconds": {
+        "N": "356.8"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_blackhole"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "end_time": {
+        "S": "2026-04-02T02:03:15.146982+00:00"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "ttl": {
+        "N": "1806631411"
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      }
+    },
+    {
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-cpu-stress-petsite.yaml"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-cpu-stress-20260402-015401-report.md"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_cpu_stress"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "ttl": {
+        "N": "1806631215"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "start_time": {
+        "S": "2026-04-02T01:54:01.889077+00:00"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-cpu-stress-20260402-015401"
+      },
+      "end_time": {
+        "S": "2026-04-02T01:59:58.869053+00:00"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "duration_seconds": {
+        "N": "357"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-cpu-stress-petsite"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      }
+    },
+    {
+      "backend": {
+        "S": "fis"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-blackhole-petsite.yaml"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "recovery_seconds": {
+        "N": "1.4"
+      },
+      "end_time": {
+        "S": "2026-04-02T01:51:39.212026+00:00"
+      },
+      "duration_seconds": {
+        "N": "355.1"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-blackhole-petsite"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "start_time": {
+        "S": "2026-04-02T01:45:44.073472+00:00"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-network-blackhole-20260402-014544"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_blackhole"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "ttl": {
+        "N": "1806630721"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-network-blackhole-20260402-014544-report.md"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "yaml_source": {
+        "S": "experiments/tier2/pethistory-time-chaos.yaml"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "start_time": {
+        "S": "2026-04-02T01:34:30.171116+00:00"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "ttl": {
+        "N": "1806629930"
+      },
+      "rca_enabled": {
+        "BOOL": false
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "target_service": {
+        "S": "pethistory"
+      },
+      "fault_value": {
+        "S": ""
+      },
+      "end_time": {
+        "S": "2026-04-02T01:38:33.515386+00:00"
+      },
+      "experiment_name": {
+        "S": "pethistory-time-chaos"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "14.5"
+          }
+        }
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "experiment_id": {
+        "S": "exp-pethistory-time-chaos-20260402-013430"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "impact_max_latency_p99": {
+        "N": "15.1"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "10.4"
+          }
+        }
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-pethistory-time-chaos-20260402-013430-report.md"
+      },
+      "target_tier": {
+        "S": "Tier2"
+      },
+      "duration_seconds": {
+        "N": "243.3"
+      },
+      "fault_type": {
+        "S": "time_chaos"
+      }
+    },
+    {
+      "rca_status": {
+        "S": "success"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "299.7"
+          }
+        }
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "fault_value": {
+        "S": ""
+      },
+      "experiment_name": {
+        "S": "petsearch-network-corrupt"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "experiment_id": {
+        "S": "exp-petsearch-network-corrupt-20260402-012815"
+      },
+      "rca_expected": {
+        "S": "petsearch"
+      },
+      "target_service": {
+        "S": "petsearch"
+      },
+      "recovery_seconds": {
+        "N": "112.3"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsearch-network-corrupt-20260402-012815-report.md"
+      },
+      "end_time": {
+        "S": "2026-04-02T01:34:13.301490+00:00"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "fault_type": {
+        "S": "network_corrupt"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "ttl": {
+        "N": "1806629669"
+      },
+      "yaml_source": {
+        "S": "experiments/tier1/petsearch-network-corrupt.yaml"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "rca_actual": {
+        "S": "petsearch"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "2.2"
+          }
+        }
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "impact_max_latency_p99": {
+        "N": "4444.9"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "duration_seconds": {
+        "N": "357.3"
+      },
+      "start_time": {
+        "S": "2026-04-02T01:28:15.985078+00:00"
+      }
+    },
+    {
+      "fault_value": {
+        "S": "50"
+      },
+      "fault_type": {
+        "S": "network_loss"
+      },
+      "ttl": {
+        "N": "1806629175"
+      },
+      "experiment_name": {
+        "S": "petlistadoptions-network-loss-tier1-20260312"
+      },
+      "experiment_id": {
+        "S": "exp-petlistadoptions-network-loss-20260402-012150"
+      },
+      "yaml_source": {
+        "S": "experiments/tier1/petlistadoptions-network-loss.yaml"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petlistadoptions-network-loss-20260402-012150-report.md"
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.1"
+          }
+        }
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "impact_max_latency_p99": {
+        "N": "224.7"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "end_time": {
+        "S": "2026-04-02T01:25:58.876574+00:00"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "start_time": {
+        "S": "2026-04-02T01:21:50.925838+00:00"
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "duration_seconds": {
+        "N": "248"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "215.6"
+          }
+        }
+      },
+      "target_service": {
+        "S": "petlistadoptions"
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "rca_expected": {
+        "S": "petlistadoptions"
+      }
+    },
+    {
+      "start_time": {
+        "S": "2026-04-02T01:15:25.048654+00:00"
+      },
+      "experiment_id": {
+        "S": "exp-pethistory-network-duplicate-20260402-011525"
+      },
+      "end_time": {
+        "S": "2026-04-02T01:19:33.125722+00:00"
+      },
+      "fault_type": {
+        "S": "network_duplicate"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "rca_expected": {
+        "S": "pethistory"
+      },
+      "target_service": {
+        "S": "pethistory"
+      },
+      "fault_value": {
+        "S": ""
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "ttl": {
+        "N": "1806628790"
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "duration_seconds": {
+        "N": "248.1"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "impact_max_latency_p99": {
+        "N": "12"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "experiment_name": {
+        "S": "pethistory-network-duplicate"
+      },
+      "recovery_seconds": {
+        "N": "1.7"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "11.7"
+          }
+        }
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "11.6"
+          }
+        }
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-pethistory-network-duplicate-20260402-011525-report.md"
+      },
+      "yaml_source": {
+        "S": "experiments/tier1/pethistory-network-duplicate.yaml"
+      }
+    },
+    {
+      "fault_type": {
+        "S": "network_delay"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "experiment_id": {
+        "S": "exp-pethistory-network-delay-20260402-010900"
+      },
+      "rca_expected": {
+        "S": "pethistory"
+      },
+      "target_service": {
+        "S": "pethistory"
+      },
+      "experiment_name": {
+        "S": "pethistory-network-delay-tier1-20260312"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "11.3"
+          }
+        }
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "duration_seconds": {
+        "N": "243.9"
+      },
+      "ttl": {
+        "N": "1806628404"
+      },
+      "yaml_source": {
+        "S": "experiments/tier1/pethistory-network-delay.yaml"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "end_time": {
+        "S": "2026-04-02T01:13:04.551341+00:00"
+      },
+      "impact_max_latency_p99": {
+        "N": "1510.9"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "start_time": {
+        "S": "2026-04-02T01:09:00.668944+00:00"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1510.1"
+          }
+        }
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-pethistory-network-delay-20260402-010900-report.md"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "rca_status": {
+        "S": "error"
+      }
+    },
+    {
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "end_time": {
+        "S": "2026-04-02T01:06:43.228251+00:00"
+      },
+      "experiment_name": {
+        "S": "payforadoption-io-chaos"
+      },
+      "fault_value": {
+        "S": ""
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "fault_type": {
+        "S": "io_chaos"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "ttl": {
+        "N": "1806628020"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "start_time": {
+        "S": "2026-04-02T01:02:36.743257+00:00"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-io-chaos-20260402-010236-report.md"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "impact_max_latency_p99": {
+        "N": "1.3"
+      },
+      "duration_seconds": {
+        "N": "246.5"
+      },
+      "yaml_source": {
+        "S": "experiments/tier1/payforadoption-io-chaos.yaml"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-io-chaos-20260402-010236"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.1"
+          }
+        }
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1"
+          }
+        }
+      }
+    },
+    {
+      "fault_value": {
+        "S": "50"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "duration_seconds": {
+        "N": "185.1"
+      },
+      "start_time": {
+        "S": "2026-04-02T00:52:55.787053+00:00"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "ttl": {
+        "N": "1806627374"
+      },
+      "end_time": {
+        "S": "2026-04-02T00:56:00.847376+00:00"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260402-005255"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260402-005255-report.md"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0-20260312"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "fault_value": {
+        "S": "50"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-pod-failure.yaml"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-failure-20260402-004632-report.md"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "pod_failure"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "end_time": {
+        "S": "2026-04-02T00:50:39.091065+00:00"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "experiment_name": {
+        "S": "petsite-pod-failure"
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-failure-20260402-004632"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "ttl": {
+        "N": "1806627055"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "duration_seconds": {
+        "N": "246.4"
+      },
+      "start_time": {
+        "S": "2026-04-02T00:46:32.732183+00:00"
+      }
+    },
+    {
+      "experiment_name": {
+        "S": "petsite-memory-stress"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-memory-stress-20260402-003806"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "duration_seconds": {
+        "N": "371.5"
+      },
+      "end_time": {
+        "S": "2026-04-02T00:44:17.704312+00:00"
+      },
+      "fault_value": {
+        "S": ""
+      },
+      "ttl": {
+        "N": "1806626672"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-memory-stress.yaml"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-memory-stress-20260402-003806-report.md"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "recovery_seconds": {
+        "N": "1.7"
+      },
+      "start_time": {
+        "S": "2026-04-02T00:38:06.193318+00:00"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_type": {
+        "S": "pod_memory_stress"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "start_time": {
+        "S": "2026-04-02T00:31:40.963771+00:00"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-dns-chaos-20260402-003140"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "rca_expected": {
+        "S": "dns"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-dns-chaos-20260402-003140-report.md"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_value": {
+        "S": ""
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-dns-chaos.yaml"
+      },
+      "end_time": {
+        "S": "2026-04-02T00:35:47.922095+00:00"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "duration_seconds": {
+        "N": "247"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "dns_chaos"
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "rca_match": {
+        "BOOL": false
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "experiment_name": {
+        "S": "petsite-dns-chaos"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "ttl": {
+        "N": "1806626165"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "rca_status": {
+        "S": "success"
+      },
+      "ttl": {
+        "N": "1806625780"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-cpu-stress.yaml"
+      },
+      "fault_value": {
+        "S": ""
+      },
+      "fault_type": {
+        "S": "pod_cpu_stress"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "end_time": {
+        "S": "2026-04-02T00:29:26.151238+00:00"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-cpu-stress-20260402-002315"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "start_time": {
+        "S": "2026-04-02T00:23:15.808962+00:00"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "duration_seconds": {
+        "N": "370.3"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "experiment_name": {
+        "S": "petsite-cpu-stress"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-cpu-stress-20260402-002315-report.md"
+      }
+    },
+    {
+      "fault_value": {
+        "S": "50"
+      },
+      "experiment_name": {
+        "S": "petsite-container-kill"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "end_time": {
+        "S": "2026-04-02T00:20:57.350794+00:00"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-container-kill.yaml"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-container-kill-20260402-001749-report.md"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-container-kill-20260402-001749"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "ttl": {
+        "N": "1806625275"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "start_time": {
+        "S": "2026-04-02T00:17:49.163504+00:00"
+      },
+      "duration_seconds": {
+        "N": "188.2"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "container_kill"
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "fault_type": {
+        "S": "network_delay"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "4.3"
+          }
+        }
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "ttl": {
+        "N": "1806624948"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "202"
+          }
+        }
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "rca_expected": {
+        "S": "petsearch"
+      },
+      "target_service": {
+        "S": "petsearch"
+      },
+      "experiment_name": {
+        "S": "petsearch-network-delay-tier0-20260312"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsearch-network-delay-20260402-001120-report.md"
+      },
+      "experiment_id": {
+        "S": "exp-petsearch-network-delay-20260402-001120"
+      },
+      "start_time": {
+        "S": "2026-04-02T00:11:20.486040+00:00"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "duration_seconds": {
+        "N": "250.3"
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsearch-network-delay.yaml"
+      },
+      "rca_actual": {
+        "S": "petsearch"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "end_time": {
+        "S": "2026-04-02T00:15:30.738191+00:00"
+      },
+      "impact_max_latency_p99": {
+        "N": "203.7"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "2.1"
+          }
+        }
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "ttl": {
+        "N": "1806624018"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-pod-kill.yaml"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "impact_max_latency_p99": {
+        "N": "4.7"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "experiment_name": {
+        "S": "payforadoption-pod-kill-tier0"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "4.7"
+          }
+        }
+      },
+      "duration_seconds": {
+        "N": "186.2"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-pod-kill-20260401-235655-report.md"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "start_time": {
+        "S": "2026-04-01T23:56:55.817243+00:00"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "end_time": {
+        "S": "2026-04-02T00:00:02.001591+00:00"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-pod-kill-20260401-235655"
+      }
+    },
+    {
+      "experiment_id": {
+        "S": "exp-payforadoption-network-partition-20260401-235000"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "impact_max_latency_p99": {
+        "N": "1"
+      },
+      "duration_seconds": {
+        "N": "277.2"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "end_time": {
+        "S": "2026-04-01T23:54:37.943058+00:00"
+      },
+      "fault_value": {
+        "S": ""
+      },
+      "fault_type": {
+        "S": "network_partition"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "ttl": {
+        "N": "1806623695"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.6"
+          }
+        }
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.2"
+          }
+        }
+      },
+      "start_time": {
+        "S": "2026-04-01T23:50:00.693830+00:00"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "experiment_name": {
+        "S": "payforadoption-network-partition"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-network-partition.yaml"
+      },
+      "recovery_seconds": {
+        "N": "96.3"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-network-partition-20260401-235000-report.md"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "experiment_name": {
+        "S": "payforadoption-http-chaos-tier0-20260312"
+      },
+      "end_time": {
+        "S": "2026-04-01T23:45:41.786459+00:00"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "504.7"
+          }
+        }
+      },
+      "ttl": {
+        "N": "1806623161"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "fault_type": {
+        "S": "http_chaos"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "impact_max_latency_p99": {
+        "N": "507.5"
+      },
+      "start_time": {
+        "S": "2026-04-01T23:41:37.055746+00:00"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "duration_seconds": {
+        "N": "244.7"
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-http-chaos-20260401-234137"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-http-chaos-20260401-234137-report.md"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-http-chaos.yaml"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0.9"
+          }
+        }
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "fault_value": {
+        "S": "50"
+      },
+      "duration_seconds": {
+        "N": "247.8"
+      },
+      "fault_type": {
+        "S": "network_loss"
+      },
+      "experiment_name": {
+        "S": "petlistadoptions-network-loss-tier1-20260312"
+      },
+      "recovery_seconds": {
+        "N": "1.5"
+      },
+      "yaml_source": {
+        "S": "experiments/tier1/petlistadoptions-network-loss.yaml"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "impact_max_latency_p99": {
+        "N": "1398.9"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petlistadoptions-network-loss-20260401-203202-report.md"
+      },
+      "ttl": {
+        "N": "1806611788"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "511.4"
+          }
+        }
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "end_time": {
+        "S": "2026-04-01T20:36:10.113923+00:00"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "experiment_id": {
+        "S": "exp-petlistadoptions-network-loss-20260401-203202"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "start_time": {
+        "S": "2026-04-01T20:32:02.317838+00:00"
+      },
+      "target_service": {
+        "S": "petlistadoptions"
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0.8"
+          }
+        }
+      },
+      "rca_expected": {
+        "S": "petlistadoptions"
+      }
+    },
+    {
+      "fault_type": {
+        "S": "network_delay"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "impact_max_latency_p99": {
+        "N": "2718.3"
+      },
+      "rca_expected": {
+        "S": "pethistory"
+      },
+      "recovery_seconds": {
+        "N": "1.5"
+      },
+      "target_service": {
+        "S": "pethistory"
+      },
+      "experiment_name": {
+        "S": "pethistory-network-delay-tier1-20260312"
+      },
+      "experiment_id": {
+        "S": "exp-pethistory-network-delay-20260401-202311"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "2718.3"
+          }
+        }
+      },
+      "duration_seconds": {
+        "N": "247.7"
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "10"
+          }
+        }
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-pethistory-network-delay-20260401-202311-report.md"
+      },
+      "start_time": {
+        "S": "2026-04-01T20:23:11.474837+00:00"
+      },
+      "yaml_source": {
+        "S": "experiments/tier1/pethistory-network-delay.yaml"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "ttl": {
+        "N": "1806611257"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "end_time": {
+        "S": "2026-04-01T20:27:19.158168+00:00"
+      }
+    },
+    {
+      "target_service": {
+        "S": "eks-nodegroup"
+      },
+      "end_time": {
+        "S": "2026-04-01T20:15:16.116461+00:00"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "start_time": {
+        "S": "2026-04-01T20:04:18.801093+00:00"
+      },
+      "rca_expected": {
+        "S": "eks-node"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "fis_eks_terminate_node"
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "recovery_seconds": {
+        "N": "1.1"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-node/fis-eks-terminate-node-1a.yaml"
+      },
+      "experiment_id": {
+        "S": "exp-eks-nodegroup-fis-eks-terminate-node-20260401-200418"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_duration": {
+        "S": "10m"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "target_namespace": {
+        "S": "eks"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-nodegroup-fis-eks-terminate-node-20260401-200418-report.md"
+      },
+      "experiment_name": {
+        "S": "fis-eks-terminate-node-1a"
+      },
+      "duration_seconds": {
+        "N": "657.3"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "ttl": {
+        "N": "1806610531"
+      }
+    },
+    {
+      "target_service": {
+        "S": "eks-nodegroup"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "ttl": {
+        "N": "1806610117"
+      },
+      "duration_seconds": {
+        "N": "657.8"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-nodegroup-fis-eks-terminate-node-20260401-195723-report.md"
+      },
+      "rca_expected": {
+        "S": "eks-node"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "experiment_id": {
+        "S": "exp-eks-nodegroup-fis-eks-terminate-node-20260401-195723"
+      },
+      "end_time": {
+        "S": "2026-04-01T20:08:21.710587+00:00"
+      },
+      "fault_type": {
+        "S": "fis_eks_terminate_node"
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "recovery_seconds": {
+        "N": "1.1"
+      },
+      "start_time": {
+        "S": "2026-04-01T19:57:23.886246+00:00"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-node/fis-eks-terminate-node-1a.yaml"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_duration": {
+        "S": "10m"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "target_namespace": {
+        "S": "eks"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "experiment_name": {
+        "S": "fis-eks-terminate-node-1a"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "experiment_name": {
+        "S": "fis-network-disrupt-az-1a"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "end_time": {
+        "S": "2026-04-01T19:55:04.126586+00:00"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/network-infra/fis-network-disrupt-az-1a.yaml"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "recovery_seconds": {
+        "N": "31.4"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1140.6"
+          }
+        }
+      },
+      "start_time": {
+        "S": "2026-04-01T19:48:39.630067+00:00"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "rca_enabled": {
+        "BOOL": false
+      },
+      "impact_max_latency_p99": {
+        "N": "1140.7"
+      },
+      "duration_seconds": {
+        "N": "384.5"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "ttl": {
+        "N": "1806609322"
+      },
+      "target_namespace": {
+        "S": "network"
+      },
+      "fault_type": {
+        "S": "fis_network_disrupt"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-network-disrupt-20260401-194839"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "335"
+          }
+        }
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-network-disrupt-20260401-194839-report.md"
+      }
+    },
+    {
+      "backend": {
+        "S": "fis"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "experiment_id": {
+        "S": "exp-petsearch-fis-ebs-io-latency-20260401-194011"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "566"
+          }
+        }
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "ttl": {
+        "N": "1806608798"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "rca_expected": {
+        "S": "petsearch"
+      },
+      "target_service": {
+        "S": "petsearch"
+      },
+      "impact_max_latency_p99": {
+        "N": "593.9"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsearch-fis-ebs-io-latency-20260401-194011-report.md"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "target_namespace": {
+        "S": "eks"
+      },
+      "experiment_name": {
+        "S": "fis-ebs-io-latency"
+      },
+      "duration_seconds": {
+        "N": "371.2"
+      },
+      "end_time": {
+        "S": "2026-04-01T19:46:22.803479+00:00"
+      },
+      "start_time": {
+        "S": "2026-04-01T19:40:11.580975+00:00"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/network-infra/fis-ebs-io-latency.yaml"
+      },
+      "rca_actual": {
+        "S": "petsearch"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "579.1"
+          }
+        }
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "recovery_seconds": {
+        "N": "16.2"
+      },
+      "fault_type": {
+        "S": "fis_ebs_io_latency"
+      }
+    },
+    {
+      "experiment_name": {
+        "S": "fis-aurora-reboot"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "end_time": {
+        "S": "2026-04-01T19:37:54.128365+00:00"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "ttl": {
+        "N": "1806608290"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/rds/fis-aurora-reboot.yaml"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "duration_seconds": {
+        "N": "234.3"
+      },
+      "recovery_seconds": {
+        "N": "1.1"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-fis-rds-reboot-20260401-193359-report.md"
+      },
+      "target_namespace": {
+        "S": "rds"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.3"
+          }
+        }
+      },
+      "start_time": {
+        "S": "2026-04-01T19:33:59.793007+00:00"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "fault_type": {
+        "S": "fis_rds_reboot"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.1"
+          }
+        }
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-fis-rds-reboot-20260401-193359"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "impact_max_latency_p99": {
+        "N": "1.4"
+      }
+    },
+    {
+      "end_time": {
+        "S": "2026-04-01T18:48:56.233823+00:00"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsearch-fis-ebs-io-latency-20260401-183800-report.md"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "start_time": {
+        "S": "2026-04-01T18:38:00.467020+00:00"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "rca_expected": {
+        "S": "petsearch"
+      },
+      "target_service": {
+        "S": "petsearch"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "recovery_seconds": {
+        "N": "301"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "794.2"
+          }
+        }
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "target_namespace": {
+        "S": "eks"
+      },
+      "experiment_name": {
+        "S": "fis-ebs-io-latency"
+      },
+      "ttl": {
+        "N": "1806605354"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/network-infra/fis-ebs-io-latency.yaml"
+      },
+      "rca_actual": {
+        "S": "petsearch"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "4.6"
+          }
+        }
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "impact_max_latency_p99": {
+        "N": "7355.3"
+      },
+      "duration_seconds": {
+        "N": "655.8"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "fault_type": {
+        "S": "fis_ebs_io_latency"
+      },
+      "experiment_id": {
+        "S": "exp-petsearch-fis-ebs-io-latency-20260401-183800"
+      }
+    },
+    {
+      "ttl": {
+        "N": "1806604832"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "experiment_name": {
+        "S": "fis-lambda-delay-petstatusupdater"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "fault_type": {
+        "S": "fis_lambda_delay"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/lambda/fis-lambda-delay-petstatusupdater.yaml"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "experiment_id": {
+        "S": "exp-petstatusupdater-fis-lambda-delay-20260401-182916"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "rca_actual": {
+        "S": "petstatusupdater"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "recovery_seconds": {
+        "N": "301"
+      },
+      "target_namespace": {
+        "S": "lambda"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petstatusupdater-fis-lambda-delay-20260401-182916-report.md"
+      },
+      "end_time": {
+        "S": "2026-04-01T18:40:17.548300+00:00"
+      },
+      "rca_expected": {
+        "S": "petstatusupdater"
+      },
+      "target_service": {
+        "S": "petstatusupdater"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "duration_seconds": {
+        "N": "660.8"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "start_time": {
+        "S": "2026-04-01T18:29:16.783550+00:00"
+      }
+    },
+    {
+      "fault_value": {
+        "S": "50"
+      },
+      "fault_type": {
+        "S": "network_loss"
+      },
+      "experiment_id": {
+        "S": "exp-petlistadoptions-network-loss-20260401-173437"
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "start_time": {
+        "S": "2026-04-01T17:34:37.516428+00:00"
+      },
+      "experiment_name": {
+        "S": "petlistadoptions-network-loss-tier1-20260312"
+      },
+      "yaml_source": {
+        "S": "experiments/tier1/petlistadoptions-network-loss.yaml"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "duration_seconds": {
+        "N": "243.5"
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "ttl": {
+        "N": "1806601140"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "end_time": {
+        "S": "2026-04-01T17:38:40.987412+00:00"
+      },
+      "impact_max_latency_p99": {
+        "N": "639.6"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "230"
+          }
+        }
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1"
+          }
+        }
+      },
+      "target_service": {
+        "S": "petlistadoptions"
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petlistadoptions-network-loss-20260401-173437-report.md"
+      },
+      "rca_expected": {
+        "S": "petlistadoptions"
+      }
+    },
+    {
+      "fault_type": {
+        "S": "network_delay"
+      },
+      "ttl": {
+        "N": "1806600876"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1510.5"
+          }
+        }
+      },
+      "impact_max_latency_p99": {
+        "N": "1510.8"
+      },
+      "experiment_id": {
+        "S": "exp-pethistory-network-delay-20260401-172951"
+      },
+      "rca_expected": {
+        "S": "pethistory"
+      },
+      "target_service": {
+        "S": "pethistory"
+      },
+      "experiment_name": {
+        "S": "pethistory-network-delay-tier1-20260312"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "end_time": {
+        "S": "2026-04-01T17:33:54.730386+00:00"
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-pethistory-network-delay-20260401-172951-report.md"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "10"
+          }
+        }
+      },
+      "yaml_source": {
+        "S": "experiments/tier1/pethistory-network-delay.yaml"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "start_time": {
+        "S": "2026-04-01T17:29:51.395225+00:00"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "duration_seconds": {
+        "N": "243.3"
+      },
+      "rca_status": {
+        "S": "error"
+      }
+    },
+    {
+      "experiment_name": {
+        "S": "payforadoption-http-chaos-tier0-20260312"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "504.3"
+          }
+        }
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "impact_max_latency_p99": {
+        "N": "504.7"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "fault_type": {
+        "S": "http_chaos"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-http-chaos-20260401-172526-report.md"
+      },
+      "end_time": {
+        "S": "2026-04-01T17:29:32.238118+00:00"
+      },
+      "start_time": {
+        "S": "2026-04-01T17:25:26.732319+00:00"
+      },
+      "duration_seconds": {
+        "N": "245.5"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "ttl": {
+        "N": "1806600590"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-http-chaos.yaml"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0.9"
+          }
+        }
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-http-chaos-20260401-172526"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "experiment_name": {
+        "S": "payforadoption-http-chaos-tier0-20260312"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-http-chaos-20260401-171514"
+      },
+      "impact_max_latency_p99": {
+        "N": "2.4"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "2.4"
+          }
+        }
+      },
+      "duration_seconds": {
+        "N": "484.2"
+      },
+      "fault_type": {
+        "S": "http_chaos"
+      },
+      "ttl": {
+        "N": "1806600212"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-http-chaos-20260401-171514-report.md"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "start_time": {
+        "S": "2026-04-01T17:15:14.547802+00:00"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "recovery_seconds": {
+        "N": "237.6"
+      },
+      "end_time": {
+        "S": "2026-04-01T17:23:18.722609+00:00"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.1"
+          }
+        }
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-http-chaos.yaml"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "experiment_name": {
+        "S": "payforadoption-http-chaos-tier0-20260312"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "start_time": {
+        "S": "2026-04-01T17:06:56.298504+00:00"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.6"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "http_chaos"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "impact_max_latency_p99": {
+        "N": "2.3"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "recovery_seconds": {
+        "N": "206"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.4"
+          }
+        }
+      },
+      "duration_seconds": {
+        "N": "456.2"
+      },
+      "ttl": {
+        "N": "1806599689"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-http-chaos-20260401-170656-report.md"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-http-chaos-20260401-170656"
+      },
+      "end_time": {
+        "S": "2026-04-01T17:14:32.525952+00:00"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-http-chaos.yaml"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "end_time": {
+        "S": "2026-04-01T16:55:04.336602+00:00"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "duration_seconds": {
+        "N": "185"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-pod-kill.yaml"
+      },
+      "impact_max_latency_p99": {
+        "N": "1.9"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "experiment_name": {
+        "S": "payforadoption-pod-kill-tier0"
+      },
+      "start_time": {
+        "S": "2026-04-01T16:51:59.293272+00:00"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-pod-kill-20260401-165159-report.md"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-pod-kill-20260401-165159"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.1"
+          }
+        }
+      },
+      "ttl": {
+        "N": "1806598519"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1"
+          }
+        }
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "fault_value": {
+        "S": "50"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260401-164322-report.md"
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "impact_max_latency_p99": {
+        "N": "660.3"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "600"
+          }
+        }
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "end_time": {
+        "S": "2026-04-01T16:46:24.127345+00:00"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260401-164322"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "start_time": {
+        "S": "2026-04-01T16:43:22.643128+00:00"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0-20260312"
+      },
+      "ttl": {
+        "N": "1806598019"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "duration_seconds": {
+        "N": "181.5"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1261.3"
+          }
+        }
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "fault_type": {
+        "S": "network_delay"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "duration_seconds": {
+        "N": "244.6"
+      },
+      "experiment_id": {
+        "S": "exp-petsearch-network-delay-20260401-163800"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "rca_expected": {
+        "S": "petsearch"
+      },
+      "start_time": {
+        "S": "2026-04-01T16:38:00.187914+00:00"
+      },
+      "target_service": {
+        "S": "petsearch"
+      },
+      "experiment_name": {
+        "S": "petsearch-network-delay-tier0-20260312"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "recovery_seconds": {
+        "N": "1.1"
+      },
+      "impact_max_latency_p99": {
+        "N": "4912.3"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "465.6"
+          }
+        }
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsearch-network-delay.yaml"
+      },
+      "rca_actual": {
+        "S": "petsearch"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "end_time": {
+        "S": "2026-04-01T16:42:04.743781+00:00"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "2669.3"
+          }
+        }
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsearch-network-delay-20260401-163800-report.md"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "ttl": {
+        "N": "1806597742"
+      }
+    },
+    {
+      "experiment_name": {
+        "S": "payforadoption-http-chaos-tier0-20260312"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-http-chaos-20260401-162631-report.md"
+      },
+      "duration_seconds": {
+        "N": "543.5"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "ttl": {
+        "N": "1806597352"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.1"
+          }
+        }
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.2"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "http_chaos"
+      },
+      "recovery_seconds": {
+        "N": "301.5"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "start_time": {
+        "S": "2026-04-01T16:26:31.739141+00:00"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-http-chaos-20260401-162631"
+      },
+      "impact_max_latency_p99": {
+        "N": "1.1"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-http-chaos.yaml"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "end_time": {
+        "S": "2026-04-01T16:35:35.243922+00:00"
+      }
+    },
+    {
+      "experiment_name": {
+        "S": "payforadoption-http-chaos-tier0-20260312"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "recovery_seconds": {
+        "N": "316.5"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "start_time": {
+        "S": "2026-04-01T16:11:46.759198+00:00"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.2"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "http_chaos"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "ttl": {
+        "N": "1806596483"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-http-chaos-20260401-161146"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.3"
+          }
+        }
+      },
+      "impact_max_latency_p99": {
+        "N": "1.3"
+      },
+      "duration_seconds": {
+        "N": "560.1"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "end_time": {
+        "S": "2026-04-01T16:21:06.873193+00:00"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-http-chaos.yaml"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-http-chaos-20260401-161146-report.md"
+      }
+    },
+    {
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "3040.9"
+          }
+        }
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "target_namespace": {
+        "S": "default"
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "end_time": {
+        "S": "2026-03-20T14:40:58.492755+00:00"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "98.55"
+          },
+          "latency_p99_ms": {
+            "N": "3055.7"
+          }
+        }
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260320-143752-report.md"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "start_time": {
+        "S": "2026-03-20T14:37:52.763367+00:00"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "duration_seconds": {
+        "N": "185.7"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260320-143752"
+      },
+      "ttl": {
+        "N": "1781793659"
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0-20260312"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "impact_max_latency_p99": {
+        "N": "3066.7"
+      },
+      "impact_min_success_rate": {
+        "N": "94.47"
+      }
+    },
+    {
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "start_time": {
+        "S": "2026-03-06T15:15:56.530513+00:00"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260306-151556"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "target_namespace": {
+        "S": "default"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "impact_max_latency_p99": {
+        "N": "3052.3"
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "ttl": {
+        "N": "1780586339"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260306-151556-report.md"
+      },
+      "duration_seconds": {
+        "N": "182.7"
+      },
+      "end_time": {
+        "S": "2026-03-06T15:18:59.254637+00:00"
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "3050.5"
+          }
+        }
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "99.05"
+          },
+          "latency_p99_ms": {
+            "N": "3049.9"
+          }
+        }
+      },
+      "impact_min_success_rate": {
+        "N": "94.4"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "ttl": {
+        "N": "1780585963"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "98.91"
+          },
+          "latency_p99_ms": {
+            "N": "3060.3"
+          }
+        }
+      },
+      "impact_min_success_rate": {
+        "N": "92.42"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0"
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "duration_seconds": {
+        "N": "181.1"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260306-150942-report.md"
+      },
+      "status": {
+        "S": "FAILED"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260306-150942"
+      },
+      "start_time": {
+        "S": "2026-03-06T15:09:42.435478+00:00"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "impact_max_latency_p99": {
+        "N": "3102.8"
+      },
+      "end_time": {
+        "S": "2026-03-06T15:12:43.570944+00:00"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "3073.2"
+          }
+        }
+      },
+      "target_namespace": {
+        "S": "default"
+      }
+    },
+    {
+      "start_time": {
+        "S": "2026-03-06T14:58:24.622086+00:00"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260306-145824"
+      },
+      "end_time": {
+        "S": "2026-03-06T15:01:25.668842+00:00"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0"
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "impact_max_latency_p99": {
+        "N": "3109.3"
+      },
+      "duration_seconds": {
+        "N": "181"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "FAILED"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1291.7"
+          }
+        }
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260306-145824-report.md"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "3056.2"
+          }
+        }
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "ttl": {
+        "N": "1780585285"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "default"
+      }
+    },
+    {
+      "ttl": {
+        "N": "1807551947"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0-20260312"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "start_time": {
+        "S": "2026-04-12T17:45:39.414994+00:00"
+      },
+      "status": {
+        "S": "ABORTED"
+      },
+      "target_namespace": {
+        "S": "default"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260412-174539"
+      },
+      "duration_seconds": {
+        "N": "8"
+      },
+      "abort_reason": {
+        "S": "Pre-flight 失败: 服务 petsite 无 Running Pods（检查 label app=petsite）"
+      },
+      "end_time": {
+        "S": "2026-04-12T17:45:47.430534+00:00"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260412-174539-report.md"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "yaml_source": {
+        "S": "/home/ubuntu/tech/chaos/code/experiments/tier0/petsite-pod-kill.yaml"
+      }
+    },
+    {
+      "end_time": {
+        "S": "2026-04-02T07:30:37.107231+00:00"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-network-disrupt-20260402-073016"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-network-disrupt-20260402-073016-report.md"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "85.93"
+          },
+          "latency_p99_ms": {
+            "N": "432.9"
+          }
+        }
+      },
+      "status": {
+        "S": "ABORTED"
+      },
+      "target_namespace": {
+        "S": "default"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "start_time": {
+        "S": "2026-04-02T07:30:16.691081+00:00"
+      },
+      "ttl": {
+        "N": "1806651037"
+      },
+      "abort_reason": {
+        "S": "Pre-flight 失败: 注入前稳态检查失败: success_rate=85.9 (要求 >= 95%)"
+      },
+      "yaml_source": {
+        "S": "experiments/generated/petsite-fis-network-disrupt-h001.yaml"
+      },
+      "experiment_name": {
+        "S": "petsite-fis-network-disrupt-h001-20260402"
+      },
+      "duration_seconds": {
+        "N": "20.4"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_type": {
+        "S": "fis_network_disrupt"
+      }
+    },
+    {
+      "fault_type": {
+        "S": "network_partition"
+      },
+      "end_time": {
+        "S": "2026-04-01T23:48:09.766824+00:00"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "duration_seconds": {
+        "N": "8.1"
+      },
+      "status": {
+        "S": "ABORTED"
+      },
+      "fault_value": {
+        "S": ""
+      },
+      "start_time": {
+        "S": "2026-04-01T23:48:01.664639+00:00"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "experiment_name": {
+        "S": "payforadoption-network-partition"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-network-partition.yaml"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-network-partition-20260401-234801"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-network-partition-20260401-234801-report.md"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "abort_reason": {
+        "S": "Pre-flight 失败: 服务 payforadoption 有 Pod 未就绪: ['pay-for-adoption-57cd9547d7-wn6qk']"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "ttl": {
+        "N": "1806623289"
+      }
+    },
+    {
+      "end_time": {
+        "S": "2026-04-01T20:31:17.663080+00:00"
+      },
+      "yaml_source": {
+        "S": "experiments/tier1/petlistadoptions-network-loss.yaml"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "abort_reason": {
+        "S": "Pre-flight 失败: 服务 petlistadoptions 有 Pod 未就绪: ['list-adoptions-87d7f5f88-chwpx']"
+      },
+      "experiment_id": {
+        "S": "exp-petlistadoptions-network-loss-20260401-203109"
+      },
+      "rca_expected": {
+        "S": "petlistadoptions"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petlistadoptions-network-loss-20260401-203109-report.md"
+      },
+      "target_service": {
+        "S": "petlistadoptions"
+      },
+      "duration_seconds": {
+        "N": "8.1"
+      },
+      "ttl": {
+        "N": "1806611477"
+      },
+      "status": {
+        "S": "ABORTED"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "start_time": {
+        "S": "2026-04-01T20:31:09.603061+00:00"
+      },
+      "experiment_name": {
+        "S": "petlistadoptions-network-loss-tier1-20260312"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "fault_type": {
+        "S": "network_loss"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      }
+    },
+    {
+      "experiment_id": {
+        "S": "exp-petlistadoptions-network-loss-20260401-202937"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petlistadoptions-network-loss-20260401-202937-report.md"
+      },
+      "ttl": {
+        "N": "1806611385"
+      },
+      "yaml_source": {
+        "S": "experiments/tier1/petlistadoptions-network-loss.yaml"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "rca_expected": {
+        "S": "petlistadoptions"
+      },
+      "target_service": {
+        "S": "petlistadoptions"
+      },
+      "duration_seconds": {
+        "N": "8.1"
+      },
+      "status": {
+        "S": "ABORTED"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "experiment_name": {
+        "S": "petlistadoptions-network-loss-tier1-20260312"
+      },
+      "abort_reason": {
+        "S": "Pre-flight 失败: 服务 petlistadoptions 有 Pod 未就绪: ['list-adoptions-87d7f5f88-6qtcg']"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "fault_type": {
+        "S": "network_loss"
+      },
+      "end_time": {
+        "S": "2026-04-01T20:29:45.300508+00:00"
+      },
+      "start_time": {
+        "S": "2026-04-01T20:29:37.180068+00:00"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      }
+    },
+    {
+      "start_time": {
+        "S": "2026-04-01T16:36:52.326270+00:00"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-pod-kill.yaml"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-pod-kill-20260401-163652"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "duration_seconds": {
+        "N": "7.8"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "status": {
+        "S": "ABORTED"
+      },
+      "ttl": {
+        "N": "1806597420"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-pod-kill-20260401-163652-report.md"
+      },
+      "abort_reason": {
+        "S": "Pre-flight 失败: 服务 payforadoption 有 Pod 未就绪: ['pay-for-adoption-c9c7cd6db-qpm55']"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "end_time": {
+        "S": "2026-04-01T16:37:00.100840+00:00"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "experiment_name": {
+        "S": "payforadoption-pod-kill-tier0"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      }
+    },
+    {
+      "fault_value": {
+        "S": "100"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-pod-kill.yaml"
+      },
+      "end_time": {
+        "S": "2026-04-01T16:22:31.496224+00:00"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-pod-kill-20260401-162223-report.md"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "ttl": {
+        "N": "1806596551"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-pod-kill-20260401-162223"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "duration_seconds": {
+        "N": "7.7"
+      },
+      "status": {
+        "S": "ABORTED"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "start_time": {
+        "S": "2026-04-01T16:22:23.768541+00:00"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "abort_reason": {
+        "S": "Pre-flight 失败: 服务 payforadoption 有 Pod 未就绪: ['pay-for-adoption-c9c7cd6db-wtlmd']"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "experiment_name": {
+        "S": "payforadoption-pod-kill-tier0"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      }
+    }
+  ]
+}

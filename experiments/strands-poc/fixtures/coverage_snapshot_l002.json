@@ -1,0 +1,2008 @@
+{
+  "id": "l002",
+  "description": "核心服务 payforadoption 的实验历史",
+  "experiment_count": 22,
+  "experiments": [
+    {
+      "abort_reason": {
+        "S": "未预期异常: An error occurred (ValidationException) when calling the CreateExperimentTemplate operation: The operations parameter value contains an operation that does not exist for the specified service."
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-fis-api-unavailable-20260402-072756-report.md"
+      },
+      "ttl": {
+        "N": "1806650896"
+      },
+      "target_namespace": {
+        "S": "default"
+      },
+      "fault_type": {
+        "S": "fis_api_unavailable"
+      },
+      "status": {
+        "S": "ERROR"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "start_time": {
+        "S": "2026-04-02T07:27:56.053487+00:00"
+      },
+      "duration_seconds": {
+        "N": "20.6"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "end_time": {
+        "S": "2026-04-02T07:28:16.607476+00:00"
+      },
+      "experiment_name": {
+        "S": "payforadoption-fis-api-unavailable-h006-20260402"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-fis-api-unavailable-20260402-072756"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.9"
+          }
+        }
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "yaml_source": {
+        "S": "experiments/generated/payforadoption-fis-api-unavailable-h006.yaml"
+      }
+    },
+    {
+      "fault_type": {
+        "S": "fis_rds_failover"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "impact_max_latency_p99": {
+        "N": "2.2"
+      },
+      "target_namespace": {
+        "S": "default"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.8"
+          }
+        }
+      },
+      "yaml_source": {
+        "S": "experiments/generated/payforadoption-fis-rds-failover-h002.yaml"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "duration_seconds": {
+        "N": "240.6"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-fis-rds-failover-20260402-072036"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "rca_match": {
+        "BOOL": false
+      },
+      "start_time": {
+        "S": "2026-04-02T07:20:36.278057+00:00"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.8"
+          }
+        }
+      },
+      "ttl": {
+        "N": "1806650755"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "experiment_name": {
+        "S": "payforadoption-fis-rds-failover-h002-20260402"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-fis-rds-failover-20260402-072036-report.md"
+      },
+      "end_time": {
+        "S": "2026-04-02T07:24:36.902748+00:00"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      }
+    },
+    {
+      "abort_reason": {
+        "S": "未预期异常: Parameter validation failed:\nInvalid length for parameter targets.main-target.resourceArns[0], value: 11, valid min length: 20"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.5"
+          }
+        }
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-fis-api-unavailable-20260402-071307"
+      },
+      "target_namespace": {
+        "S": "default"
+      },
+      "fault_type": {
+        "S": "fis_api_unavailable"
+      },
+      "status": {
+        "S": "ERROR"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "ttl": {
+        "N": "1806650008"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "experiment_name": {
+        "S": "payforadoption-fis-api-unavailable-h006-20260402"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "end_time": {
+        "S": "2026-04-02T07:13:28.035486+00:00"
+      },
+      "start_time": {
+        "S": "2026-04-02T07:13:07.614187+00:00"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-fis-api-unavailable-20260402-071307-report.md"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "duration_seconds": {
+        "N": "20.4"
+      },
+      "yaml_source": {
+        "S": "experiments/generated/payforadoption-fis-api-unavailable-h006.yaml"
+      }
+    },
+    {
+      "fault_type": {
+        "S": "fis_rds_failover"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "target_namespace": {
+        "S": "default"
+      },
+      "yaml_source": {
+        "S": "experiments/generated/payforadoption-fis-rds-failover-h002.yaml"
+      },
+      "status": {
+        "S": "ERROR"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "end_time": {
+        "S": "2026-04-02T07:11:07.524902+00:00"
+      },
+      "experiment_name": {
+        "S": "payforadoption-fis-rds-failover-h002-20260402"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.6"
+          }
+        }
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-fis-rds-failover-20260402-071047-report.md"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "ttl": {
+        "N": "1806649867"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-fis-rds-failover-20260402-071047"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "start_time": {
+        "S": "2026-04-02T07:10:47.085490+00:00"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "abort_reason": {
+        "S": "未预期异常: Parameter validation failed:\nInvalid length for parameter targets.main-target.resourceArns[0], value: 14, valid min length: 20"
+      },
+      "duration_seconds": {
+        "N": "20.4"
+      }
+    },
+    {
+      "ttl": {
+        "N": "1806649835"
+      },
+      "fault_type": {
+        "S": "fis_rds_failover"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "target_namespace": {
+        "S": "default"
+      },
+      "yaml_source": {
+        "S": "experiments/generated/payforadoption-fis-rds-failover-h002.yaml"
+      },
+      "status": {
+        "S": "ERROR"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "start_time": {
+        "S": "2026-04-02T07:10:15.088566+00:00"
+      },
+      "experiment_name": {
+        "S": "payforadoption-fis-rds-failover-h002-20260402"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.6"
+          }
+        }
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-fis-rds-failover-20260402-071015"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "end_time": {
+        "S": "2026-04-02T07:10:35.505122+00:00"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-fis-rds-failover-20260402-071015-report.md"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "abort_reason": {
+        "S": "未预期异常: Parameter validation failed:\nInvalid length for parameter targets.main-target.resourceArns[0], value: 14, valid min length: 20"
+      },
+      "duration_seconds": {
+        "N": "20.4"
+      }
+    },
+    {
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "impact_max_latency_p99": {
+        "N": "1.4"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "start_time": {
+        "S": "2026-04-02T03:51:56.704104+00:00"
+      },
+      "experiment_name": {
+        "S": "fis-aurora-reboot"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "ttl": {
+        "N": "1806638173"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "end_time": {
+        "S": "2026-04-02T03:55:55.146148+00:00"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "duration_seconds": {
+        "N": "238.4"
+      },
+      "recovery_seconds": {
+        "N": "1.1"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "target_namespace": {
+        "S": "rds"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.2"
+          }
+        }
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-fis-rds-reboot-20260402-035156"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/rds/fis-aurora-reboot.yaml"
+      },
+      "fault_type": {
+        "S": "fis_rds_reboot"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-fis-rds-reboot-20260402-035156-report.md"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1"
+          }
+        }
+      }
+    },
+    {
+      "backend": {
+        "S": "fis"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-fis-eks-pod-io-stress-20260402-030117-report.md"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-io-stress-payforadoption"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-io-stress-payforadoption.yaml"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "end_time": {
+        "S": "2026-04-02T03:07:16.658740+00:00"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "ttl": {
+        "N": "1806635253"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_io_stress"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.1"
+          }
+        }
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.3"
+          }
+        }
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-fis-eks-pod-io-stress-20260402-030117"
+      },
+      "impact_max_latency_p99": {
+        "N": "1.7"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "start_time": {
+        "S": "2026-04-02T03:01:17.595297+00:00"
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "duration_seconds": {
+        "N": "359.1"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      }
+    },
+    {
+      "backend": {
+        "S": "fis"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.2"
+          }
+        }
+      },
+      "end_time": {
+        "S": "2026-04-02T02:58:55.770060+00:00"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-fis-eks-pod-network-packet-loss-20260402-025258-report.md"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_packet_loss"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "start_time": {
+        "S": "2026-04-02T02:52:58.145160+00:00"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "impact_max_latency_p99": {
+        "N": "1.8"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "duration_seconds": {
+        "N": "357.6"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-fis-eks-pod-network-packet-loss-20260402-025258"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.3"
+          }
+        }
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "ttl": {
+        "N": "1806634756"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-loss-payforadoption"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-loss-payforadoption.yaml"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      }
+    },
+    {
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.1"
+          }
+        }
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "fault_value": {
+        "S": ""
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "end_time": {
+        "S": "2026-04-02T01:06:43.228251+00:00"
+      },
+      "experiment_name": {
+        "S": "payforadoption-io-chaos"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-io-chaos-20260402-010236-report.md"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "duration_seconds": {
+        "N": "246.5"
+      },
+      "yaml_source": {
+        "S": "experiments/tier1/payforadoption-io-chaos.yaml"
+      },
+      "impact_max_latency_p99": {
+        "N": "1.3"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-io-chaos-20260402-010236"
+      },
+      "start_time": {
+        "S": "2026-04-02T01:02:36.743257+00:00"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "fault_type": {
+        "S": "io_chaos"
+      },
+      "ttl": {
+        "N": "1806628020"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1"
+          }
+        }
+      }
+    },
+    {
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-pod-kill-20260401-235655-report.md"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "impact_max_latency_p99": {
+        "N": "4.7"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-pod-kill.yaml"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "4.7"
+          }
+        }
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-pod-kill-20260401-235655"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "ttl": {
+        "N": "1806624018"
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "2.1"
+          }
+        }
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "experiment_name": {
+        "S": "payforadoption-pod-kill-tier0"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "duration_seconds": {
+        "N": "186.2"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "end_time": {
+        "S": "2026-04-02T00:00:02.001591+00:00"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "start_time": {
+        "S": "2026-04-01T23:56:55.817243+00:00"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "status": {
+        "S": "PASSED"
+      }
+    },
+    {
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "recovery_seconds": {
+        "N": "96.3"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "fault_value": {
+        "S": ""
+      },
+      "duration_seconds": {
+        "N": "277.2"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "impact_max_latency_p99": {
+        "N": "1"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.6"
+          }
+        }
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "fault_type": {
+        "S": "network_partition"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "experiment_name": {
+        "S": "payforadoption-network-partition"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-network-partition-20260401-235000"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.2"
+          }
+        }
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-network-partition.yaml"
+      },
+      "start_time": {
+        "S": "2026-04-01T23:50:00.693830+00:00"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "ttl": {
+        "N": "1806623695"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-network-partition-20260401-235000-report.md"
+      },
+      "end_time": {
+        "S": "2026-04-01T23:54:37.943058+00:00"
+      },
+      "status": {
+        "S": "PASSED"
+      }
+    },
+    {
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "experiment_name": {
+        "S": "payforadoption-network-partition"
+      },
+      "abort_reason": {
+        "S": "Pre-flight 失败: 服务 payforadoption 有 Pod 未就绪: ['pay-for-adoption-57cd9547d7-wn6qk']"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-network-partition-20260401-234801"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "fault_value": {
+        "S": ""
+      },
+      "start_time": {
+        "S": "2026-04-01T23:48:01.664639+00:00"
+      },
+      "duration_seconds": {
+        "N": "8.1"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-network-partition.yaml"
+      },
+      "end_time": {
+        "S": "2026-04-01T23:48:09.766824+00:00"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-network-partition-20260401-234801-report.md"
+      },
+      "status": {
+        "S": "ABORTED"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "fault_type": {
+        "S": "network_partition"
+      },
+      "ttl": {
+        "N": "1806623289"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      }
+    },
+    {
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "experiment_name": {
+        "S": "payforadoption-http-chaos-tier0-20260312"
+      },
+      "fault_type": {
+        "S": "http_chaos"
+      },
+      "ttl": {
+        "N": "1806623161"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-http-chaos-20260401-234137-report.md"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-http-chaos-20260401-234137"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0.9"
+          }
+        }
+      },
+      "end_time": {
+        "S": "2026-04-01T23:45:41.786459+00:00"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-http-chaos.yaml"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "start_time": {
+        "S": "2026-04-01T23:41:37.055746+00:00"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "duration_seconds": {
+        "N": "244.7"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "impact_max_latency_p99": {
+        "N": "507.5"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "504.7"
+          }
+        }
+      }
+    },
+    {
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.1"
+          }
+        }
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "impact_max_latency_p99": {
+        "N": "1.4"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "experiment_name": {
+        "S": "fis-aurora-reboot"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-fis-rds-reboot-20260401-193359"
+      },
+      "ttl": {
+        "N": "1806608290"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "end_time": {
+        "S": "2026-04-01T19:37:54.128365+00:00"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-fis-rds-reboot-20260401-193359-report.md"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.3"
+          }
+        }
+      },
+      "recovery_seconds": {
+        "N": "1.1"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "target_namespace": {
+        "S": "rds"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "duration_seconds": {
+        "N": "234.3"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/rds/fis-aurora-reboot.yaml"
+      },
+      "fault_type": {
+        "S": "fis_rds_reboot"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "start_time": {
+        "S": "2026-04-01T19:33:59.793007+00:00"
+      }
+    },
+    {
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "experiment_name": {
+        "S": "payforadoption-http-chaos-tier0-20260312"
+      },
+      "fault_type": {
+        "S": "http_chaos"
+      },
+      "end_time": {
+        "S": "2026-04-01T17:29:32.238118+00:00"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0.9"
+          }
+        }
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-http-chaos.yaml"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "start_time": {
+        "S": "2026-04-01T17:25:26.732319+00:00"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-http-chaos-20260401-172526"
+      },
+      "impact_max_latency_p99": {
+        "N": "504.7"
+      },
+      "duration_seconds": {
+        "N": "245.5"
+      },
+      "ttl": {
+        "N": "1806600590"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-http-chaos-20260401-172526-report.md"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "504.3"
+          }
+        }
+      },
+      "status": {
+        "S": "PASSED"
+      }
+    },
+    {
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.1"
+          }
+        }
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "experiment_name": {
+        "S": "payforadoption-http-chaos-tier0-20260312"
+      },
+      "impact_max_latency_p99": {
+        "N": "2.4"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "2.4"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "http_chaos"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-http-chaos.yaml"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "start_time": {
+        "S": "2026-04-01T17:15:14.547802+00:00"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "ttl": {
+        "N": "1806600212"
+      },
+      "duration_seconds": {
+        "N": "484.2"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-http-chaos-20260401-171514-report.md"
+      },
+      "end_time": {
+        "S": "2026-04-01T17:23:18.722609+00:00"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-http-chaos-20260401-171514"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "recovery_seconds": {
+        "N": "237.6"
+      }
+    },
+    {
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "experiment_name": {
+        "S": "payforadoption-http-chaos-tier0-20260312"
+      },
+      "fault_type": {
+        "S": "http_chaos"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "impact_max_latency_p99": {
+        "N": "2.3"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.6"
+          }
+        }
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-http-chaos.yaml"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "start_time": {
+        "S": "2026-04-01T17:06:56.298504+00:00"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-http-chaos-20260401-170656"
+      },
+      "duration_seconds": {
+        "N": "456.2"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "ttl": {
+        "N": "1806599689"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "recovery_seconds": {
+        "N": "206"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.4"
+          }
+        }
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-http-chaos-20260401-170656-report.md"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "end_time": {
+        "S": "2026-04-01T17:14:32.525952+00:00"
+      }
+    },
+    {
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.1"
+          }
+        }
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-pod-kill.yaml"
+      },
+      "impact_max_latency_p99": {
+        "N": "1.9"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "duration_seconds": {
+        "N": "185"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "experiment_name": {
+        "S": "payforadoption-pod-kill-tier0"
+      },
+      "start_time": {
+        "S": "2026-04-01T16:51:59.293272+00:00"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-pod-kill-20260401-165159"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "ttl": {
+        "N": "1806598519"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "end_time": {
+        "S": "2026-04-01T16:55:04.336602+00:00"
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-pod-kill-20260401-165159-report.md"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1"
+          }
+        }
+      }
+    },
+    {
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "duration_seconds": {
+        "N": "7.8"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-pod-kill.yaml"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "end_time": {
+        "S": "2026-04-01T16:37:00.100840+00:00"
+      },
+      "ttl": {
+        "N": "1806597420"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-pod-kill-20260401-163652-report.md"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "experiment_name": {
+        "S": "payforadoption-pod-kill-tier0"
+      },
+      "start_time": {
+        "S": "2026-04-01T16:36:52.326270+00:00"
+      },
+      "status": {
+        "S": "ABORTED"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-pod-kill-20260401-163652"
+      },
+      "abort_reason": {
+        "S": "Pre-flight 失败: 服务 payforadoption 有 Pod 未就绪: ['pay-for-adoption-c9c7cd6db-qpm55']"
+      }
+    },
+    {
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "experiment_name": {
+        "S": "payforadoption-http-chaos-tier0-20260312"
+      },
+      "fault_type": {
+        "S": "http_chaos"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-http-chaos-20260401-162631-report.md"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "start_time": {
+        "S": "2026-04-01T16:26:31.739141+00:00"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-http-chaos.yaml"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "recovery_seconds": {
+        "N": "301.5"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "duration_seconds": {
+        "N": "543.5"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.2"
+          }
+        }
+      },
+      "impact_max_latency_p99": {
+        "N": "1.1"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.1"
+          }
+        }
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "end_time": {
+        "S": "2026-04-01T16:35:35.243922+00:00"
+      },
+      "ttl": {
+        "N": "1806597352"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-http-chaos-20260401-162631"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "status": {
+        "S": "PASSED"
+      }
+    },
+    {
+      "experiment_id": {
+        "S": "exp-payforadoption-pod-kill-20260401-162223"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-pod-kill.yaml"
+      },
+      "ttl": {
+        "N": "1806596551"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "end_time": {
+        "S": "2026-04-01T16:22:31.496224+00:00"
+      },
+      "duration_seconds": {
+        "N": "7.7"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "start_time": {
+        "S": "2026-04-01T16:22:23.768541+00:00"
+      },
+      "abort_reason": {
+        "S": "Pre-flight 失败: 服务 payforadoption 有 Pod 未就绪: ['pay-for-adoption-c9c7cd6db-wtlmd']"
+      },
+      "experiment_name": {
+        "S": "payforadoption-pod-kill-tier0"
+      },
+      "status": {
+        "S": "ABORTED"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-pod-kill-20260401-162223-report.md"
+      }
+    },
+    {
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "experiment_name": {
+        "S": "payforadoption-http-chaos-tier0-20260312"
+      },
+      "fault_type": {
+        "S": "http_chaos"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "recovery_seconds": {
+        "N": "316.5"
+      },
+      "experiment_id": {
+        "S": "exp-payforadoption-http-chaos-20260401-161146"
+      },
+      "rca_match": {
+        "BOOL": true
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-payforadoption-http-chaos-20260401-161146-report.md"
+      },
+      "start_time": {
+        "S": "2026-04-01T16:11:46.759198+00:00"
+      },
+      "rca_actual": {
+        "S": "payforadoption"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/payforadoption-http-chaos.yaml"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.3"
+          }
+        }
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_service": {
+        "S": "payforadoption"
+      },
+      "rca_expected": {
+        "S": "payforadoption"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1.2"
+          }
+        }
+      },
+      "duration_seconds": {
+        "N": "560.1"
+      },
+      "impact_max_latency_p99": {
+        "N": "1.3"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "end_time": {
+        "S": "2026-04-01T16:21:06.873193+00:00"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "ttl": {
+        "N": "1806596483"
+      }
+    }
+  ]
+}

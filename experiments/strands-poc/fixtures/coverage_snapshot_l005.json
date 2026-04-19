@@ -1,0 +1,101 @@
+{
+  "id": "l005",
+  "description": "特殊后端 eks-storage 的实验历史",
+  "experiment_count": 1,
+  "experiments": [
+    {
+      "experiment_id": {
+        "S": "exp-eks-storage-fis-ebs-pause-io-20260402-040657"
+      },
+      "end_time": {
+        "S": "2026-04-02T04:11:10.301425+00:00"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "fis_ebs_pause_io"
+      },
+      "rca_expected": {
+        "S": "ebs-io-failure"
+      },
+      "experiment_name": {
+        "S": "fis-ebs-pause-io-1a"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "ttl": {
+        "N": "1806639086"
+      },
+      "duration_seconds": {
+        "N": "252.6"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "recovery_seconds": {
+        "N": "16.4"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-storage-fis-ebs-pause-io-20260402-040657-report.md"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/network-infra/fis-ebs-pause-io-1a.yaml"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "target_service": {
+        "S": "eks-storage"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "start_time": {
+        "S": "2026-04-02T04:06:57.661485+00:00"
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "target_namespace": {
+        "S": "storage"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "fault_duration": {
+        "S": "3m"
+      }
+    }
+  ]
+}

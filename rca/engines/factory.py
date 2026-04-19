@@ -79,3 +79,33 @@ def make_hypothesis_engine(profile: Any = None) -> "NLQueryBase":  # type: ignor
             return HypothesisAgent(profile=profile)  # type: ignore[call-arg,return-value]
         except TypeError:
             return HypothesisAgent()  # type: ignore[return-value]
+
+
+def make_learning_engine(profile: Any = None) -> "LearningBase":  # type: ignore[name-defined]
+    """构造 LearningAgent 引擎，切换 env：LEARNING_ENGINE=direct|strands。
+
+    默认 direct；strands 不可用 → warning + 回退 direct。
+    """
+    from engines.base import LearningBase  # 延迟导入避免循环
+    engine = (os.environ.get("LEARNING_ENGINE") or "direct").lower()
+    if engine == "strands":
+        try:
+            from chaos.code.agents.learning_strands import StrandsLearningAgent  # type: ignore
+            return StrandsLearningAgent(profile=profile)  # type: ignore[return-value]
+        except ImportError as e:
+            logger.warning(
+                "Strands LearningAgent 不可用 (%s)；回退 direct。", e,
+            )
+        except Exception as e:
+            logger.warning("Strands LearningAgent 构造失败 (%r)；回退 direct。", e)
+
+    try:
+        from chaos.code.agents.learning_direct import DirectBedrockLearning  # type: ignore
+        return DirectBedrockLearning(profile=profile)  # type: ignore[return-value]
+    except ImportError:
+        # 过渡期：回退到现版 LearningAgent
+        from chaos.code.agents.learning_agent import LearningAgent  # type: ignore
+        try:
+            return LearningAgent(profile=profile)  # type: ignore[call-arg,return-value]
+        except TypeError:
+            return LearningAgent()  # type: ignore[return-value]

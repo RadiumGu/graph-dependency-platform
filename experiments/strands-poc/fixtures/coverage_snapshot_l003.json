@@ -1,0 +1,468 @@
+{
+  "id": "l003",
+  "description": "核心服务 pethistory 的实验历史",
+  "experiment_count": 5,
+  "experiments": [
+    {
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "yaml_source": {
+        "S": "experiments/tier2/pethistory-time-chaos.yaml"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "duration_seconds": {
+        "N": "243.3"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "10.4"
+          }
+        }
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "14.5"
+          }
+        }
+      },
+      "impact_max_latency_p99": {
+        "N": "15.1"
+      },
+      "experiment_name": {
+        "S": "pethistory-time-chaos"
+      },
+      "ttl": {
+        "N": "1806629930"
+      },
+      "rca_enabled": {
+        "BOOL": false
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "end_time": {
+        "S": "2026-04-02T01:38:33.515386+00:00"
+      },
+      "experiment_id": {
+        "S": "exp-pethistory-time-chaos-20260402-013430"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "target_tier": {
+        "S": "Tier2"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "fault_type": {
+        "S": "time_chaos"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-pethistory-time-chaos-20260402-013430-report.md"
+      },
+      "fault_value": {
+        "S": ""
+      },
+      "target_service": {
+        "S": "pethistory"
+      },
+      "start_time": {
+        "S": "2026-04-02T01:34:30.171116+00:00"
+      }
+    },
+    {
+      "experiment_name": {
+        "S": "pethistory-network-duplicate"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "yaml_source": {
+        "S": "experiments/tier1/pethistory-network-duplicate.yaml"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "recovery_seconds": {
+        "N": "1.7"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-pethistory-network-duplicate-20260402-011525-report.md"
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "end_time": {
+        "S": "2026-04-02T01:19:33.125722+00:00"
+      },
+      "experiment_id": {
+        "S": "exp-pethistory-network-duplicate-20260402-011525"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "start_time": {
+        "S": "2026-04-02T01:15:25.048654+00:00"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "11.6"
+          }
+        }
+      },
+      "ttl": {
+        "N": "1806628790"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "11.7"
+          }
+        }
+      },
+      "duration_seconds": {
+        "N": "248.1"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "fault_type": {
+        "S": "network_duplicate"
+      },
+      "fault_value": {
+        "S": ""
+      },
+      "target_service": {
+        "S": "pethistory"
+      },
+      "rca_expected": {
+        "S": "pethistory"
+      },
+      "impact_max_latency_p99": {
+        "N": "12"
+      }
+    },
+    {
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "duration_seconds": {
+        "N": "243.9"
+      },
+      "yaml_source": {
+        "S": "experiments/tier1/pethistory-network-delay.yaml"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "start_time": {
+        "S": "2026-04-02T01:09:00.668944+00:00"
+      },
+      "end_time": {
+        "S": "2026-04-02T01:13:04.551341+00:00"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1510.1"
+          }
+        }
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "impact_max_latency_p99": {
+        "N": "1510.9"
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "experiment_name": {
+        "S": "pethistory-network-delay-tier1-20260312"
+      },
+      "experiment_id": {
+        "S": "exp-pethistory-network-delay-20260402-010900"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-pethistory-network-delay-20260402-010900-report.md"
+      },
+      "ttl": {
+        "N": "1806628404"
+      },
+      "fault_type": {
+        "S": "network_delay"
+      },
+      "target_service": {
+        "S": "pethistory"
+      },
+      "rca_expected": {
+        "S": "pethistory"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "11.3"
+          }
+        }
+      }
+    },
+    {
+      "duration_seconds": {
+        "N": "247.7"
+      },
+      "yaml_source": {
+        "S": "experiments/tier1/pethistory-network-delay.yaml"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-pethistory-network-delay-20260401-202311-report.md"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "ttl": {
+        "N": "1806611257"
+      },
+      "recovery_seconds": {
+        "N": "1.5"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "10"
+          }
+        }
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "2718.3"
+          }
+        }
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "experiment_name": {
+        "S": "pethistory-network-delay-tier1-20260312"
+      },
+      "start_time": {
+        "S": "2026-04-01T20:23:11.474837+00:00"
+      },
+      "impact_max_latency_p99": {
+        "N": "2718.3"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "experiment_id": {
+        "S": "exp-pethistory-network-delay-20260401-202311"
+      },
+      "fault_type": {
+        "S": "network_delay"
+      },
+      "target_service": {
+        "S": "pethistory"
+      },
+      "rca_expected": {
+        "S": "pethistory"
+      },
+      "end_time": {
+        "S": "2026-04-01T20:27:19.158168+00:00"
+      }
+    },
+    {
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1510.5"
+          }
+        }
+      },
+      "start_time": {
+        "S": "2026-04-01T17:29:51.395225+00:00"
+      },
+      "end_time": {
+        "S": "2026-04-01T17:33:54.730386+00:00"
+      },
+      "yaml_source": {
+        "S": "experiments/tier1/pethistory-network-delay.yaml"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "duration_seconds": {
+        "N": "243.3"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "10"
+          }
+        }
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "experiment_name": {
+        "S": "pethistory-network-delay-tier1-20260312"
+      },
+      "ttl": {
+        "N": "1806600876"
+      },
+      "experiment_id": {
+        "S": "exp-pethistory-network-delay-20260401-172951"
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "impact_max_latency_p99": {
+        "N": "1510.8"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-pethistory-network-delay-20260401-172951-report.md"
+      },
+      "fault_type": {
+        "S": "network_delay"
+      },
+      "target_service": {
+        "S": "pethistory"
+      },
+      "rca_expected": {
+        "S": "pethistory"
+      }
+    }
+  ]
+}

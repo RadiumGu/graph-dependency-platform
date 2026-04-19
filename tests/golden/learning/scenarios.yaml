@@ -1,0 +1,115 @@
+# Golden Set Scenarios for LearningAgent
+# 4 类分桶：核心服务(3) / 特殊后端(3) / 错误输入(2) / 边界(2)
+
+# ── 核心服务 ──
+- id: l001
+  description: "petsite 核心服务 coverage 分析"
+  fixture: "coverage_snapshot_l001.json"
+  bucket: "core"
+  min_recommendations: 1
+  max_recommendations: 10
+  dimension_must_include_any: ["coverage", "resilience"]
+  recommendation_must_not_include: ["delete_service", "shutdown"]
+  coverage_has_gaps: true  # petsite 不可能覆盖全部 5 域
+  should_error: false
+
+- id: l002
+  description: "payforadoption 支付服务 coverage 分析"
+  fixture: "coverage_snapshot_l002.json"
+  bucket: "core"
+  min_recommendations: 1
+  max_recommendations: 10
+  dimension_must_include_any: ["coverage", "resilience"]
+  recommendation_must_not_include: ["delete_service"]
+  coverage_has_gaps: true
+  should_error: false
+
+- id: l003
+  description: "pethistory 历史服务 coverage 分析"
+  fixture: "coverage_snapshot_l003.json"
+  bucket: "core"
+  min_recommendations: 1
+  max_recommendations: 8
+  dimension_must_include_any: ["coverage"]
+  recommendation_must_not_include: ["delete_service"]
+  coverage_has_gaps: true
+  should_error: false
+
+# ── 特殊后端 ──
+- id: l004
+  description: "eks-nodegroup 节点组实验分析"
+  fixture: "coverage_snapshot_l004.json"
+  bucket: "special_backend"
+  min_recommendations: 1
+  max_recommendations: 10
+  dimension_must_include_any: ["coverage", "resilience", "process"]
+  recommendation_must_not_include: ["delete_service"]
+  coverage_has_gaps: true
+  should_error: false
+
+- id: l005
+  description: "eks-storage 存储实验分析（仅 1 条）"
+  fixture: "coverage_snapshot_l005.json"
+  bucket: "special_backend"
+  min_recommendations: 1
+  max_recommendations: 8
+  dimension_must_include_any: ["coverage"]
+  recommendation_must_not_include: ["delete_service"]
+  coverage_has_gaps: true
+  should_error: false
+
+- id: l006
+  description: "eks-control-plane 控制平面分析"
+  fixture: "coverage_snapshot_l006.json"
+  bucket: "special_backend"
+  min_recommendations: 1
+  max_recommendations: 10
+  dimension_must_include_any: ["coverage", "resilience"]
+  recommendation_must_not_include: ["delete_service"]
+  coverage_has_gaps: true
+  should_error: false
+
+# ── 错误输入 ──
+- id: l007
+  description: "空实验列表 — 应返回空分析"
+  fixture: "coverage_snapshot_l007.json"
+  bucket: "error_input"
+  min_recommendations: 0
+  max_recommendations: 0
+  dimension_must_include_any: []
+  recommendation_must_not_include: []
+  expect_empty_analysis: true
+  should_error: false
+
+- id: l008
+  description: "畸形数据 — graceful 处理"
+  fixture: "coverage_snapshot_l008.json"
+  bucket: "error_input"
+  min_recommendations: 0
+  max_recommendations: 5
+  dimension_must_include_any: []
+  recommendation_must_not_include: []
+  should_error: false
+
+# ── 边界 ──
+- id: l009
+  description: "全量 86 条实验聚合"
+  fixture: "coverage_snapshot_l009.json"
+  bucket: "boundary"
+  min_recommendations: 2
+  max_recommendations: 10
+  dimension_must_include_any: ["coverage", "resilience"]
+  recommendation_must_not_include: ["delete_service"]
+  coverage_has_gaps: true
+  should_error: false
+
+- id: l010
+  description: "仅 1 条实验 — 边界最小值"
+  fixture: "coverage_snapshot_l010.json"
+  bucket: "boundary"
+  min_recommendations: 1
+  max_recommendations: 8
+  dimension_must_include_any: ["coverage"]
+  recommendation_must_not_include: ["delete_service"]
+  coverage_has_gaps: true
+  should_error: false

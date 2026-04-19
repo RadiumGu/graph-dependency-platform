@@ -166,10 +166,8 @@ def query_infra_snapshot(services_csv: str) -> str:
     if not names:
         return "{}"
     try:
-        # 复用 hypothesis_direct 的 infra snapshot 实现
-        from agents.hypothesis_direct import DirectBedrockHypothesis  # type: ignore
-        eng = DirectBedrockHypothesis()
-        snap = eng._query_infra_snapshot(names)  # type: ignore[attr-defined]
+        from runner.neptune_helpers import query_infra_snapshot as _query_snap  # type: ignore
+        snap = _query_snap(names)
     except Exception as e:
         with _lock:
             _calls.append({"tool": "query_infra_snapshot", "error": repr(e)[:200]})

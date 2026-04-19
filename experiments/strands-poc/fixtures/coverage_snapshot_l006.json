@@ -1,0 +1,327 @@
+{
+  "id": "l006",
+  "description": "特殊后端 eks-control-plane 的实验历史",
+  "experiment_count": 4,
+  "experiments": [
+    {
+      "end_time": {
+        "S": "2026-04-02T03:48:28.513504+00:00"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "experiment_name": {
+        "S": "fis-api-throttle-eks"
+      },
+      "start_time": {
+        "S": "2026-04-02T03:42:05.529195+00:00"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "recovery_seconds": {
+        "N": "31.4"
+      },
+      "fault_type": {
+        "S": "fis_api_throttle"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "duration_seconds": {
+        "N": "383"
+      },
+      "target_namespace": {
+        "S": "api-injection"
+      },
+      "experiment_id": {
+        "S": "exp-eks-control-plane-fis-api-throttle-20260402-034205"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-control-plane-fis-api-throttle-20260402-034205-report.md"
+      },
+      "ttl": {
+        "N": "1806637724"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "target_service": {
+        "S": "eks-control-plane"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/api-injection/fis-api-throttle-eks.yaml"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": false
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "fault_duration": {
+        "S": "5m"
+      }
+    },
+    {
+      "start_time": {
+        "S": "2026-04-02T03:32:47.859297+00:00"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "end_time": {
+        "S": "2026-04-02T03:39:10.714006+00:00"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "recovery_seconds": {
+        "N": "31.4"
+      },
+      "ttl": {
+        "N": "1806637167"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "experiment_name": {
+        "S": "fis-api-internal-error-eks"
+      },
+      "target_namespace": {
+        "S": "api-injection"
+      },
+      "target_service": {
+        "S": "eks-control-plane"
+      },
+      "experiment_id": {
+        "S": "exp-eks-control-plane-fis-api-internal-error-20260402-033247"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": false
+      },
+      "fault_type": {
+        "S": "fis_api_internal_error"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-control-plane-fis-api-internal-error-20260402-033247-report.md"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/api-injection/fis-api-internal-error-eks.yaml"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "duration_seconds": {
+        "N": "382.9"
+      }
+    },
+    {
+      "fault_value": {
+        "S": "100"
+      },
+      "status": {
+        "S": "ERROR"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-control-plane-fis-api-internal-error-20260402-033056-report.md"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "experiment_name": {
+        "S": "fis-api-internal-error-eks"
+      },
+      "target_namespace": {
+        "S": "api-injection"
+      },
+      "duration_seconds": {
+        "N": "20.4"
+      },
+      "target_service": {
+        "S": "eks-control-plane"
+      },
+      "experiment_id": {
+        "S": "exp-eks-control-plane-fis-api-internal-error-20260402-033056"
+      },
+      "abort_reason": {
+        "S": "未预期异常: An error occurred (ValidationException) when calling the CreateExperimentTemplate operation: Missing value for required parameter \"percentage\" in action \"fault-action\"."
+      },
+      "end_time": {
+        "S": "2026-04-02T03:31:16.472312+00:00"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": false
+      },
+      "start_time": {
+        "S": "2026-04-02T03:30:56.044569+00:00"
+      },
+      "ttl": {
+        "N": "1806636676"
+      },
+      "fault_type": {
+        "S": "fis_api_internal_error"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/api-injection/fis-api-internal-error-eks.yaml"
+      },
+      "fault_duration": {
+        "S": "5m"
+      }
+    },
+    {
+      "fault_value": {
+        "S": "100"
+      },
+      "abort_reason": {
+        "S": "未预期异常: An error occurred (ValidationException) when calling the CreateExperimentTemplate operation: The resourceArn \"${EKS_NODE_ROLE_ARN}\" in target \"main-target\" is not in valid format."
+      },
+      "status": {
+        "S": "ERROR"
+      },
+      "start_time": {
+        "S": "2026-04-02T03:30:09.222811+00:00"
+      },
+      "end_time": {
+        "S": "2026-04-02T03:30:29.644689+00:00"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "target_tier": {
+        "S": "Tier1"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "experiment_id": {
+        "S": "exp-eks-control-plane-fis-api-internal-error-20260402-033009"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "experiment_name": {
+        "S": "fis-api-internal-error-eks"
+      },
+      "target_namespace": {
+        "S": "api-injection"
+      },
+      "duration_seconds": {
+        "N": "20.4"
+      },
+      "target_service": {
+        "S": "eks-control-plane"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-control-plane-fis-api-internal-error-20260402-033009-report.md"
+      },
+      "ttl": {
+        "N": "1806636629"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": false
+      },
+      "fault_type": {
+        "S": "fis_api_internal_error"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/api-injection/fis-api-internal-error-eks.yaml"
+      },
+      "fault_duration": {
+        "S": "5m"
+      }
+    }
+  ]
+}

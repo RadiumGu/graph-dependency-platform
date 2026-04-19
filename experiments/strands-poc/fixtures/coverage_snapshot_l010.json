@@ -1,0 +1,98 @@
+{
+  "id": "l010",
+  "description": "边界：仅 1 条实验",
+  "experiment_count": 1,
+  "experiments": [
+    {
+      "target_service": {
+        "S": "eks-nodegroup"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "experiment_id": {
+        "S": "exp-eks-nodegroup-fis-eks-terminate-node-20260413-040353"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "rca_expected": {
+        "S": "eks-node"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "end_time": {
+        "S": "2026-04-13T04:19:55.330713+00:00"
+      },
+      "recovery_seconds": {
+        "N": "301.1"
+      },
+      "experiment_name": {
+        "S": "fis-eks-terminate-node-1c"
+      },
+      "fault_type": {
+        "S": "fis_eks_terminate_node"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_duration": {
+        "S": "10m"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "target_namespace": {
+        "S": "eks"
+      },
+      "start_time": {
+        "S": "2026-04-13T04:03:53.852197+00:00"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "duration_seconds": {
+        "N": "961.5"
+      },
+      "ttl": {
+        "N": "1807590013"
+      },
+      "rca_status": {
+        "S": "buffered"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-eks-nodegroup-fis-eks-terminate-node-20260413-040353-report.md"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "yaml_source": {
+        "S": "/home/ubuntu/tech/chaos/code/experiments/fis/eks-node/fis-eks-terminate-node-1c.yaml"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    }
+  ]
+}

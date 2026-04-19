@@ -1,0 +1,177 @@
+- id: l001
+  scenario: petsite 核心服务 coverage 分析
+  fixture: coverage_snapshot_l001.json
+  bucket: core
+  min_recommendations: 1
+  max_recommendations: 10
+  dimension_must_include_any:
+  - coverage
+  - resilience
+  recommendation_must_not_include:
+  - delete_service
+  - shutdown
+  should_error: false
+  observed_frequent_categories:
+  - coverage
+  - process
+  - resilience
+  observed_rec_count_range:
+  - 5
+  - 5
+- id: l002
+  scenario: payforadoption 支付服务 coverage 分析
+  fixture: coverage_snapshot_l002.json
+  bucket: core
+  min_recommendations: 1
+  max_recommendations: 10
+  dimension_must_include_any:
+  - coverage
+  - resilience
+  recommendation_must_not_include:
+  - delete_service
+  should_error: false
+  observed_frequent_categories:
+  - coverage
+  - process
+  - resilience
+  observed_rec_count_range:
+  - 5
+  - 5
+- id: l003
+  scenario: pethistory 历史服务 coverage 分析
+  fixture: coverage_snapshot_l003.json
+  bucket: core
+  min_recommendations: 1
+  max_recommendations: 8
+  dimension_must_include_any:
+  - coverage
+  recommendation_must_not_include:
+  - delete_service
+  should_error: false
+  observed_frequent_categories:
+  - coverage
+  - process
+  - resilience
+  observed_rec_count_range:
+  - 5
+  - 5
+- id: l004
+  scenario: eks-nodegroup 节点组实验分析
+  fixture: coverage_snapshot_l004.json
+  bucket: special_backend
+  min_recommendations: 1
+  max_recommendations: 10
+  dimension_must_include_any:
+  - coverage
+  - resilience
+  - process
+  recommendation_must_not_include:
+  - delete_service
+  should_error: false
+  observed_frequent_categories:
+  - coverage
+  - process
+  - resilience
+  observed_rec_count_range:
+  - 5
+  - 5
+- id: l005
+  scenario: eks-storage 存储实验分析（仅 1 条）
+  fixture: coverage_snapshot_l005.json
+  bucket: special_backend
+  min_recommendations: 1
+  max_recommendations: 8
+  dimension_must_include_any:
+  - coverage
+  recommendation_must_not_include:
+  - delete_service
+  should_error: false
+  observed_frequent_categories:
+  - coverage
+  - process
+  - resilience
+  observed_rec_count_range:
+  - 5
+  - 5
+- id: l006
+  scenario: eks-control-plane 控制平面分析
+  fixture: coverage_snapshot_l006.json
+  bucket: special_backend
+  min_recommendations: 1
+  max_recommendations: 10
+  dimension_must_include_any:
+  - coverage
+  - resilience
+  recommendation_must_not_include:
+  - delete_service
+  should_error: false
+  observed_frequent_categories:
+  - coverage
+  - process
+  - resilience
+  observed_rec_count_range:
+  - 5
+  - 5
+- id: l007
+  scenario: 空实验列表 — 应返回空分析
+  fixture: coverage_snapshot_l007.json
+  bucket: error_input
+  min_recommendations: 0
+  max_recommendations: 0
+  dimension_must_include_any: []
+  recommendation_must_not_include: []
+  should_error: false
+  expect_empty_analysis: true
+- id: l008
+  scenario: 畸形数据 — graceful 处理
+  fixture: coverage_snapshot_l008.json
+  bucket: error_input
+  min_recommendations: 0
+  max_recommendations: 5
+  dimension_must_include_any: []
+  recommendation_must_not_include: []
+  should_error: false
+  observed_frequent_categories:
+  - coverage
+  - process
+  - resilience
+  observed_rec_count_range:
+  - 5
+  - 5
+- id: l009
+  scenario: 全量 86 条实验聚合
+  fixture: coverage_snapshot_l009.json
+  bucket: boundary
+  min_recommendations: 2
+  max_recommendations: 10
+  dimension_must_include_any:
+  - coverage
+  - resilience
+  recommendation_must_not_include:
+  - delete_service
+  should_error: false
+  observed_frequent_categories:
+  - coverage
+  - process
+  - resilience
+  observed_rec_count_range:
+  - 5
+  - 5
+- id: l010
+  scenario: 仅 1 条实验 — 边界最小值
+  fixture: coverage_snapshot_l010.json
+  bucket: boundary
+  min_recommendations: 1
+  max_recommendations: 8
+  dimension_must_include_any:
+  - coverage
+  recommendation_must_not_include:
+  - delete_service
+  should_error: false
+  observed_frequent_categories:
+  - coverage
+  - process
+  - resilience
+  observed_rec_count_range:
+  - 5
+  - 5

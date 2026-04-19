@@ -1,0 +1,3563 @@
+{
+  "id": "l001",
+  "description": "核心服务 petsite 的实验历史",
+  "experiment_count": 39,
+  "experiments": [
+    {
+      "ttl": {
+        "N": "1807553183"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0-20260312"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260412-180258"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "impact_max_latency_p99": {
+        "N": "981.7"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "yaml_source": {
+        "S": "/home/ubuntu/tech/chaos/code/experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "981.6"
+          }
+        }
+      },
+      "start_time": {
+        "S": "2026-04-12T18:02:58.140427+00:00"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "505.8"
+          }
+        }
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "rca_status": {
+        "S": "buffered"
+      },
+      "duration_seconds": {
+        "N": "188.3"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260412-180258-report.md"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "end_time": {
+        "S": "2026-04-12T18:06:06.396191+00:00"
+      },
+      "fault_value": {
+        "S": "50"
+      }
+    },
+    {
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0-20260312"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260412-174743"
+      },
+      "end_time": {
+        "S": "2026-04-12T17:50:51.285019+00:00"
+      },
+      "start_time": {
+        "S": "2026-04-12T17:47:43.381315+00:00"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260412-174743-report.md"
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "yaml_source": {
+        "S": "/home/ubuntu/tech/chaos/code/experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "rca_status": {
+        "S": "buffered"
+      },
+      "duration_seconds": {
+        "N": "187.9"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "ttl": {
+        "N": "1807552269"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_value": {
+        "S": "50"
+      }
+    },
+    {
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "end_time": {
+        "S": "2026-04-12T17:45:47.430534+00:00"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260412-174539-report.md"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "yaml_source": {
+        "S": "/home/ubuntu/tech/chaos/code/experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "target_namespace": {
+        "S": "default"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260412-174539"
+      },
+      "duration_seconds": {
+        "N": "8"
+      },
+      "abort_reason": {
+        "S": "Pre-flight 失败: 服务 petsite 无 Running Pods（检查 label app=petsite）"
+      },
+      "ttl": {
+        "N": "1807551947"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0-20260312"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "status": {
+        "S": "ABORTED"
+      },
+      "start_time": {
+        "S": "2026-04-12T17:45:39.414994+00:00"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "fault_value": {
+        "S": "50"
+      }
+    },
+    {
+      "abort_reason": {
+        "S": "Pre-flight 失败: 注入前稳态检查失败: success_rate=85.9 (要求 >= 95%)"
+      },
+      "ttl": {
+        "N": "1806651037"
+      },
+      "yaml_source": {
+        "S": "experiments/generated/petsite-fis-network-disrupt-h001.yaml"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "duration_seconds": {
+        "N": "20.4"
+      },
+      "target_namespace": {
+        "S": "default"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-network-disrupt-20260402-073016-report.md"
+      },
+      "start_time": {
+        "S": "2026-04-02T07:30:16.691081+00:00"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "experiment_name": {
+        "S": "petsite-fis-network-disrupt-h001-20260402"
+      },
+      "fault_type": {
+        "S": "fis_network_disrupt"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-network-disrupt-20260402-073016"
+      },
+      "end_time": {
+        "S": "2026-04-02T07:30:37.107231+00:00"
+      },
+      "status": {
+        "S": "ABORTED"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "85.93"
+          },
+          "latency_p99_ms": {
+            "N": "432.9"
+          }
+        }
+      }
+    },
+    {
+      "ttl": {
+        "N": "1806650148"
+      },
+      "end_time": {
+        "S": "2026-04-02T07:15:48.540825+00:00"
+      },
+      "yaml_source": {
+        "S": "experiments/generated/petsite-fis-network-disrupt-h001.yaml"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "status": {
+        "S": "ERROR"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "duration_seconds": {
+        "N": "20.4"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-network-disrupt-20260402-071528-report.md"
+      },
+      "target_namespace": {
+        "S": "default"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "658.3"
+          }
+        }
+      },
+      "experiment_name": {
+        "S": "petsite-fis-network-disrupt-h001-20260402"
+      },
+      "fault_type": {
+        "S": "fis_network_disrupt"
+      },
+      "start_time": {
+        "S": "2026-04-02T07:15:28.114947+00:00"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-network-disrupt-20260402-071528"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "abort_reason": {
+        "S": "未预期异常: Parameter validation failed:\nInvalid length for parameter targets.main-target.resourceArns[0], value: 13, valid min length: 20"
+      }
+    },
+    {
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "544.5"
+          }
+        }
+      },
+      "yaml_source": {
+        "S": "experiments/fis/az-scenarios/fis-cross-az-severe-degradation-1a.yaml"
+      },
+      "recovery_seconds": {
+        "N": "77"
+      },
+      "duration_seconds": {
+        "N": "738.3"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "ttl": {
+        "N": "1806649633"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_latency"
+      },
+      "end_time": {
+        "S": "2026-04-02T07:06:52.242258+00:00"
+      },
+      "rca_expected": {
+        "S": "network-cross-az-degradation"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "az-scenario"
+      },
+      "experiment_name": {
+        "S": "fis-cross-az-severe-degradation-1a"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "fault_duration": {
+        "S": "10m"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-network-latency-20260402-065433"
+      },
+      "start_time": {
+        "S": "2026-04-02T06:54:33.929771+00:00"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1149.4"
+          }
+        }
+      },
+      "rca_match": {
+        "BOOL": false
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-network-latency-20260402-065433-report.md"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "impact_max_latency_p99": {
+        "N": "1158.3"
+      }
+    },
+    {
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "722.2"
+          }
+        }
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      },
+      "start_time": {
+        "S": "2026-04-02T06:40:54.619614+00:00"
+      },
+      "ttl": {
+        "N": "1806648753"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-network-latency-20260402-064054"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1029.6"
+          }
+        }
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_expected": {
+        "S": "network-intra-az"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_latency"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-network-latency-20260402-064054-report.md"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "az-scenario"
+      },
+      "impact_min_success_rate": {
+        "N": "66.67"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "fault_duration": {
+        "S": "10m"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "experiment_name": {
+        "S": "fis-az-app-slowdown-1c"
+      },
+      "rca_match": {
+        "BOOL": false
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "impact_max_latency_p99": {
+        "N": "1200.4"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/az-scenarios/fis-az-app-slowdown-1c.yaml"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "end_time": {
+        "S": "2026-04-02T06:51:55.887377+00:00"
+      },
+      "duration_seconds": {
+        "N": "661.3"
+      }
+    },
+    {
+      "recovery_seconds": {
+        "N": "77"
+      },
+      "experiment_name": {
+        "S": "fis-az-app-slowdown-1a"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_expected": {
+        "S": "network-intra-az"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_latency"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-network-latency-20260402-062618"
+      },
+      "end_time": {
+        "S": "2026-04-02T06:38:34.233167+00:00"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "start_time": {
+        "S": "2026-04-02T06:26:18.535383+00:00"
+      },
+      "target_namespace": {
+        "S": "az-scenario"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/az-scenarios/fis-az-app-slowdown-1a.yaml"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "fault_duration": {
+        "S": "10m"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "rca_match": {
+        "BOOL": false
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1304.3"
+          }
+        }
+      },
+      "impact_max_latency_p99": {
+        "N": "2219.1"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-network-latency-20260402-062618-report.md"
+      },
+      "ttl": {
+        "N": "1806647933"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "629.3"
+          }
+        }
+      },
+      "duration_seconds": {
+        "N": "735.7"
+      }
+    },
+    {
+      "end_time": {
+        "S": "2026-04-02T06:23:56.254348+00:00"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1155.6"
+          }
+        }
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "97.14"
+          },
+          "latency_p99_ms": {
+            "N": "934.9"
+          }
+        }
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/az-scenarios/fis-cross-az-traffic-slowdown-1c.yaml"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_packet_loss"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-network-packet-loss-20260402-061255-report.md"
+      },
+      "rca_expected": {
+        "S": "network-cross-az"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "duration_seconds": {
+        "N": "660.3"
+      },
+      "experiment_name": {
+        "S": "fis-cross-az-traffic-slowdown-1c"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "az-scenario"
+      },
+      "start_time": {
+        "S": "2026-04-02T06:12:55.920611+00:00"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "fault_duration": {
+        "S": "10m"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "impact_min_success_rate": {
+        "N": "80"
+      },
+      "rca_match": {
+        "BOOL": false
+      },
+      "impact_max_latency_p99": {
+        "N": "1274.9"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-network-packet-loss-20260402-061255"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "ttl": {
+        "N": "1806647057"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      }
+    },
+    {
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1779.8"
+          }
+        }
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-network-packet-loss-20260402-055822-report.md"
+      },
+      "start_time": {
+        "S": "2026-04-02T05:58:22.570421+00:00"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_packet_loss"
+      },
+      "rca_expected": {
+        "S": "network-cross-az"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "end_time": {
+        "S": "2026-04-02T06:10:36.357359+00:00"
+      },
+      "impact_max_latency_p99": {
+        "N": "1780"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_namespace": {
+        "S": "az-scenario"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "fault_duration": {
+        "S": "10m"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-network-packet-loss-20260402-055822"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/az-scenarios/fis-cross-az-traffic-slowdown-1a.yaml"
+      },
+      "recovery_seconds": {
+        "N": "77.1"
+      },
+      "rca_match": {
+        "BOOL": false
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "duration_seconds": {
+        "N": "733.8"
+      },
+      "ttl": {
+        "N": "1806646255"
+      },
+      "experiment_name": {
+        "S": "fis-cross-az-traffic-slowdown-1a"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      }
+    },
+    {
+      "backend": {
+        "S": "fis"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/network-infra/fis-network-disrupt-az-1c.yaml"
+      },
+      "recovery_seconds": {
+        "N": "31.4"
+      },
+      "end_time": {
+        "S": "2026-04-02T05:51:23.444003+00:00"
+      },
+      "target_namespace": {
+        "S": "network"
+      },
+      "experiment_name": {
+        "S": "fis-network-disrupt-az-1c"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-network-disrupt-20260402-054458"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "duration_seconds": {
+        "N": "384.6"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-network-disrupt-20260402-054458-report.md"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "rca_enabled": {
+        "BOOL": false
+      },
+      "fault_type": {
+        "S": "fis_network_disrupt"
+      },
+      "start_time": {
+        "S": "2026-04-02T05:44:58.821871+00:00"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "ttl": {
+        "N": "1806645101"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      }
+    },
+    {
+      "experiment_name": {
+        "S": "fis-network-disrupt-az-1a"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "end_time": {
+        "S": "2026-04-02T05:42:39.965615+00:00"
+      },
+      "recovery_seconds": {
+        "N": "31.4"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-network-disrupt-20260402-053615-report.md"
+      },
+      "target_namespace": {
+        "S": "network"
+      },
+      "start_time": {
+        "S": "2026-04-02T05:36:15.562333+00:00"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "rca_enabled": {
+        "BOOL": false
+      },
+      "fault_type": {
+        "S": "fis_network_disrupt"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-network-disrupt-20260402-053615"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/network-infra/fis-network-disrupt-az-1a.yaml"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "duration_seconds": {
+        "N": "384.4"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "ttl": {
+        "N": "1806644577"
+      }
+    },
+    {
+      "rca_match": {
+        "BOOL": true
+      },
+      "duration_seconds": {
+        "N": "240.3"
+      },
+      "ttl": {
+        "N": "1806633206"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_delete"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-delete-20260402-022908"
+      },
+      "recovery_seconds": {
+        "N": "1.1"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-delete-petsite.yaml"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "start_time": {
+        "S": "2026-04-02T02:29:08.350475+00:00"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-delete-20260402-022908-report.md"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-delete-petsite"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "end_time": {
+        "S": "2026-04-02T02:33:08.614493+00:00"
+      }
+    },
+    {
+      "abort_reason": {
+        "S": "未预期异常: An error occurred (ValidationException) when calling the CreateExperimentTemplate operation: Unexpected parameter \"duration\" in action \"fault-action\""
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "status": {
+        "S": "ERROR"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-delete-20260402-022821-report.md"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-delete-20260402-022821"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_delete"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-delete-petsite.yaml"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "duration_seconds": {
+        "N": "20.5"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "ttl": {
+        "N": "1806632922"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-delete-petsite"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "start_time": {
+        "S": "2026-04-02T02:28:21.953234+00:00"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "end_time": {
+        "S": "2026-04-02T02:28:42.492471+00:00"
+      }
+    },
+    {
+      "abort_reason": {
+        "S": "未预期异常: An error occurred (ValidationException) when calling the CreateExperimentTemplate operation: Unexpected parameter \"duration\" in action \"fault-action\""
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-delete-20260402-022115"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "status": {
+        "S": "ERROR"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "ttl": {
+        "N": "1806632496"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_delete"
+      },
+      "start_time": {
+        "S": "2026-04-02T02:21:15.940557+00:00"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-delete-petsite.yaml"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "duration_seconds": {
+        "N": "20.5"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "end_time": {
+        "S": "2026-04-02T02:21:36.452732+00:00"
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-delete-petsite"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-delete-20260402-022115-report.md"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      }
+    },
+    {
+      "rca_match": {
+        "BOOL": true
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-cpu-stress-20260402-021840"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-cpu-stress-petsite"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "start_time": {
+        "S": "2026-04-02T02:18:40.085357+00:00"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_cpu_stress"
+      },
+      "duration_seconds": {
+        "N": "445.4"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-cpu-stress-20260402-021840-report.md"
+      },
+      "end_time": {
+        "S": "2026-04-02T02:26:05.488506+00:00"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "recovery_seconds": {
+        "N": "92"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-cpu-stress-petsite.yaml"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "ttl": {
+        "N": "1806632781"
+      }
+    },
+    {
+      "duration_seconds": {
+        "N": "20.6"
+      },
+      "abort_reason": {
+        "S": "未预期异常: An error occurred (ValidationException) when calling the CreateExperimentTemplate operation: Unexpected parameter \"duration\" in action \"fault-action\""
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "status": {
+        "S": "ERROR"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "ttl": {
+        "N": "1806632049"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_delete"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-delete-petsite.yaml"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "start_time": {
+        "S": "2026-04-02T02:13:49.173047+00:00"
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-delete-20260402-021349"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-delete-20260402-021349-report.md"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-delete-petsite"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "end_time": {
+        "S": "2026-04-02T02:14:09.726809+00:00"
+      }
+    },
+    {
+      "rca_match": {
+        "BOOL": true
+      },
+      "start_time": {
+        "S": "2026-04-02T02:11:42.650522+00:00"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-cpu-stress-20260402-021142"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "duration_seconds": {
+        "N": "435.1"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-cpu-stress-petsite"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_cpu_stress"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "ttl": {
+        "N": "1806632355"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "end_time": {
+        "S": "2026-04-02T02:18:57.737853+00:00"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-cpu-stress-20260402-021142-report.md"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "recovery_seconds": {
+        "N": "76.7"
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-cpu-stress-petsite.yaml"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      }
+    },
+    {
+      "rca_match": {
+        "BOOL": true
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "start_time": {
+        "S": "2026-04-02T02:08:50.382449+00:00"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "ttl": {
+        "N": "1806632199"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_blackhole"
+      },
+      "duration_seconds": {
+        "N": "450.8"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-blackhole-petsite.yaml"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-network-blackhole-20260402-020850-report.md"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-blackhole-petsite"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "recovery_seconds": {
+        "N": "92"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-network-blackhole-20260402-020850"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "end_time": {
+        "S": "2026-04-02T02:16:21.149780+00:00"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      }
+    },
+    {
+      "rca_match": {
+        "BOOL": true
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-cpu-stress-20260402-020531"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "duration_seconds": {
+        "N": "362.2"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-cpu-stress-petsite"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "recovery_seconds": {
+        "N": "1.5"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_cpu_stress"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "start_time": {
+        "S": "2026-04-02T02:05:31.153282+00:00"
+      },
+      "end_time": {
+        "S": "2026-04-02T02:11:33.356801+00:00"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-cpu-stress-20260402-020531-report.md"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-cpu-stress-petsite.yaml"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "ttl": {
+        "N": "1806631909"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      }
+    },
+    {
+      "rca_match": {
+        "BOOL": true
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-network-blackhole-20260402-020329"
+      },
+      "end_time": {
+        "S": "2026-04-02T02:09:28.644582+00:00"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_blackhole"
+      },
+      "duration_seconds": {
+        "N": "359.5"
+      },
+      "ttl": {
+        "N": "1806631782"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-blackhole-petsite.yaml"
+      },
+      "recovery_seconds": {
+        "N": "1.1"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-blackhole-petsite"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "start_time": {
+        "S": "2026-04-02T02:03:29.105637+00:00"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-network-blackhole-20260402-020329-report.md"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      }
+    },
+    {
+      "start_time": {
+        "S": "2026-04-02T02:02:15.398383+00:00"
+      },
+      "end_time": {
+        "S": "2026-04-02T02:02:35.937434+00:00"
+      },
+      "abort_reason": {
+        "S": "未预期异常: An error occurred (ValidationException) when calling the CreateExperimentTemplate operation: Unexpected parameter \"duration\" in action \"fault-action\""
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "status": {
+        "S": "ERROR"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_delete"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "ttl": {
+        "N": "1806631355"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-delete-petsite.yaml"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-delete-20260402-020215-report.md"
+      },
+      "duration_seconds": {
+        "N": "20.5"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-delete-petsite"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-delete-20260402-020215"
+      }
+    },
+    {
+      "rca_match": {
+        "BOOL": true
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "ttl": {
+        "N": "1806631411"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_blackhole"
+      },
+      "duration_seconds": {
+        "N": "356.8"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-network-blackhole-20260402-015718"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-blackhole-petsite.yaml"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-blackhole-petsite"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "end_time": {
+        "S": "2026-04-02T02:03:15.146982+00:00"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-network-blackhole-20260402-015718-report.md"
+      },
+      "start_time": {
+        "S": "2026-04-02T01:57:18.346991+00:00"
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      }
+    },
+    {
+      "rca_match": {
+        "BOOL": true
+      },
+      "ttl": {
+        "N": "1806631215"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "recovery_seconds": {
+        "N": "1.2"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "duration_seconds": {
+        "N": "357"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-cpu-stress-petsite"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_cpu_stress"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "end_time": {
+        "S": "2026-04-02T01:59:58.869053+00:00"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-cpu-stress-20260402-015401-report.md"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-cpu-stress-20260402-015401"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "start_time": {
+        "S": "2026-04-02T01:54:01.889077+00:00"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-cpu-stress-petsite.yaml"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      }
+    },
+    {
+      "rca_match": {
+        "BOOL": true
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-eks-pod-network-blackhole-20260402-014544-report.md"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "ttl": {
+        "N": "1806630721"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "fault_type": {
+        "S": "fis_eks_pod_network_blackhole"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "recovery_seconds": {
+        "N": "1.4"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/eks-pod/fis-eks-pod-blackhole-petsite.yaml"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-eks-pod-network-blackhole-20260402-014544"
+      },
+      "experiment_name": {
+        "S": "fis-eks-pod-blackhole-petsite"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "duration_seconds": {
+        "N": "355.1"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "end_time": {
+        "S": "2026-04-02T01:51:39.212026+00:00"
+      },
+      "target_namespace": {
+        "S": "eks-pod"
+      },
+      "start_time": {
+        "S": "2026-04-02T01:45:44.073472+00:00"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      }
+    },
+    {
+      "rca_match": {
+        "BOOL": true
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "duration_seconds": {
+        "N": "185.1"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0-20260312"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "start_time": {
+        "S": "2026-04-02T00:52:55.787053+00:00"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260402-005255-report.md"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "end_time": {
+        "S": "2026-04-02T00:56:00.847376+00:00"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "ttl": {
+        "N": "1806627374"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260402-005255"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_value": {
+        "S": "50"
+      }
+    },
+    {
+      "rca_match": {
+        "BOOL": true
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "start_time": {
+        "S": "2026-04-02T00:46:32.732183+00:00"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-pod-failure.yaml"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "ttl": {
+        "N": "1806627055"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-failure-20260402-004632"
+      },
+      "duration_seconds": {
+        "N": "246.4"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-failure-20260402-004632-report.md"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "experiment_name": {
+        "S": "petsite-pod-failure"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "end_time": {
+        "S": "2026-04-02T00:50:39.091065+00:00"
+      },
+      "fault_type": {
+        "S": "pod_failure"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_value": {
+        "S": "50"
+      }
+    },
+    {
+      "rca_match": {
+        "BOOL": true
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "experiment_name": {
+        "S": "petsite-memory-stress"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "duration_seconds": {
+        "N": "371.5"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "recovery_seconds": {
+        "N": "1.7"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-memory-stress-20260402-003806"
+      },
+      "ttl": {
+        "N": "1806626672"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_value": {
+        "S": ""
+      },
+      "start_time": {
+        "S": "2026-04-02T00:38:06.193318+00:00"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-memory-stress.yaml"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_type": {
+        "S": "pod_memory_stress"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "end_time": {
+        "S": "2026-04-02T00:44:17.704312+00:00"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-memory-stress-20260402-003806-report.md"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      }
+    },
+    {
+      "duration_seconds": {
+        "N": "247"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "ttl": {
+        "N": "1806626165"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-dns-chaos.yaml"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-dns-chaos-20260402-003140"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_type": {
+        "S": "dns_chaos"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "rca_expected": {
+        "S": "dns"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "experiment_name": {
+        "S": "petsite-dns-chaos"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-dns-chaos-20260402-003140-report.md"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_value": {
+        "S": ""
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "rca_match": {
+        "BOOL": false
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "fault_duration": {
+        "S": "3m"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "start_time": {
+        "S": "2026-04-02T00:31:40.963771+00:00"
+      },
+      "end_time": {
+        "S": "2026-04-02T00:35:47.922095+00:00"
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      }
+    },
+    {
+      "rca_match": {
+        "BOOL": true
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-cpu-stress-20260402-002315"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "duration_seconds": {
+        "N": "370.3"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "experiment_name": {
+        "S": "petsite-cpu-stress"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "fault_type": {
+        "S": "pod_cpu_stress"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_value": {
+        "S": ""
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "start_time": {
+        "S": "2026-04-02T00:23:15.808962+00:00"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-cpu-stress-20260402-002315-report.md"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "end_time": {
+        "S": "2026-04-02T00:29:26.151238+00:00"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-cpu-stress.yaml"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "ttl": {
+        "N": "1806625780"
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      }
+    },
+    {
+      "rca_match": {
+        "BOOL": true
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-container-kill-20260402-001749"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "end_time": {
+        "S": "2026-04-02T00:20:57.350794+00:00"
+      },
+      "experiment_name": {
+        "S": "petsite-container-kill"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "rca_confidence": {
+        "N": "0.7"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-container-kill-20260402-001749-report.md"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "start_time": {
+        "S": "2026-04-02T00:17:49.163504+00:00"
+      },
+      "fault_type": {
+        "S": "container_kill"
+      },
+      "duration_seconds": {
+        "N": "188.2"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-container-kill.yaml"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "ttl": {
+        "N": "1806625275"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "recovery_seconds": {
+        "N": "1.6"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "fault_value": {
+        "S": "50"
+      }
+    },
+    {
+      "experiment_name": {
+        "S": "fis-network-disrupt-az-1a"
+      },
+      "backend": {
+        "S": "fis"
+      },
+      "recovery_seconds": {
+        "N": "31.4"
+      },
+      "start_time": {
+        "S": "2026-04-01T19:48:39.630067+00:00"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-fis-network-disrupt-20260401-194839-report.md"
+      },
+      "target_namespace": {
+        "S": "network"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "fault_value": {
+        "S": "100"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-fis-network-disrupt-20260401-194839"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "335"
+          }
+        }
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "rca_enabled": {
+        "BOOL": false
+      },
+      "fault_type": {
+        "S": "fis_network_disrupt"
+      },
+      "fault_mode": {
+        "S": "all"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1140.6"
+          }
+        }
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "fault_duration": {
+        "S": "5m"
+      },
+      "yaml_source": {
+        "S": "experiments/fis/network-infra/fis-network-disrupt-az-1a.yaml"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "duration_seconds": {
+        "N": "384.5"
+      },
+      "ttl": {
+        "N": "1806609322"
+      },
+      "impact_max_latency_p99": {
+        "N": "1140.7"
+      },
+      "end_time": {
+        "S": "2026-04-01T19:55:04.126586+00:00"
+      }
+    },
+    {
+      "rca_match": {
+        "BOOL": true
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "duration_seconds": {
+        "N": "181.5"
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0-20260312"
+      },
+      "rca_actual": {
+        "S": "petsite"
+      },
+      "rca_confidence": {
+        "N": "1"
+      },
+      "ttl": {
+        "N": "1806598019"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "impact_max_latency_p99": {
+        "N": "660.3"
+      },
+      "start_time": {
+        "S": "2026-04-01T16:43:22.643128+00:00"
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "600"
+          }
+        }
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260401-164322"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "rca_status": {
+        "S": "success"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1261.3"
+          }
+        }
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260401-164322-report.md"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "end_time": {
+        "S": "2026-04-01T16:46:24.127345+00:00"
+      },
+      "target_namespace": {
+        "S": "petadoptions"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "fault_value": {
+        "S": "50"
+      }
+    },
+    {
+      "impact_min_success_rate": {
+        "N": "94.47"
+      },
+      "end_time": {
+        "S": "2026-03-20T14:40:58.492755+00:00"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "backend": {
+        "S": "chaosmesh"
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "duration_seconds": {
+        "N": "185.7"
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0-20260312"
+      },
+      "ttl": {
+        "N": "1781793659"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260320-143752-report.md"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260320-143752"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "start_time": {
+        "S": "2026-03-20T14:37:52.763367+00:00"
+      },
+      "rca_status": {
+        "S": "error"
+      },
+      "target_namespace": {
+        "S": "default"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "impact_max_latency_p99": {
+        "N": "3066.7"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "98.55"
+          },
+          "latency_p99_ms": {
+            "N": "3055.7"
+          }
+        }
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "rca_error": {
+        "S": "Lambda 返回成功但 root_cause 为空"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "3040.9"
+          }
+        }
+      },
+      "fault_value": {
+        "S": "50"
+      }
+    },
+    {
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "3050.5"
+          }
+        }
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "impact_max_latency_p99": {
+        "N": "3052.3"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "ttl": {
+        "N": "1780586339"
+      },
+      "target_namespace": {
+        "S": "default"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260306-151556"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260306-151556-report.md"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "99.05"
+          },
+          "latency_p99_ms": {
+            "N": "3049.9"
+          }
+        }
+      },
+      "end_time": {
+        "S": "2026-03-06T15:18:59.254637+00:00"
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0"
+      },
+      "duration_seconds": {
+        "N": "182.7"
+      },
+      "status": {
+        "S": "PASSED"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "impact_min_success_rate": {
+        "N": "94.4"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "fault_value": {
+        "S": "50"
+      },
+      "start_time": {
+        "S": "2026-03-06T15:15:56.530513+00:00"
+      }
+    },
+    {
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "status": {
+        "S": "FAILED"
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "ttl": {
+        "N": "1780585963"
+      },
+      "target_namespace": {
+        "S": "default"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "end_time": {
+        "S": "2026-03-06T15:12:43.570944+00:00"
+      },
+      "impact_min_success_rate": {
+        "N": "92.42"
+      },
+      "impact_max_latency_p99": {
+        "N": "3102.8"
+      },
+      "start_time": {
+        "S": "2026-03-06T15:09:42.435478+00:00"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "98.91"
+          },
+          "latency_p99_ms": {
+            "N": "3060.3"
+          }
+        }
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "3073.2"
+          }
+        }
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260306-150942"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "duration_seconds": {
+        "N": "181.1"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260306-150942-report.md"
+      },
+      "fault_value": {
+        "S": "50"
+      }
+    },
+    {
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "status": {
+        "S": "FAILED"
+      },
+      "recovery_seconds": {
+        "N": "0.8"
+      },
+      "duration_seconds": {
+        "N": "181"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "target_namespace": {
+        "S": "default"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "ttl": {
+        "N": "1780585285"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260306-145824"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "steady_state_after": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "3056.2"
+          }
+        }
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "1291.7"
+          }
+        }
+      },
+      "end_time": {
+        "S": "2026-03-06T15:01:25.668842+00:00"
+      },
+      "start_time": {
+        "S": "2026-03-06T14:58:24.622086+00:00"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "impact_max_latency_p99": {
+        "N": "3109.3"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260306-145824-report.md"
+      },
+      "fault_value": {
+        "S": "50"
+      }
+    },
+    {
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260306-042545-report.md"
+      },
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "status": {
+        "S": "ERROR"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "target_namespace": {
+        "S": "default"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "ttl": {
+        "N": "1780547150"
+      },
+      "duration_seconds": {
+        "N": "5.2"
+      },
+      "end_time": {
+        "S": "2026-03-06T04:25:50.640022+00:00"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "abort_reason": {
+        "S": "未预期异常: 'ChaosMCPClient' object has no attribute 'check_pods'"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260306-042545"
+      },
+      "start_time": {
+        "S": "2026-03-06T04:25:45.402570+00:00"
+      },
+      "fault_value": {
+        "S": "50"
+      }
+    },
+    {
+      "yaml_source": {
+        "S": "experiments/tier0/petsite-pod-kill.yaml"
+      },
+      "rca_enabled": {
+        "BOOL": true
+      },
+      "fault_type": {
+        "S": "pod_kill"
+      },
+      "status": {
+        "S": "ERROR"
+      },
+      "fault_duration": {
+        "S": "2m"
+      },
+      "target_namespace": {
+        "S": "default"
+      },
+      "target_service": {
+        "S": "petsite"
+      },
+      "impact_max_latency_p99": {
+        "N": "0"
+      },
+      "start_time": {
+        "S": "2026-03-06T03:58:32.223272+00:00"
+      },
+      "rca_expected": {
+        "S": "petsite"
+      },
+      "experiment_name": {
+        "S": "petsite-pod-kill-tier0"
+      },
+      "end_time": {
+        "S": "2026-03-06T04:01:07.212308+00:00"
+      },
+      "impact_min_success_rate": {
+        "N": "100"
+      },
+      "duration_seconds": {
+        "N": "155"
+      },
+      "abort_reason": {
+        "S": "未预期异常: 注入失败: Failed to start experiment after 3 attempts: (409)\nReason: Conflict\nHTTP response headers: HTTPHeaderDict({'Audit-Id': '119b19f1-a5ae-4f61-838c-5de494303430', 'Cache-Control': 'no-cache, private', 'Content-Type': 'application/json', 'X-Kubernetes-Pf-Flowschema-Uid': '49f5456b-3a44-42d7-8b4c-3d6e8e848dd6', 'X-Kubernetes-Pf-Prioritylevel-Uid': '7577ec30-3ad7-4557-ae69-e3fc16b62a32', 'Date': 'Fri, 06 Mar 2026 04:01:07 GMT', 'Content-Length': '313'})\nHTTP response body: {\n  \"kind\": \"Status\",\n  \"apiVersion\": \"v1\",\n  \"metadata\": {},\n  \"status\": \"Failure\",\n  \"message\": \"podchaos.chaos-mesh.org \\\"pod-kill-90ae86e2\\\" already exists\",\n  \"reason\": \"AlreadyExists\",\n  \"details\": {\n    \"name\": \"pod-kill-90ae86e2\",\n    \"group\": \"chaos-mesh.org\",\n    \"kind\": \"podchaos\"\n  },\n  \"code\": 409\n}\n"
+      },
+      "target_tier": {
+        "S": "Tier0"
+      },
+      "experiment_id": {
+        "S": "exp-petsite-pod-kill-20260306-035832"
+      },
+      "fault_mode": {
+        "S": "fixed-percent"
+      },
+      "report_path": {
+        "S": "/home/ubuntu/tech/chaos/validation-results/exp-petsite-pod-kill-20260306-035832-report.md"
+      },
+      "steady_state_before": {
+        "M": {
+          "success_rate": {
+            "N": "100"
+          },
+          "latency_p99_ms": {
+            "N": "0"
+          }
+        }
+      },
+      "ttl": {
+        "N": "1780545667"
+      },
+      "fault_value": {
+        "S": "50"
+      }
+    }
+  ]
+}

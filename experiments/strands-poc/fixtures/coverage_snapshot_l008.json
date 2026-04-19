@@ -1,0 +1,31 @@
+{
+  "id": "l008",
+  "description": "错误输入：畸形 JSON / 缺字段",
+  "experiment_count": 3,
+  "experiments": [
+    {
+      "experiment_id": {
+        "S": "bad-001"
+      },
+      "status": {
+        "S": "UNKNOWN"
+      }
+    },
+    {
+      "experiment_id": {
+        "S": "bad-002"
+      }
+    },
+    {
+      "target_service": {
+        "S": "ghost"
+      },
+      "status": {
+        "S": "FAILED"
+      },
+      "fault_type": {
+        "S": "invalid_type"
+      }
+    }
+  ]
+}
