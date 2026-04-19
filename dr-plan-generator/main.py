@@ -153,6 +153,45 @@ def cmd_export_chaos(args: argparse.Namespace) -> None:
     print(f"Exported {len(experiments)} chaos experiment(s) to {args.output}")
 
 
+def cmd_execute(args: argparse.Namespace) -> None:
+    """Execute a DR plan using the configured engine."""
+    import json as _json
+    from models import DRPlan
+    from executor_factory import make_dr_executor
+
+    with open(args.plan) as f:
+        plan_data = _json.load(f)
+    plan = DRPlan.from_dict(plan_data)
+
+    dry_run = not getattr(args, 'no_dry_run', False)
+    executor = make_dr_executor(dry_run=dry_run)
+
+    print(f"Executing DR plan {plan.plan_id} (dry_run={executor.dry_run}, engine={executor.ENGINE_NAME})")
+    report = executor.execute(plan)
+
+    print(f"\nResult: environment={report.environment}")
+    print(f"Duration: {report.total_duration_seconds:.1f}s")
+    print(f"RTO: {report.actual_rto_minutes}min (estimated {report.estimated_rto_minutes}min)")
+    if report.warnings:
+        print(f"Warnings: {report.warnings}")
+    if report.failed_steps:
+        print(f"Failed steps: {report.failed_steps}")
+    """Export DR plan key assumptions as chaos experiment YAML files.
+
+    Args:
+        args: Parsed CLI arguments.
+    """
+    from models import DRPlan
+    from validation.chaos_exporter import ChaosExporter
+
+    with open(args.plan, encoding="utf-8") as fh:
+        plan = DRPlan.from_dict(json.load(fh))
+
+    os.makedirs(args.output, exist_ok=True)
+    experiments = ChaosExporter().export(plan, args.output)
+    print(f"Exported {len(experiments)} chaos experiment(s) to {args.output}")
+
+
 # ---------------------------------------------------------------------------
 # Shared output helper
 # ---------------------------------------------------------------------------
@@ -256,6 +295,11 @@ def _build_parser() -> argparse.ArgumentParser:
     e.add_argument("--plan", required=True, help="Path to plan JSON file")
     e.add_argument("--output", required=True, help="Output directory for experiment YAMLs")
 
+    x = sub.add_parser("execute", help="Execute a DR plan (dry-run by default)")
+    x.add_argument("--plan", required=True, help="Path to plan JSON file")
+    x.add_argument("--dry-run", action="store_true", default=True, help="Dry-run mode (default)")
+    x.add_argument("--no-dry-run", action="store_true", help="Disable dry-run (real execution)")
+
     return parser
 
 
@@ -274,6 +318,7 @@ def main() -> None:
         "validate": cmd_validate,
         "rollback": cmd_rollback,
         "export-chaos": cmd_export_chaos,
+        "execute": cmd_execute,
     }
     cmd_map[args.command](args)
 

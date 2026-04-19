@@ -60,11 +60,11 @@ modules:
 
   - name: dr-executor
     direct_file: dr-plan-generator/executor_direct.py
-    freeze_date: ~
-    delete_date: ~
+    freeze_date: 2026-04-21
+    delete_date: 2026-08-21
     owner: "@programming-cat"
-    status: "planned"
-    notes: "Phase 3 Week 19-20；跨 region、影响生产，最后迁；2 个完整演练"
+    status: "active"
+    notes: "Phase 3 最终模块；L1 Golden 2/2 both engines；8 tools + failure strategy + partial caching"
 
 tags:
   last_direct_snapshot: ""      # Phase 2 开始前由大乖乖打 v-last-direct-YYYYMMDD
