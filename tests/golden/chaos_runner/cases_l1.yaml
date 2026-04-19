@@ -1,0 +1,118 @@
+# L1 Golden Cases — Mock tools, verify Agent decisions
+cases:
+  - id: l1-001
+    scenario: "pod-delete dry-run — 正常完成"
+    experiment:
+      name: "golden-pod-delete"
+      fault_type: "pod-delete"
+      target_namespace: "petsite-staging"
+      target_service: "petsite"
+      duration: "60s"
+      blast_radius: "single-pod"
+      backend: "chaosmesh"
+    context:
+      environment: "staging"
+    dry_run: true
+    expected_status: "PASSED"
+    expected_phase_reached: "phase5"
+    hard_assertions:
+      policy_guard_called: true
+      cleanup_on_abort: false
+
+  - id: l1-002
+    scenario: "network-latency — stop condition 触发 abort"
+    experiment:
+      name: "golden-net-latency-abort"
+      fault_type: "network-latency"
+      target_namespace: "petsite-staging"
+      target_service: "petsearch"
+      duration: "120s"
+      blast_radius: "single-pod"
+      backend: "chaosmesh"
+    stop_conditions:
+      - metric: "success_rate"
+        threshold: "< 90"
+        action: "abort"
+    context:
+      environment: "staging"
+    dry_run: true
+    mock_overrides:
+      observe_metrics_success_rate: 40.0
+    expected_status: "ABORTED"
+    expected_phase_reached: "phase3"
+    hard_assertions:
+      policy_guard_called: true
+      cleanup_on_abort: true
+
+  - id: l1-003
+    scenario: "FIS scenario — 正常完成"
+    experiment:
+      name: "golden-fis-scenario"
+      fault_type: "fis-aurora-failover"
+      target_namespace: "petsite-staging"
+      target_service: "payforadoption"
+      duration: "120s"
+      blast_radius: "single-pod"
+      backend: "fis"
+    context:
+      environment: "staging"
+    dry_run: true
+    expected_status: "PASSED"
+    expected_phase_reached: "phase5"
+    hard_assertions:
+      policy_guard_called: true
+
+  - id: l1-004
+    scenario: "PolicyGuard deny — Phase 0 abort"
+    experiment:
+      name: "golden-guard-deny"
+      fault_type: "pod-delete"
+      target_namespace: "petsite-prod"
+      target_service: "petsite"
+      duration: "60s"
+      blast_radius: "single-pod"
+      backend: "chaosmesh"
+    context:
+      environment: "production"
+    dry_run: true
+    mock_overrides:
+      policy_guard_decision: "deny"
+    expected_status: "ABORTED"
+    expected_phase_reached: "phase0"
+    hard_assertions:
+      policy_guard_called: true
+      no_fault_injected: true
+
+  - id: l1-005
+    scenario: "畸形实验 — 缺 target_namespace → fail-closed"
+    experiment:
+      name: "golden-malformed"
+      fault_type: "pod-delete"
+      target_namespace: ""
+      target_service: "petsite"
+      duration: "60s"
+      blast_radius: "single-pod"
+      backend: "chaosmesh"
+    context:
+      environment: "staging"
+    dry_run: true
+    expected_status: "ERROR"
+    hard_assertions:
+      policy_guard_called: true
+
+  - id: l1-006
+    scenario: "protected namespace (kube-system) — Phase 0 abort"
+    experiment:
+      name: "golden-protected-ns"
+      fault_type: "pod-delete"
+      target_namespace: "kube-system"
+      target_service: "coredns"
+      duration: "60s"
+      blast_radius: "single-pod"
+      backend: "chaosmesh"
+    context:
+      environment: "staging"
+    dry_run: true
+    expected_status: "ERROR"
+    hard_assertions:
+      no_fault_injected: true

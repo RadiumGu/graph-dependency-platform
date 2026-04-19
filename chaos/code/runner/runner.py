@@ -222,10 +222,10 @@ class ExperimentRunner:
         now = datetime.now(timezone(timedelta(hours=8))).isoformat()
         experiment_dict = {
             "name": exp.name,
-            "fault_type": getattr(exp, "fault_type", getattr(exp, "type", "unknown")),
+            "fault_type": exp.fault.type if hasattr(exp, 'fault') and hasattr(exp.fault, 'type') else "unknown",
             "target_namespace": exp.target_namespace,
             "target_service": exp.target_service,
-            "duration_sec": getattr(exp, "duration", getattr(exp, "duration_sec", 0)),
+            "duration_sec": int(exp.fault.duration.rstrip('smh').split('.')[0]) if hasattr(exp, 'fault') and hasattr(exp.fault, 'duration') else 0,
             "blast_radius": getattr(exp, "blast_radius", "service"),
         }
         context_dict = {
@@ -607,7 +607,7 @@ class ExperimentRunner:
             self._safe_print(f"报告:     {result.report_path}")
         if result.abort_reason:
             self._safe_print(f"原因:     {result.abort_reason}")
-        if result.log_collection is not None:
+        if getattr(result, 'log_collection', None) is not None:
             self._safe_print(f"日志采集: {result.log_collection.summary()}")
             if result.log_collection.error_summary:
                 self._safe_print(f"错误分类: {result.log_collection.error_summary}")

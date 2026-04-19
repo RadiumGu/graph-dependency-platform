@@ -311,15 +311,18 @@ class StrandsRunner(RunnerBase):
                 current_success_rate: Current success rate percentage (0-100)
                 current_p99_ms: Current p99 latency in milliseconds
             """
-            # Use experiment's stop conditions
+            from runner.experiment import MetricsSnapshot
+            # Build a fake snapshot for the StopCondition.is_triggered() method
+            snap = MetricsSnapshot(
+                timestamp=int(time.time()),
+                success_rate=current_success_rate,
+                latency_p99_ms=current_p99_ms,
+                total_requests=0,
+            )
             breaches = []
             for cond in experiment.stop_conditions:
-                # Simple threshold check
-                if hasattr(cond, 'metric') and hasattr(cond, 'threshold'):
-                    if cond.metric == "success_rate" and current_success_rate < cond.threshold:
-                        breaches.append(f"success_rate {current_success_rate:.1f}% < {cond.threshold}%")
-                    elif cond.metric == "latency_p99" and current_p99_ms > cond.threshold:
-                        breaches.append(f"p99 {current_p99_ms:.0f}ms > {cond.threshold}ms")
+                if cond.is_triggered(snap):
+                    breaches.append(cond.describe(snap))
             return json.dumps({"breached": len(breaches) > 0, "breaches": breaches})
 
         @tool
