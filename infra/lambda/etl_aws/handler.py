@@ -1025,6 +1025,7 @@ def run_etl():
             'fault_boundary': 'region' if _svc_type == 'lambda' else 'az',
             'region': REGION,
             'recovery_priority': MICROSERVICE_RECOVERY_PRIORITY.get(svc_name, 'Tier2'),
+            'tier': MICROSERVICE_RECOVERY_PRIORITY.get(svc_name, 'Tier2'),
             'service_type': _svc_type,
         }, 'manual')
         if not svc_vid:
@@ -1102,6 +1103,7 @@ def run_etl():
                     'fault_boundary': 'region' if _svc_type == 'lambda' else 'az',
                     'region': REGION,
                     'recovery_priority': MICROSERVICE_RECOVERY_PRIORITY.get(svc_name, 'Tier2'),
+                    'tier': MICROSERVICE_RECOVERY_PRIORITY.get(svc_name, 'Tier2'),
                     'service_type': _svc_type,
                 }, 'manual')
                 if svc_vid and _svc_type != 'lambda':

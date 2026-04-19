@@ -101,6 +101,7 @@ def upsert_business_capabilities() -> dict:
                 'fault_boundary': 'region' if _svc_type == 'lambda' else 'az',
                 'region': REGION,
                 'recovery_priority': svc_priority,
+                'tier': svc_priority,
                 'service_type': _svc_type,
                 'log_source': f"cwlogs:///aws/containerinsights/{EKS_CLUSTER_NAME}/application?filter={sn}",
             }, 'manual')
