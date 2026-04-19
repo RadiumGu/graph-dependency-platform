@@ -1,0 +1,270 @@
+cases:
+  - id: l1-001
+    scenario: "AZ failover — 全部成功"
+    expected_status: "SUCCESS"
+    plan:
+      plan_id: "dr-az-failover-001"
+      created_at: "2026-04-20T00:00:00Z"
+      scope: "az"
+      source: "ap-northeast-1a"
+      target: "ap-northeast-1c"
+      affected_services: ["petsite", "petsearch"]
+      affected_resources: ["aurora-cluster-1", "eks-petsite"]
+      estimated_rto: 15
+      estimated_rpo: 5
+      validation_status: "valid"
+      graph_snapshot_time: "2026-04-20T00:00:00Z"
+      phases:
+        - phase_id: "phase-preflight"
+          name: "Pre-flight"
+          layer: "preflight"
+          estimated_duration: 2
+          gate_condition: "all_checks_pass"
+          steps:
+            - step_id: "step-001"
+              order: 1
+              resource_type: "health"
+              resource_id: "cross-region-check"
+              resource_name: "Cross-AZ Health"
+              action: "verify"
+              command: "aws ec2 describe-availability-zones --region ap-northeast-1"
+              validation: "echo 'AZ check passed'"
+              expected_result: "AZs available"
+              rollback_command: "echo 'no rollback needed'"
+              estimated_time: 10
+              requires_approval: false
+              dependencies: []
+
+        - phase_id: "phase-l1-data"
+          name: "L1-Data"
+          layer: "L1"
+          estimated_duration: 5
+          gate_condition: "all_data_synced HARD_BLOCK"
+          steps:
+            - step_id: "step-002"
+              order: 1
+              resource_type: "aurora"
+              resource_id: "arn:aws:rds:ap-northeast-1:926093770964:cluster/aurora-cluster-1"
+              resource_name: "Aurora Cluster Failover"
+              action: "failover"
+              command: "aws rds failover-db-cluster --db-cluster-identifier aurora-cluster-1"
+              validation: "aws rds describe-db-clusters --db-cluster-identifier aurora-cluster-1 --query 'DBClusters[0].Status'"
+              expected_result: "available"
+              rollback_command: "aws rds failover-db-cluster --db-cluster-identifier aurora-cluster-1"
+              estimated_time: 120
+              requires_approval: false
+              dependencies: ["step-001"]
+
+        - phase_id: "phase-l2-compute"
+          name: "L2-Compute"
+          layer: "L2"
+          estimated_duration: 3
+          gate_condition: "workloads_healthy"
+          steps:
+            - step_id: "step-003"
+              order: 1
+              resource_type: "eks"
+              resource_id: "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite"
+              resource_name: "EKS Workload Switch"
+              action: "switch"
+              command: "kubectl rollout restart deployment -n petadoptions"
+              validation: "kubectl get pods -n petadoptions --field-selector=status.phase=Running"
+              expected_result: "all pods running"
+              rollback_command: "kubectl rollout undo deployment -n petadoptions"
+              estimated_time: 60
+              requires_approval: false
+              dependencies: ["step-002"]
+
+        - phase_id: "phase-l3-app"
+          name: "L3-App"
+          layer: "L3"
+          estimated_duration: 2
+          gate_condition: "app_healthy INFO"
+          steps:
+            - step_id: "step-004"
+              order: 1
+              resource_type: "route53"
+              resource_id: "Z1234567890"
+              resource_name: "Route53 Health Check"
+              action: "verify"
+              command: "aws route53 get-health-check-status --health-check-id hc-petsite"
+              validation: "curl -s -o /dev/null -w '%{http_code}' https://petsite.example.com/health"
+              expected_result: "200"
+              rollback_command: "echo 'no rollback for health check'"
+              estimated_time: 15
+              requires_approval: false
+              dependencies: ["step-003"]
+
+      rollback_phases:
+        - phase_id: "rollback-phase-1"
+          name: "Rollback"
+          layer: "rollback"
+          estimated_duration: 10
+          gate_condition: "rollback_complete"
+          steps:
+            - step_id: "rb-001"
+              order: 1
+              resource_type: "aurora"
+              resource_id: "aurora-cluster-1"
+              resource_name: "Aurora Rollback"
+              action: "failover"
+              command: "aws rds failover-db-cluster --db-cluster-identifier aurora-cluster-1"
+              validation: "aws rds describe-db-clusters --query 'DBClusters[0].Status'"
+              expected_result: "available"
+              rollback_command: "echo 'already rolled back'"
+              estimated_time: 120
+              requires_approval: false
+              dependencies: []
+
+  - id: l1-002
+    scenario: "Region failover — Aurora promote 失败 → RETRY 3次 → ROLLBACK"
+    expected_status: "ROLLED_BACK"
+    plan:
+      plan_id: "dr-region-failover-002"
+      created_at: "2026-04-20T00:00:00Z"
+      scope: "region"
+      source: "ap-northeast-1"
+      target: "us-west-2"
+      affected_services: ["petsite", "petsearch", "payforadoption"]
+      affected_resources: ["aurora-global-1", "route53-petsite", "s3-assets", "eks-petsite-west"]
+      estimated_rto: 30
+      estimated_rpo: 10
+      validation_status: "valid"
+      graph_snapshot_time: "2026-04-20T00:00:00Z"
+      phases:
+        - phase_id: "phase-preflight"
+          name: "Pre-flight"
+          layer: "preflight"
+          estimated_duration: 3
+          gate_condition: "cross_region_healthy HARD_BLOCK"
+          steps:
+            - step_id: "step-r-001"
+              order: 1
+              resource_type: "health"
+              resource_id: "cross-region-check"
+              resource_name: "Cross-Region Health"
+              action: "verify"
+              command: "aws sts get-caller-identity --region us-west-2"
+              validation: "echo 'target region reachable'"
+              expected_result: "identity confirmed"
+              rollback_command: "echo 'no rollback'"
+              estimated_time: 10
+              requires_approval: false
+              dependencies: []
+
+        - phase_id: "phase-l0-infra"
+          name: "L0-Infra"
+          layer: "L0"
+          estimated_duration: 5
+          gate_condition: "infra_ready HARD_BLOCK"
+          steps:
+            - step_id: "step-r-002"
+              order: 1
+              resource_type: "route53"
+              resource_id: "Z9876543210"
+              resource_name: "Route53 Failover"
+              action: "failover"
+              command: "aws route53 change-resource-record-sets --hosted-zone-id Z9876543210 --change-batch file://failover.json"
+              validation: "aws route53 get-health-check-status --health-check-id hc-petsite-west"
+              expected_result: "healthy"
+              rollback_command: "aws route53 change-resource-record-sets --hosted-zone-id Z9876543210 --change-batch file://rollback.json"
+              estimated_time: 30
+              requires_approval: true
+              dependencies: ["step-r-001"]
+
+        - phase_id: "phase-l1-data"
+          name: "L1-Data"
+          layer: "L1"
+          estimated_duration: 10
+          gate_condition: "data_promoted HARD_BLOCK"
+          steps:
+            - step_id: "step-r-003"
+              order: 1
+              resource_type: "aurora"
+              resource_id: "arn:aws:rds:us-west-2:926093770964:cluster/aurora-global-1-west"
+              resource_name: "Aurora Global Promote"
+              action: "promote"
+              command: "aws rds promote-read-replica-db-cluster --db-cluster-identifier aurora-global-1-west --region us-west-2"
+              validation: "aws rds describe-db-clusters --db-cluster-identifier aurora-global-1-west --region us-west-2 --query 'DBClusters[0].Status'"
+              expected_result: "available"
+              rollback_command: "aws rds create-global-cluster --global-cluster-identifier aurora-global-1 --source-db-cluster-identifier aurora-global-1-west"
+              estimated_time: 300
+              requires_approval: true
+              dependencies: ["step-r-002"]
+            - step_id: "step-r-004"
+              order: 2
+              resource_type: "s3"
+              resource_id: "petsite-assets-west"
+              resource_name: "S3 Cross-Region Sync"
+              action: "replicate"
+              command: "aws s3 sync s3://petsite-assets s3://petsite-assets-west --region us-west-2"
+              validation: "aws s3 ls s3://petsite-assets-west --region us-west-2"
+              expected_result: "objects synced"
+              rollback_command: "echo 's3 sync is idempotent'"
+              estimated_time: 60
+              requires_approval: false
+              dependencies: ["step-r-001"]
+
+        - phase_id: "phase-l2-compute"
+          name: "L2-Compute"
+          layer: "L2"
+          estimated_duration: 5
+          gate_condition: "workloads_running"
+          steps:
+            - step_id: "step-r-005"
+              order: 1
+              resource_type: "eks"
+              resource_id: "arn:aws:eks:us-west-2:926093770964:cluster/PetSite-West"
+              resource_name: "EKS West Workload"
+              action: "switch"
+              command: "kubectl --context eks-west rollout restart deployment -n petadoptions"
+              validation: "kubectl --context eks-west get pods -n petadoptions"
+              expected_result: "all pods running"
+              rollback_command: "kubectl --context eks-west rollout undo deployment -n petadoptions"
+              estimated_time: 90
+              requires_approval: false
+              dependencies: ["step-r-003", "step-r-004"]
+
+      rollback_phases:
+        - phase_id: "rollback-phase-1"
+          name: "Rollback-Infra"
+          layer: "rollback"
+          estimated_duration: 15
+          gate_condition: "rollback_complete"
+          steps:
+            - step_id: "rb-r-001"
+              order: 1
+              resource_type: "route53"
+              resource_id: "Z9876543210"
+              resource_name: "Route53 Rollback"
+              action: "failover"
+              command: "aws route53 change-resource-record-sets --hosted-zone-id Z9876543210 --change-batch file://rollback.json"
+              validation: "aws route53 get-health-check-status --health-check-id hc-petsite"
+              expected_result: "healthy"
+              rollback_command: "echo 'already rolled back'"
+              estimated_time: 30
+              requires_approval: false
+              dependencies: []
+            - step_id: "rb-r-002"
+              order: 2
+              resource_type: "aurora"
+              resource_id: "aurora-global-1"
+              resource_name: "Aurora Rollback"
+              action: "failover"
+              command: "aws rds create-global-cluster --global-cluster-identifier aurora-global-1 --source-db-cluster-identifier aurora-cluster-1"
+              validation: "aws rds describe-global-clusters --global-cluster-identifier aurora-global-1"
+              expected_result: "available"
+              rollback_command: "echo 'already rolled back'"
+              estimated_time: 180
+              requires_approval: false
+              dependencies: ["rb-r-001"]
+
+    # For l1-002, mock tools will return failure for step-r-003 (Aurora promote)
+    # after RETRY exhaustion, triggering ROLLBACK → global rollback
+    mock_overrides:
+      step-r-003:
+        execute_step:
+          success: false
+          exit_code: 1
+          output: "An error occurred (InvalidDBClusterStateFault): DB cluster is not in a valid state for failover"
+        failure_strategy: "ROLLBACK"

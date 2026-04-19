@@ -232,20 +232,10 @@ class StrandsExecutor(ExecutorBase):
 
     # ── System Prompt (partial caching) ──────────────────────────────
 
-    def _build_system_prompt(self, plan: DRPlan) -> list[dict]:
-        """Build system prompt with stable (cached) + variable segments."""
+    def _build_system_prompt(self, plan: DRPlan) -> str:
+        """Build system prompt: stable framework + variable plan context."""
         variable = self._format_plan_context(plan)
-        return [
-            {
-                "type": "text",
-                "text": STABLE_DR_FRAMEWORK,
-                "cache_control": {"type": "ephemeral"},
-            },
-            {
-                "type": "text",
-                "text": variable,
-            },
-        ]
+        return STABLE_DR_FRAMEWORK + "\n\n" + variable
 
     def _format_plan_context(self, plan: DRPlan) -> str:
         phases_desc = []
@@ -298,7 +288,7 @@ Begin with Phase 1. For cross-region plans, call check_cross_region_health first
     # ── Tools ────────────────────────────────────────────────────────
 
     def _build_tools(self, plan: DRPlan) -> list:
-        from strands.tool import tool
+        from strands import tool
         executor_self = self
 
         @tool
@@ -591,6 +581,26 @@ Begin with Phase 1. For cross-region plans, call check_cross_region_health first
                 abort_and_rollback]
 
     # ── Helpers ──────────────────────────────────────────────────────
+
+    @staticmethod
+    def _abort_report(plan: DRPlan, reason: str, t0: float = 0) -> RehearsalReport:
+        """Create an aborted RehearsalReport."""
+        return RehearsalReport(
+            plan_id=plan.plan_id,
+            scope=plan.scope,
+            environment="aborted",
+            timestamp=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            total_duration_seconds=time.time() - t0 if t0 else 0,
+            actual_rto_minutes=0,
+            estimated_rto_minutes=plan.estimated_rto,
+            phase_results=[],
+            step_results=[],
+            rollback_success=None,
+            rollback_duration_seconds=0,
+            failed_steps=[],
+            warnings=[reason],
+            plan_adjustments=[],
+        )
 
     @staticmethod
     def _find_step(plan: DRPlan, step_id: str) -> Optional[DRStep]:
