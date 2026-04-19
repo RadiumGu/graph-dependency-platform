@@ -55,8 +55,8 @@ modules:
     freeze_date: ~
     delete_date: ~
     owner: "@programming-cat"
-    status: "planned"
-    notes: "Phase 3 Week 16-18；真正 mutate K8s/FIS 状态，风险最高；3 个 dry-run 实验"
+    status: "active"
+    notes: "Phase 3 Week 16-18；L1 Golden 6/6 both engines；dry_run double gate；7 tools"
 
   - name: dr-executor
     direct_file: dr-plan-generator/executor_direct.py

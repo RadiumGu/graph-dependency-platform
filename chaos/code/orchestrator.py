@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from runner import ExperimentRunner, load_experiment, Experiment, ExperimentResult
+from runner.factory import make_runner_engine
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +236,8 @@ class WorkflowOrchestrator:
             # 覆盖 namespace 以隔离并行实验（不修改原始 Experiment 对象）
             import dataclasses
             exp = dataclasses.replace(exp, target_namespace=namespace_override)
-        runner = ExperimentRunner(dry_run=dry_run, tags=self.tags)
+        runner = make_runner_engine(dry_run=dry_run)
+        runner.tags = self.tags
         return runner.run(exp)
 
     @staticmethod
