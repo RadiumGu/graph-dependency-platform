@@ -12,7 +12,7 @@
 - **Golden baseline**:
   - direct *6/6 = 100%* ✅
   - strands *6/6 = 100%* ✅
-- **Cache hit ratio**: ⚠️ *无法确认*（accumulated_usage 不报 cacheRead/cacheWrite）
+- **Cache hit ratio**: ✅ *稳态 ~66%*（Run 3 cache_read=19772 / total=36760）—— 修复 CacheConfig import 后正常
 - **Memory**: Strands engine delta < 500 MB ✅
 - **Latency**: Direct 4.7s / Strands 363s（~77x，但 Strands 做了深度分析 + 跨 Prober 关联）
 
@@ -50,11 +50,12 @@
 
 ### 3.1 踩到的坑
 
-**坑 1: Strands metrics 不报缓存 token**
-- 症状：`_extract_token_usage` 返回 `cache_read=0, cache_write=0`
-- 根因：Strands `EventLoopMetrics.accumulated_usage` 只有 `inputTokens/outputTokens/totalTokens`，不传递 Bedrock response 中的 `cacheReadInputTokens`
-- 修复：暂未修复，记录为已知限制
-- *给下个模块*：如果缓存验证是 Gate B 必过项，需要绕过 Strands metrics，直接 hook Bedrock response（或等 Strands SDK 升级）
+**坑 1: CacheConfig import 路径错误导致缓存从未启用**
+- 症状：`cache_write=0, cache_read=0`，缓存完全无效
+- 根因：`from strands.types.models import CacheConfig` 模块不存在，`try/except ImportError` 静默回退到 `cache_kwargs = {}`，缓存从未启用
+- 修复：改为 `from strands.models import CacheConfig`（与 Module 2 一致）
+- 修复后缓存验证 3/3 通过：Run 1 cache_write=3169，Run 2 cache_read=11275，Run 3 cache_read=19772
+- *给下个模块*：**强制统一 CacheConfig import 路径为 `from strands.models import CacheConfig`**。不要用 `strands.types.models`、`strands.models.bedrock` 等其他路径。这个 silent ImportError 极难 debug——代码正常运行但缓存无效，只有跑 verify_cache 才能发现
 
 **坑 2: `_extract_token_usage` 用错了 API（metrics.get()）**
 - 症状：token_usage 返回空 dict `{}`
@@ -127,8 +128,8 @@ Direct 版只返回数据（"SQS backlog=5000, DynamoDB throttle=20"）。Strand
 
 ## 6. 给下个模块的 Top 3 建议 ⭐⭐⭐
 
-1. **Strands `accumulated_usage` 不含 cacheRead/cacheWrite — 需要替代方案**
-   如果缓存验证是 Gate B 必过项，有两个选择：(a) 直接 hook `boto3` 的 Bedrock response 提取 usage（绕过 Strands metrics）；(b) 在 Strands Agent 的 callback/hook 里截获每次 model call 的 raw response。Module 1/2 能报告缓存是因为它们*不通过 Strands metrics*，而是从 Bedrock raw response 提取。
+1. **强制统一 CacheConfig import 路径为 `from strands.models import CacheConfig`**
+   `strands.types.models` 不存在，`strands.models.bedrock` 只有 BedrockModel。错误的 import 路径会被 `try/except ImportError` 静默吁掉，缓存永远不会启用但代码正常运行。极难 debug。下个模块的 TASK 应在“强制约束”里写明 import 路径。
 
 2. **如果 Agent 被多次调用，管理好 conversation history**
    `SlidingWindowConversationManager` 会累积上下文（inputTokens 线性增长）。生产环境中，如果同一个 engine 实例处理多个 alert，要么每次新建实例，要么在调用前 clear conversation。不然第 10 次调用时 input 可能已经 50k+ tokens。
