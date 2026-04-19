@@ -52,8 +52,8 @@ modules:
 
   - name: chaos-runner
     direct_file: chaos/code/runner/runner_direct.py
-    freeze_date: ~
-    delete_date: ~
+    freeze_date: 2026-04-20
+    delete_date: 2026-08-20
     owner: "@programming-cat"
     status: "active"
     notes: "Phase 3 Week 16-18；L1 Golden 6/6 both engines；dry_run double gate；7 tools"

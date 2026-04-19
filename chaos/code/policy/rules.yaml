@@ -14,7 +14,7 @@ rules:
     name: "Namespace 白名单"
     description: "只允许在指定 namespace 执行实验"
     condition:
-      allowed_namespaces: ["petsite-staging", "petsite-canary", "chaos-sandbox"]
+      allowed_namespaces: ["petsite-staging", "petsite-canary", "chaos-sandbox", "petadoptions"]
     action: "deny_if_not_in_list"
     severity: "critical"
 
