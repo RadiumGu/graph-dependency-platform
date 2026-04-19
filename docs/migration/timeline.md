@@ -35,12 +35,12 @@ modules:
     notes: "Phase 3 Module 2 完成（2026-04-19）；direct 10/10、strands 10/10。灰度中，4/26 冻结。"
 
   - name: rca-layer2-probers
-    direct_file: rca/probers/layer2_direct.py
+    direct_file: rca/collectors/layer2_direct.py
     freeze_date: ~
     delete_date: ~
     owner: "@programming-cat"
-    status: "planned"
-    notes: "Phase 3 Week 10-12；Strands multi-agent 编排主场；golden set 6 个已知故障场景"
+    status: "active"
+    notes: "Phase 3 Module 3 PR1-5 完成（2026-04-19）；Direct 6/6、Strands 6/6。灰度中。缓存 token 报告待调查。"
 
   - name: chaos-policy-guard
     direct_file: chaos/code/policy/guard_direct.py
