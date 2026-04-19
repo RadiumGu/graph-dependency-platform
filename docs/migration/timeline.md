@@ -28,11 +28,11 @@ modules:
 
   - name: learning-agent
     direct_file: chaos/code/agents/learning_direct.py
-    freeze_date: ~
-    delete_date: ~
+    freeze_date: 2026-04-26
+    delete_date: 2026-08-26
     owner: "@programming-cat"
     status: "active"
-    notes: "Phase 3 Module 2 Week 1-2 完成（2026-04-19）；direct 10/10、strands 10/10。Week 3 集成测试通过。待 1 周灰度后冻结。"
+    notes: "Phase 3 Module 2 完成（2026-04-19）；direct 10/10、strands 10/10。灰度中，4/26 冻结。"
 
   - name: rca-layer2-probers
     direct_file: rca/probers/layer2_direct.py
