@@ -1,39 +1,39 @@
 [
   {
     "run": 1,
-    "latency_s": 37.0,
+    "latency_s": 37.1,
     "token_usage": {
-      "input": 6064,
-      "output": 2159,
-      "total": 8223,
-      "cache_read": 0,
-      "cache_write": 0
+      "input": 165,
+      "output": 2196,
+      "total": 8312,
+      "cache_read": 2782,
+      "cache_write": 3169
     },
     "probe_count": 5,
-    "score_delta": 10
+    "score_delta": 5
   },
   {
     "run": 2,
-    "latency_s": 32.7,
+    "latency_s": 44.5,
     "token_usage": {
-      "input": 17124,
-      "output": 4582,
-      "total": 21706,
-      "cache_read": 0,
-      "cache_write": 0
+      "input": 330,
+      "output": 4780,
+      "total": 22077,
+      "cache_read": 11275,
+      "cache_write": 5692
     },
     "probe_count": 5,
     "score_delta": 10
   },
   {
     "run": 3,
-    "latency_s": 28.2,
+    "latency_s": 37.9,
     "token_usage": {
-      "input": 28718,
-      "output": 7054,
-      "total": 35772,
-      "cache_read": 0,
-      "cache_write": 0
+      "input": 495,
+      "output": 7505,
+      "total": 36760,
+      "cache_read": 19772,
+      "cache_write": 8988
     },
     "probe_count": 5,
     "score_delta": 10

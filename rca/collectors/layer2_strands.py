@@ -151,13 +151,13 @@ After collecting tool results, produce a JSON analysis with these fields:
 def _build_orchestrator():
     """Construct the Strands Orchestrator Agent."""
     from strands import Agent
-    from strands.models.bedrock import BedrockModel
+    from strands.models import BedrockModel
     from strands.agent.conversation_manager.sliding_window_conversation_manager import (
         SlidingWindowConversationManager,
     )
 
     try:
-        from strands.types.models import CacheConfig
+        from strands.models import CacheConfig
         cache_kwargs = {"cache_config": CacheConfig(strategy="auto")}
     except ImportError:
         cache_kwargs = {}
@@ -209,29 +209,17 @@ def _extract_token_usage(result) -> dict | None:
         metrics = result.metrics
         if not metrics:
             return None
-        # accumulated_usage has the totals
-        usage = getattr(metrics, 'accumulated_usage', None) or {}
-        # Look for cache tokens in cycle-level usage
-        cache_read = usage.get('cacheReadInputTokens', 0)
-        cache_write = usage.get('cacheWriteInputTokens', 0)
-        # Also check agent_invocations for cache tokens
-        if (not cache_read and not cache_write) and hasattr(metrics, 'agent_invocations'):
-            for inv in metrics.agent_invocations:
-                inv_usage = getattr(inv, 'usage', {}) or {}
-                cache_read += inv_usage.get('cacheReadInputTokens', 0)
-                cache_write += inv_usage.get('cacheWriteInputTokens', 0)
-                # Also check individual cycles
-                for cycle in getattr(inv, 'cycles', []):
-                    c_usage = getattr(cycle, 'usage', {}) or {}
-                    cache_read += c_usage.get('cacheReadInputTokens', 0)
-                    cache_write += c_usage.get('cacheWriteInputTokens', 0)
-        return {
-            "input": usage.get('inputTokens', 0),
-            "output": usage.get('outputTokens', 0),
-            "total": usage.get('totalTokens', 0),
-            "cache_read": cache_read,
-            "cache_write": cache_write,
-        }
+        summary = metrics.get_summary()
+        usage = summary.get("accumulated_usage") or {}
+        it = int(usage.get("inputTokens", 0) or 0)
+        ot = int(usage.get("outputTokens", 0) or 0)
+        cr = int(usage.get("cacheReadInputTokens", 0) or 0)
+        cw = int(usage.get("cacheWriteInputTokens", 0) or 0)
+        tt = int(usage.get("totalTokens", it + ot + cr + cw) or 0)
+        if it == 0 and ot == 0 and cr == 0 and cw == 0:
+            return None
+        return {"input": it, "output": ot, "total": tt,
+                "cache_read": cr, "cache_write": cw}
     except Exception:
         return None
 
