@@ -1,0 +1,83 @@
+# Golden cases for Layer2 Probers — behavior constraints (not exact match)
+# Generated from direct engine sampling + human review
+
+cases:
+  - id: p001
+    scenario: "petsite EKS Pod CrashLoopBackOff + SQS 积压"
+    signal:
+      alarm_name: "petsite-pod-crash"
+      alarm_type: "EKS"
+      neptune_infra_fault: false
+    affected_service: "petsite"
+    # With neptune_infra_fault=false, deployment probe should run
+    min_probes_returning: 1
+    max_probes_returning: 6
+    min_score_delta: 0
+    max_score_delta: 40
+    summary_not_empty: true
+
+  - id: p002
+    scenario: "payforadoption Step Functions 超时 + Lambda 错误"
+    signal:
+      alarm_name: "payment-timeout"
+      alarm_type: "StepFunctions"
+      neptune_infra_fault: true
+    affected_service: "payforadoption"
+    min_probes_returning: 0
+    max_probes_returning: 6
+    min_score_delta: 0
+    max_score_delta: 40
+    summary_not_empty: true
+
+  - id: p003
+    scenario: "Lambda 限流 + DynamoDB 节流"
+    signal:
+      alarm_name: "lambda-throttle"
+      alarm_type: "Lambda"
+      neptune_infra_fault: true
+    affected_service: "petadoption"
+    min_probes_returning: 0
+    max_probes_returning: 6
+    min_score_delta: 0
+    max_score_delta: 40
+    summary_not_empty: true
+
+  - id: p004
+    scenario: "ALB 5xx 飙升 + 不健康目标"
+    signal:
+      alarm_name: "alb-5xx-spike"
+      alarm_type: "ALB"
+      neptune_infra_fault: true
+    affected_service: "petsite"
+    min_probes_returning: 0
+    max_probes_returning: 6
+    min_score_delta: 0
+    max_score_delta: 40
+    summary_not_empty: true
+
+  - id: p005
+    scenario: "畸形 signal + 不存在的 service"
+    signal:
+      alarm_name: ""
+      some_garbage: 12345
+    affected_service: "nonexistent-service-xyz"
+    # Should handle gracefully — no crash, possibly 0 results
+    should_not_crash: true
+    min_probes_returning: 0
+    max_probes_returning: 6
+    min_score_delta: 0
+    max_score_delta: 40
+
+  - id: p006
+    scenario: "全部 healthy — 无异常场景"
+    signal:
+      alarm_name: "test-healthy"
+      alarm_type: "Manual"
+      neptune_infra_fault: true
+    affected_service: "petsite"
+    # Healthy scenario — anomalies depend on current AWS state
+    min_probes_returning: 0
+    max_probes_returning: 6
+    min_score_delta: 0
+    max_score_delta: 40
+    summary_not_empty: true

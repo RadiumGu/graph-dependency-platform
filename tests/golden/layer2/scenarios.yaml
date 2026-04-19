@@ -1,0 +1,60 @@
+# Golden Set scenarios for RCA Layer2 Probers
+# 4 buckets: core service (p001-p002), special backend (p003-p004), error input (p005), boundary (p006)
+
+scenarios:
+  # ── Bucket 1: Core Service Fault ──
+  - id: p001
+    name: "petsite EKS Pod CrashLoopBackOff + SQS 积压"
+    signal:
+      alarm_name: "petsite-pod-crash"
+      alarm_type: "EKS"
+      neptune_infra_fault: false
+    affected_service: "petsite"
+    description: "Pod crash 导致 SQS 消费停滞，DLQ 开始累积"
+
+  - id: p002
+    name: "payforadoption Step Functions 超时 + Lambda 错误"
+    signal:
+      alarm_name: "payment-timeout"
+      alarm_type: "StepFunctions"
+      neptune_infra_fault: true
+    affected_service: "payforadoption"
+    description: "支付流程 Step Functions 超时，Lambda 函数错误飙升"
+
+  # ── Bucket 2: Special Backend Fault ──
+  - id: p003
+    name: "Lambda 限流 + DynamoDB 节流"
+    signal:
+      alarm_name: "lambda-throttle"
+      alarm_type: "Lambda"
+      neptune_infra_fault: true
+    affected_service: "petadoption"
+    description: "高并发下 Lambda 限流，DynamoDB 读写节流"
+
+  - id: p004
+    name: "ALB 5xx 飙升 + 不健康目标"
+    signal:
+      alarm_name: "alb-5xx-spike"
+      alarm_type: "ALB"
+      neptune_infra_fault: true
+    affected_service: "petsite"
+    description: "ALB 返回大量 5xx，目标组中有不健康实例"
+
+  # ── Bucket 3: Error Input ──
+  - id: p005
+    name: "畸形 signal + 不存在的 service"
+    signal:
+      alarm_name: ""
+      some_garbage: 12345
+    affected_service: "nonexistent-service-xyz"
+    description: "测试 graceful degradation：service 不存在，signal 不规范"
+
+  # ── Bucket 4: Boundary ──
+  - id: p006
+    name: "全部 healthy — 无异常场景"
+    signal:
+      alarm_name: "test-healthy"
+      alarm_type: "Manual"
+      neptune_infra_fault: true
+    affected_service: "petsite"
+    description: "正常情况下所有 Prober 都应返回 healthy"
