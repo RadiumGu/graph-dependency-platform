@@ -38,10 +38,7 @@ class NLQueryBase(ABC):
         """执行自然语言查询。实现必须填齐上面所有字段。"""
 
 
-# TODO(phase-3): 以下 Base 为未来 6 个模块预留占位，本 Phase 不实现。
-# - class HypothesisBase(ABC): ...
-# - class LearningBase(ABC): ...
-# - class ProberBase(ABC): ...
+# TODO(phase-3): 以下 Base 为未来模块预留占位。
 # - class ChaosPolicyGuardBase(ABC): ...
 # - class ChaosRunnerBase(ABC): ...
 # - class DRExecutorBase(ABC): ...
@@ -200,3 +197,94 @@ class LearningBase(ABC):
                 "error": str | None,
             }
         """
+
+
+class Layer2ProberBase(ABC):
+    """RCA Layer2 Prober 引擎基类（Phase 3 Module 3）。
+
+    *核心契约*：子类实现 run_probes() 和 run_single_probe()，
+    并行执行 6 个 Prober，返回汇总结果。
+
+    *向后兼容*：提供 format_probe_results() 和 total_score_delta()
+    使 rca_engine.py 无需改动调用方式。
+    """
+
+    ENGINE_NAME = "base"
+
+    def __init__(self, profile: Any = None) -> None:
+        self.profile = profile
+
+    @abstractmethod
+    def run_probes(
+        self,
+        signal: dict,
+        affected_service: str,
+        timeout_sec: int = 30,
+    ) -> dict:
+        """\u5e76\u884c\u6267\u884c 6 \u4e2a Prober\uff0c\u8fd4\u56de\u6c47\u603b\u7ed3\u679c\u3002
+
+        Returns:
+            {
+                "probe_results": list[dict],   # ProbeResult dicts
+                "summary": str,                # 汇总摘要
+                "score_delta": int,            # 总分增量 (cap 40)
+                "engine": str,                 # "direct" | "strands"
+                "model_used": str | None,
+                "latency_ms": int,
+                "token_usage": dict | None,
+                "trace": list[dict],
+                "error": str | None,
+            }
+        """
+
+    @abstractmethod
+    def run_single_probe(
+        self,
+        probe_name: str,
+        signal: dict,
+        affected_service: str,
+    ) -> dict:
+        """\u5355\u72ec\u6267\u884c\u4e00\u4e2a Prober\uff08\u7528\u4e8e\u8c03\u8bd5/\u6d4b\u8bd5\uff09\u3002
+
+        Returns:
+            {
+                "service_name": str,
+                "healthy": bool,
+                "score_delta": int,
+                "summary": str,
+                "details": dict,
+                "evidence": list[str],
+                "engine": str,
+                "token_usage": dict | None,
+                "trace": list[dict],
+            }
+        """
+
+    # \u2014\u2014 \u5411\u540e\u517c\u5bb9 helper \u2014\u2014
+
+    @staticmethod
+    def format_probe_results(results: list[dict]) -> str:
+        """\u683c\u5f0f\u5316 probe \u7ed3\u679c\u4e3a prompt block\u3002"""
+        if not results:
+            return "[Layer2 AWS Probers]\nNo anomalies detected across monitored AWS services."
+        lines = []
+        for r in results:
+            svc = r.get("service_name", "Unknown")
+            healthy = r.get("healthy", True)
+            summary = r.get("summary", "")
+            evidence = r.get("evidence", [])
+            block = [f"[{svc} Probe]",
+                     f"Status: {'OK' if healthy else '\u26a0\ufe0f ANOMALY'}",
+                     f"Summary: {summary}"]
+            for e in evidence:
+                block.append(f"  - {e}")
+            lines.append("\n".join(block))
+        return "\n\n".join(lines)
+
+    @staticmethod
+    def total_score_delta(results: list[dict]) -> int:
+        """\u6c47\u603b\u5f02\u5e38\u5206\u6570 (cap 40)\u3002"""
+        return min(
+            sum(r.get("score_delta", 0) for r in results if not r.get("healthy", True)),
+            40,
+        )

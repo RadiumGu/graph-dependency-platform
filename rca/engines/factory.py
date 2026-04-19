@@ -108,3 +108,25 @@ def make_learning_engine(profile: Any = None) -> "LearningBase":  # type: ignore
             return LearningAgent(profile=profile)  # type: ignore[call-arg,return-value]
         except TypeError:
             return LearningAgent()  # type: ignore[return-value]
+
+
+def make_layer2_engine(profile: Any = None) -> "Layer2ProberBase":  # type: ignore[name-defined]
+    """\u6784\u9020 Layer2 Prober \u5f15\u64ce\uff0c\u5207\u6362 env\uff1aLAYER2_ENGINE=direct|strands\u3002
+
+    \u9ed8\u8ba4 direct\uff1bstrands \u4e0d\u53ef\u7528 \u2192 warning + \u56de\u9000 direct\u3002
+    """
+    from engines.base import Layer2ProberBase  # \u5ef6\u8fdf\u5bfc\u5165\u907f\u514d\u5faa\u73af
+    engine = (os.environ.get("LAYER2_ENGINE") or "direct").lower()
+    if engine == "strands":
+        try:
+            from collectors.layer2_strands import StrandsLayer2Prober  # type: ignore
+            return StrandsLayer2Prober(profile=profile)  # type: ignore[return-value]
+        except ImportError as e:
+            logger.warning(
+                "Strands Layer2Prober \u4e0d\u53ef\u7528 (%s)\uff1b\u56de\u9000 direct\u3002", e,
+            )
+        except Exception as e:
+            logger.warning("Strands Layer2Prober \u6784\u9020\u5931\u8d25 (%r)\uff1b\u56de\u9000 direct\u3002", e)
+
+    from collectors.layer2_direct import DirectLayer2Prober  # type: ignore
+    return DirectLayer2Prober(profile=profile)  # type: ignore[return-value]
