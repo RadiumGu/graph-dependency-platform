@@ -27,12 +27,12 @@ modules:
     notes: "Phase 3 Module 1 完成（2026-04-18）；direct 18/20、strands 20/20（P0-bugfix 后，commit 5376421）。Cache hit direct 66% / strands 76.2%。冻结期内禁止修改 direct，除非 P0-bugfix label。"
 
   - name: learning-agent
-    direct_file: rca/agents/learning_direct.py
+    direct_file: chaos/code/agents/learning_direct.py
     freeze_date: ~
     delete_date: ~
     owner: "@programming-cat"
-    status: "planned"
-    notes: "Phase 3 Week 7-9；需 Strands session memory；golden set 10 个 coverage snapshot"
+    status: "active"
+    notes: "Phase 3 Module 2 Week 1-2 完成（2026-04-19）；direct 10/10、strands 10/10。Week 3 集成测试通过。待 1 周灰度后冻结。"
 
   - name: rca-layer2-probers
     direct_file: rca/probers/layer2_direct.py

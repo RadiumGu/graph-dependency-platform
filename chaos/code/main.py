@@ -186,34 +186,78 @@ def cmd_auto(args):
 
 def cmd_learn(args):
     """闭环学习分析"""
-    from agents import LearningAgent
+    from agents import HypothesisAgent  # for .load() / .save()
+    from engines.factory import make_learning_engine, make_hypothesis_engine
+    from runner.query import ExperimentQueryClient
 
-    agent = LearningAgent()
+    hypothesis_engine = make_hypothesis_engine()
+    agent = make_learning_engine()
+    # Wire hypothesis engine for iterate_hypotheses
+    agent.hypothesis_engine = hypothesis_engine
+
     service = None if args.all else args.service
     if not service and not args.all:
         print("❌ 请指定 --service 或 --all")
         sys.exit(1)
 
-    report = agent.run(
-        service=service,
-        limit=args.limit,
-        output=args.output,
-        update_neptune=not args.no_graph_update,
-    )
+    # 1. 获取实验历史
+    query_client = ExperimentQueryClient()
+    if service:
+        experiments = query_client.list_by_service(service, days=90, limit=args.limit)
+    else:
+        experiments = []
+        for status in ("PASSED", "FAILED", "ABORTED"):
+            experiments.extend(query_client.list_by_status(status, days=90))
 
+    if not experiments:
+        print("⚠️ 无实验历史记录")
+        sys.exit(0)
+
+    print(f"📊 加载 {len(experiments)} 条实验记录 (engine={agent.ENGINE_NAME})")
+
+    # 2. 分析
+    analysis = agent.analyze(experiments)
+
+    # 3. 生成建议 (LLM)
+    rec_result = agent.generate_recommendations(analysis)
+    analysis["recommendations_result"] = rec_result
+
+    # 4. 迭代假设
+    existing = HypothesisAgent.load()
+    hyp_result = agent.iterate_hypotheses(analysis, existing)
+    updated = hyp_result.get("updated_hypotheses", existing)
+    new_hyps = hyp_result.get("new_hypotheses", [])
+    HypothesisAgent().save(updated)
+
+    # 5. 更新图谱
+    if not args.no_graph_update:
+        agent.update_graph(analysis)
+
+    # 6. 生成报告
+    report_result = agent.generate_report(analysis)
+    with open(args.output, "w") as f:
+        f.write(report_result.get("report_md", ""))
+
+    # 输出摘要
+    report = analysis.get("report")
+    recs = rec_result.get("recommendations", [])
     print(f"\n{'='*60}")
-    print(f"📊 学习分析完成")
+    print(f"📊 学习分析完成 (engine={agent.ENGINE_NAME})")
     print(f"{'='*60}")
-    print(f"  实验总数: {report.total_experiments}")
-    print(f"  通过率:   {report.pass_rate}%")
-    print(f"  平均恢复: {report.avg_recovery_seconds}s")
-    if report.repeated_failures:
+    print(f"  实验总数: {report.total_experiments if report else 0}")
+    print(f"  通过率:   {report.pass_rate if report else 0}%")
+    print(f"  平均恢复: {report.avg_recovery_seconds if report else 0}s")
+    if report and report.repeated_failures:
         print(f"  ⚠️  重复失败: {len(report.repeated_failures)} 个模式")
-    if report.coverage_gaps:
+    if report and report.coverage_gaps:
         print(f"  🔍 覆盖空白: {len(report.coverage_gaps)} 个服务")
-    if report.new_hypotheses:
-        print(f"  🆕 新假设:   {len(report.new_hypotheses)} 个")
+    if new_hyps:
+        print(f"  🆕 新假设:   {len(new_hyps)} 个")
+    print(f"  💡 建议:     {len(recs)} 条")
     print(f"  📄 报告:     {args.output}")
+    if rec_result.get("token_usage"):
+        tu = rec_result["token_usage"]
+        print(f"  🔑 Token:    in={tu.get('input',0)} out={tu.get('output',0)} cache_read={tu.get('cache_read',0)}")
     print()
 
 
