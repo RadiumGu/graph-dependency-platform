@@ -47,8 +47,8 @@ modules:
     freeze_date: ~
     delete_date: ~
     owner: "@programming-cat"
-    status: "planned"
-    notes: "Phase 3 Week 13-15；pre-execution policy_guard【新增能力】；10 个规则场景"
+    status: "active"
+    notes: "Phase 3 Module 4 完成（2026-04-19）；Direct 12/12、Strands 12/12。Shadow 一致性 12/12。缓存方案 A 启用（1839 tokens）。灰度中。"
 
   - name: chaos-runner
     direct_file: chaos/code/runner/runner_direct.py

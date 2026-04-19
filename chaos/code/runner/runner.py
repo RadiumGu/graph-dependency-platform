@@ -171,6 +171,9 @@ class ExperimentRunner:
         slog.info("phase_started", phase=0, experiment=exp.name, backend=exp.backend)
         logger.info(f"🔍 Phase 0: Pre-flight Check (backend={exp.backend})")
 
+        # ── PolicyGuard pre-execution check ──
+        self._run_policy_guard(exp, result)
+
         from .target_resolver import TargetResolver
         resolver = TargetResolver(tags=self.tags)
 
@@ -204,6 +207,54 @@ class ExperimentRunner:
 
         logger.info(f"✅ Pre-flight 通过: {pods['total']} pods ready")
         slog.info("phase_completed", phase=0, experiment=exp.name)
+
+    # ─── PolicyGuard ─────────────────────────────────────────────────────────
+
+    def _run_policy_guard(self, exp: Experiment, result: ExperimentResult):
+        """Pre-execution policy check. Deny → abort experiment (fail-closed)."""
+        try:
+            from policy.factory import make_policy_guard
+        except ImportError:
+            logger.warning("PolicyGuard not available — skipping")
+            return
+
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone(timedelta(hours=8))).isoformat()
+        experiment_dict = {
+            "name": exp.name,
+            "fault_type": getattr(exp, "fault_type", getattr(exp, "type", "unknown")),
+            "target_namespace": exp.target_namespace,
+            "target_service": exp.target_service,
+            "duration_sec": getattr(exp, "duration", getattr(exp, "duration_sec", 0)),
+            "blast_radius": getattr(exp, "blast_radius", "service"),
+        }
+        context_dict = {
+            "current_time": now,
+            "environment": os.environ.get("ENVIRONMENT", "staging"),
+            "recent_incidents": [],
+            "recent_experiments": [],
+        }
+
+        guard = make_policy_guard()
+        verdict = guard.evaluate(experiment_dict, context_dict)
+
+        slog.info("policy_guard_result",
+                  experiment=exp.name,
+                  decision=verdict["decision"],
+                  matched_rules=verdict.get("matched_rules", []),
+                  latency_ms=verdict.get("latency_ms", 0),
+                  engine=verdict.get("engine", "unknown"))
+
+        result.policy_guard = verdict  # attach for reporting
+
+        if verdict["decision"] == "deny":
+            rules = ", ".join(verdict.get("matched_rules", []))
+            raise PrefightFailure(
+                f"PolicyGuard DENIED: {verdict.get('reasoning', 'no reason')[:200]} "
+                f"[rules: {rules}]"
+            )
+
+        logger.info(f"✅ PolicyGuard: ALLOW (confidence={verdict.get('confidence', 0):.2f})")
 
     # ─── Phase 1：Steady State Before ────────────────────────────────────────
 

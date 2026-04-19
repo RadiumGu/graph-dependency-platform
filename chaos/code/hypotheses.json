@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-04-01T22:28:50.011203+00:00",
+  "generated_at": "2026-04-19T09:39:52.825853+00:00",
   "generator": "hypothesis-agent-v1",
   "model": "global.anthropic.claude-sonnet-4-6",
   "graph_snapshot": {
-    "services": 14
+    "services": 0
   },
   "hypotheses": [
     {
@@ -28,7 +28,7 @@
         "feasibility": 9,
         "learning_value": 7
       },
-      "status": "draft",
+      "status": "invalidated",
       "linked_experiments": [],
       "generated_by": "hypothesis-agent-v1",
       "generated_at": "2026-04-01T22:28:43.757440+00:00",
@@ -59,7 +59,7 @@
         "feasibility": 7,
         "learning_value": 9
       },
-      "status": "draft",
+      "status": "invalidated",
       "linked_experiments": [],
       "generated_by": "hypothesis-agent-v1",
       "generated_at": "2026-04-01T22:28:43.757458+00:00",
@@ -90,7 +90,7 @@
         "feasibility": 8,
         "learning_value": 8
       },
-      "status": "draft",
+      "status": "invalidated",
       "linked_experiments": [],
       "generated_by": "hypothesis-agent-v1",
       "generated_at": "2026-04-01T22:28:43.757420+00:00",
@@ -121,7 +121,7 @@
         "feasibility": 9,
         "learning_value": 9
       },
-      "status": "draft",
+      "status": "invalidated",
       "linked_experiments": [],
       "generated_by": "hypothesis-agent-v1",
       "generated_at": "2026-04-01T22:28:43.757450+00:00",
@@ -152,7 +152,7 @@
         "feasibility": 7,
         "learning_value": 8
       },
-      "status": "draft",
+      "status": "validated",
       "linked_experiments": [],
       "generated_by": "hypothesis-agent-v1",
       "generated_at": "2026-04-01T22:28:43.757454+00:00",
@@ -184,7 +184,7 @@
         "feasibility": 9,
         "learning_value": 7
       },
-      "status": "draft",
+      "status": "validated",
       "linked_experiments": [],
       "generated_by": "hypothesis-agent-v1",
       "generated_at": "2026-04-01T22:28:43.757462+00:00",
@@ -217,7 +217,7 @@
         "feasibility": 6,
         "learning_value": 10
       },
-      "status": "draft",
+      "status": "invalidated",
       "linked_experiments": [],
       "generated_by": "hypothesis-agent-v1",
       "generated_at": "2026-04-01T22:28:43.757473+00:00",
@@ -249,7 +249,7 @@
         "feasibility": 8,
         "learning_value": 7
       },
-      "status": "draft",
+      "status": "validated",
       "linked_experiments": [],
       "generated_by": "hypothesis-agent-v1",
       "generated_at": "2026-04-01T22:28:43.757446+00:00",
@@ -280,7 +280,7 @@
         "feasibility": 7,
         "learning_value": 7
       },
-      "status": "draft",
+      "status": "validated",
       "linked_experiments": [],
       "generated_by": "hypothesis-agent-v1",
       "generated_at": "2026-04-01T22:28:43.757466+00:00",
@@ -312,7 +312,7 @@
         "feasibility": 8,
         "learning_value": 6
       },
-      "status": "draft",
+      "status": "validated",
       "linked_experiments": [],
       "generated_by": "hypothesis-agent-v1",
       "generated_at": "2026-04-01T22:28:43.757469+00:00",

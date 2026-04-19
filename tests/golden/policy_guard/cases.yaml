@@ -1,0 +1,214 @@
+# Golden cases for PolicyGuard — 12 scenarios (10 rules + 2 boundary)
+cases:
+  - id: g001
+    scenario: "工作日高峰期 production pod-delete"
+    experiment:
+      name: "test-pod-delete-payment"
+      fault_type: "pod-delete"
+      target_namespace: "petsite-prod"
+      target_service: "payment-service"
+      duration_sec: 120
+      blast_radius: "single-pod"
+    context:
+      current_time: "2026-04-20T14:30:00+08:00"
+      environment: "production"
+      recent_incidents: []
+      recent_experiments: []
+    expected_decision: "deny"
+    must_match_rules: ["R001"]
+
+  - id: g002
+    scenario: "工作日 22:00 staging pod-delete — 应放行"
+    experiment:
+      name: "test-pod-delete-staging"
+      fault_type: "pod-delete"
+      target_namespace: "petsite-staging"
+      target_service: "petsite"
+      duration_sec: 60
+      blast_radius: "single-pod"
+    context:
+      current_time: "2026-04-20T22:00:00+08:00"
+      environment: "staging"
+      recent_incidents: []
+      recent_experiments: []
+    expected_decision: "allow"
+
+  - id: g003
+    scenario: "未知 namespace"
+    experiment:
+      name: "test-unknown-ns"
+      fault_type: "network-latency"
+      target_namespace: "unknown-namespace"
+      target_service: "some-service"
+      duration_sec: 60
+      blast_radius: "single-pod"
+    context:
+      current_time: "2026-04-20T22:00:00+08:00"
+      environment: "production"
+      recent_incidents: []
+      recent_experiments: []
+    expected_decision: "deny"
+    must_match_rules: ["R002"]
+
+  - id: g004
+    scenario: "cluster-shutdown 故障类型"
+    experiment:
+      name: "test-cluster-shutdown"
+      fault_type: "cluster-shutdown"
+      target_namespace: "petsite-staging"
+      target_service: "petsite"
+      duration_sec: 60
+      blast_radius: "cluster"
+    context:
+      current_time: "2026-04-20T22:00:00+08:00"
+      environment: "staging"
+      recent_incidents: []
+      recent_experiments: []
+    expected_decision: "deny"
+    must_match_rules: ["R003"]
+
+  - id: g005
+    scenario: "production namespace 级爆炸半径"
+    experiment:
+      name: "test-namespace-blast"
+      fault_type: "network-latency"
+      target_namespace: "petsite-staging"
+      target_service: "petsite"
+      duration_sec: 60
+      blast_radius: "namespace"
+    context:
+      current_time: "2026-04-20T22:00:00+08:00"
+      environment: "production"
+      recent_incidents: []
+      recent_experiments: []
+    expected_decision: "deny"
+    must_match_rules: ["R004"]
+
+  - id: g006
+    scenario: "同一 service 20分钟内第二次实验"
+    experiment:
+      name: "test-interval"
+      fault_type: "pod-delete"
+      target_namespace: "petsite-staging"
+      target_service: "petsite"
+      duration_sec: 60
+      blast_radius: "single-pod"
+    context:
+      current_time: "2026-04-20T22:00:00+08:00"
+      environment: "staging"
+      recent_incidents: []
+      recent_experiments:
+        - service: "petsite"
+          time: "2026-04-20T21:45:00+08:00"
+    expected_decision: "deny"
+    must_match_rules: ["R005"]
+
+  - id: g007
+    scenario: "SEV-1 incident 期间执行实验"
+    experiment:
+      name: "test-during-incident"
+      fault_type: "pod-delete"
+      target_namespace: "petsite-staging"
+      target_service: "petsite"
+      duration_sec: 60
+      blast_radius: "single-pod"
+    context:
+      current_time: "2026-04-20T22:00:00+08:00"
+      environment: "staging"
+      recent_incidents:
+        - severity: 1
+          title: "Payment service down"
+          status: "open"
+      recent_experiments: []
+    expected_decision: "deny"
+    must_match_rules: ["R006"]
+
+  - id: g008
+    scenario: "同一 service 今天第 6 次实验"
+    experiment:
+      name: "test-daily-limit"
+      fault_type: "pod-delete"
+      target_namespace: "petsite-staging"
+      target_service: "petsite"
+      duration_sec: 60
+      blast_radius: "single-pod"
+    context:
+      current_time: "2026-04-20T22:00:00+08:00"
+      environment: "staging"
+      recent_incidents: []
+      recent_experiments:
+        - service: "petsite"
+          time: "2026-04-20T10:00:00+08:00"
+        - service: "petsite"
+          time: "2026-04-20T11:00:00+08:00"
+        - service: "petsite"
+          time: "2026-04-20T12:00:00+08:00"
+        - service: "petsite"
+          time: "2026-04-20T13:00:00+08:00"
+        - service: "petsite"
+          time: "2026-04-20T14:00:00+08:00"
+    expected_decision: "deny"
+    must_match_rules: ["R007"]
+
+  - id: g009
+    scenario: "持续时间 900 秒超限"
+    experiment:
+      name: "test-long-duration"
+      fault_type: "pod-cpu-stress"
+      target_namespace: "petsite-staging"
+      target_service: "petsite"
+      duration_sec: 900
+      blast_radius: "single-pod"
+    context:
+      current_time: "2026-04-20T22:00:00+08:00"
+      environment: "staging"
+      recent_incidents: []
+      recent_experiments: []
+    expected_decision: "deny"
+    must_match_rules: ["R008"]
+
+  - id: g010
+    scenario: "周六 production 实验"
+    experiment:
+      name: "test-weekend"
+      fault_type: "pod-delete"
+      target_namespace: "petsite-staging"
+      target_service: "petsite"
+      duration_sec: 60
+      blast_radius: "single-pod"
+    context:
+      current_time: "2026-04-25T14:00:00+08:00"
+      environment: "production"
+      recent_incidents: []
+      recent_experiments: []
+    expected_decision: "deny"
+    must_match_rules: ["R010"]
+
+  # ── Boundary cases ──
+  - id: g011
+    scenario: "畸形实验 metadata — 缺 fault_type"
+    experiment:
+      name: "test-malformed"
+      target_namespace: "petsite-staging"
+      target_service: "petsite"
+      duration_sec: 60
+    context:
+      current_time: "2026-04-20T22:00:00+08:00"
+      environment: "staging"
+    expected_decision: "deny"
+
+  - id: g012
+    scenario: "staging 全部规则通过"
+    experiment:
+      name: "test-staging-allow"
+      fault_type: "pod-delete"
+      target_namespace: "petsite-staging"
+      target_service: "petsite"
+      duration_sec: 120
+      blast_radius: "single-pod"
+    context:
+      current_time: "2026-04-20T22:00:00+08:00"
+      environment: "staging"
+      recent_incidents: []
+      recent_experiments: []
+    expected_decision: "allow"
