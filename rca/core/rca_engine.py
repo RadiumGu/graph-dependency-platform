@@ -658,20 +658,25 @@ def analyze(affected_service: str, classification: dict) -> dict:
     # Step 3d: Layer 2 — AWS Service Probers（插件化多服务探测）
     aws_probe_results = []
     try:
-        from collectors.aws_probers import run_all_probes, total_score_delta
+        from engines.factory import make_layer2_engine
+        layer2_engine = make_layer2_engine()
         # 告知 EC2ASGProbe 是否 Neptune 图层已找到基础设施故障（避免重复）
         neptune_found_infra = any(c.get('infra_fault') for c in candidates)
         probe_signal = {**classification.get('signal', {}),
                         'neptune_infra_fault': neptune_found_infra}
-        aws_probe_results = run_all_probes(probe_signal, affected_service, timeout_sec=12)
+        layer2_result = layer2_engine.run_probes(probe_signal, affected_service,
+                                                 timeout_sec=60 if layer2_engine.ENGINE_NAME == 'strands' else 12)
+        aws_probe_results = layer2_result.get('probe_results', [])
         # 将 probe score 叠加到 top candidate
-        probe_score_bonus = total_score_delta(aws_probe_results)
+        probe_score_bonus = layer2_result.get('score_delta', 0)
         if probe_score_bonus > 0 and scored:
             scored[0]['score'] = min(scored[0]['score'] + probe_score_bonus, 100)
             scored[0]['confidence'] = round(scored[0]['score'] / 100, 2)
             scored[0]['evidence'].append(
                 f"Layer2 AWS probers detected anomalies (+{probe_score_bonus} pts): "
-                + "; ".join(r.summary for r in aws_probe_results if not r.healthy)
+                + "; ".join(r.get('summary', '') if isinstance(r, dict) else r.summary
+                             for r in aws_probe_results
+                             if (not r.get('healthy', True) if isinstance(r, dict) else not r.healthy))
             )
         logger.info(f"Step3d AWS probers: {len(aws_probe_results)} results, "
                     f"bonus={probe_score_bonus}")
@@ -689,8 +694,10 @@ def analyze(affected_service: str, classification: dict) -> dict:
         'analysis_time_sec': elapsed,
         'log_samples': log_samples,
         'aws_probe_results': [
-            {'service': r.service_name, 'healthy': r.healthy,
-             'summary': r.summary, 'evidence': r.evidence}
+            {'service': r.get('service_name', '') if isinstance(r, dict) else r.service_name,
+             'healthy': r.get('healthy', True) if isinstance(r, dict) else r.healthy,
+             'summary': r.get('summary', '') if isinstance(r, dict) else r.summary,
+             'evidence': r.get('evidence', []) if isinstance(r, dict) else r.evidence}
             for r in aws_probe_results
         ],
         'top_candidate': scored[0] if scored else None,
