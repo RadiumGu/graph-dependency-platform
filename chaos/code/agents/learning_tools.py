@@ -160,8 +160,18 @@ def invoke_hypothesis_engine(coverage_gaps_csv: str, max_hypotheses: int = 5) ->
         return "[]"
 
     try:
-        from engines.factory import make_hypothesis_engine  # type: ignore
-        engine = make_hypothesis_engine()
+        # Force direct engine to avoid nested Strands agent (memory explosion)
+        import os as _os
+        old_val = _os.environ.get("HYPOTHESIS_ENGINE", "")
+        _os.environ["HYPOTHESIS_ENGINE"] = "direct"
+        try:
+            from engines.factory import make_hypothesis_engine  # type: ignore
+            engine = make_hypothesis_engine()
+        finally:
+            if old_val:
+                _os.environ["HYPOTHESIS_ENGINE"] = old_val
+            else:
+                _os.environ.pop("HYPOTHESIS_ENGINE", None)
         all_hypotheses = []
         for svc in services[:3]:  # limit to 3 services to control cost
             generated = engine.generate(max_hypotheses=int(max_hypotheses), service_filter=svc)
