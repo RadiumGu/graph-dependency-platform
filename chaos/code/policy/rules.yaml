@@ -1,0 +1,88 @@
+# 10 个策略规则定义
+rules:
+  - id: R001
+    name: "业务高峰时间窗保护"
+    description: "工作日 09:00-18:00 (UTC+8) 不允许在 production 执行破坏性实验"
+    condition:
+      environment: "production"
+      time_window: { weekday: [1,2,3,4,5], hours: [9,18] }
+      fault_types: ["pod-delete", "node-drain", "network-partition"]
+    action: "deny"
+    severity: "critical"
+
+  - id: R002
+    name: "Namespace 白名单"
+    description: "只允许在指定 namespace 执行实验"
+    condition:
+      allowed_namespaces: ["petsite-staging", "petsite-canary", "chaos-sandbox"]
+    action: "deny_if_not_in_list"
+    severity: "critical"
+
+  - id: R003
+    name: "故障类型限制"
+    description: "禁止集群级故障注入（node-drain-all / cluster-shutdown / az-failure）"
+    condition:
+      blocked_fault_types: ["node-drain-all", "cluster-shutdown", "az-failure"]
+    action: "deny"
+    severity: "critical"
+
+  - id: R004
+    name: "爆炸半径限制"
+    description: "production 环境不允许 namespace 或 cluster 级别的爆炸半径"
+    condition:
+      environment: "production"
+      blocked_blast_radius: ["namespace", "cluster"]
+    action: "deny"
+    severity: "high"
+
+  - id: R005
+    name: "连续实验间隔"
+    description: "同一 service 的两次实验间隔不少于 30 分钟"
+    condition:
+      min_interval_minutes: 30
+      scope: "same_service"
+    action: "deny"
+    severity: "medium"
+
+  - id: R006
+    name: "活跃 Incident 保护"
+    description: "存在未关闭的 SEV-1/2 incident 时，不允许新实验"
+    condition:
+      active_incidents_severity: [1, 2]
+    action: "deny"
+    severity: "critical"
+
+  - id: R007
+    name: "单日实验次数上限"
+    description: "同一 service 每天最多 5 次实验"
+    condition:
+      max_daily_experiments: 5
+      scope: "same_service"
+    action: "deny"
+    severity: "medium"
+
+  - id: R008
+    name: "持续时间上限"
+    description: "单次实验持续时间不超过 600 秒"
+    condition:
+      max_duration_sec: 600
+    action: "deny"
+    severity: "high"
+
+  - id: R009
+    name: "Staging 宽松模式"
+    description: "staging 环境允许所有故障类型，但仍受持续时间和次数限制"
+    condition:
+      environment: "staging"
+    action: "allow_with_limits"
+    severity: "info"
+
+  - id: R010
+    name: "周末/节假日保护"
+    description: "周末和指定节假日不允许 production 实验"
+    condition:
+      environment: "production"
+      blocked_days: ["saturday", "sunday"]
+      blocked_dates: []
+    action: "deny"
+    severity: "high"
