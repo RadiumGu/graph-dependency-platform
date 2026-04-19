@@ -1,0 +1,44 @@
+[
+  {
+    "run": 1,
+    "recs": 5,
+    "latency_s": 53.3,
+    "cache_write": 5020,
+    "cache_read": 7933,
+    "token_usage": {
+      "input": 5,
+      "output": 2964,
+      "total": 15922,
+      "cache_read": 7933,
+      "cache_write": 5020
+    }
+  },
+  {
+    "run": 2,
+    "recs": 5,
+    "latency_s": 47.3,
+    "cache_write": 1970,
+    "cache_read": 10896,
+    "token_usage": {
+      "input": 105,
+      "output": 2666,
+      "total": 15637,
+      "cache_read": 10896,
+      "cache_write": 1970
+    }
+  },
+  {
+    "run": 3,
+    "recs": 5,
+    "latency_s": 45.3,
+    "cache_write": 1952,
+    "cache_read": 10998,
+    "token_usage": {
+      "input": 5,
+      "output": 2672,
+      "total": 15627,
+      "cache_read": 10998,
+      "cache_write": 1952
+    }
+  }
+]
