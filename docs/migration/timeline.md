@@ -12,11 +12,11 @@
 modules:
   - name: smart-query
     direct_file: rca/neptune/nl_query_direct.py
-    freeze_date: ~         # L1 POC 达标后由大乖乖填（Phase 2 Week 3）
-    delete_date: ~         # 冻结日 + 4 个月
+    freeze_date: 2026-04-22
+    delete_date: 2026-04-29   # 冻结一周（大乖乖指定）
     owner: "@programming-cat"
-    status: "active"
-    notes: "Phase 2 L1 POC 完成（2026-04-18）；direct 20/20, strands 19/20"
+    status: "frozen"
+    notes: "Phase 2 L1 POC 完成（2026-04-18）；direct 20/20, strands 19/20。2026-04-22 冻结，一周后解冻。"
 
   - name: hypothesis-agent
     direct_file: chaos/code/agents/hypothesis_direct.py
@@ -67,7 +67,7 @@ modules:
     notes: "Phase 3 最终模块；L1 Golden 2/2 both engines；8 tools + failure strategy + partial caching"
 
 tags:
-  last_direct_snapshot: ""      # Phase 2 开始前由大乖乖打 v-last-direct-YYYYMMDD
+  last_direct_snapshot: "v-last-direct-20260422"
   strands_only: ""              # Phase 4 结束时打 v-strands-only-YYYYMMDD
 
 phase_gates:
