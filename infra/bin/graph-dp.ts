@@ -3,6 +3,7 @@ import 'source-map-support/register';
 import * as cdk from 'aws-cdk-lib';
 import { NeptuneClusterStack } from '../lib/neptune-cluster-stack';
 import { NeptuneEtlStack } from '../lib/neptune-etl-stack';
+import { AlertBufferStack } from '../lib/alert-buffer-stack';
 
 const app = new cdk.App();
 
@@ -21,6 +22,12 @@ new NeptuneClusterStack(app, 'NeptuneClusterStack', {
 new NeptuneEtlStack(app, 'NeptuneEtlStack', {
   env,
   description: 'Neptune ETL Lambda functions - DeepFlow, AWS, CFN pipelines',
+});
+
+// --- Alert buffer + window flush ---
+new AlertBufferStack(app, 'AlertBufferStack', {
+  env,
+  description: 'Alert aggregation buffer (DynamoDB + window-flush Lambda + EventBridge Scheduler role)',
 });
 
 app.synth();
