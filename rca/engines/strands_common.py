@@ -47,11 +47,38 @@ def build_bedrock_model(
     return BedrockModel(**kwargs)
 
 
-# TODO(phase-2): OTel / CloudWatch 接入
-# 参考 experiments/strands-poc/spike.py 的 _LAST_CALLS hack；L1 要用 Strands 原生 callbacks。
+# OTel / CloudWatch 接入（2026-04-22 实装）
+# ADOT Collector 在 localhost:4318 接收 OTLP，导出到 X-Ray + CloudWatch Logs。
+# Strands StrandsTelemetry 负责 agent 内部 span；此处额外配 X-Ray ID generator
+# 确保 trace ID 格式兼容 X-Ray（前 8 hex = epoch seconds）。
 
 
 _TELEMETRY_STATE: dict = {"initialized": False}
+
+
+def _setup_xray_id_generator() -> None:
+    """注入 AWS X-Ray compatible trace ID generator 到全局 TracerProvider。
+
+    X-Ray 要求 trace ID 前 32 bit 是 unix timestamp，标准 OTel random ID 会被 X-Ray 丢弃。
+    必须在 TracerProvider 初始化前调用，或重新设置 provider。
+    """
+    try:
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.extension.aws.trace import AwsXRayIdGenerator  # type: ignore
+
+        current = trace.get_tracer_provider()
+        # 只在还没设过 provider 或者是 proxy 时替换
+        if not isinstance(current, TracerProvider):
+            provider = TracerProvider(id_generator=AwsXRayIdGenerator())
+            trace.set_tracer_provider(provider)
+    except ImportError:
+        # opentelemetry-sdk-extension-aws 未装；X-Ray 可能丢 trace 但不致命
+        import logging
+        logging.getLogger(__name__).warning(
+            "aws xray id generator not available; traces may not appear in X-Ray")
+    except Exception:
+        pass  # best-effort
 
 
 def ensure_telemetry() -> None:
@@ -60,14 +87,13 @@ def ensure_telemetry() -> None:
     环境变量：
       STRANDS_TELEMETRY=off    → noop（默认）
       STRANDS_TELEMETRY=console → 开启 ConsoleSpanExporter（日志可见）
-      STRANDS_TELEMETRY=otlp    → 开启 OTLPSpanExporter
-        目标端点由标准 OTEL_EXPORTER_OTLP_ENDPOINT 、
-        OTEL_EXPORTER_OTLP_HEADERS 控制（ADOT / CloudWatch Agent / 第三方均可）。
+      STRANDS_TELEMETRY=otlp    → 开启 OTLPSpanExporter → ADOT → X-Ray + CloudWatch
+        目标端点由标准 OTEL_EXPORTER_OTLP_ENDPOINT 控制（默认 http://localhost:4318）。
 
     CloudWatch 接法：
-      1. 单独跑 aws-otel-collector / ADOT，配置 OTLP→CloudWatch Logs/X-Ray exporter；
-      2. STRANDS_TELEMETRY=otlp + OTEL_EXPORTER_OTLP_ENDPOINT 指向 collector。
-      通过标准 OTLP pipe 解耦，无需特别 CloudWatch adapter。
+      1. ADOT Collector (Docker) 监听 :4318，配置 awsxray + awsemf exporter；
+      2. STRANDS_TELEMETRY=otlp 即可，无需额外 CloudWatch adapter。
+      3. X-Ray console → Service Map / Traces 可查 Strands agent 调用链。
     """
     if _TELEMETRY_STATE["initialized"]:
         return
@@ -76,6 +102,10 @@ def ensure_telemetry() -> None:
         _TELEMETRY_STATE["initialized"] = True
         return
     try:
+        # X-Ray ID generator 必须在 exporter setup 之前
+        if mode == "otlp":
+            _setup_xray_id_generator()
+
         from strands.telemetry import StrandsTelemetry  # type: ignore
         st = StrandsTelemetry()
         if mode == "console":

@@ -1,0 +1,39 @@
+## ADOT Collector config — receives OTLP from Strands agents, exports to CloudWatch X-Ray + Logs
+## Ref: https://aws-otel.github.io/docs/getting-started/cloudwatch-metrics
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  batch:
+    timeout: 5s
+    send_batch_size: 256
+
+exporters:
+  awsxray:
+    region: ap-northeast-1
+    # Uses default credential chain (instance profile / env vars)
+
+  awsemf:
+    region: ap-northeast-1
+    namespace: "GraphDP/StrandsOTel"
+    log_group_name: "/graphdp/strands/traces"
+    log_retention: 30
+    dimension_rollup_option: "NoDimensionRollup"
+
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [awsxray, debug]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [awsemf, debug]
