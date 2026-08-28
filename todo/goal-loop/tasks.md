@@ -574,34 +574,63 @@ T-091 / T-092 / T-093 / T-094)。
 
 ## 阶段 X — 遗留欠项(可穿插)
 
-### T-090 · 实现 `generate_group_report` · `todo`
+### T-090 · 实现 `generate_group_report` · `done`
 
-`window_flush_handler` 调用了**不存在的函数名**,靠 fallback 降级到
-`generate_rca_report()` 才没崩:
+`window_flush_handler:153` 调用了**不存在的函数名**,靠 fallback 降级到
+`generate_rca_report()` 才没崩。意味着"按 EventGroup 聚合出报告"这条路径
+**从未实现** —— 聚合做到了,聚合后的联合分析没做到,削弱了告警聚合一半的价值。
+
+**实现方式**:给 `generate_rca_report` 加可选 `group_context` 注入点
+(`None` 时行为与原先完全一致),而非复制那 100 行数据装配与 Bedrock 调用。
+
+**增量价值定位为「传播时序 + 拓扑印证」** —— 单条告警看不出传播方向,
+多条告警的先后顺序配合拓扑才能判断谁是源头:
 
 ```
-AttributeError: module 'core.graph_rag_reporter' has no attribute
-'generate_group_report'. Did you mean: 'generate_rca_report'?
-[WARNING] generate_group_report degraded to generate_rca_report() for <group_id>
+[告警时序（按发生时间排序）]
+  1. [P1] payforadoption 5XX=42.0(阈值 5.0) @ 10:30:00Z — 最早
+  2. [P1] petsite        5XX=42.0(阈值 5.0) @ 10:30:06Z — 晚 6s
+  3. [P1] petsearch      5XX=42.0(阈值 5.0) @ 10:30:20Z — 晚 20s
+
+[拓扑印证]
+  最早告警服务: petsite   其当前活跃下游: ['petsearch']
+  ✅ 时序与拓扑一致（petsite 在上游）: ['petsearch']
 ```
 
-意味着"**按 EventGroup 聚合出报告**"这条路径**从未实现** —— 多条告警聚合之后,
-报告仍是按单点逻辑生成的。这削弱了告警聚合(Fix C)的一半价值:
-聚合做到了,聚合后的联合分析没做到。
+**拓扑印证用 `kind='live'` 而非 `'dynamic'`**,实测两个场景都判对:
+
+| 场景 | 输出 |
+|---|---|
+| petsite 先告警,petsearch 后(活跃边) | ✅ 时序与拓扑一致 |
+| 已缩容到零的 gateway-service 先告警 | ⚠️ 拓扑无法解释,提示可能是共因故障 |
+
+场景二是关键:系统**不会顺着时序错误推断传播方向**,这正是 `live` 过滤的价值落地。
+
+prompt 相应要求模型回答"最早的告警是否就是源头、拓扑能否解释顺序、
+时序与拓扑是否矛盾",返回 JSON 增加 `propagation_analysis` 字段。
+拓扑查询失败时本节优雅跳过,不让整份报告生成不出来。
+
+- 2026-08-28T18:20Z cycle-10: 实现并实测两个场景,commit `43a3355`
 
 ---
 
-### T-091 · 修 `K8S_NAMESPACE` 默认值 · `todo`
+### T-091 · 修 `K8S_NAMESPACE` 默认值 · `done`
 
-`rca/actions/action_executor.py:33` 默认 `'default'`,
-但服务实际在 `petadoptions`(另有 `awesomeshop` 第二个应用,其 6 个 Deployment
-副本数当前全为 0)。`profiles/petsite.yaml:135` 有 `namespace: "petadoptions"` 但代码未读。
+`rca/actions/action_executor.py` 默认 `'default'`,但服务实际在 `petadoptions`。
+后果:EKS RBAC 401 已于 cycle 早期修复,但重启动作仍会去错的命名空间找 Deployment。
 
-后果:EKS RBAC 401 已于 2026-08-28 修复(access entry + ClusterRole `rca-agent`),
-但重启动作仍会去错的命名空间找 Deployment。
+**过程中修正一处自己的假设**:先按 `profile['k8s']['namespace']` 取,实测返回
+`None` —— profile 的顶层键是 **`kubernetes`** 而非 `k8s`
+(另有 `chaos.default_namespace` 也是 `petadoptions`,已作为次级回退)。
+改对后实测取到 `petadoptions`。
 
-**注意**:存在两个应用命名空间,单一 `K8S_NAMESPACE` 是设计局限,
-应考虑按服务从 profile 取。
+取值顺序:环境变量 > profile > `'default'`。
+
+**已知局限(记为后续项)**:本项目有**两个**应用命名空间
+(`petadoptions` 与 `awesomeshop`),而本模块只有单一 `K8S_NAMESPACE`。
+真正的解法是按服务从 profile 取服务→命名空间映射。
+
+- 2026-08-28T18:20Z cycle-10: 改为从 profile 取,实测 petadoptions
 
 ---
 
@@ -720,3 +749,13 @@ PR 正文已备在 `todo/goal-loop/PR_BODY.md`。
   在原开发机之外无法收集**,已改为从 `__file__` 推导 —— 印证了早前审计说的
   26 处开发机路径硬编码。剩余 20+ 测试文件记为 T-094。
   按 north_star 此处本应 stop,但用户指示「把所有任务都完成」覆盖该条件,循环继续
+- 2026-08-28T18:12Z cycle-9 T-093: 11 个主题化 commit(49 文件 +4998/-446)。
+  推送远端被 Kiro Crew 安全策略拦截(**非用户取消**),推送与开 PR 需用户执行。
+  推送前检查全过:机密扫描未发现、cdk.json 无 slackWebhookUrl、工作树干净、
+  外部研究归档未入库、全量 .py 语法通过。PR 正文备在 goal-loop/PR_BODY.md
+- 2026-08-28T18:20Z cycle-10 T-090+T-091: 实现 `generate_group_report`
+  (此前该函数并不存在,靠 fallback 掩盖),定位其增量价值为「传播时序 + 拓扑印证」;
+  拓扑印证用 kind='live',实测已下线服务先告警时会输出「拓扑无法解释、
+  可能是共因故障」而非顺着时序错判传播方向。
+  T-091 过程中修正自己的假设:profile 顶层键是 `kubernetes` 不是 `k8s`,
+  先按 k8s 取返回 None,改对后取到 petadoptions
