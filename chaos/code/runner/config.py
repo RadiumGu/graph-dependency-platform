@@ -33,7 +33,13 @@ except Exception:
     _DEFAULT_NEPTUNE_HOST = "petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com"
     _DEFAULT_NEPTUNE_PORT = "8182"
 
-NEPTUNE_HOST     = os.environ.get("NEPTUNE_HOST", _DEFAULT_NEPTUNE_HOST)
+# 环境变量名分裂:全仓 7 处用 NEPTUNE_ENDPOINT,只有本文件用 NEPTUNE_HOST。
+# 后果是设了 NEPTUNE_ENDPOINT 的调用方(包括测试套件)在这里取不到值,
+# 落到 profile 的 '${NEPTUNE_ENDPOINT}' 占位符上 —— 展开修好之前会直接
+# DNS 失败。两个名字都认,NEPTUNE_HOST 优先(向后兼容既有部署)。
+NEPTUNE_HOST     = (os.environ.get("NEPTUNE_HOST")
+                    or os.environ.get("NEPTUNE_ENDPOINT")
+                    or _DEFAULT_NEPTUNE_HOST)
 NEPTUNE_PORT     = int(os.environ.get("NEPTUNE_PORT", _DEFAULT_NEPTUNE_PORT))
 NEPTUNE_ENDPOINT = f"https://{NEPTUNE_HOST}:{NEPTUNE_PORT}"
 

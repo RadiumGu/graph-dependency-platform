@@ -7,49 +7,13 @@ Tests: S3-09 ~ S3-11
 import base64
 import datetime
 import os
-import sys
 from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-from paths import RCA_DIR
-
-# ── 包名冲突隔离 ──────────────────────────────────────────────────────────────
-# 仓库里有**两个**顶层名同为 `collectors` 的包:
-#   rca/collectors/                    aws_probers / infra_collector / eks_auth
-#   infra/lambda/etl_aws/collectors/   ec2 / eks / rds / alb / data_stores …
-#
-# test_12_unit_etl_aws.py 刻意把 etl_aws 提到 sys.path[0] 让它**遮蔽** rca/collectors,
-# 并清掉 sys.modules 里的 collectors* 缓存。那之后整个 session 的
-# sys.modules['collectors'] 都是 etl_aws 那个包,本文件想要的
-# rca/collectors/infra_collector 便报 ModuleNotFoundError —— 实测 26 个 error。
-#
-# 单独跑本文件不会复现（那时没人遮蔽过），属**收集顺序依赖**的全局状态泄漏,
-# 在套件长期无法运行期间一直不可见。
-#
-# 本文件的 import 都写在测试方法体内(惰性),故用 autouse fixture 在每个测试前
-# 把环境还原成"rca 优先"。这是局部对症修法;根治要给其中一个包改名
-# (见 tasks.md 的 T-097)。
-@pytest.fixture(autouse=True)
-def _prefer_rca_collectors():
-    """确保 `collectors` 解析到 rca/collectors,不受其他测试文件遮蔽影响。"""
-    saved_path = list(sys.path)
-    saved_mods = {k: v for k, v in sys.modules.items()
-                  if k == 'collectors' or k.startswith('collectors.')}
-    for k in saved_mods:
-        del sys.modules[k]
-    if RCA_DIR in sys.path:
-        sys.path.remove(RCA_DIR)
-    sys.path.insert(0, RCA_DIR)
-    try:
-        yield
-    finally:
-        # 还原,避免本文件反过来污染后续测试
-        for k in [k for k in sys.modules
-                  if k == 'collectors' or k.startswith('collectors.')]:
-            del sys.modules[k]
-        sys.modules.update(saved_mods)
-        sys.path[:] = saved_path
+# `collectors` 的解析由 conftest.py 的 _isolate_collectors_package fixture 统一保证
+# —— 仓库有两个同名 collectors 包(rca 与 etl_aws),test_12 会在收集期把 etl_aws
+# 顶到 sys.path[0],本文件需要的是 rca 那个。背景见 conftest 中该 fixture 的注释。
 
 
 # ─── S3-09: infra_collector ──────────────────────────────────────────────────

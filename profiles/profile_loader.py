@@ -5,10 +5,14 @@ profiles/profile_loader.py — Environment Profile 加载器
 所有 planner/ 模块中的硬编码值都从这里读取。
 """
 
+import logging
 import os
+import re
 from typing import Any, Optional
 
 import yaml
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_PROFILE = os.path.join(os.path.dirname(__file__), "petsite.yaml")
 
@@ -82,8 +86,15 @@ class EnvironmentProfile:
 
     @property
     def dns_hosted_zone_id(self) -> str:
-        """Route 53 Hosted Zone ID。"""
-        return self._data.get("dns", {}).get("hosted_zone_id", "${ZONE_ID}")
+        """Route 53 Hosted Zone ID。
+
+        走 get() 以便展开 profile 里的 ``${ROUTE53_ZONE_ID}`` 占位符。
+        注意此前这里的兜底默认写的是 ``"${ZONE_ID}"`` —— 与 profile 中实际的
+        ``${ROUTE53_ZONE_ID}`` **名字都不一致**,且两条路径都只会交出占位符原文。
+        现在环境变量未设置时返回空串,调用方能用 falsy 判断,不会拿一个
+        看着像 zone id 的字符串去调 Route 53。
+        """
+        return self.get("dns.hosted_zone_id", "") or ""
 
     @property
     def dns_primary_record(self) -> str:
@@ -151,12 +162,55 @@ class EnvironmentProfile:
         ck = self._data.get("neptune", {}).get("complex_keywords", {}) or {}
         return {"zh": list(ck.get("zh") or []), "en": list(ck.get("en") or [])}
 
+    _PLACEHOLDER_RE = re.compile(r'^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$')
+
+    @classmethod
+    def _resolve_placeholder(cls, value: Any, default: Any, dotted_key: str) -> Any:
+        """把 ``${ENV_VAR}`` 占位符换成环境变量的值。
+
+        2026-08-28 新增。此前 profile_loader **完全没有展开逻辑**,而
+        profiles/petsite.yaml 里有 5 个 ``${}`` 占位符
+        (``neptune.endpoint``、``kubernetes.cluster_name``、
+        ``kubernetes.context_source``/``context_target``、dns 的 zone id),
+        于是消费方拿到的是**字面字符串**。实测后果:
+
+            chaos/code/runner/config.py 读 ``neptune.endpoint``
+              → 得到 '${NEPTUNE_ENDPOINT}'
+              → URL 变成 https://${NEPTUNE_ENDPOINT}:8182
+              → urllib.error.URLError: [Errno -2] Name or service not known
+              → chaos 写图谱全部失败(实测 14 个测试因此红)
+
+        这不只是测试问题:profile 自称"唯一源头",但这些键对任何消费方
+        都是不可用的占位符 —— 要么静默拿到垃圾,要么必须另设环境变量,
+        那 profile 对这些键就只是装饰。
+
+        取不到环境变量时返回**调用方的 default**,而不是把 ``${VAR}`` 原文
+        交出去 —— 原文一定会在下游造成更难定位的错误(DNS 失败、
+        kubectl context 不存在),而 default 至少是调用方预期过的值。
+        """
+        m = cls._PLACEHOLDER_RE.match(value) if isinstance(value, str) else None
+        if not m:
+            return value
+        env_name = m.group(1)
+        env_val = os.environ.get(env_name)
+        if env_val:
+            return env_val
+        logger.warning(
+            "profile 键 %s 的值是未展开的占位符 ${%s},且该环境变量未设置;"
+            "改用调用方 default=%r。请设置 %s 或在 profile 中写入实际值。",
+            dotted_key, env_name, default, env_name,
+        )
+        return default
+
     def get(self, dotted_key: str, default: Any = None) -> Any:
         """点分路径访问。
 
+        值形如 ``${ENV_VAR}`` 时会用环境变量展开;环境变量未设置则返回
+        ``default``(不会把占位符原文交给调用方)。
+
         Args:
             dotted_key: 如 ``dns.ttl_normal``。
-            default: 未找到时返回的默认值。
+            default: 未找到、或占位符无法展开时返回的默认值。
 
         Returns:
             配置值或默认值。
@@ -164,6 +218,7 @@ class EnvironmentProfile:
         Example::
 
             profile.get("dns.ttl_normal", 300)
+            profile.get("neptune.endpoint")  # ${NEPTUNE_ENDPOINT} → 环境变量值
         """
         keys = dotted_key.split(".")
         node: Any = self._data
@@ -174,4 +229,4 @@ class EnvironmentProfile:
                 return default
             if node is None:
                 return default
-        return node
+        return self._resolve_placeholder(node, default, dotted_key)
