@@ -25,3 +25,7 @@ infra/cdk.context.json
 *.log
 /tmp_*
 
+
+# 外部研究归档（可从 s3://m2m-926093770964-ap-northeast-1/ 重新获取，不入库）
+/graph-dep-research-20260531.tar.gz
+/todo/graph-dep-research-20260531/
