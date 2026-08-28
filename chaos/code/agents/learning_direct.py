@@ -507,8 +507,13 @@ JSON 数组，每个元素: {{"priority": 1, "category": "coverage|resilience|pr
         updates = []
         now = datetime.now(timezone.utc).isoformat()
         for svc, stats in report.service_stats.items():
-            updates.append(GraphUpdate(svc, "chaos_resilience_score", round(stats.pass_rate / 100, 2)))
-            updates.append(GraphUpdate(svc, "last_tested_at", now))
+            # 属性名与量纲统一到 runner/graph_feedback.py 的写法：
+            # 该文件写 resilience_score 且是 0-100 整数，活图里已有 6 个节点带它。
+            # 这里原先写 chaos_resilience_score 且是 0-1 浮点（pass_rate/100），
+            # 与 A 既不同名也不同量纲，导致读取方 neptune_helpers.query_learning_nodes
+            # 只读到 B 的名字、而 B 从未真正落数据，每次都拿 -1 兜底。
+            updates.append(GraphUpdate(svc, "resilience_score", round(stats.pass_rate)))
+            updates.append(GraphUpdate(svc, "last_chaos_test", now))
             updates.append(GraphUpdate(svc, "test_coverage", ",".join(stats.tested_domains)))
         for fp in report.repeated_failures:
             updates.append(GraphUpdate(fp.service, "weakness_pattern", f"{fp.fault_type}:fail_count={fp.failure_count}"))
