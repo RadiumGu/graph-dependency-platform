@@ -13,11 +13,22 @@ from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
 
-REGION = os.environ.get('REGION', 'ap-northeast-1')
+from shared import get_region
+REGION = get_region()
+
+# ── 因果先验接入评分的调参 ──────────────────────────────────────────────────
+# 半衰期需与 incident_writer.CAUSAL_HALF_LIFE_DAYS 一致（同一个环境变量），
+# 否则日志里报的半衰期与实际写入时用的不同源，排查时会误导。
+CAUSAL_HALF_LIFE_DAYS = float(os.environ.get('CAUSAL_HALF_LIFE_DAYS', '30'))
+# 衰减后样本权重门槛。低于此值不计分并打日志说明 —— 小样本比率是噪声，
+# 把噪声喂进评分正是本项目一直在清除的那类"无法核实的信号"。
+# 取 3.0 而非原注释里的 "100+ 真实告警"：后者以当前故障频率永远达不到，
+# 等于让机制永久休眠；3.0 在半衰期 30 天下约等于"近一两个月有 3 次同类判定"。
+CAUSAL_MIN_SAMPLE = float(os.environ.get('CAUSAL_MIN_SAMPLE', '3.0'))
 CH_HOST = os.environ.get('CLICKHOUSE_HOST', '')
 CH_PORT = int(os.environ.get('CLICKHOUSE_PORT', '8123'))
 
-from config import CANONICAL as DEPLOYMENT_TO_SVC
+from config import CANONICAL as DEPLOYMENT_TO_SVC, NEPTUNE_TO_DEPLOYMENT
 
 def _ch_query(sql: str) -> list:
     """执行 ClickHouse 查询，返回行列表"""
@@ -39,14 +50,8 @@ def step1_deepflow_errors(affected_service: str, window_minutes: int = 30) -> li
     Step 1: 查 DeepFlow，找故障窗口内出现 5xx 的服务及最早时间
     返回: [{'service': ..., 'first_error': ..., 'error_count': ..., 'error_rate': ...}]
     """
-    # 服务名 → request_domain 前缀映射
-    svc_domain_map = {
-        'petsite':            'service-petsite',
-        'petsearch':          'search-service',
-        'payforadoption':     'pay-for-adoption',
-        'petlistadoptions':   'list-adoptions',
-        'petadoptionshistory': 'pethistory-service',
-    }
+    # 服务名 → request_domain 前缀映射（从 config 派生）
+    svc_domain_map = {v: k for k, v in NEPTUNE_TO_DEPLOYMENT.items()}
     
     sql = f"""
 SELECT 
@@ -445,18 +450,64 @@ def step3c_log_sampling(top_candidates: list, window_minutes: int = 5) -> dict:
 
     return results
 
+def _get_causal_prior(upstream: str, affected_service: str):
+    """读取 upstream→affected_service 边上的因果先验。
+
+    Returns:
+        (rate, sample_weight, lift) 或 None（边不存在 / 无先验数据）。
+        lift 为 None 表示无定义（该上游从未被判为任何故障的根因）。
+
+    刻意只读**活跃**边:已下线服务的历史根因判定不能用来解释现在的故障。
+    这与 incident_writer 写入侧的过滤保持一致 —— 两侧不一致会让读到的
+    分母与写入时的分母不同源。
+    """
+    from neptune import neptune_queries as nq
+    from neptune import neptune_client as nc
+
+    rows = nc.results("""
+    MATCH (u:Microservice {name: $up})-[e:Calls]->(n:Microservice {name: $svc})
+    WHERE e.active = true OR e.active IS NULL
+    RETURN e.prior_root_cause_rate AS rate,
+           e.prior_sample_weight AS sample_w,
+           e.prior_lift AS lift
+    """, {'up': upstream, 'svc': affected_service})
+    if not rows:
+        return None
+    r = rows[0]
+    rate = r.get('rate')
+    if rate is None:
+        return None
+    sample_w = r.get('sample_w') or 0.0
+    lift = r.get('lift')
+    # 写入侧用 -1.0 表示 lift 无定义（Neptune 属性不能存 None）
+    if lift is not None and float(lift) < 0:
+        lift = None
+    return (float(rate), float(sample_w),
+            float(lift) if lift is not None else None)
+
+
 def step4_score(error_services: list, cloudtrail_changes: list,
                 graph_candidates: list, affected_service: str,
                 temporal_info: dict = None,
                 l4_anomalies: list = None) -> list:
     """
     Step 4: 置信度评分
-    
-    评分维度（共100分）：
-    - 时间线最早出现异常（L7 或 L4）: +40分
-    - 有近期配置变更: +30分  
-    - 无上游故障（自身是链路起点）: +20分
-    - 历史曾发生同类故障: +10分（Phase 4 实现）
+
+    评分维度（原始分相加最高 245，末尾 min(score, 100) 截断 → confidence = score/100）：
+    - 时间线最早出现异常（L7 或 L4）: +40
+    - 有近期配置变更: +30
+    - 无上游故障（自身是链路起点）: +20
+    - 图遍历发现基础设施层故障（EC2 停止/终止）: +40
+    - 历史曾发生同类故障: +10
+    - 因果先验（曾被判定为该服务故障根因的衰减频率）: +0~10
+    - 时序验证一致（first_error × 图路径深度）: +0~10
+    - L4 SYN 重传 / TCP RST / 超时: +40 / +15 / +10
+    - Layer2 AWS probers 异常: 见 step5
+
+    ⚠️ 原文档写「共100分」与实现不符（2026-08-28 更正）。原始分上限远超 100，
+    截断的后果是**多个候选可能一起饱和在 100，排序区分度丢失**。
+    典型场景（40 最早 + 20 无上游 + 10 历史 = 70）不饱和，
+    但基础设施故障或 L4 强信号同时命中时会饱和。已记为 T-032。
     """
     if l4_anomalies is None:
         l4_anomalies = []
@@ -548,6 +599,47 @@ def step4_score(error_services: list, cloudtrail_changes: list,
                 evidence.append(f"历史上曾发生 {len(history)} 次类似故障（最近：{history[0].get('root_cause','?')}）")
         except Exception:
             pass
+
+        # 因果先验：该候选曾被判定为 affected_service 故障根因的衰减频率 +0~10
+        # 2026-08-28 接入。此前 prior_root_cause_rate（旧名 causal_weight）
+        # **只有写入方、零读取方** —— 与 cycle-1 查出的 active/last_seen
+        # 写了没人读是同一缺陷类型。
+        #
+        # 三条刻意的约束:
+        #   1. 上限 10 分 —— 它是小样本相关统计，只该做同分候选间的排序微调，
+        #      不该盖过时间线(+40)或基础设施故障(+40)这类直接证据。
+        #   2. 样本门槛 CAUSAL_MIN_SAMPLE —— 衰减后样本权重不足时**不计分**，
+        #      并打 info 日志说明为何不计，避免"静默地什么都没做"。
+        #   3. 需要 lift > 1 —— lift <= 1 说明该上游在所有故障里都被判为根因，
+        #      对本次故障没有特异性信息（基线率混杂）。
+        try:
+            prior = _get_causal_prior(svc, affected_service)
+            if prior is not None:
+                rate, sample_w, lift = prior
+                if sample_w < CAUSAL_MIN_SAMPLE:
+                    logger.info(
+                        f"因果先验不计分: {svc}→{affected_service} "
+                        f"衰减样本权重 {sample_w:.2f} < 门槛 {CAUSAL_MIN_SAMPLE}"
+                    )
+                elif lift is not None and lift <= 1.0:
+                    logger.info(
+                        f"因果先验不计分: {svc}→{affected_service} "
+                        f"lift={lift:.2f} <= 1（无特异性）"
+                    )
+                elif rate > 0:
+                    bonus = min(10, int(round(rate * 10)))
+                    if bonus > 0:
+                        score += bonus
+                        evidence.append(
+                            f"因果先验：该服务曾被判定为 {affected_service} 故障根因的"
+                            f"衰减频率 {rate:.0%}"
+                            f"（半衰期 {CAUSAL_HALF_LIFE_DAYS:.0f} 天，"
+                            f"样本权重 {sample_w:.1f}"
+                            + (f"，lift {lift:.1f}" if lift is not None else "")
+                            + f"）+{bonus}分"
+                        )
+        except Exception as e:
+            logger.warning(f"因果先验读取失败（non-fatal）: {e}")
 
         # 时序验证：DeepFlow first_error × 图路径深度一致性 +0~10
         if temporal_info and svc in temporal_info:
@@ -663,20 +755,25 @@ def analyze(affected_service: str, classification: dict) -> dict:
     # Step 3d: Layer 2 — AWS Service Probers（插件化多服务探测）
     aws_probe_results = []
     try:
-        from collectors.aws_probers import run_all_probes, total_score_delta
+        from engines.factory import make_layer2_engine
+        layer2_engine = make_layer2_engine()
         # 告知 EC2ASGProbe 是否 Neptune 图层已找到基础设施故障（避免重复）
         neptune_found_infra = any(c.get('infra_fault') for c in candidates)
         probe_signal = {**classification.get('signal', {}),
                         'neptune_infra_fault': neptune_found_infra}
-        aws_probe_results = run_all_probes(probe_signal, affected_service, timeout_sec=12)
+        layer2_result = layer2_engine.run_probes(probe_signal, affected_service,
+                                                 timeout_sec=60 if layer2_engine.ENGINE_NAME == 'strands' else 12)
+        aws_probe_results = layer2_result.get('probe_results', [])
         # 将 probe score 叠加到 top candidate
-        probe_score_bonus = total_score_delta(aws_probe_results)
+        probe_score_bonus = layer2_result.get('score_delta', 0)
         if probe_score_bonus > 0 and scored:
             scored[0]['score'] = min(scored[0]['score'] + probe_score_bonus, 100)
             scored[0]['confidence'] = round(scored[0]['score'] / 100, 2)
             scored[0]['evidence'].append(
                 f"Layer2 AWS probers detected anomalies (+{probe_score_bonus} pts): "
-                + "; ".join(r.summary for r in aws_probe_results if not r.healthy)
+                + "; ".join(r.get('summary', '') if isinstance(r, dict) else r.summary
+                             for r in aws_probe_results
+                             if (not r.get('healthy', True) if isinstance(r, dict) else not r.healthy))
             )
         logger.info(f"Step3d AWS probers: {len(aws_probe_results)} results, "
                     f"bonus={probe_score_bonus}")
@@ -694,95 +791,16 @@ def analyze(affected_service: str, classification: dict) -> dict:
         'analysis_time_sec': elapsed,
         'log_samples': log_samples,
         'aws_probe_results': [
-            {'service': r.service_name, 'healthy': r.healthy,
-             'summary': r.summary, 'evidence': r.evidence}
+            {'service': r.get('service_name', '') if isinstance(r, dict) else r.service_name,
+             'healthy': r.get('healthy', True) if isinstance(r, dict) else r.healthy,
+             'summary': r.get('summary', '') if isinstance(r, dict) else r.summary,
+             'evidence': r.get('evidence', []) if isinstance(r, dict) else r.evidence}
             for r in aws_probe_results
         ],
         'top_candidate': scored[0] if scored else None,
     }
     
     logger.info(f"RCA complete in {elapsed}s: {json.dumps(result, ensure_ascii=False)[:300]}")
-    return result
-
-
-def analyze_group(group: 'EventGroup', classification: dict) -> dict:
-    """对 EventGroup 执行多服务视角 RCA 分析。
-
-    在单服务 analyze() 基础上，汇集分组内所有告警对应服务的信息，
-    得到更完整的根因候选列表和传播路径。
-
-    保持现有 analyze() 不变，本方法是独立的新增方法。
-
-    Args:
-        group: topology_correlator.EventGroup 对象
-        classification: classify_group() 或 classify() 的返回值
-
-    Returns:
-        与 analyze() 格式相同的分析结果字典，新增 group_id 和 multi_service_context 字段
-    """
-    svc = group.root_candidate_service
-    logger.info(
-        f"analyze_group: group={group.group_id} root_svc={svc} "
-        f"evidence={len(group.evidence_alerts)} alerts"
-    )
-
-    # Step 1: 以根因候选服务为主，执行标准分析
-    base_result = analyze(svc, classification)
-
-    # Step 2: 收集分组内所有服务的 DeepFlow 数据（多服务视角）
-    evidence_svcs = list({
-        getattr(a, 'service_name', '') for a in group.evidence_alerts
-        if getattr(a, 'service_name', '')
-    })
-    all_svcs = list({svc} | set(evidence_svcs))
-
-    multi_context: list[dict] = []
-    for ev_svc in evidence_svcs:
-        try:
-            ev_errors = step1_deepflow_errors(ev_svc, window_minutes=30)
-            multi_context.append({
-                'service': ev_svc,
-                'error_count': sum(e.get('error_count', 0) for e in ev_errors),
-                'max_error_rate': max((e.get('error_rate_pct', 0) for e in ev_errors), default=0),
-                'correlation_type': group.correlation_type,
-            })
-        except Exception as e:
-            logger.warning(f"analyze_group: DeepFlow query failed for {ev_svc}: {e}")
-
-    # Step 3: 补充 Neptune 多服务拓扑（blast_radius 中已有的服务）
-    blast_svcs = group.blast_radius or []
-    if blast_svcs:
-        try:
-            additional_errors = [
-                s for s in blast_svcs
-                if s and s not in all_svcs
-            ]
-            if additional_errors:
-                multi_context.append({
-                    'service': ','.join(additional_errors[:5]),
-                    'note': 'blast_radius_services (from Neptune)',
-                    'error_count': 0,
-                    'max_error_rate': 0,
-                    'correlation_type': 'blast_radius',
-                })
-        except Exception as e:
-            logger.warning(f"analyze_group: blast_radius context failed: {e}")
-
-    # 合并结果
-    result = {
-        **base_result,
-        'group_id': group.group_id,
-        'multi_service_context': multi_context,
-        'evidence_services': evidence_svcs,
-        'blast_radius_services': blast_svcs,
-        'correlation_type': group.correlation_type,
-    }
-
-    logger.info(
-        f"analyze_group: group={group.group_id} "
-        f"top_candidate={result.get('top_candidate', {}).get('service', '?')} "
-        f"multi_context={len(multi_context)}"
-    )
     return result
 
 
