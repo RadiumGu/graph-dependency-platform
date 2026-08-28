@@ -686,16 +686,32 @@ def step4_score(error_services: list, cloudtrail_changes: list,
                 score += 10
                 evidence.append(f"L4 交叉验证：集群有 {total_syn} 次 SYN 重传")
         
-        score = min(score, 100)  # 置信度上限 100%
+        # 置信度截断到 100%，但**保留原始分用于排序**。
+        # 2026-08-28:此前 score 先被截断再用于 results.sort()，于是原始分
+        # 110 与 150 的两个候选都变成 100，**排序区分度丢失** ——
+        # 而排在第一位的候选就是 DecisionEngine 拿去决策、
+        # action_executor 拿去执行动作的那一个。
+        #
+        # 生产数据佐证:126 个有置信度记录的 Incident 里 **50 个(40%) >= 1.0**。
+        # 这不是理论问题。
+        #
+        # 刻意**不**重新归一各维度权重:band 阈值(high>=80 / medium>=50)是
+        # 按现有分值校准的，重新加权会改变所有历史评分的相对关系，
+        # 进而改变 auto / semi_auto 判定。保留原始分排序是零风险的最小修法。
+        raw_score = score
+        score = min(score, 100)
         results.append({
             'service': svc,
             'confidence': round(score / 100, 2),
             'score': score,
+            'raw_score': raw_score,   # 未截断，用于排序与排查
             'evidence': evidence,
             'error_count': svc_info['error_count'],
         })
     
-    results.sort(key=lambda x: x['score'], reverse=True)
+    # 按**未截断**的原始分排序 —— 用截断后的分数排序会让饱和候选顺序退化为
+    # 字典插入顺序，即取决于 DeepFlow 返回的服务次序，而非证据强度。
+    results.sort(key=lambda x: x.get('raw_score', x['score']), reverse=True)
     return results
 
 def analyze(affected_service: str, classification: dict) -> dict:

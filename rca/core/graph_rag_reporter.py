@@ -604,6 +604,27 @@ def generate_rca_report(
             except ValueError:
                 result['confidence'] = 0
 
+        # 钳制到 [0, 100]。2026-08-28 新增。
+        # 提示词要求 confidence 等于 confidence_breakdown 四项之和
+        # （40+30+20+10 = 100 上限），但 LLM 不可靠地遵守 ——
+        # 生产图谱里实测存在 root_cause_confidence = **1.1** 的 Incident，
+        # 即 LLM 返回了 110 而 decision_engine 的 `rag_conf / 100.0`
+        # 没有上界，直接变成 1.1。
+        #
+        # 越界时**打 warning**而不是静默修正:静默修正会让我们永远不知道
+        # 模型在违反自己的输出契约，而那本身是需要调提示词的信号。
+        try:
+            raw_conf = float(result.get('confidence', 0) or 0)
+        except (TypeError, ValueError):
+            raw_conf = 0.0
+        if raw_conf < 0 or raw_conf > 100:
+            logger.warning(
+                f"LLM 返回的 confidence 越界（{raw_conf}），已钳制到 [0,100]。"
+                f"提示词要求它等于 confidence_breakdown 四项之和（≤100），"
+                f"越界说明模型未遵守输出契约"
+            )
+        result['confidence'] = max(0.0, min(100.0, raw_conf))
+
         result['source'] = 'graph_rag_bedrock'
         logger.info(f"Graph RAG report: confidence={result.get('confidence')}, root_cause={result.get('root_cause','')[:60]}")
         return result
