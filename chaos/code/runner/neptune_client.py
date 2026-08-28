@@ -33,6 +33,29 @@ _ssl_ctx.check_hostname = False
 _ssl_ctx.verify_mode = ssl.CERT_NONE
 
 
+_boto_session = None
+
+
+def _get_frozen_creds():
+    """复用 boto3 Session，但每次调用重新冻结凭证。
+
+    2026-08-28:原先每次调用都 `boto3.Session().get_credentials()
+    .get_frozen_credentials()`。Session 构造昂贵 —— 实测每次约 9.7 ms，
+    且生产 ETL 日志里同一次调用（同一 request ID）2 秒内出现 4 次
+    「Found credentials in environment variables」，是已确认的实况开销。
+    按 RCA 单次运行 15-30 次查询估，纯浪费 150-300 ms，而 RCA 在事故热路径上。
+
+    刻意**只缓存 Session、不缓存冻结凭证**:冻结凭证是含固定 session token
+    的快照，缓存它会在凭证过期后让长生命周期进程持续 403
+    （shared/python/neptune_client_base.py 原先就是这么写的，已一并修正）。
+    boto3 的可刷新凭证在临近过期时会自动续期，所以每次重新冻结是正确做法。
+    """
+    global _boto_session
+    if _boto_session is None:
+        _boto_session = boto3.Session(region_name=REGION)
+    return _boto_session.get_credentials().get_frozen_credentials()
+
+
 def query_opencypher(cypher: str) -> list[dict]:
     """
     执行 Neptune OpenCypher 查询，使用 SigV4 认证。
@@ -47,8 +70,7 @@ def query_opencypher(cypher: str) -> list[dict]:
         Exception: 网络错误或 Neptune 返回错误时抛出
     """
     url = f"{NEPTUNE_ENDPOINT}/openCypher"
-    session = boto3.Session(region_name=REGION)
-    creds = session.get_credentials().get_frozen_credentials()
+    creds = _get_frozen_creds()
     body = json.dumps({"query": cypher})
     req = AWSRequest(
         method="POST", url=url, data=body,
@@ -77,8 +99,7 @@ def query_gremlin(gremlin: str) -> list:
         Exception: 网络错误或 Neptune 返回错误时抛出
     """
     url = f"{NEPTUNE_ENDPOINT}/gremlin"
-    session = boto3.Session(region_name=REGION)
-    creds = session.get_credentials().get_frozen_credentials()
+    creds = _get_frozen_creds()
     body = json.dumps({"gremlin": gremlin})
     req = AWSRequest(
         method="POST", url=url, data=body,
@@ -151,8 +172,7 @@ def query_gremlin_parsed(gremlin: str) -> list:
         解析后的 Python 对象列表
     """
     url = f"{NEPTUNE_ENDPOINT}/gremlin"
-    session = boto3.Session(region_name=REGION)
-    creds = session.get_credentials().get_frozen_credentials()
+    creds = _get_frozen_creds()
     body = json.dumps({"gremlin": gremlin})
     req = AWSRequest(
         method="POST", url=url, data=body,

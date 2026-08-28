@@ -13,7 +13,8 @@ logger = logging.getLogger(__name__)
 
 NEPTUNE_ENDPOINT = os.environ.get('NEPTUNE_ENDPOINT', '')
 NEPTUNE_PORT = int(os.environ.get('NEPTUNE_PORT', '8182'))
-REGION = os.environ.get('REGION', 'ap-northeast-1')
+from shared import get_region
+REGION = get_region()
 
 # RDS Combined CA bundle — downloaded once per container lifetime
 _RDS_CA_PATH = '/tmp/rds-combined-ca-bundle.pem'
@@ -21,6 +22,29 @@ _RDS_CA_URL = 'https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
 
 _http = None
 _ca_path = None
+
+
+_boto_session = None
+
+
+def _get_frozen_creds():
+    """复用 boto3 Session，但每次调用重新冻结凭证。
+
+    2026-08-28:原先每次调用都 `boto3.Session().get_credentials()
+    .get_frozen_credentials()`。Session 构造昂贵 —— 实测每次约 9.7 ms，
+    且生产 ETL 日志里同一次调用（同一 request ID）2 秒内出现 4 次
+    「Found credentials in environment variables」，是已确认的实况开销。
+    按 RCA 单次运行 15-30 次查询估，纯浪费 150-300 ms，而 RCA 在事故热路径上。
+
+    刻意**只缓存 Session、不缓存冻结凭证**:冻结凭证是含固定 session token
+    的快照，缓存它会在凭证过期后让长生命周期进程持续 403
+    （shared/python/neptune_client_base.py 原先就是这么写的，已一并修正）。
+    boto3 的可刷新凭证在临近过期时会自动续期，所以每次重新冻结是正确做法。
+    """
+    global _boto_session
+    if _boto_session is None:
+        _boto_session = boto3.Session(region_name=REGION)
+    return _boto_session.get_credentials().get_frozen_credentials()
 
 
 def _get_ca_path() -> str:
@@ -57,7 +81,7 @@ def query(cypher: str, params: dict = None) -> dict:
         body_dict["parameters"] = json.dumps(params)
     body = json.dumps(body_dict).encode()
 
-    credentials = boto3.Session().get_credentials().get_frozen_credentials()
+    credentials = _get_frozen_creds()
     request = AWSRequest(method='POST', url=url, data=body,
                          headers={'Content-Type': 'application/json'})
     SigV4Auth(credentials, 'neptune-db', REGION).add_auth(request)
