@@ -876,6 +876,72 @@ T-091 / T-092 / T-093 / T-094)。
 
 ---
 
+### T-033 · 生产代码漂移 —— 11/12 项修复未部署 · `blocked`(需人确认部署)
+
+**cycle 16–19 改的全是 `rca/` 运行时代码,但生产 Lambda 最后更新是 16:39。**
+「我测过的代码不是在跑的代码」违反北极星的唯一源头,也让验证结论失去意义。
+
+**方法上的一个坑**:最初用 `git log --since="16:40"` 判断未部署项,**结论是错的** ——
+cycle-9(18:12)一次性批量提交了前 8 轮改动,那些代码 16:39 就已部署,
+但提交时间戳晚于部署时间。**按提交时间推断部署状态不成立。**
+改为下载生产包逐文件比对 + 标记字符串判定。
+
+生产 `petsite-rca-engine` 缺 **11/12** 项,8 个关键文件全部有差异。
+
+**⚠️ 更正 cycle-19 的风险定级**
+
+我当时写「flag 默认 False,所以 `auto` 会被降级 —— 潜伏,非在跑」。
+**结论成立,但给的理由之一是错的。**
+
+生产 `config.py` 里 `FEATURE_FLAGS` 出现 **0 次**,而 `decision_engine:127` 的导入
+包在 `except Exception: pass` 里 —— ImportError 被吞,**flag 从未被检查**。
+直接在生产代码上执行验证:`P2 + 规则分饱和 1.0 + LLM 说 35` → `action_level = auto`。
+
+真正「非在跑」的原因是另一个:
+
+| 函数 | 有 FEATURE_FLAGS | 调用 DecisionEngine | 执行动作 |
+|---|---|---|---|
+| `petsite-rca-engine` | ❌ | ❌ **压根不调用** | ❌ |
+| `gp-window-flush` | ✅ | ✅ (`:186`) | ❌ **只写 `result['decision']`** |
+
+生产中没有任何路径执行 `auto`,决策目前是纯建议性的;执行只走
+`actions/semi_auto.py`(Slack 人工确认)。**真实风险**是一旦给 `auto` 接上执行,
+`petsite-rca-engine` 缺 `FEATURE_FLAGS` 会让本该拦住它的开关失效。
+
+**为什么没部署**:4 轮未在生产验证过的 RCA 引擎改动属于「难以回滚、影响共享系统」,
+需人确认;本轮是自动循环唤醒,不是部署指令。历史也支持:早期一次直接部署到生产
+先缺 `shared/` 再缺 `pydantic`,导致中断并回滚;此后 canary 优先,
+后续 6 个缺陷全在 canary 暴露、生产零影响。
+
+**部署前必须知道的最重要一项**:`K8S_NAMESPACE` 从 `default` 改为 `petadoptions`,
+把一个「因找错命名空间而必然失败」的重启动作变成**可能真正生效**的动作。
+配合 EKS RBAC 已放开 `deployments` 的 `patch/update`,semi_auto 路径上人点确认后
+重启会**真的执行**。这是修复不是缺陷,但它改变了实际后果。
+
+完整评估(含 arm64 平台 targeting、ETL 不要跑 pip、绝不对生产跑完整 `deploy.sh`、
+行为变更清单、建议的三步顺序)见
+`../production-drift-audit_20260828-2205.md`。
+
+---
+
+### 🔍 顺带修掉我自己引入的一个错误
+
+`infra/lambda/rca_window_flush/neptune/graph_rag_reporter.py` —— 687 行模块的
+**过期副本**,放在错误子目录(应在 `core/`)。来源是我从 cycle-5 起的写法:
+
+```bash
+cp rca/neptune/neptune_queries.py rca/core/graph_rag_reporter.py DEST/
+#     ↑ 属于 neptune/              ↑ 属于 core/   —— 第二个被放错位置
+```
+
+`git cat-file -e main:...` 确认 main 上不存在,即**是我引入的**,非既有问题。
+无模块引用,已删除,套件仍 364 passed。
+
+**教训**:`cp 源1 源2 目标/` 在源文件属于不同子目录时会静默放错位置。
+应一次拷一个,或拷完核对。
+
+---
+
 ### T-031 · 基线快照 + 事件重放(补齐「T 时刻完整拓扑」)· `todo` · P3
 
 T-030 的变更日志答的是「T 附近变了什么」,答不了「T 时刻的完整拓扑」。
@@ -1589,3 +1655,21 @@ PR 正文已备在 `todo/goal-loop/PR_BODY.md`。
   测试无法区分「否决生效」与「flag 拦下」,等于什么都没验证。
   风险定级:潜伏非在跑(flag 默认 False),这些是安全打开该开关的前置条件。
   套件 364 passed / 0 failed
+- 2026-08-28T22:10Z cycle-20: 看板只剩 T-031(已两轮论证暂不做),故转向一件
+  比它重要且被我推后的事 —— **核查生产与分支的漂移**。结论:生产
+  petsite-rca-engine 缺 **11/12** 项修复,8 个关键文件全部有差异。
+  **方法坑**:最初用 git log --since 判断未部署项,结论是错的 —— cycle-9 一次性
+  批量提交了前 8 轮改动,代码 16:39 已部署但提交时间戳更晚。按提交时间推断
+  部署状态不成立。改为下载生产包逐文件比对。
+  **更正 cycle-19 的风险定级**:我说「flag 默认 False 所以 auto 被降级」——
+  结论对,但理由之一错了。生产 config.py 里 FEATURE_FLAGS 出现 0 次,
+  导入被 except: pass 吞掉,flag 从未被检查;直接在生产代码上执行验证
+  P2+饱和+LLM 说 35 → auto。真正「非在跑」的原因是 petsite-rca-engine
+  压根不调用 DecisionEngine,而 gp-window-flush 虽调用但只记录不执行。
+  **未部署**:4 轮未在生产验证的 RCA 改动属难回滚动作,需人确认;
+  且早期一次直接部署曾导致生产中断并回滚。已写出含 arm64 打包、
+  行为变更清单、三步顺序的评估文档,把决定权交给用户。
+  最需知情的一项:K8S_NAMESPACE 改对之后,重启动作从「必然失败」变成
+  「可能真正生效」——配合已放开的 EKS RBAC,semi_auto 确认后会真执行。
+  **也修掉自己引入的错误**:从 cycle-5 起用 `cp 源1 源2 目标/` 把属于不同
+  子目录的两个文件拷进同一目录,留下一份 687 行的过期副本。已删,套件不变
