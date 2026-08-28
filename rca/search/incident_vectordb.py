@@ -13,14 +13,15 @@ S3 Vectors 配置：
 """
 import logging
 import os
-import sys
 
 import boto3
 
-# 复用 s3-vector-skill 的 embedding 和分块实现
-sys.path.insert(0, '/home/ubuntu/tech/s3-vector-skill/scripts')
-from embed import embed_text  # noqa: E402
-from chunker import chunk_text  # noqa: E402
+# embed / chunker 已内联进本仓库（rca/embed.py、rca/chunker.py）。
+# 原先这里靠 sys.path.insert('/home/ubuntu/tech/s3-vector-skill/scripts') 引入，
+# 该路径只存在于最初的开发机，导致 Lambda 上必然 "No module named 'embed'"，
+# 语义检索与向量索引长期静默降级。
+from embed import embed_text
+from chunker import chunk_text
 
 logger = logging.getLogger(__name__)
 
