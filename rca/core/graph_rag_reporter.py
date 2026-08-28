@@ -20,14 +20,15 @@ REGION = get_region()
 BEDROCK_MODEL = os.environ.get('BEDROCK_MODEL', 'global.anthropic.claude-sonnet-4-6')
 KB_ID = os.environ.get('BEDROCK_KB_ID', '')
 
-# DeepFlow 服务名 → CloudWatch namespace/dimension 映射
-SVC_TO_CW = {
-    'payforadoption':     {'ns': 'AWS/ApplicationELB', 'dim': 'pay-for-adoption'},
-    'petsite':            {'ns': 'AWS/ApplicationELB', 'dim': 'service-petsite'},
-    'petsearch':          {'ns': 'AWS/ApplicationELB', 'dim': 'search-service'},
-    'petlistadoptions':   {'ns': 'AWS/ApplicationELB', 'dim': 'list-adoptions'},
-    'petadoptionshistory':{'ns': 'AWS/ApplicationELB', 'dim': 'pethistory-service'},
-}
+# CloudWatch namespace/dimension 不再在此硬编码。
+#
+# 2026-08-28 移除背景:此处原有一个 SVC_TO_CW 字典,与 profiles/petsite.yaml 的
+# services.<name>.cloudwatch 段重复维护,且有两个实际缺陷:
+#   1. key 用的是 'petadoptionshistory' —— 那是 alias,规范名是 'pethistory'
+#      (与 rca_window_flush/config.py 同一类漂移),调用方传规范名时直接查不到
+#   2. 只列了 5 个服务,缺 petstatusupdater
+# 现统一走 config.registry.get_cloudwatch_config(),它内部先 resolve() 别名,
+# 传规范名或别名都能命中。
 
 
 # ─── Step 1: Neptune 子图 ───────────────────────────────────────────────────
@@ -176,7 +177,11 @@ def _get_cloudwatch_metrics(affected_service: str, window_minutes: int = 30) -> 
             'ReturnData': True,
         })
         # EKS Pod restarts
-        svc_raw = SVC_TO_CW.get(affected_service, {}).get('dim', affected_service)
+        # 从 profile 派生的 registry 取维度值（内部会先 resolve 别名）。
+        # profile 里的字段名是 dimension_value，取不到则退回服务名本身。
+        from config import registry as _registry
+        svc_raw = (_registry.get_cloudwatch_config(affected_service).get('dimension_value')
+                   or affected_service)
         queries.append({
             'Id': 'cpu',
             'Expression': f'AVG(SEARCH(\'{{ContainerInsights,ClusterName,Namespace,PodName}} pod_cpu_utilization PodName="{svc_raw}"\', \'Average\', 60))',
@@ -423,7 +428,20 @@ def generate_rca_report(
 
 
 def _query_kb_similar_incidents(service: str, rca_result: dict, region: str) -> list:
-    """使用 Bedrock Knowledge Base 语义搜索相似历史故障案例"""
+    """使用 Bedrock Knowledge Base 语义搜索相似历史故障案例。
+
+    未配置 BEDROCK_KB_ID 时直接返回空列表 —— 否则会用空 knowledgeBaseId 去调
+    retrieve()，每次 RCA 白跑一次注定 ValidationException 的 API 调用。
+
+    历史背景（2026-08-28）：原 KB `petsite-rca-incident-kb-rds` 已删除。
+    其语料只有 1 篇种子文档，导致任何查询都返回同一篇，且得分与相关性负相关
+    （乱码 0.89 > 真相关查询 0.77），代码里 score > 0.3 的阈值形同虚设，
+    结果是每次 RCA 都被注入一条标着「相似度 89%」的伪造先例。
+    语义检索改由 S3 Vectors（search/incident_vectordb.py）承担：它有自动写入
+    路径，语料随运行增长。若将来重建策划语料库，需先解决得分语义与摄取路径问题。
+    """
+    if not KB_ID:
+        return []
     try:
         import boto3
         client = boto3.client('bedrock-agent-runtime', region_name=region)
@@ -446,4 +464,8 @@ def _query_kb_similar_incidents(service: str, rca_result: dict, region: str) -> 
                 results.append(f"(相似度{score:.0%}) {summary}")
         return results
     except Exception as e:
-        return [f"KB查询失败: {str(e)[:80]}"]
+        # 不要把错误信息当作检索结果返回：调用方会把返回值逐条渲染进
+        # 提示词的「相似历史案例」小节，于是 "KB查询失败: AccessDenied..." 会被
+        # 当成一条历史案例喂给模型。返回空列表，让调用方走「暂无数据」分支。
+        logger.warning(f"KB 检索失败(non-fatal): {str(e)[:200]}")
+        return []

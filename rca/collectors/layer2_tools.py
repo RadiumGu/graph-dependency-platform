@@ -197,12 +197,16 @@ def probe_logs(affected_service: str) -> str:
     try:
         lam = boto3.client("lambda", region_name=region)
         cw = boto3.client("cloudwatch", region_name=region)
-        SERVICE_FUNCTION_MAP = {
-            "petsite": ["petsite", "statusupdater", "StepFn"],
-            "petadoption": ["statusupdater", "StepFn", "stepread", "stepprice"],
-            "payforadoption": ["StepFn", "stepprice"],
-        }
-        patterns = SERVICE_FUNCTION_MAP.get(affected_service, [affected_service])
+        # 服务 → Lambda 函数名模式来自 profiles/petsite.yaml 的
+        # aws_resources.lambda_functions。此处原有 SERVICE_FUNCTION_MAP 硬编码
+        # （与 collectors/aws_probers.py 的副本重复，共 2 份），2026-08-28 移除。
+        try:
+            from config import profile as _profile
+            _mapping = (_profile.get("aws_resources", {}) or {}).get("lambda_functions", {}) or {}
+        except Exception as e:
+            logger.warning(f"layer2 lambda: profile 读取失败，退回服务名匹配: {e}")
+            _mapping = {}
+        patterns = _mapping.get(affected_service, [affected_service])
         functions = []
         for page in lam.get_paginator("list_functions").paginate():
             for fn in page["Functions"]:

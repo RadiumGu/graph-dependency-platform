@@ -15,7 +15,8 @@ from collectors import infra_collector
 from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
-REGION = os.environ.get('REGION', 'ap-northeast-1')
+from shared import get_region
+REGION = get_region()
 BEDROCK_MODEL = os.environ.get('BEDROCK_MODEL', 'global.anthropic.claude-sonnet-4-6')
 KB_ID = os.environ.get('BEDROCK_KB_ID', '')
 
@@ -421,276 +422,21 @@ def generate_rca_report(
         }
 
 
-def generate_group_report(
-    group: 'EventGroup',
-    classification: dict,
-    rca_result: dict,
-) -> dict:
-    """为 EventGroup 生成增强版 RCA 报告。
-
-    在 generate_rca_report() 基础上，增加：
-    - 关联告警列表（evidence_alerts）
-    - 多服务影响范围（blast_radius_services）
-    - 聚合关联类型（correlation_type）
-    - 历史参考（Q17/Q19 已确认的相似 incident）
-
-    保持现有 generate_rca_report() 不变，本方法是独立的新增方法。
-
-    Args:
-        group: topology_correlator.EventGroup 对象
-        classification: classify_group() 的返回值
-        rca_result: analyze_group() 的返回值
-
-    Returns:
-        与 generate_rca_report() 格式相同的报告字典，新增 group_context 字段
-    """
-    svc = group.root_candidate_service
-    severity = classification.get('severity', group.severity)
-    log_samples = rca_result.get('log_samples', {}) if rca_result else {}
-
-    # 1. 复用标准报告的所有数据采集
-    base_report = generate_rca_report(svc, classification, rca_result, log_samples=log_samples)
-
-    # 2. 构建聚合上下文补充段
-    group_context_lines: list[str] = []
-
-    # 关联告警列表
-    evidence_alerts = group.evidence_alerts or []
-    if evidence_alerts:
-        group_context_lines.append(f"[聚合关联告警（{len(evidence_alerts)} 条佐证）]")
-        for ev in evidence_alerts[:5]:
-            ev_svc = getattr(ev, 'service_name', '?')
-            ev_metric = getattr(ev, 'metric_name', '?')
-            ev_val = getattr(ev, 'metric_value', 0)
-            group_context_lines.append(f"- {ev_svc}: metric={ev_metric}, value={ev_val}")
-
-    # 多服务影响范围
-    multi_ctx = rca_result.get('multi_service_context', []) if rca_result else []
-    if multi_ctx:
-        group_context_lines.append("")
-        group_context_lines.append("[多服务错误上下文（聚合分析）]")
-        for ctx in multi_ctx[:5]:
-            note = ctx.get('note', '')
-            if note:
-                group_context_lines.append(f"- {ctx['service']}: {note}")
-            else:
-                group_context_lines.append(
-                    f"- {ctx['service']}: "
-                    f"errors={ctx.get('error_count', 0)}, "
-                    f"max_rate={ctx.get('max_error_rate', 0):.1f}%"
-                )
-
-    # 历史已确认相似 incident（Q19）
-    try:
-        from neptune import neptune_queries as nq
-        # 从 rca_result 中推断事件类型
-        top = (rca_result.get('root_cause_candidates') or [{}])[0] if rca_result else {}
-        event_type = top.get('service', svc)
-        confirmed = nq.q19_confirmed_similar_incidents(svc, event_type, limit=3)
-        if confirmed:
-            group_context_lines.append("")
-            group_context_lines.append("[历史已确认相似故障（人工验证）]")
-            for inc in confirmed:
-                group_context_lines.append(
-                    f"- {inc.get('id', '?')} | {inc.get('severity', '?')} | "
-                    f"根因: {inc.get('root_cause', '?')} | "
-                    f"确认: {inc.get('confirmed_by', '?')}"
-                )
-    except Exception as e:
-        logger.warning(f"Q19 query failed for group={group.group_id}: {e}")
-
-    # 3. 增强 Prompt 并重新调用 Bedrock（仅在有聚合上下文时）
-    group_context_text = '\n'.join(group_context_lines)
-    if not group_context_lines:
-        # 无聚合上下文，直接返回标准报告
-        base_report['group_id'] = group.group_id
-        base_report['correlation_type'] = group.correlation_type
-        return base_report
-
-    # 重新调用 Bedrock 含聚合上下文
-    try:
-        enhanced_report = _generate_with_group_context(
-            svc, severity, classification, rca_result,
-            group_context_text, log_samples,
-        )
-        enhanced_report['group_id'] = group.group_id
-        enhanced_report['correlation_type'] = group.correlation_type
-        enhanced_report['group_context'] = group_context_text
-        return enhanced_report
-    except Exception as e:
-        logger.error(f"generate_group_report Bedrock call failed: {e}", exc_info=True)
-        base_report['group_id'] = group.group_id
-        base_report['correlation_type'] = group.correlation_type
-        base_report['group_context'] = group_context_text
-        return base_report
-
-
-def _generate_with_group_context(
-    affected_service: str,
-    severity: str,
-    classification: dict,
-    rca_result: dict,
-    group_context_text: str,
-    log_samples: dict,
-) -> dict:
-    """含聚合上下文的 Bedrock 调用（generate_group_report 内部使用）。
-
-    Args:
-        affected_service: 根因候选服务名
-        severity: 严重度
-        classification: 故障分类结果
-        rca_result: RCA 分析结果
-        group_context_text: 聚合上下文字符串
-        log_samples: 日志采样
-
-    Returns:
-        Bedrock 生成的结构化报告字典
-    """
-    subgraph_text = _get_neptune_subgraph(affected_service)
-    cw_text = _get_cloudwatch_metrics(affected_service)
-
-    from collectors import infra_collector
-    infra_data = infra_collector.collect(affected_service)
-    infra_text = infra_collector.format_for_prompt(infra_data)
-
-    error_services = rca_result.get('error_services', []) if rca_result else []
-    changes = rca_result.get('recent_changes', []) if rca_result else []
-    candidates = rca_result.get('root_cause_candidates', []) if rca_result else []
-
-    df_lines = ["[DeepFlow 调用链观测]"]
-    for s in error_services[:5]:
-        df_lines.append(
-            f"- {s['service']}: 5xx 开始={s['first_error']}, "
-            f"错误次数={s['error_count']}, 错误率={s.get('error_rate_pct',0):.1f}%"
-        )
-    if not error_services:
-        df_lines.append("- 无 5xx 错误数据")
-    df_text = '\n'.join(df_lines)
-
-    ct_lines = ["[近期配置变更（CloudTrail）]"]
-    for c in changes[:3]:
-        ct_lines.append(f"- {c['time'][:16]} {c['event']} on {c['resource'][:40]}")
-    if not changes:
-        ct_lines.append("- 无近期变更记录")
-    ct_text = '\n'.join(ct_lines)
-
-    log_lines = ["[应用日志采样（CloudWatch）]"]
-    if log_samples:
-        for svc_name, lines in log_samples.items():
-            log_lines.append(f"--- {svc_name} ---")
-            for line in lines[:5]:
-                log_lines.append(f"  {line}")
-    else:
-        log_lines.append("- 无日志采样数据")
-    log_text = '\n'.join(log_lines)
-
-    top = candidates[0] if candidates else {}
-    hist_lines = ["[历史故障记录（Neptune）]"]
-    for ev in top.get('evidence', []):
-        hist_lines.append(f"- {ev}")
-    if not top.get('evidence'):
-        hist_lines.append("- 无历史记录")
-    hist_text = '\n'.join(hist_lines)
-
-    prompt = f"""你是一位资深 SRE，正在分析 PetSite 微服务平台的聚合故障（多服务受影响）。
-请严格基于以下已验证的系统事实，输出根因分析报告。
-
-故障概况：
-- 根因候选服务：{affected_service}
-- 严重度：{severity}
-
-{subgraph_text}
-
-{df_text}
-
-{cw_text}
-
-{ct_text}
-
-{infra_text}
-
-{log_text}
-
-{hist_text}
-
-{group_context_text}
-
-请直接输出以下 JSON 格式（不要用 markdown 代码块包裹，不要加任何解释文字）：
-{{
-  "root_cause": "根因描述（一句话）",
-  "confidence": 数字（0-100），
-  "confidence_breakdown": {{
-    "deepflow": 数字（有5xx调用链时序证据得40，无得0），
-    "cloudtrail": 数字（有近期变更事件得30，无得0），
-    "graph": 数字（Neptune图谱确认为链路起点得20，无数据得0），
-    "history": 数字（有历史同类Incident得10，无得0）
-  }},
-  "evidence": ["证据1", "证据2", "证据3"],
-  "recommended_action": "建议操作",
-  "reasoning": "推理过程（3-5句话）",
-  "blast_radius": "影响范围描述（含关联服务）"
-}}
-
-注意：confidence 等于 confidence_breakdown 四项之和。"""
-
-    bedrock = boto3.client('bedrock-runtime', region_name=REGION)
-    body = json.dumps({
-        'anthropic_version': 'bedrock-2023-05-31',
-        'max_tokens': 8192,
-        'messages': [{'role': 'user', 'content': prompt}],
-    })
-    resp = bedrock.invoke_model(modelId=BEDROCK_MODEL, body=body)
-    resp_body = json.loads(resp['body'].read())
-    text = resp_body['content'][0]['text'].strip()
-
-    import re
-    result = None
-    stripped = re.sub(r'^```(?:json)?\s*', '', text.strip(), flags=re.MULTILINE)
-    stripped = re.sub(r'\s*```$', '', stripped.strip(), flags=re.MULTILINE).strip()
-    try:
-        result = json.loads(stripped)
-    except Exception:
-        start = text.find('{')
-        if start != -1:
-            depth = 0
-            end = -1
-            for i in range(start, len(text)):
-                if text[i] == '{':
-                    depth += 1
-                elif text[i] == '}':
-                    depth -= 1
-                    if depth == 0:
-                        end = i
-                        break
-            if end != -1:
-                try:
-                    result = json.loads(text[start:end + 1])
-                except Exception:
-                    pass
-    if not result:
-        result = {
-            'root_cause': text[:200], 'confidence': 0,
-            'evidence': [], 'recommended_action': '',
-            'reasoning': text[:300],
-        }
-
-    if isinstance(result.get('root_cause'), dict):
-        rc = result['root_cause']
-        result['root_cause'] = rc.get('description', rc.get('summary', str(rc)[:200]))
-
-    conf = result.get('confidence', 0)
-    if isinstance(conf, str):
-        try:
-            result['confidence'] = float(conf.replace('%', ''))
-        except ValueError:
-            result['confidence'] = 0
-
-    result['source'] = 'graph_rag_group_bedrock'
-    return result
-
-
 def _query_kb_similar_incidents(service: str, rca_result: dict, region: str) -> list:
-    """使用 Bedrock Knowledge Base 语义搜索相似历史故障案例"""
+    """使用 Bedrock Knowledge Base 语义搜索相似历史故障案例。
+
+    未配置 BEDROCK_KB_ID 时直接返回空列表 —— 否则会用空 knowledgeBaseId 去调
+    retrieve()，每次 RCA 白跑一次注定 ValidationException 的 API 调用。
+
+    历史背景（2026-08-28）：原 KB `petsite-rca-incident-kb-rds` 已删除。
+    其语料只有 1 篇种子文档，导致任何查询都返回同一篇，且得分与相关性负相关
+    （乱码 0.89 > 真相关查询 0.77），代码里 score > 0.3 的阈值形同虚设，
+    结果是每次 RCA 都被注入一条标着「相似度 89%」的伪造先例。
+    语义检索改由 S3 Vectors（search/incident_vectordb.py）承担：它有自动写入
+    路径，语料随运行增长。若将来重建策划语料库，需先解决得分语义与摄取路径问题。
+    """
+    if not KB_ID:
+        return []
     try:
         import boto3
         client = boto3.client('bedrock-agent-runtime', region_name=region)
@@ -713,4 +459,8 @@ def _query_kb_similar_incidents(service: str, rca_result: dict, region: str) -> 
                 results.append(f"(相似度{score:.0%}) {summary}")
         return results
     except Exception as e:
-        return [f"KB查询失败: {str(e)[:80]}"]
+        # 不要把错误信息当作检索结果返回：调用方会把返回值逐条渲染进
+        # 提示词的「相似历史案例」小节，于是 "KB查询失败: AccessDenied..." 会被
+        # 当成一条历史案例喂给模型。返回空列表，让调用方走「暂无数据」分支。
+        logger.warning(f"KB 检索失败(non-fatal): {str(e)[:200]}")
+        return []
