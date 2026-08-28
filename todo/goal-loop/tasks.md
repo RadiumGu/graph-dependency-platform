@@ -304,7 +304,74 @@ run_cypher DETACH DELETE ✅ 被拒:「查询包含写操作关键字: DETACH」
 
 ---
 
-### T-022 · 收敛 Neptune 访问层为 graph SDK · `todo`(P2,不阻塞 DoD)
+### T-022 · 收敛 Neptune 访问层为 graph SDK · `done`(降范围,三条前提两条不成立)
+
+**逐条核实卡片的理由**:
+
+| 卡片声称 | 实测结论 |
+|---|---|
+| 消除 6 份重复 | 重复真实存在,但各客户端在查询语言(Gremlin vs openCypher)、GraphSON 解析、Lambda layer 约束上有**实质差异** |
+| 把 `query_guard` 给到 chaos/dr-plan | **不成立** |
+| 修 chaos 连接不复用 | 成立,但客户端互比只差 6.7 ms/次 |
+
+**为什么 `query_guard` 那条不成立**
+
+`query_guard` 是防**LLM 生成 Cypher** 的只读校验,实际调用点全在
+`nl_query_direct` / `nl_query_strands` / `strands_tools` —— 都是 LLM 输出路径。
+而 chaos 与 dr-plan **只发手写静态查询**(`hypothesis_direct.py:206` 是硬编码
+三引号 gremlin,`fmea`/`gen_template` 用静态 openCypher,`dr-plan/graph` 无任何
+bedrock 调用)。
+
+更要紧的是 **chaos 有写路径**:`neptune_sync` 通过同一个客户端写
+`ChaosExperiment` 节点与 `TestedBy` 边。把守卫下沉到客户端层**会直接拦掉它**。
+已加测试 N-04 把这个理由固定下来,避免将来有人"顺手"下沉。
+
+**排查过程找到两个比重构更有价值的问题**
+
+**1. 共享 Lambda layer 永久缓存冻结凭证(潜伏缺陷)**
+
+```python
+_frozen_creds = None
+def _get_creds():
+    global _frozen_creds
+    if _frozen_creds is None:
+        _frozen_creds = ...get_frozen_credentials()   # 含固定 session token 的快照
+    return _frozen_creds
+```
+
+Lambda 容器可复用数小时,而执行角色凭证有有效期 —— 过期后该热容器的每次
+Neptune 调用都会 403,直到容器被回收。**三个 ETL 都用这个 layer。**
+
+如实说明:近 7 天 ETL 日志里**没有**观测到 403/ExpiredToken,
+所以这是「明确写错但在观测窗口内尚未触发」的潜伏缺陷。
+
+**2. 每次调用新建 boto3 Session(已确认的实况开销)**
+
+四份客户端、6 个调用点**全部**在函数体内 `boto3.Session()`。
+生产 ETL 日志佐证:同一次调用(同一 request ID)2 秒内出现 4 次
+「Found credentials in environment variables」。
+
+| 客户端 | 改前 | 改后 |
+|---|---|---|
+| rca | 32.8 ms | **16.8 ms**(-49%) |
+| chaos | 39.5 ms | **15.9 ms**(-60%) |
+
+按 RCA 单次运行 15–30 次查询估,此前每次运行纯浪费 **150–300 ms**,
+而 RCA 在事故热路径上。套件总耗时也从 267s 降到 252s。
+
+**⚠️ 方法教训:比较两个实现时,它们共有的缺陷是不可见的**
+
+我一开始把两个客户端**互相比较**,只看到 6.7 ms 之差,据此判断「不值得重构」。
+但它们**共有**这个开销 —— 互比把共同缺陷掩盖了。
+只有单独测 `boto3.Session()` 的绝对成本(9.7 ms)才暴露出来。
+
+**正确模式**:缓存 **Session**(构造昂贵),每次调用**重新冻结**凭证
+(boto3 可刷新凭证在临近过期时自动续期)。原 layer 恰好两者都反了。
+
+已在 4 份客户端统一应用(6 个调用点),不改公开 API、不动查询语义 ——
+外科手术式修改而非重构。已验证 chaos 写路径未被破坏。
+
+- 2026-08-28T21:48Z cycle-18: 降范围 + 修凭证缓存 + Session 复用,commit `7809687`
 
 全仓 **6 份** `neptune_client*.py`。`dr-plan-generator/graph/neptune_client.py`
 注释直接写着 "Mirrors the pattern in rca/neptune/neptune_client.py"。
@@ -1422,3 +1489,20 @@ PR 正文已备在 `todo/goal-loop/PR_BODY.md`。
   误报 4 个。结论不是写更好的正则,而是**停止对源码做文本断言** —— 改为行为
   断言后 P-01 变成「跑两遍评分比较分数」,这才真正证明先验被用上。
   套件 342 passed / 0 failed。新立 T-032(评分饱和导致排序区分度丢失)
+- 2026-08-28T21:48Z cycle-18 T-022: **降范围** —— 卡片三条前提两条经不起实测。
+  query_guard 那条不成立:它是防 LLM 生成 Cypher 的,而 chaos/dr-plan 只发手写
+  静态查询;更要紧的是 chaos 有写路径(neptune_sync),把守卫下沉到客户端会
+  直接拦掉它。已加测试 N-04 固定这个理由,避免将来有人顺手下沉。
+  但排查过程找到两个比重构更有价值的问题:
+  (1) 共享 Lambda layer 把 get_frozen_credentials() 的快照永久缓存在模块全局,
+      Lambda 容器复用数小时后凭证过期会持续 403 —— 三个 ETL 都用这个 layer。
+      如实说明:近 7 天日志未观测到 403,是「写错但尚未触发」的潜伏缺陷。
+  (2) 四份客户端 6 个调用点全部每次新建 boto3 Session。生产日志佐证:
+      同一 request ID 在 2 秒内出现 4 次「Found credentials」。
+      实测 rca 32.8→16.8ms、chaos 39.5→15.9ms,按单次 RCA 15-30 次查询估
+      此前每轮浪费 150-300ms,而 RCA 在事故热路径上。
+  **方法教训:比较两个实现时,它们共有的缺陷是不可见的。** 我一开始把两个
+  客户端互比只看到 6.7ms 之差,据此判断不值得动;只有单独测 boto3.Session()
+  的绝对成本(9.7ms)才暴露出共同开销。
+  正确模式是缓存 Session、每次重新冻结凭证 —— 原 layer 恰好两者都反了。
+  套件 350 passed / 0 failed,总耗时 267s→252s
