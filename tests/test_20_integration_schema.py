@@ -156,9 +156,16 @@ def test_s6_01_dynamic_node_labels_match_static_schema(neptune_rca):
     if extra_in_neptune:
         print(f"[EXTRA]   Neptune 有但静态未定义: {sorted(extra_in_neptune)}")
 
+    # 已声明但尚无首个实例的类型走允许名单 —— 名单与理由集中在
+    # tests/test_11_schema_consistency.py，不在此处复制（避免两份漂移）。
+    from test_11_schema_consistency import PENDING_FIRST_INSTANCE
+    missing_in_neptune = missing_in_neptune - PENDING_FIRST_INSTANCE
+
     assert not missing_in_neptune, (
         f"schema_prompt.py 定义了以下节点标签但 Neptune 中不存在: "
-        f"{sorted(missing_in_neptune)}"
+        f"{sorted(missing_in_neptune)}\n"
+        f"若是刚引入、尚未产生首个实例的新类型，加进 "
+        f"test_11_schema_consistency.PENDING_FIRST_INSTANCE 并写明理由。"
     )
     assert not extra_in_neptune, (
         f"Neptune 中存在以下节点标签但 schema_prompt.py 未定义: "

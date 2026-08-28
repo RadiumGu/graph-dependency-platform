@@ -22,6 +22,27 @@ ETL_DIR = os.path.join(PROJECT_ROOT, "infra", "lambda", "etl_aws")
 INFRA_DIR = os.path.join(PROJECT_ROOT, "infra")
 RCA_DIR = os.path.join(PROJECT_ROOT, "rca")
 
+# ── 已声明但尚无首个实例的节点类型 ────────────────────────────────────────────
+# 2026-08-28:本文件的 test_s0_01 与 test_20 的 test_s6_01 断言
+# 「schema 声明 ⊆ 活图存在」，而 tests/test_24_live_schema_consistency.py 断言
+# 「活图存在 ⊆ schema 声明」。两者都是硬失败，合起来要求两个集合**完全相等** ——
+# 于是任何新节点类型都无法引入:先声明则本测试红，先建实例则 test_24 在声明前
+# 那一刻红。这是这对测试本身的死锁，与具体改动无关。
+#
+# 解法刻意用**显式名单**而不是把这个方向笼统降级为告警:笼统降级会把
+# 「声明了一个永不出现的类型」也一起放过 —— 而那是真问题（schema 会喂给 LLM，
+# 声明零实例类型等于邀请它推理不存在的东西，与此前删掉的 Bedrock KB 同一类）。
+# 实际就有这样的例子:etl_cfn 的 TYPE_TO_LABEL 里 APIGateway / KinesisStream
+# 在本账号永不出现，故**刻意没有**写进 schema。
+#
+# 每项都必须写明为什么它会在将来出现:
+PENDING_FIRST_INSTANCE = {
+    # T-030 拓扑变更日志。由 etl_deepflow 对账在依赖边 active 发生 true→false
+    # 状态转变时写入 —— 是活机制，只是当前恰好没有处于该转变的边。
+    # 与 APIGateway 那类的区别:那是本账号根本没有的资源，这个必然会有实例。
+    "TopologyChange",
+}
+
 # ── Schema parse helpers ──────────────────────────────────────────────────────
 
 
@@ -86,11 +107,14 @@ def test_s0_01_node_labels_match_schema(neptune_rca):
         elif isinstance(val, str):
             actual_labels.add(val)
 
-    missing_in_neptune = schema_labels - actual_labels
+    missing_in_neptune = schema_labels - actual_labels - PENDING_FIRST_INSTANCE
     extra_in_neptune = actual_labels - schema_labels
 
     print(f"\nSchema labels  ({len(schema_labels)}): {sorted(schema_labels)}")
     print(f"Neptune labels ({len(actual_labels)}): {sorted(actual_labels)}")
+    pending_now = (schema_labels & PENDING_FIRST_INSTANCE) - actual_labels
+    if pending_now:
+        print(f"[PENDING] 已声明、尚无实例（在允许名单内）: {sorted(pending_now)}")
     if missing_in_neptune:
         print(f"[MISSING] In schema, absent in Neptune: {sorted(missing_in_neptune)}")
     if extra_in_neptune:
@@ -98,7 +122,10 @@ def test_s0_01_node_labels_match_schema(neptune_rca):
 
     assert not missing_in_neptune, (
         f"Labels defined in schema_prompt.py but not present in Neptune: "
-        f"{sorted(missing_in_neptune)}"
+        f"{sorted(missing_in_neptune)}\n"
+        f"若这是刚引入、尚未产生首个实例的新类型，把它加进本文件的 "
+        f"PENDING_FIRST_INSTANCE 并写明理由；否则说明 schema 声明了一个"
+        f"永不出现的类型（schema 会喂给 LLM，等于邀请它推理不存在的东西）。"
     )
     assert not extra_in_neptune, (
         f"Labels present in Neptune but not defined in schema_prompt.py: "

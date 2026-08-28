@@ -740,6 +740,102 @@ INACTIVE_AFTER_SECONDS = int(os.environ.get('CALLS_INACTIVE_AFTER_SECONDS', '180
 DROP_AFTER_SECONDS = int(os.environ.get('CALLS_DROP_AFTER_SECONDS', '604800'))
 DROP_ENABLED = os.environ.get('CALLS_EDGE_DROP_ENABLED', 'false').lower() == 'true'
 
+# ── 拓扑变更日志 ──────────────────────────────────────────────────────────────
+# 「上周拓扑长什么样」此前完全无法回答:所有写入都是就地覆盖,无版本、无快照。
+#
+# 方案选择(三选一,详见 todo/goal-loop/tasks.md 的 T-030):
+#   A 定期全量快照到 S3   —— 只答「T 时刻全貌」,答不了「变了什么」
+#   B 双时态边 valid_from/valid_to —— **否决**:要改 6 个写入方,且现有 19 条
+#     查询会静默返回被取代的旧版本,除非每条都加时间过滤。回归面太大,
+#     且图规模按「边 × 变更频率」无界增长。
+#   C 图内追加式变更事件日志 —— **采用**:纯追加,现有查询不动,
+#     增长与**变更次数**成正比而非边数×时间。
+#
+# 为什么图谱侧的变更日志不可替代 CloudTrail:CloudTrail 记录的是 AWS API 级
+# 变更(部署、实例停止、RDS 修改、扩缩容),它按构造**看不见**
+#   · 依赖消失 —— A 不再调用 B,这不产生任何 AWS API 调用,是「流量缺席」
+#   · 依赖出现 —— 应用内配置/开关导致 A 开始调 B
+# 而对依赖图谱 RCA 因果上最相关的,恰恰是这两类。
+#
+# 保留期:否决方案 B 的理由之一是无界增长,所以自建的日志必须有上限。
+CHANGE_LOG_ENABLED = os.environ.get('TOPOLOGY_CHANGE_LOG_ENABLED', 'true').lower() == 'true'
+CHANGE_LOG_RETENTION_SECONDS = int(
+    os.environ.get('TOPOLOGY_CHANGE_LOG_RETENTION_SECONDS', str(90 * 86400))
+)
+
+
+def _emit_topology_changes(events: list) -> int:
+    """把拓扑变更事件写入图谱,返回成功写入条数。
+
+    幂等键 change_id = f"{kind}:{subject}:{ts}" —— 同一轮重复调用不会重复建点。
+
+    刻意用 `mergeV` 而非 `addV`:ETL 可能因重试被同一轮触发两次
+    (SQS/EventBridge 均为 at-least-once),裸 addV 会留下重复事件,
+    而变更日志一旦重复就没法用来做时序推断。
+
+    Args:
+        events: [{'kind','subject','source','target','edge_type','detail'}]
+
+    Returns:
+        写入条数(失败不抛,返回已成功的条数)
+    """
+    if not CHANGE_LOG_ENABLED or not events:
+        return 0
+    ts = int(time.time())
+    written = 0
+    for ev in events:
+        kind = safe_str(ev.get('kind', 'unknown'))
+        subject = safe_str(ev.get('subject', ''))
+        cid = safe_str(f"{kind}:{subject}:{ts}")
+        try:
+            neptune_query(
+                f"g.mergeV([(T.label):'TopologyChange','change_id':'{cid}'])"
+                f".option(Merge.onCreate, ["
+                f"  'ts': {ts},"
+                f"  'kind': '{kind}',"
+                f"  'subject': '{subject}',"
+                f"  'edge_type': '{safe_str(ev.get('edge_type', ''))}',"
+                f"  'source_name': '{safe_str(ev.get('source', ''))}',"
+                f"  'target_name': '{safe_str(ev.get('target', ''))}',"
+                f"  'detail': '{safe_str(ev.get('detail', ''))}',"
+                f"  'provenance': 'deepflow-etl-reconcile'"
+                f"]).iterate()"
+            )
+            written += 1
+        except Exception as ex:
+            # 变更日志是旁路,写失败不该影响本轮 upsert 的成果。
+            # 但必须可见 —— 本项目历史上多数缺陷都是异常被吞导致的静默失败。
+            logger.warning(f"拓扑变更事件写入失败 {cid}: {ex}")
+    if written:
+        logger.info(f"拓扑变更日志:写入 {written} 条事件")
+    return written
+
+
+def _prune_change_log(now_ts: int) -> int:
+    """清理超过保留期的变更事件,返回删除条数。
+
+    追加式日志必须有上限 —— 否则就重复了我否决方案 B 时批评的无界增长。
+    """
+    if not CHANGE_LOG_ENABLED:
+        return 0
+    cutoff = now_ts - CHANGE_LOG_RETENTION_SECONDS
+    try:
+        cnt = neptune_query(
+            f"g.V().hasLabel('TopologyChange').has('ts', lt({cutoff})).count()"
+        )
+        n = _first_scalar(cnt)
+        if n:
+            neptune_query(
+                f"g.V().hasLabel('TopologyChange').has('ts', lt({cutoff}))"
+                f".drop().iterate()"
+            )
+            logger.info(f"拓扑变更日志:清理 {n} 条超过保留期的事件")
+        return n
+    except Exception as ex:
+        logger.warning(f"拓扑变更日志清理失败: {ex}")
+        return 0
+
+
 
 def reconcile_calls_edges(round_ts: int) -> dict:
     """把本轮未被观测到的 Calls 边标记为失效。
@@ -757,17 +853,38 @@ def reconcile_calls_edges(round_ts: int) -> dict:
     Returns:
         {'marked_inactive': int, 'dropped': int}
     """
-    stats = {'marked_inactive': 0, 'dropped': 0}
+    stats = {'marked_inactive': 0, 'dropped': 0, 'changes_logged': 0, 'changes_pruned': 0}
 
     inactive_before = round_ts - INACTIVE_AFTER_SECONDS
     try:
-        # 先数一下将被影响的边，便于日志留痕（对账是静默动作，没有日志就无法追溯）
-        cnt = neptune_query(
-            f"g.E().hasLabel('Calls')"
-            f".has('last_seen', lt({inactive_before}))"
-            f".has('active', true).count()"
-        )
-        n = _first_scalar(cnt)
+        # 先取出**将被影响的边的身份**（不只是计数）—— 变更日志需要知道是哪条依赖
+        # 消失了。过滤里带 .has('active', true)，所以只会命中 true→false 的
+        # **状态转变**，稳态失效边不会每轮重复产生事件（事件量因此天然有界）。
+        pairs = []
+        try:
+            resp = neptune_query(
+                f"g.E().hasLabel('Calls')"
+                f".has('last_seen', lt({inactive_before}))"
+                f".has('active', true)"
+                f".project('src','dst')"
+                f".by(__.outV().values('name'))"
+                f".by(__.inV().values('name'))"
+                f".toList()"
+            )
+            pairs = _extract_pairs(resp)
+        except Exception as ex:
+            # 取不到身份不该阻止对账本身 —— 标记失效比记日志重要
+            logger.warning(f"对账取边身份失败（仍会继续标记失效）: {ex}")
+
+        n = len(pairs)
+        if n == 0:
+            # 身份取不到时退回计数，保持原有行为
+            cnt = neptune_query(
+                f"g.E().hasLabel('Calls')"
+                f".has('last_seen', lt({inactive_before}))"
+                f".has('active', true).count()"
+            )
+            n = _first_scalar(cnt)
         if n:
             neptune_query(
                 f"g.E().hasLabel('Calls')"
@@ -780,10 +897,23 @@ def reconcile_calls_edges(round_ts: int) -> dict:
             logger.info(
                 f"Calls reconcile: {n} 条边超过 {INACTIVE_AFTER_SECONDS}s 未被观测 → active=false"
             )
+            stats['changes_logged'] = _emit_topology_changes([
+                {
+                    'kind': 'dependency_deactivated',
+                    'subject': f"{p['src']}->{p['dst']}",
+                    'source': p['src'],
+                    'target': p['dst'],
+                    'edge_type': 'Calls',
+                    'detail': f"超过 {INACTIVE_AFTER_SECONDS}s 未被 DeepFlow 观测到",
+                }
+                for p in pairs
+            ])
     except Exception as ex:
         # 对账失败不能影响本轮 upsert 的成果，但必须可见（本项目历史上
         # 9 个缺陷都是异常被吞导致的静默失败）
         logger.warning(f"Calls reconcile (mark inactive) failed: {ex}")
+
+    stats['changes_pruned'] = _prune_change_log(round_ts)
 
     if not DROP_ENABLED:
         return stats
@@ -808,6 +938,52 @@ def reconcile_calls_edges(round_ts: int) -> dict:
         logger.warning(f"Calls reconcile (drop) failed: {ex}")
 
     return stats
+
+
+def _extract_pairs(resp) -> list:
+    """从 Gremlin project('src','dst') 的响应里取出 [{'src':..,'dst':..}]。
+
+    GraphSON 的包装层数因 Neptune 版本而异（1.4.x 会多一层 @value/@type），
+    这里做宽松解析:解析不出来返回空列表,让调用方退回计数路径 ——
+    变更日志是旁路,不该因为解析细节炸掉整轮对账。
+    """
+    def _unwrap(x):
+        if isinstance(x, dict):
+            if '@value' in x:
+                return _unwrap(x['@value'])
+            # GraphSON Map 是 ['k1',v1,'k2',v2] 的扁平列表
+            return x
+        if isinstance(x, list):
+            return x
+        return x
+
+    out = []
+    try:
+        data = resp
+        if isinstance(data, dict):
+            data = data.get('result', {}).get('data', data)
+        data = _unwrap(data)
+        if not isinstance(data, list):
+            return []
+        for item in data:
+            m = _unwrap(item)
+            if isinstance(m, list):
+                # 扁平 kv 列表 → dict
+                m = {m[i]: _unwrap(m[i + 1]) for i in range(0, len(m) - 1, 2)}
+            if not isinstance(m, dict):
+                continue
+            src, dst = m.get('src'), m.get('dst')
+            src = _unwrap(src)
+            dst = _unwrap(dst)
+            if isinstance(src, list) and src:
+                src = _unwrap(src[0])
+            if isinstance(dst, list) and dst:
+                dst = _unwrap(dst[0])
+            if src and dst:
+                out.append({'src': str(src), 'dst': str(dst)})
+    except Exception:
+        return []
+    return out
 
 
 def _first_scalar(resp) -> int:

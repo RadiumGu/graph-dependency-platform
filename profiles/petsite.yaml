@@ -211,6 +211,14 @@ neptune:
     ### 运维层
     - Incident: id(str), severity(P0|P1|P2), root_cause(str), resolution(str), start_time(str), status(str), affected_service(str)
     - ChaosExperiment: experiment_id(str), fault_type(str), result(passed|failed), recovery_time_sec(int), degradation_rate(float), timestamp(str)
+    - TopologyChange: change_id(str), ts(int), kind(str), subject(str), source_name(str), target_name(str), edge_type(str), detail(str), provenance(str)
+      - 拓扑变更事件（追加式日志）。kind 取值: dependency_deactivated | dependency_reactivated | dependency_appeared
+      - 由 etl_deepflow 对账在依赖边 active 发生 true→false **状态转变**时写入，稳态不重复产生
+      - 为什么需要它: CloudTrail 记录 AWS API 级变更（部署/实例停止/RDS 修改/扩缩容），
+        但按构造看不见两类对依赖图谱最相关的变化 —— 依赖消失（A 不再调用 B，是「流量缺席」
+        而非 API 调用）与依赖出现（应用内配置/开关导致 A 开始调 B）
+      - 保留期由 TOPOLOGY_CHANGE_LOG_RETENTION_SECONDS 控制，默认 90 天，对账时顺带清理
+      - 查询用 Q19: q19_topology_changes(service_name, since_seconds, limit)
 
     ## 边类型（26 种）
 

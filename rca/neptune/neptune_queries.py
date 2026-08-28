@@ -287,6 +287,54 @@ def q18_chaos_history(service_name: str, limit: int = 5) -> list:
     return nc.results(cypher, {"svc": service_name, "limit": limit})
 
 
+def q19_topology_changes(service_name: str = None, since_seconds: int = 86400,
+                         limit: int = 20) -> list:
+    """Q19: 查询拓扑变更事件（依赖出现/消失），可按服务过滤。
+
+    为什么需要它:CloudTrail 记录的是 AWS API 级变更（部署、实例停止、
+    RDS 修改、扩缩容），它按构造**看不见**两类对依赖图谱最相关的变化 ——
+      · 依赖消失:A 不再调用 B。这不产生任何 AWS API 调用，是「流量缺席」
+      · 依赖出现:应用内配置/开关导致 A 开始调 B
+    事件由 etl_deepflow 的对账在 active true→false 的**状态转变**时写入。
+
+    Args:
+        service_name: 只看与该服务相关的变更（作为 source 或 target）。
+                      None 表示全图。
+        since_seconds: 只看最近这么多秒内的变更，默认 24h
+        limit: 返回条数上限
+
+    Returns:
+        [{'ts':..., 'kind':..., 'subject':..., 'source':..., 'target':...,
+          'edge_type':..., 'detail':...}]，按时间倒序
+    """
+    import time as _t
+    cutoff = int(_t.time()) - int(since_seconds)
+    if service_name:
+        cypher = """
+        MATCH (c:TopologyChange)
+        WHERE c.ts >= $cutoff
+          AND (c.source_name = $svc OR c.target_name = $svc)
+        RETURN c.ts AS ts, c.kind AS kind, c.subject AS subject,
+               c.source_name AS source, c.target_name AS target,
+               c.edge_type AS edge_type, c.detail AS detail
+        ORDER BY c.ts DESC
+        LIMIT $limit
+        """
+        params = {"cutoff": cutoff, "svc": service_name, "limit": limit}
+    else:
+        cypher = """
+        MATCH (c:TopologyChange)
+        WHERE c.ts >= $cutoff
+        RETURN c.ts AS ts, c.kind AS kind, c.subject AS subject,
+               c.source_name AS source, c.target_name AS target,
+               c.edge_type AS edge_type, c.detail AS detail
+        ORDER BY c.ts DESC
+        LIMIT $limit
+        """
+        params = {"cutoff": cutoff, "limit": limit}
+    return nc.results(cypher, params)
+
+
 def q8_log_source(service_name: str) -> str:
     """
     Q8: 查询节点的 log_source 属性

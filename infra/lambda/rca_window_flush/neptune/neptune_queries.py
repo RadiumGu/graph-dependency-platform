@@ -3,31 +3,46 @@ neptune_queries.py - RCA 核心图谱查询（Q1/Q2/Q3）
 """
 from neptune import neptune_client as nc
 
-def q1_blast_radius(failed_node: str) -> dict:
+def q1_blast_radius(failed_node: str, kind: str = None) -> dict:
     """
     Q1: 影响面评估
     给定故障节点，找受影响的下游服务和 BusinessCapability
     返回 {'services': [...], 'capabilities': [...]}
     """
     # 受影响的下游服务（最多5跳）
-    svc_cypher = """
-    MATCH (n {name: $node})-[:Calls|DependsOn*1..5]->(m)
-    WHERE m.name IS NOT NULL
+    # dependency_kind 过滤：见 q3_upstream_deps 的 docstring。
+    # 'live' = dynamic AND active=true，即「当前仍然存在的依赖」，
+    # 影响面分析应该用它 —— 已下线服务的历史调用边不构成现在的影响面。
+    if kind == 'live':
+        _kind_filter = (" AND all(_r IN _rels WHERE _r.dependency_kind = 'dynamic'"
+                        " AND _r.active = true)")
+    elif kind:
+        _kind_filter = " AND all(_r IN _rels WHERE _r.dependency_kind = $kind)"
+    else:
+        _kind_filter = ""
+    svc_cypher = f"""
+    MATCH (n {{name: $node}})-[_rels:Calls|DependsOn*1..5]->(m)
+    WHERE m.name IS NOT NULL{_kind_filter}
     RETURN DISTINCT m.name AS name, labels(m)[0] AS type,
            m.recovery_priority AS priority
     """
     # 受影响的 BusinessCapability
+    # 原先遍历 :Serves —— 但 etl_aws/handler.py 每轮主动 drop 该标签的边
+    # （hasLabel('Serves').drop()），实测活图 Serves 边为 0 条，
+    # BusinessCapability 只有 DependsOn 出边。故移除 Serves，避免死查询。
     bc_cypher = """
-    MATCH (bc:BusinessCapability)-[:Serves|DependsOn*1..3]->(n {name: $node})
+    MATCH (bc:BusinessCapability)-[:DependsOn*1..3]->(n {name: $node})
     RETURN DISTINCT bc.name AS name, bc.recovery_priority AS priority
     UNION
     MATCH (n {name: $node})-[:Calls|DependsOn*1..5]->(svc)
-          <-[:Serves|DependsOn*1..3]-(bc:BusinessCapability)
+          <-[:DependsOn*1..3]-(bc:BusinessCapability)
     RETURN DISTINCT bc.name AS name, bc.recovery_priority AS priority
     """
     params = {"node": failed_node}
+    if kind:
+        params["kind"] = kind
     services = nc.results(svc_cypher, params)
-    capabilities = nc.results(bc_cypher, params)
+    capabilities = nc.results(bc_cypher, {"node": failed_node})
     return {"services": services, "capabilities": capabilities}
 
 def q2_tier0_status() -> list:
@@ -43,17 +58,43 @@ def q2_tier0_status() -> list:
     """
     return nc.results(cypher)
 
-def q3_upstream_deps(failed_service: str) -> list:
+def q3_upstream_deps(failed_service: str, kind: str = None) -> list:
     """
     Q3: 上游依赖查询（找根因候选）
     找直接依赖了故障服务的所有节点
+
+    Args:
+        failed_service: 故障服务名
+        kind: 依赖类型过滤
+            None       不过滤（向后兼容）
+            'static'   只看 AWS 配置 / CFN 模板「声明」的依赖
+            'dynamic'  只看「观测到过」的依赖（含已失效的历史观测）
+            'live'     只看「当前仍然存在」的依赖 = dynamic AND active=true
+                       —— **根因定位应该用这个**
+
+    为什么 'dynamic' 不够：dependency_kind 只区分「声明 vs 观测」，
+    不区分「观测过 vs 现在还在」。实测例子：petsite 的三个 dynamic 上游里，
+    gateway-service 与 order-service 属 awesomeshop 命名空间，
+    其 6 个 Deployment 副本数已全为 0（服务下线），边已被对账置 active=false，
+    但 dependency_kind 仍是 dynamic。若按 'dynamic' 过滤，
+    这两个已下线的服务仍会被当作根因候选 —— 这正是此前
+    causal_weight 出现 gateway-service→petsite 这类无意义条目的原因。
     """
-    cypher = """
-    MATCH (upstream)-[:Calls|DependsOn]->(n {name: $svc})
+    if kind == 'live':
+        _f = " WHERE r.dependency_kind = 'dynamic' AND r.active = true"
+        params = {"svc": failed_service}
+    elif kind:
+        _f = " WHERE r.dependency_kind = $kind"
+        params = {"svc": failed_service, "kind": kind}
+    else:
+        _f = ""
+        params = {"svc": failed_service}
+    cypher = f"""
+    MATCH (upstream)-[r:Calls|DependsOn]->(n {{name: $svc}}){_f}
     RETURN upstream.name AS name, labels(upstream)[0] AS type,
            upstream.recovery_priority AS priority
     """
-    return nc.results(cypher, {"svc": failed_service})
+    return nc.results(cypher, params)
 
 def q4_service_info(service_name: str) -> dict:
     """获取单个服务的完整属性"""
@@ -246,86 +287,52 @@ def q18_chaos_history(service_name: str, limit: int = 5) -> list:
     return nc.results(cypher, {"svc": service_name, "limit": limit})
 
 
-def q19_confirmed_similar_incidents(service_name: str, event_type: str,
-                                    limit: int = 5) -> list:
-    """Q19: 查找经人工确认的历史相似 Incident（知识质量更高）。
+def q19_topology_changes(service_name: str = None, since_seconds: int = 86400,
+                         limit: int = 20) -> list:
+    """Q19: 查询拓扑变更事件（依赖出现/消失），可按服务过滤。
 
-    仅返回 human_confirmed=true 的 Incident，这类记录的根因经过 SRE 验证，
-    可用于提高 RCA 置信度推断的可靠性。
+    为什么需要它:CloudTrail 记录的是 AWS API 级变更（部署、实例停止、
+    RDS 修改、扩缩容），它按构造**看不见**两类对依赖图谱最相关的变化 ——
+      · 依赖消失:A 不再调用 B。这不产生任何 AWS API 调用，是「流量缺席」
+      · 依赖出现:应用内配置/开关导致 A 开始调 B
+    事件由 etl_deepflow 的对账在 active true→false 的**状态转变**时写入。
 
     Args:
-        service_name: Neptune Microservice 节点 name 属性
-        event_type: 事件类型（通常为根因候选服务名，用于相似性过滤）
+        service_name: 只看与该服务相关的变更（作为 source 或 target）。
+                      None 表示全图。
+        since_seconds: 只看最近这么多秒内的变更，默认 24h
         limit: 返回条数上限
 
     Returns:
-        [{'id':..., 'severity':..., 'root_cause':..., 'resolution':...,
-          'confirmed_by':..., 'confirmed_at':..., 'start_time':...}]
+        [{'ts':..., 'kind':..., 'subject':..., 'source':..., 'target':...,
+          'edge_type':..., 'detail':...}]，按时间倒序
     """
-    cypher = """
-    MATCH (inc:Incident)-[:TriggeredBy]->(svc {name: $svc})
-    WHERE inc.human_confirmed = true
-      AND inc.status IN ['resolved', 'false_positive'] = false
-      AND inc.status = 'resolved'
-    RETURN inc.id AS id, inc.severity AS severity,
-           inc.root_cause AS root_cause, inc.resolution AS resolution,
-           inc.confirmed_by AS confirmed_by, inc.confirmed_at AS confirmed_at,
-           inc.start_time AS start_time
-    ORDER BY inc.confirmed_at DESC
-    LIMIT $limit
-    """
-    return nc.results(cypher, {"svc": service_name, "limit": limit})
-
-
-def q20_false_positive_rate(service_name: str, days: int = 30) -> dict:
-    """Q20: 统计指定服务在最近 N 天内的误报率。
-
-    误报率 = false_positive Incident 数 / 总 Incident 数（该时间窗口内）
-
-    Args:
-        service_name: Neptune Microservice 节点 name 属性
-        days: 统计时间窗口（天数）
-
-    Returns:
-        {'service':..., 'total':..., 'false_positive':..., 'confirmed':...,
-         'false_positive_rate':..., 'window_days':...}
-    """
-    # 计算时间窗口起始点（ISO 字符串）
-    from datetime import datetime, timezone, timedelta
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%dT%H:%M:%SZ')
-
-    cypher = """
-    MATCH (inc:Incident)-[:TriggeredBy]->(svc {name: $svc})
-    WHERE inc.start_time >= $cutoff
-    RETURN count(inc) AS total,
-           sum(CASE WHEN inc.status = 'false_positive' THEN 1 ELSE 0 END) AS false_positive,
-           sum(CASE WHEN inc.human_confirmed = true THEN 1 ELSE 0 END) AS confirmed
-    """
-    rows = nc.results(cypher, {"svc": service_name, "cutoff": cutoff})
-    if not rows:
-        return {
-            'service': service_name,
-            'total': 0,
-            'false_positive': 0,
-            'confirmed': 0,
-            'false_positive_rate': 0.0,
-            'window_days': days,
-        }
-
-    row = rows[0]
-    total = int(row.get('total') or 0)
-    fp = int(row.get('false_positive') or 0)
-    confirmed = int(row.get('confirmed') or 0)
-    fp_rate = round(fp / total, 3) if total > 0 else 0.0
-
-    return {
-        'service': service_name,
-        'total': total,
-        'false_positive': fp,
-        'confirmed': confirmed,
-        'false_positive_rate': fp_rate,
-        'window_days': days,
-    }
+    import time as _t
+    cutoff = int(_t.time()) - int(since_seconds)
+    if service_name:
+        cypher = """
+        MATCH (c:TopologyChange)
+        WHERE c.ts >= $cutoff
+          AND (c.source_name = $svc OR c.target_name = $svc)
+        RETURN c.ts AS ts, c.kind AS kind, c.subject AS subject,
+               c.source_name AS source, c.target_name AS target,
+               c.edge_type AS edge_type, c.detail AS detail
+        ORDER BY c.ts DESC
+        LIMIT $limit
+        """
+        params = {"cutoff": cutoff, "svc": service_name, "limit": limit}
+    else:
+        cypher = """
+        MATCH (c:TopologyChange)
+        WHERE c.ts >= $cutoff
+        RETURN c.ts AS ts, c.kind AS kind, c.subject AS subject,
+               c.source_name AS source, c.target_name AS target,
+               c.edge_type AS edge_type, c.detail AS detail
+        ORDER BY c.ts DESC
+        LIMIT $limit
+        """
+        params = {"cutoff": cutoff, "limit": limit}
+    return nc.results(cypher, params)
 
 
 def q8_log_source(service_name: str) -> str:

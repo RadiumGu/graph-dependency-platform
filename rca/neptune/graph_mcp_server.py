@@ -158,6 +158,15 @@ QUERY_REGISTRY = {
         "params": {"service_name": "str，必填", "limit": "int，默认 5"},
         "required": ["service_name"],
     },
+    "q19_topology_changes": {
+        "mod": "queries", "fn": "q19_topology_changes",
+        "desc": ("拓扑变更事件（依赖出现/消失）。CloudTrail 看不见这两类变化 —— "
+                 "依赖消失是「流量缺席」而非 API 调用"),
+        "params": {"service_name": "str，可选（省略=全图）",
+                   "since_seconds": "int，默认 86400",
+                   "limit": "int，默认 20"},
+        "required": [],
+    },
     # ── 以下来自 dr-plan-generator ──
     "q12_az_dependency_tree": {
         "mod": "dr", "fn": "q12_az_dependency_tree",

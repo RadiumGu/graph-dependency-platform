@@ -406,6 +406,37 @@ def generate_rca_report(
         ct_lines.append("- 无近期变更记录")
     ct_text = '\n'.join(ct_lines)
 
+    # 3b-2. 拓扑变更（图谱侧，CloudTrail 看不见的那一类）
+    # CloudTrail 记录 AWS API 级变更（部署/实例停止/RDS 修改/扩缩容），
+    # 但它按构造**看不见**两类对依赖图谱最相关的变化:
+    #   · 依赖消失 —— A 不再调用 B，这不产生任何 AWS API 调用，是「流量缺席」
+    #   · 依赖出现 —— 应用内配置/开关导致 A 开始调 B
+    # 二者恰恰是「上游是否还存在」这个根因判断的直接输入，故单列一段。
+    tc_lines = ["[拓扑变更（图谱观测，CloudTrail 无法覆盖）]"]
+    try:
+        from neptune import neptune_queries as _nq
+        tc = _nq.q19_topology_changes(affected_service, since_seconds=86400, limit=10)
+        if tc:
+            import datetime as _dt
+            for c in tc:
+                try:
+                    when = _dt.datetime.fromtimestamp(
+                        int(c.get('ts', 0)), _dt.timezone.utc
+                    ).strftime('%Y-%m-%d %H:%M:%SZ')
+                except (ValueError, OSError, TypeError):
+                    when = str(c.get('ts'))
+                tc_lines.append(
+                    f"- {when} {c.get('kind')}: {c.get('subject')}"
+                    f"（{c.get('detail', '')}）"
+                )
+        else:
+            tc_lines.append("- 近 24h 无拓扑变更事件")
+    except Exception as e:
+        # 变更日志是增量信息，取不到不该让整份报告生成不出来
+        logger.warning(f"拓扑变更查询失败（non-fatal）: {e}")
+        tc_lines.append(f"- 查询失败，本节跳过: {str(e)[:120]}")
+    tc_text = '\n'.join(tc_lines)
+
     # 3c. 应用日志采样（由 rca_engine.step3c 传入）
     log_lines = ["[应用日志采样（CloudWatch）]"]
     if log_samples:
@@ -482,6 +513,8 @@ def generate_rca_report(
 {cw_text}
 
 {ct_text}
+
+{tc_text}
 
 {infra_text}
 
