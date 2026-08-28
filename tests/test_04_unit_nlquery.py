@@ -117,6 +117,95 @@ def test_ub2_03_bedrock_timeout_returns_error(caplog):
                for r in caplog.records), "失败应记 warning 日志，实际日志为空"
 
 
+def test_ub2_03b_execution_error_triggers_retry():
+    """U-B2-03b: Neptune 执行失败时,把错误回喂给 LLM 重试一次并能救回。
+
+    2026-08-28 新增。此前 query() 对两种失败的处理是**反的**:
+    空结果会重试(`_retry_with_hint`),而执行失败直接返回 error 不重试 ——
+    可语法错误恰恰是 LLM 看到报错就能改对的情形。
+
+    实测触发场景:问「petsite 的上下游服务」时,4 次里 3 次生成
+
+        RETURN 'downstream' AS direction, ...
+        WHERE downstream IS NOT NULL       ← WHERE 在 RETURN 之后,语法非法
+
+    Neptune 回 400。而「某服务的上下游」是依赖图谱最核心的问题,
+    75% 失败率意味着「图谱可被各类 agent 快速调用」在最常用的问法上不成立。
+    加了重试之后实测 6/6 成功,其中 4 次是靠重试救回的。
+
+    本测试用桩验证机制本身,不打真实 Bedrock/Neptune。
+    """
+    from neptune.nl_query import NLQueryEngine
+
+    engine = NLQueryEngine.__new__(NLQueryEngine)
+    from neptune.schema_prompt import build_system_prompt
+    engine.system_prompt = build_system_prompt()
+    engine.profile = None
+    engine._last_model = None
+    engine._last_tokens = None
+
+    bad = "MATCH (s:Microservice) RETURN s.name AS n WHERE s.name='petsite'"
+    good = "MATCH (s:Microservice {name:'petsite'}) RETURN s.name AS n"
+
+    # 第一次生成非法 cypher，重试时生成合法的
+    gen_calls = []
+
+    def fake_generate(question):
+        gen_calls.append(question)
+        return bad if len(gen_calls) == 1 else good
+
+    engine._generate_cypher = fake_generate
+
+    exec_calls = []
+
+    def fake_results(cypher, *a, **kw):
+        exec_calls.append(cypher)
+        if cypher.startswith(bad[:40]):
+            raise Exception("400 Client Error: Bad Request")
+        return [{'n': 'petsite'}]
+
+    with patch('neptune.nl_query_direct.nc.results', side_effect=fake_results), \
+         patch.object(engine, '_summarize', return_value='ok'):
+        result = engine.query("petsite 的上下游服务")
+
+    assert not result.get('error'), f"重试应救回，实际仍报错: {result.get('error')}"
+    assert result['retried'] is True, "应标记 retried=True"
+    assert result['results'] == [{'n': 'petsite'}]
+    # 重试的提示词必须把真实错误回喂给 LLM，否则它无从改正
+    assert len(gen_calls) == 2, f"应恰好生成两次，实际 {len(gen_calls)}"
+    assert '400' in gen_calls[1], "重试提示应包含 Neptune 的原始错误"
+    assert 'WHERE' in gen_calls[1], "重试提示应说明 WHERE 的位置约束"
+
+
+def test_ub2_03c_execution_error_retry_gives_up_once():
+    """U-B2-03c: 重试后仍失败则返回 error,**不**无限重试烧 Bedrock 调用。"""
+    from neptune.nl_query import NLQueryEngine
+
+    engine = NLQueryEngine.__new__(NLQueryEngine)
+    from neptune.schema_prompt import build_system_prompt
+    engine.system_prompt = build_system_prompt()
+    engine.profile = None
+    engine._last_model = None
+    engine._last_tokens = None
+
+    gen_calls = []
+
+    def fake_generate(question):
+        gen_calls.append(question)
+        # 每次都生成不同但同样会失败的 cypher
+        return f"MATCH (s:Microservice) RETURN s.name AS n{len(gen_calls)}"
+
+    engine._generate_cypher = fake_generate
+
+    with patch('neptune.nl_query_direct.nc.results',
+               side_effect=Exception("400 Client Error: Bad Request")):
+        result = engine.query("petsite 的上下游服务")
+
+    assert result.get('error'), "两次都失败应返回 error"
+    assert '400' in result['error']
+    assert len(gen_calls) == 2, f"最多生成两次（首次 + 一次重试），实际 {len(gen_calls)}"
+
+
 def test_ub2_04_unsafe_cypher_blocked(neptune_rca):
     """U-B2-04: LLM 生成不安全的查询时，query_guard 拦截并返回 error。"""
     # Mock Bedrock 返回一个写操作查询

@@ -10,6 +10,7 @@ import importlib
 import importlib.util
 import os
 import re
+import shutil
 import subprocess
 import sys
 import types
@@ -324,7 +325,18 @@ def test_s0_06_cdk_synth():
 
     Intent: confirm the IaC stack definition compiles cleanly; catches
     TypeScript type errors and missing construct props before deployment.
+
+    2026-08-28:CDK CLI 未安装时改为 **skip 而非 fail**。此前会抛
+    FileNotFoundError: 'cdk'，使套件在任何没装 aws-cdk 的机器上恒红一条。
+    恒红项的危害不是它本身，而是它训练所有人忽略红色 —— 真缺陷会跟着被忽略。
+    安装方式写在跳过原因里，需要它的人看得到。
     """
+    if shutil.which("cdk") is None:
+        pytest.skip(
+            "未安装 CDK CLI，跳过 synth 校验。"
+            "安装: npm install -g aws-cdk（见 requirements-dev.txt 的外部工具段）"
+        )
+
     result = subprocess.run(
         ["cdk", "synth", "--quiet"],
         cwd=INFRA_DIR,

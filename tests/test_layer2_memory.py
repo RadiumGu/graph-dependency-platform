@@ -29,8 +29,40 @@ def _get_rss_mb() -> float:
     return ru.ru_maxrss / 1024  # KB -> MB
 
 
+@pytest.fixture(autouse=True)
+def _restore_layer2_engine_env():
+    """还原 LAYER2_ENGINE。
+
+    2026-08-28:本文件两个测试都 `os.environ["LAYER2_ENGINE"] = ...` 且**从不还原**,
+    泄漏到后续测试 —— 与本次修掉的 sys.modules 泄漏属同一类问题
+    (测试改全局状态却不恢复,结果取决于执行顺序)。
+    """
+    saved = os.environ.get("LAYER2_ENGINE")
+    try:
+        yield
+    finally:
+        if saved is None:
+            os.environ.pop("LAYER2_ENGINE", None)
+        else:
+            os.environ["LAYER2_ENGINE"] = saved
+
+
 def test_strands_memory_under_2gb():
-    """Constructing Strands Layer2 engine should stay under 2 GB."""
+    """Constructing Strands Layer2 engine should stay under 2 GB.
+
+    2026-08-28:strands 包缺失时改为 **skip 而非 fail**。
+    `make_layer2_engine` 在 strands 不可导入时按设计 warning + 回退 direct,
+    于是 `assert engine.ENGINE_NAME == "strands"` 必然失败 ——
+    这是环境缺件,不是代码缺陷。
+
+    恒红项的危害不是它本身,而是它训练所有人忽略红色 —— 真缺陷会跟着被忽略。
+    """
+    pytest.importorskip(
+        "strands",
+        reason="未安装 strands 包，make_layer2_engine 会按设计回退 direct，"
+               "本内存预算测试无从进行（安装见 requirements-dev.txt 可选段）",
+    )
+
     import gc
     gc.collect()
     baseline_mb = _get_rss_mb()
@@ -40,7 +72,10 @@ def test_strands_memory_under_2gb():
     from engines.factory import make_layer2_engine
 
     engine = make_layer2_engine()
-    assert engine.ENGINE_NAME == "strands"
+    assert engine.ENGINE_NAME == "strands", (
+        "strands 包已安装但引擎仍回退到 direct —— "
+        "检查 collectors.layer2_strands 的导入错误（factory 会吞成 warning）"
+    )
 
     gc.collect()
     after_mb = _get_rss_mb()
