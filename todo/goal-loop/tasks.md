@@ -516,17 +516,45 @@ payforadoption   旧=['StepFn','stepprice']                        新=同  ✅
 
 ---
 
-### T-094 · 收敛其余测试文件的硬编码路径 · `todo`
+### T-094 · 收敛其余测试文件的硬编码路径 · `done`
 
-仓库内约 20 个测试文件各自硬编码
-`PROJECT_ROOT = '/home/ubuntu/tech/graph-dependency-platform'`
-(`test_00` / `test_02` / `test_03` / `test_11` / `test_12` / `test_13` / `test_14` /
-`test_17` / `test_18` / `test_19` / `test_20` / `test_21` / `test_22` / `test_23` 等),
-以及 `scripts/debug_microservice_source.py`、`chaos/code/runner/report.py`、
-`chaos/code/fmea/fmea.py`、`chaos/code/gen_template.py`、`demo/pages/4_Chaos_Engineering.py`。
+全仓 29 处 `/home/ubuntu/tech/...`,其中**生效代码 20 处**
+(其余是描述旧状态的 docstring,属修复记录,保留)。
 
-conftest.py 已改为自动推导(T-025),这些文件应改为从 conftest 或
-从自身 `__file__` 推导,不再各自写死。
+**测试文件 14 处 / 13 个文件**:新增 `tests/paths.py` 作为**单一来源**,
+各文件改为 `from paths import ...`。**不把推导逻辑复制 13 遍** —— 那会把
+「一处硬编码」换成「13 处重复推导」,正是 T-021 刚清掉的那类问题。
+`conftest.py` 也复用同一来源,并调用 `assert_layout()` 让推导错误立刻失败,
+而不是让后续测试报一堆误导性的"文件不存在"。
+
+**运行时 6 处**(比测试更严重,在本机会直接失败):
+
+| 文件 | 常量 |
+|---|---|
+| `chaos/code/runner/report.py` | `REPORT_DIR` |
+| `chaos/code/gen_template.py` | `out_dir` + 提示文本 |
+| `chaos/code/fmea/fmea.py` | `--output` 默认值 |
+| `demo/pages/4_Chaos_Engineering.py` | `CHAOS_CODE_DIR` |
+| `scripts/debug_microservice_source.py` | `sys.path` |
+| `chaos/code/agents/sample_for_golden_learning.py` | docstring 用法示例 |
+
+这些指向 `/home/ubuntu/tech/chaos/...` —— 仓库的**同级**目录,说明原开发机上
+chaos 是独立树。全部改为从 `__file__` 推导,**逐个实测路径存在**
+(`report.py` 第一版层级算错 —— `chaos/code/runner/` 需上溯四级而非三级,
+复验后修正。不实测就会留一个静默错路径)。
+
+**效果:测试套件首次可运行**
+
+```
+改前  conftest 之外 13 个文件指向不存在的路径
+改后  426 个测试可收集
+      （不是文档所称的 277 —— 该数字从未被核实过）
+py3.11 首次真实基线: 208 passed / 22 failed / 118 skipped / 78 errors
+```
+
+顺带发现两个环境约束,已立为 T-095 / T-096。
+
+- 2026-08-28T18:34Z cycle-11: paths.py 单一来源 + 20 处生效改动,commit `9346be0`
 
 ---
 
@@ -634,10 +662,65 @@ prompt 相应要求模型回答"最早的告警是否就是源头、拓扑能否
 
 ---
 
-### T-092 · `etl_cfn` SQS label 不一致 · `todo`
+### T-092 · `etl_cfn` SQS label 不一致 · `done`
 
-`infra/lambda/etl_cfn/neptune_etl_cfn.py:54` 把 `AWS::SQS::Queue` 映射为 `'Queue'`,
-而 `:389` 写入时用的是 `'SQSQueue'`。
+`:54` 把 `AWS::SQS::Queue` 映射为 `'Queue'`,而全仓规范名是 `'SQSQueue'` ——
+**同一文件 `:398` 自己写的就是 `SQSQueue`**,即文件内部就不一致。
+
+| 标签 | 全仓引用 | schema | 其他写入方 | 活图 |
+|---|---|---|---|---|
+| `SQSQueue` | **24 处** | ✅ 声明 | etl_aws:884 + etl_cfn:398 | **7 个节点** |
+| `Queue` | 1 处 | ❌ | 无 | **0 个节点** |
+
+**潜伏缺陷**:尚未触发(当前无 CFN 模板声明涉及 SQS 的依赖)。一旦出现,
+`write_deps_to_neptune` 会按 `Queue` 建点,与已有 7 个 `:SQSQueue` 分裂成
+**同一队列的两个节点** —— 正是「单一源头」要防的事。
+
+**核对整表时另发现** `APIGateway` / `KinesisStream` 也不在 schema 中,但性质不同:
+本账号零实例,非标签名写错。**刻意不写进 schema** —— schema 喂给 LLM 做自然语言
+查询,声明零实例类型等于邀请它推理不存在的东西(与删除 Bedrock KB 同一理由)。
+映射保留并加注释,因为 fallback `split('::')[-1]` 会得到 `'RestApi'`/`'Stream'`,更差。
+
+**过程中修正自己的方法错误**:首次用正则扫映射表,把**注释掉的**
+`TargetGroup → Microservice` 也算成生效条目,误报 3 条错配。重做时逐行标注
+注释/生效,实际只有 1 条真错配。同类错误此前已被纠正过一次。
+
+- 2026-08-28T18:34Z cycle-11: 1 行修复 + 整表核对,commit `9346be0`
+
+---
+
+### T-095 · 声明并统一测试运行的 Python 版本 · `todo` · P2
+
+仓库有 **661 处 py3.10+ 联合类型语法**(`list | None` 等),但本机默认
+`python3` 是 **3.9.25**。实测差异:
+
+| Python | 结果 |
+|---|---|
+| 3.9.25 | 173 passed / 51 failed / 112 skipped / 90 errors |
+| **3.11.15** | **208 passed / 22 failed** / 118 skipped / 78 errors |
+
+换对版本立刻多 35 个通过、失败减半 —— **过半"失败"根本不是代码缺陷**。
+而仓库**没有任何地方声明这个约束**:无 `pyproject.toml`、无 `pytest.ini`、
+无 `python_requires`、README 未提。任何人在默认 python3 上跑都会得到
+误导性的失败清单。
+
+Lambda 运行时是 py3.12,生产不受影响 —— 纯粹是本地/CI 可复现性问题。
+
+**建议**:加 `pyproject.toml` 声明 `requires-python = ">=3.10"`,
+README 测试小节写明用 `python3.11 -m pytest`。
+
+---
+
+### T-096 · 声明测试依赖 · `todo` · P2
+
+`moto` / `streamlit` / `structlog` 是测试依赖,但仓库**无任何 requirements 文件**。
+缺 `structlog` 一项就产生 **36 个 error**;`test_12` 需要 `moto>=5`
+(装了 moto 4 仍报 `mock_aws` 不存在);`test_22` 需要 `streamlit`。
+
+后果:新环境跑测试会得到一堆 `ModuleNotFoundError`,与真实缺陷混在一起,
+无法判断套件到底是什么状态。
+
+**建议**:加 `requirements-dev.txt`,版本下限写明(`moto>=5` 是硬约束,不是偏好)。
 
 ---
 
@@ -759,3 +842,13 @@ PR 正文已备在 `todo/goal-loop/PR_BODY.md`。
   可能是共因故障」而非顺着时序错判传播方向。
   T-091 过程中修正自己的假设:profile 顶层键是 `kubernetes` 不是 `k8s`,
   先按 k8s 取返回 None,改对后取到 petadoptions
+- 2026-08-28T18:34Z cycle-11 T-092+T-094: SQS 标签错配(潜伏缺陷,未触发但会造成
+  同一队列两个节点)已修;整表核对时发现另两条标签不在 schema 但属零实例资源,
+  刻意不声明。硬编码路径全仓收敛:测试 14 处走新建的 tests/paths.py 单一来源,
+  运行时 6 处(chaos/demo/scripts)改为从 __file__ 推导。
+  **测试套件首次可运行:426 个测试可收集**(非文档所称 277),
+  py3.11 基线 208 passed / 22 failed。
+  两个方法教训:(1) 正则扫映射表时把注释行算成生效条目,误报 3 条错配 ——
+  同类错误此前已被纠正过;(2) report.py 的目录上溯层级第一版算错,
+  靠实测路径存在才发现。新立 T-095(py 版本约束无处声明,换 3.11 失败减半)
+  与 T-096(测试依赖无 requirements 声明,缺 structlog 一项即 36 个 error)
