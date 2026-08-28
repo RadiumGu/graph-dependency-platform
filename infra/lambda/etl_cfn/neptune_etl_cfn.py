@@ -100,6 +100,13 @@ def upsert_cfn_edge(src_vid, dst_vid, rel_type: str, stack_name: str, evidence: 
     sn = safe_str(stack_name)
     ev = safe_str(evidence)
     rt = safe_str(rel_type)
+    # dependency_kind='static'：CFN 模板「声明」的依赖，未必被实际调用过。
+    # 同时补 source 与 etl_aws / etl_deepflow 对齐 —— 本文件原先只写 declared_in，
+    # 字段名与另两个 ETL 不一致，导致无法按统一字段判定溯源。declared_in 保留不动，
+    # 避免破坏既有查询。
+    # 依赖语义边集合见 etl_aws/neptune_client.py 的 DEPENDENCY_EDGE_LABELS 注释。
+    _dep_kind = (".property('dependency_kind', 'static')"
+                 if rt in ('Calls', 'DependsOn', 'AccessesData') else "")
     # Use V(id) lookups to get vertex refs, then coalesce to find or create edge
     gremlin = (
         f"g.V('{src_vid}').as('s').V('{dst_vid}').as('d')"
@@ -109,7 +116,9 @@ def upsert_cfn_edge(src_vid, dst_vid, rel_type: str, stack_name: str, evidence: 
         f"  __.addE('{rt}').to(__.V('{dst_vid}'))"
         f")"
         f".property('declared_in', 'cfn')"
-        f".property('stack_name', '{sn}')"
+        f".property('source', 'cfn-etl')"
+        + _dep_kind
+        + f".property('stack_name', '{sn}')"
         f".property('evidence', '{ev}')"
         f".property('last_scanned', {ts})"
     )

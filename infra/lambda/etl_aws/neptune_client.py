@@ -96,6 +96,14 @@ def upsert_vertex(label: str, name: str, extra_props: dict, managed_by: str = 'm
     return None
 
 
+# 依赖语义边的标签集合。只有这些边代表「A 依赖 B」，才需要 dependency_kind；
+# LocatedIn / Contains / BelongsTo 等结构边不是依赖，不打该标记。
+# 规范定义见 profiles/petsite.yaml 的边类型声明。
+# 三个 ETL 各自持有一份同样的常量：跨 Lambda 共享需要改 neptune-client-base layer
+# 并同步升级 3 个函数，代价高于复制一个 3 元素集合；后续 graph SDK 收敛时统一。
+DEPENDENCY_EDGE_LABELS = frozenset({'Calls', 'DependsOn', 'AccessesData'})
+
+
 def upsert_edge(src_id, dst_id, label: str, props: dict = None):
     """upsert 边（by vertex ID）"""
     if src_id is None or dst_id is None:
@@ -103,6 +111,11 @@ def upsert_edge(src_id, dst_id, label: str, props: dict = None):
     ts = int(time.time())
     lb = safe_str(label)
     prop_str = f".property('source', 'aws-etl').property('last_updated', {ts})"
+    # dependency_kind='static'：本 ETL 的边来自 AWS 资源配置「声明」的关系，
+    # 而非运行时观测。与 deepflow 的 dynamic 相对，供 q1/q3 按类型过滤，
+    # 避免「模板里声明但从未调用的依赖」和「每秒数百次的真实调用」在影响面分析里等权。
+    if lb in DEPENDENCY_EDGE_LABELS:
+        prop_str += ".property('dependency_kind', 'static')"
     if props:
         for k, v in props.items():
             ks = safe_str(k)

@@ -62,7 +62,13 @@ services:
     deepflow_app: "pethistory-deployment"
 
   petstatusupdater:
-    tier: Tier2
+    # 2026-08-28 修正 Tier2 → Tier1。四方核对，本文件原先是唯一的异类：
+    #   AWS 资源 tag（statusupdater lambda）  Tier=tier1
+    #   infra/lambda/etl_aws/business_config.json  Tier1
+    #   活图 Microservice.recovery_priority        Tier1
+    #   本文件                                    Tier2  ← 错
+    # 由 tests/test_24_live_schema_consistency.py 的一致性校验发现。
+    tier: Tier1
     type: lambda
     lambda_name: "petstatusupdater"
     neptune_name: "petstatusupdater"
@@ -94,6 +100,11 @@ aws_resources:
   lambda_functions:
     petsite: ["petsite", "statusupdater", "StepFn"]
     payforadoption: ["StepFn", "stepprice"]
+    # petadoption 从 rca/collectors/aws_probers.py 与 layer2_tools.py 的
+    # SERVICE_FUNCTION_MAP 硬编码副本迁入（2026-08-28 消除副本时保留原行为）。
+    # 注意：该名称不在活图的 15 个 Microservice 中，作为 affected_service 永远不会命中，
+    # 疑为遗留配置。删除它需要单独的证据支撑，不在本次重构范围内。
+    petadoption: ["statusupdater", "StepFn", "stepread", "stepprice"]
 
   s3_buckets:
     incidents: "petsite-incidents"
@@ -201,7 +212,24 @@ neptune:
     - Incident: id(str), severity(P0|P1|P2), root_cause(str), resolution(str), start_time(str), status(str), affected_service(str)
     - ChaosExperiment: experiment_id(str), fault_type(str), result(passed|failed), recovery_time_sec(int), degradation_rate(float), timestamp(str)
 
-    ## 边类型（28 种）
+    ## 边类型（26 种）
+
+    ### 依赖边的通用属性（Calls / DependsOn / AccessesData 必带）
+    这三种边表示「A 依赖 B」，与 LocatedIn / Contains / BelongsTo 等结构边不同，
+    统一携带以下属性。查询依赖关系时应按 dependency_kind 过滤，
+    否则「模板里声明但从未调用的依赖」与「每秒数百次的真实调用」会被等权对待。
+    - dependency_kind: static | dynamic
+        static  = 由 AWS 资源配置或 CloudFormation 模板「声明」出来（etl_aws / etl_cfn 写入），
+                  声明存在不代表实际被调用过
+        dynamic = 由 DeepFlow L7 / DNS「运行时观测」到（etl_deepflow 写入），
+                  代表这条依赖真实发生过
+    - source: aws-etl | cfn-etl | deepflow-etl | deepflow-dns | business-layer | manual-fix
+    - last_seen(int): 最近一次被观测到的 epoch 秒（dynamic 边）
+    - first_seen(int): 自埋点起首次观测到的 epoch 秒（dynamic 边，非真实首现时间）
+    - active(bool): dynamic 边是否仍被观测到。超过失效阈值未刷新会被置 false，
+                    重新观测到会自动写回 true
+    Calls 边额外带运行时度量：calls(int), avg_latency_us(int), p99_latency_ms(float),
+    error_count(int), error_rate(float), protocol(str), port(int), call_type(str)
 
     ### 拓扑/位置关系
     - (:Region)-[:Contains]->(:AvailabilityZone)

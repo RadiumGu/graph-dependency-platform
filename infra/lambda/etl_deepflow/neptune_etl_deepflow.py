@@ -400,6 +400,8 @@ def run_drift_detection(service_names: list, ip_map: dict):
                         f"  __.inE('AccessesData').where(outV().has('name',containing('{svc_name}'))),"
                         f"  __.addE('AccessesData').from('src')"
                         f").property('source','deepflow-dns')"
+                        # DNS 观测得来 → dynamic（与 etl_aws/etl_cfn 声明的 static 相对）
+                        f".property('dependency_kind','dynamic')"
                         f".property('runtime_verified',true)"
                         f".property('drift_status','observed_not_declared')"
                         f".property('last_drift_check',{ts})"
@@ -687,6 +689,13 @@ def batch_upsert_edges(edges: list):
             f"  __.inE('Calls').where(__.outV().has('name','{src}')),"
             f"  __.addE('Calls').from('s')"
             f")"
+            # first_seen 用幂等写法：已有值保留，缺失才写入当前 ts。
+            # 不能放在 addE 分支之外裸写 .property('first_seen', ts) —— 那会被每轮
+            # 刷新，「首次出现时间」退化成「最近一次时间」。
+            # 也不用 last_seen 回填存量边：first_seen <= last_seen 恒成立，
+            # 把 last_seen 当 first_seen 等于断言依赖"那时才出现"，比留空更糟。
+            # 存量边的语义是「自埋点起首次观测到」，非真实首现时间，见 north_star DoD-1。
+            f".property('first_seen', __.coalesce(__.values('first_seen'), __.constant({ts})))"
             f".property('protocol','{proto}')"
             f".property('port',{e['port']})"
             f".property('calls',{calls})"
@@ -695,6 +704,12 @@ def batch_upsert_edges(edges: list):
             f".property('error_count',{errors})"
             f".property('error_rate',{error_rate})"
             f".property('call_type','sync')"
+            # source / dependency_kind：本 ETL 的 Calls 边来自 DeepFlow L7 **运行时观测**，
+            # 与 etl_aws / etl_cfn 「声明」出来的静态依赖相对。
+            # 此前 Calls 边**没有任何溯源标记**（实测 18 条边带 source 的 0 条），
+            # 只能靠端点节点的 source='deepflow' 间接猜，无法在图上直接判定其性质。
+            f".property('source','deepflow-etl')"
+            f".property('dependency_kind','dynamic')"
             f".property('active',true)"
             f".property('last_seen',{ts})"
         )
@@ -702,6 +717,125 @@ def batch_upsert_edges(edges: list):
             neptune_query(gremlin)
         except Exception as ex:
             logger.error(f"upsert edge {e['src']}->{e['dst']} failed: {ex}")
+
+    return ts
+
+
+# ─── Calls 边失效对账 ───────────────────────────────────────────────────────
+#
+# 背景：本 ETL 原先只 upsert，从不失效。`active` / `last_seen` 两个字段写了但
+# 全仓库没有任何消费方，导致已消失的依赖永久留在图里且始终 active=true。
+# 2026-08-28 实测：18 条 Calls 边里 17 条陈旧 2-5 个月却全部 active=true，
+# 其中 gateway-service→auth-service 对应的 awesomeshop 命名空间 6 个 Deployment
+# 副本数全为 0（服务已下线），图谱仍声称该依赖活跃并带 376 次调用量。
+# 后果：RCA 把缩容到零的服务当作上游做根因推理。
+
+# 多久未被观测到就标记 active=false。ETL 每 5 分钟一轮，默认 30 分钟 ≈ 6 轮，
+# 留出容错窗口 —— 单轮 L7 查询偶发漏采不应立刻把活依赖判死。
+INACTIVE_AFTER_SECONDS = int(os.environ.get('CALLS_INACTIVE_AFTER_SECONDS', '1800'))
+
+# 硬删除阈值。**默认关闭**：删除是不可逆的生产数据变更，而软删除
+# （active=false）已足以让图谱停止断言不存在的依赖，且保留历史可供追溯。
+# 需要真正清理时显式设 CALLS_EDGE_DROP_ENABLED=true。
+DROP_AFTER_SECONDS = int(os.environ.get('CALLS_DROP_AFTER_SECONDS', '604800'))
+DROP_ENABLED = os.environ.get('CALLS_EDGE_DROP_ENABLED', 'false').lower() == 'true'
+
+
+def reconcile_calls_edges(round_ts: int) -> dict:
+    """把本轮未被观测到的 Calls 边标记为失效。
+
+    与 etl_aws/graph_gc.py 的 _gc_vertices 是同一思路（求差集），
+    但那里只覆盖节点，这里补上边级对账。
+
+    自愈：边一旦重新被观测到，batch_upsert_edges 会把 active 写回 true，
+    因此误判是自动恢复的，不需要人工干预。
+
+    Args:
+        round_ts: 本轮 upsert 使用的时间戳。本轮刷新过的边 last_seen == round_ts，
+                  用严格小于把它们排除在对账范围外。
+
+    Returns:
+        {'marked_inactive': int, 'dropped': int}
+    """
+    stats = {'marked_inactive': 0, 'dropped': 0}
+
+    inactive_before = round_ts - INACTIVE_AFTER_SECONDS
+    try:
+        # 先数一下将被影响的边，便于日志留痕（对账是静默动作，没有日志就无法追溯）
+        cnt = neptune_query(
+            f"g.E().hasLabel('Calls')"
+            f".has('last_seen', lt({inactive_before}))"
+            f".has('active', true).count()"
+        )
+        n = _first_scalar(cnt)
+        if n:
+            neptune_query(
+                f"g.E().hasLabel('Calls')"
+                f".has('last_seen', lt({inactive_before}))"
+                f".has('active', true)"
+                f".property('active', false)"
+                f".iterate()"
+            )
+            stats['marked_inactive'] = n
+            logger.info(
+                f"Calls reconcile: {n} 条边超过 {INACTIVE_AFTER_SECONDS}s 未被观测 → active=false"
+            )
+    except Exception as ex:
+        # 对账失败不能影响本轮 upsert 的成果，但必须可见（本项目历史上
+        # 9 个缺陷都是异常被吞导致的静默失败）
+        logger.warning(f"Calls reconcile (mark inactive) failed: {ex}")
+
+    if not DROP_ENABLED:
+        return stats
+
+    drop_before = round_ts - DROP_AFTER_SECONDS
+    try:
+        cnt = neptune_query(
+            f"g.E().hasLabel('Calls').has('last_seen', lt({drop_before})).count()"
+        )
+        n = _first_scalar(cnt)
+        if n:
+            neptune_query(
+                f"g.E().hasLabel('Calls')"
+                f".has('last_seen', lt({drop_before}))"
+                f".drop().iterate()"
+            )
+            stats['dropped'] = n
+            logger.info(
+                f"Calls reconcile: {n} 条边超过 {DROP_AFTER_SECONDS}s 未被观测 → 已删除"
+            )
+    except Exception as ex:
+        logger.warning(f"Calls reconcile (drop) failed: {ex}")
+
+    return stats
+
+
+def _first_scalar(resp) -> int:
+    """从 Gremlin count() 响应里取出第一个整数，取不到返回 0。
+
+    GraphSON 的包装层数因 Neptune 版本而异，这里做宽松解析，
+    解析不出来就当 0 —— 对账是尽力而为，不该因为解析细节炸掉整轮 ETL。
+    """
+    try:
+        if isinstance(resp, dict):
+            data = resp.get('result', {}).get('data', resp)
+            if isinstance(data, dict):
+                data = data.get('@value', data)
+            if isinstance(data, list) and data:
+                v = data[0]
+                if isinstance(v, dict):
+                    v = v.get('@value', 0)
+                return int(v)
+        if isinstance(resp, list) and resp:
+            v = resp[0]
+            if isinstance(v, dict):
+                v = v.get('@value', 0)
+            return int(v)
+        if isinstance(resp, (int, float)):
+            return int(resp)
+    except (TypeError, ValueError, AttributeError):
+        pass
+    return 0
 
 def batch_fetch_dependency_and_update(service_names: list, l7_metrics: dict,
                                        ip_map_by_name: dict, replica_counts: dict,
@@ -938,7 +1072,11 @@ ORDER BY calls DESC LIMIT 100 FORMAT TSV
 
     # 6. 写入边（复用连接，无需 get_vertex_id）
     logger.info(f"upsert {len(edges_list)} 条边...")
-    batch_upsert_edges(edges_list)
+    round_ts = batch_upsert_edges(edges_list)
+
+    # 6.5 Calls 边失效对账 —— 必须紧跟 upsert，用同一个 round_ts 做分界：
+    # 本轮刷新过的边 last_seen == round_ts，未刷新的严格小于它。
+    reconcile_stats = reconcile_calls_edges(round_ts)
 
     # 7. 副本数 + resource limits
     replica_counts = fetch_replica_counts(ip_map)
@@ -1014,6 +1152,8 @@ ORDER BY calls DESC LIMIT 100 FORMAT TSV
                     f"  __.inE('DependsOn').where(__.outV().hasId('{svc_vid}')),"
                     f"  __.addE('DependsOn').from('s')"
                     f").property('source','deepflow-etl')"
+                    # ECR 启动依赖同样源自运行时观测（实际拉取的镜像）→ dynamic
+                    f".property('dependency_kind','dynamic')"
                     f".property('phase','startup')"
                     f".property('strength','strong')"
                     f".property('last_updated',{ts_ecr})"
@@ -1026,7 +1166,10 @@ ORDER BY calls DESC LIMIT 100 FORMAT TSV
 
     duration = int((time.time() - t0) * 1000)
     logger.info(f"=== ETL 完成: nodes={len(nodes_list)}, edges={len(edges_list)}, {duration}ms ===")
-    return {"nodes": len(nodes_list), "edges": len(edges_list), "duration_ms": duration}
+    return {"nodes": len(nodes_list), "edges": len(edges_list),
+            "marked_inactive": reconcile_stats.get("marked_inactive", 0),
+            "dropped": reconcile_stats.get("dropped", 0),
+            "duration_ms": duration}
 
 
 def handler(event, context):
