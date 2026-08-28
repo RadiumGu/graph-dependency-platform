@@ -441,20 +441,6 @@ payforadoption   旧=['StepFn','stepprice']                        新=同  ✅
 
 ---
 
-### T-022 · 收敛 Neptune 访问层为 graph SDK · `todo`
-
-全仓 **6 份** `neptune_client*.py`。`dr-plan-generator/graph/neptune_client.py`
-注释直接写着 "Mirrors the pattern in rca/neptune/neptune_client.py"。
-本该消除重复的 `infra/lambda/shared/python/neptune_client_base.py`
-**只支持 Gremlin、只服务 ETL 写入**,查询侧三模块谁都没用它。
-
-顺带:`chaos/code/runner/neptune_client.py` 用 `urllib.request.urlopen`,
-**每次调用重新握手**(其余几套都已用 `requests.Session` 复用)。
-
-**依赖**:建议在 T-013 之后 —— 让 MCP 端点与三模块共用同一层。
-
----
-
 ### T-023 · `causal_weight` 接入评分 + 时间衰减 · `todo`
 
 代码自注释(`rca/actions/incident_writer.py:250-253`)明说
@@ -943,27 +929,100 @@ AttributeError: <module 'handler' from '.../rca/handler.py'>
 
 ---
 
-### T-102 · NL 查询「上下游拓扑」失败 · `todo` · P2
+### T-102 · NL 查询「上下游拓扑」失败 · `done`(真实产品问题)
 
-`test_s6_07_common_nl_query_patterns[petsite 的上下游服务]` 与
-`test_20_integration_schema` 的对应用例失败。需真实 Bedrock 调用,
-可能是 NL→Cypher 生成的查询与新 schema(本次加的 `dependency_kind` /
-`active` / `live` 语义)不匹配 —— 若是,属本次改动的回归,须优先处理。
+**不是测试波动,也不是本次 schema 改动的回归。** 实测 4 次里 3 次失败,
+捕获到 LLM 生成的 Cypher:
+
+```cypher
+RETURN 'downstream' AS direction, ...
+WHERE downstream IS NOT NULL        ← WHERE 在 RETURN 之后，语法非法
+UNION ...
+```
+
+Neptune 回 400 Bad Request —— 是 **LLM 输出质量问题**,不是 Neptune 的限制。
+
+而「某服务的上下游」是依赖图谱**最核心的问题**,75% 失败率意味着
+「图谱可被各类 agent 快速调用」这条目标**在最常用的问法上并不成立**。
+
+**根因是 `query()` 对两种失败的处理是反的**:
+
+| 失败类型 | 原处理 |
+|---|---|
+| 空结果 | `_retry_with_hint` 重试 |
+| 执行失败 | 直接 `return error`,**不重试** |
+
+可语法错误恰恰是 LLM 看到报错就能改对的情形。新增 `_retry_with_error()`,
+把 Neptune 原始错误 + 失败的 cypher 回喂给 LLM,并点明三条常见约束
+(WHERE 位置、UNION 列名一致、Neptune 不支持 CALL 子查询)。
+**只重试一次** —— 再失败就把错误交给调用方,不无限烧 Bedrock 调用。
+
+**实测:6/6 成功,其中 4 次靠重试救回**(改前 4 次里 3 次直接失败)。
+
+补两个单测锁住行为(用桩,不打真实 Bedrock/Neptune):
+
+| 测试 | 断言 |
+|---|---|
+| `test_ub2_03b` | 重试能救回,且重试提示**必须**包含真实错误与 WHERE 约束 |
+| `test_ub2_03c` | 两次都失败则返回 error,最多生成两次(不无限重试) |
+
+- 2026-08-28T20:32Z cycle-15: 执行错误重试 + 2 个单测,commit `ce5aced`
 
 ---
 
-### T-103 · 声明可选测试依赖与外部工具 · `todo` · P3
+### T-103 · 声明可选测试依赖与外部工具 · `done`
 
-两条失败纯属环境缺件,不是缺陷:
+两条测试在缺件时恒红,但都不是代码缺陷:
 
-| 失败 | 缺什么 |
+| 失败 | 原因 |
 |---|---|
-| `test_s0_06_cdk_synth` | CDK CLI(`npm i -g aws-cdk`) |
-| `test_strands_memory_under_2gb` | `strands` 包(未装 → 引擎回退 direct) |
+| `test_s0_06_cdk_synth` | `FileNotFoundError: 'cdk'`(CDK CLI 未装) |
+| `test_strands_memory_under_2gb` | `assert 'direct' == 'strands'`(strands 未装,`make_layer2_engine` 按设计回退) |
 
-这类测试应当在依赖缺失时 **skip 而非 fail** —— 否则每次跑套件都有两条
-恒红,久而久之所有人都学会忽略红色,真缺陷也一起被忽略。
-`requirements-dev.txt` 补可选段并在测试里加 `pytest.importorskip` / 工具存在性检查。
+**恒红项的危害不是它本身,而是它训练所有人忽略红色** —— 真缺陷会跟着被忽略。
+
+改为 `shutil.which` 探测 / `pytest.importorskip`,跳过原因里写明安装方式,
+并在 `requirements-dev.txt` 补「可选依赖」与「外部工具」两段,让跳过原因有据可查。
+
+**顺带修掉一处同类泄漏**:`test_layer2_memory.py` 的两个测试都
+`os.environ["LAYER2_ENGINE"] = ...` 且**从不还原**,泄漏到后续测试 ——
+与本次修掉的 `sys.modules` 泄漏同一类(改全局状态却不恢复,结果取决于执行顺序)。
+加 autouse fixture 还原。
+
+- 2026-08-28T20:38Z cycle-15: 缺件改 skip + 依赖声明 + 环境变量还原,commit `ce5aced`
+
+---
+
+## 🎯 里程碑:测试套件首次全绿(2026-08-28T20:40Z · cycle-15)
+
+```
+cycle-11 末  426 collected / 2 collection errors（此前套件在本机根本跑不起来）
+cycle-12     466 collected / 0 collection errors
+             292 passed /  17 failed / 138 skipped / 78 errors
+cycle-13     312 passed /  10 failed / 144 skipped /  0 errors  ← error 归零
+cycle-14     322 passed /   2 failed / 145 skipped /  0 errors
+cycle-15     325 passed /   0 failed / 145 skipped /  0 errors  ← 全绿
+```
+
+**连续两次运行结果一致(325 passed),非侥幸。**
+数据零残留:向量 8 条、Incident 无今日残留、图谱 867 节点。
+
+这条路上一共查清了 7 个根因,其中**只有 2 个是"测试写错了"**,
+其余 5 个是真实缺陷或真实的环境/数据问题:
+
+| 根因 | 性质 | 影响 |
+|---|---|---|
+| profile `${}` 占位符从不展开 | **真缺陷** | chaos 写图谱全部 DNS 失败(14 红) |
+| conftest 把 Lambda 部署包放进全局 sys.path | **真缺陷** | 整个 session 用 vendored 副本 |
+| 两个同名包互相遮蔽(collectors + handler) | **真缺陷** | 12 error + 4 失败 |
+| `base.py` f-string 在 3.12 前无法解析 | **真缺陷** | 78 error |
+| 向量索引 56% 是孤儿 | **真缺陷** | 给 RCA 喂无法核实的先例 |
+| Q18 测试写死旧时间戳 | 测试脆弱 | 随数据累积静默失效 |
+| `bedrock_timeout` 断言实现细节 | 测试过期 | —— |
+
+**教训**:「测试红了」的默认假设不该是「测试写错了」。7 个根因里 5 个是真问题,
+而它们全部被"套件跑不起来"掩盖了 —— 一个跑不起来的测试套件比没有测试更危险,
+因为它让人以为有覆盖。
 
 ---
 
@@ -1147,3 +1206,18 @@ PR 正文已备在 `todo/goal-loop/PR_BODY.md`。
   基线 312 passed/10 failed → **322 passed / 2 failed**,
   剩余 2 条均为环境缺件(cdk CLI、strands),非代码缺陷。
   生产侧清理:向量 56 → 8,Incident 残留 15 → 0,图谱 867 节点/1341 边
+- 2026-08-28T20:40Z cycle-15 T-102+T-103: **套件首次全绿 325 passed / 0 failed**,
+  连续两次一致。
+  T-102 是真实产品问题不是测试波动:LLM 生成 `WHERE` 在 `RETURN` 之后的非法
+  Cypher,Neptune 回 400,而「某服务的上下游」是依赖图谱最核心的问法 ——
+  75% 失败率意味着「可被 agent 快速调用」在最常用问法上不成立。
+  根因是 query() 对两种失败处理**反了**:空结果会重试,执行失败直接返回,
+  可语法错误恰恰是 LLM 看到报错就能改对的。加 _retry_with_error 回喂错误,
+  实测 6/6 成功(4 次靠重试救回),并补 2 个桩测试锁住行为。
+  T-103 让两条环境缺件从 fail 改 skip —— 恒红项的真正危害是训练所有人忽略
+  红色,真缺陷会跟着被忽略。顺带修 test_layer2_memory 设 LAYER2_ENGINE
+  从不还原的泄漏(与本次修的 sys.modules 泄漏同一类)。
+  **回顾这条路上的 7 个根因,只有 2 个是"测试写错了"**,其余 5 个是真缺陷:
+  profile 占位符不展开、conftest 把部署包入全局 sys.path、两个同名包遮蔽、
+  base.py f-string 语法、向量索引 56% 孤儿。它们全部被"套件跑不起来"掩盖 ——
+  一个跑不起来的测试套件比没有测试更危险,因为它让人以为有覆盖
