@@ -612,8 +612,50 @@ AttributeError: module 'core.graph_rag_reporter' has no attribute
 
 ---
 
-### T-093 · 提交工作树改动到特性分支并开 PR · `todo`
+### T-093 · 提交工作树改动到特性分支并开 PR · `blocked`(推送被安全策略拦截)
 
+**已完成**:分支 `fix/graph-single-source-of-truth`,**10 个主题化 commit**,
+48 文件 +4773/-446。刻意分主题而非一个巨型提交 —— 20+ 文件挤在一起没法 review。
+
+| commit | 内容 |
+|---|---|
+| `df13410` | chore: 外部研究归档不入库 |
+| `bfc32a6` | fix(rca): 告警聚合链路的 5 个静默失败 + deploy.sh |
+| `47db216` | fix(rca): 内联 embed/chunker,移除开发机硬编码路径 |
+| `4a54b22` | feat(graph): 依赖边失效对账、first_seen、静/动态区分 |
+| `6615e04` | fix(chaos): 统一韧性分数属性名,修复从未闭合的反馈闭环 |
+| `3c58d2f` | refactor(rca): 消除服务映射硬编码副本 |
+| `53059b6` | feat(mcp): 图谱查询 MCP 端点 |
+| `c0f2341` | test: schema↔活图一致性校验 + 修 conftest 路径 |
+| `e016028` | fix(infra): CDK arm64 声明、layer 双架构、EKS RBAC |
+| `269949e` | docs: 盘点/评估/goal-loop 锚文件/README 校正 |
+
+**推送前检查全部通过**:
+
+```
+机密扫描(webhook/AKIA/私钥/password)   未发现 ✅
+cdk.json 是否误入 slackWebhookUrl      无 ✅（刻意未写入，它是机密）
+工作树                                 干净，无未提交残留 ✅
+外部研究归档                           未入库 ✅
+所有改动 .py 语法                       全部通过 ✅
+```
+
+**阻塞点**:`git push` 被 Kiro Crew 安全策略拦截(**非用户取消**)。
+提交已全部在本地分支上,推送与开 PR 需用户执行:
+
+```bash
+cd /home/ec2-user/works/graph-dependency-platform
+git push -u origin fix/graph-single-source-of-truth
+gh pr create --base main --head fix/graph-single-source-of-truth \
+  --title "fix: 让依赖图谱停止断言不存在的依赖" \
+  --body-file todo/goal-loop/PR_BODY.md
+```
+
+PR 正文已备在 `todo/goal-loop/PR_BODY.md`。
+
+- 2026-08-28T18:12Z cycle-9: 10 个主题化 commit 完成,推送被策略拦截,已备好 PR 正文
+
+**原始清单(留档)**:
 2026-08-28 会话累积的未提交改动(README ×2、`rca/handler.py`、
 `rca/core/alert_buffer.py`、`rca/core/graph_rag_reporter.py`、
 `rca/actions/action_executor.py`、`rca/embed.py`(新增)、`rca/chunker.py`(新增)、
