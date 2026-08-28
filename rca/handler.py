@@ -47,7 +47,8 @@ def lambda_handler(event, context):
 
     logger.info(f"RCA triggered: {json.dumps(event)[:300]}")
 
-    if 'Records' in event:
+    is_sns_event = 'Records' in event
+    if is_sns_event:
         msg_str = event['Records'][0]['Sns']['Message']
         try:
             msg = json.loads(msg_str)
@@ -76,6 +77,44 @@ def lambda_handler(event, context):
         except Exception as e:
             logger.error(f"Resolve failed: {e}")
             return {'statusCode': 500, 'body': str(e)}
+
+    # ── 告警聚合缓冲（仅 SNS 路径）────────────────────────────────────────────
+    # 设计意图：SNS 告警可能成风暴（100 条告警 → 100 次完整 RCA）。
+    # 缓冲后由 window_flush_handler 在窗口到期时统一处理：
+    #   flush_window → TopologyCorrelator 按拓扑聚合 → 每组只跑一次 RCA。
+    #
+    # 直接 invoke（无 'Records'）不走缓冲，保持同步返回 RCA 结果：
+    #   chaos/code/runner/rca.py 的 RCATrigger 依赖同步结果做准确性校验，
+    #   手动排障调用同理。
+    #
+    # ALERT_BUFFER_ENABLED=false 可关闭缓冲，退回逐条同步处理（无需改代码）。
+    if is_sns_event and os.environ.get('ALERT_BUFFER_ENABLED', 'true').lower() != 'false':
+        try:
+            from core.alert_buffer import AlertBuffer
+            from core.event_normalizer import EventNormalizer
+
+            unified = EventNormalizer().normalize(signal)
+            if unified is None:
+                logger.info("AlertBuffer: normalize returned None, skipping")
+                return {'statusCode': 200, 'body': 'skipped (not normalizable)'}
+
+            is_first = AlertBuffer().put_alert(unified)
+            logger.info(
+                f"AlertBuffer: buffered fingerprint={unified.fingerprint[:8]}... "
+                f"svc={unified.service_name} first_in_window={is_first}"
+            )
+            return {
+                'statusCode': 202,
+                'body': json.dumps({
+                    'buffered': True,
+                    'fingerprint': unified.fingerprint,
+                    'service': unified.service_name,
+                    'first_in_window': is_first,
+                }, ensure_ascii=False),
+            }
+        except Exception as e:
+            # 缓冲失败不能吞掉告警：记录后继续走同步 RCA，保证不丢信号
+            logger.error(f"AlertBuffer failed, falling back to sync RCA: {e}", exc_info=True)
 
     # 故障分类
     try:

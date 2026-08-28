@@ -23,7 +23,13 @@ logger = logging.getLogger(__name__)
 
 from shared import get_region
 REGION = get_region()
-EKS_CLUSTER = os.environ.get('EKS_CLUSTER', '')
+# 环境变量命名兼容：petsite-rca-engine 设的是 EKS_CLUSTER，
+# AlertBufferStack 给 gp-window-flush 设的是 EKS_CLUSTER_NAME（其余 collectors 也都读后者）。
+# 本模块原先只读 EKS_CLUSTER，在 flush 路径上会拿到空串，
+# 导致 get_k8s_endpoint('') 失败、半自动动作无法定位集群。
+EKS_CLUSTER = (os.environ.get('EKS_CLUSTER')
+               or os.environ.get('EKS_CLUSTER_NAME')
+               or 'PetSite')
 K8S_NAMESPACE = os.environ.get('K8S_NAMESPACE', 'default')
 AUDIT_LOG_GROUP = '/rca/audit'
 RATE_LIMIT_WINDOW = 1800  # 30分钟
