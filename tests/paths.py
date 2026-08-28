@@ -24,7 +24,31 @@
 (如 CI 里仓库被挂到别处、或只检出部分子树)下运行。
 """
 import os
+import sys
+import warnings
 from pathlib import Path
+
+# ── Python 版本检查 ────────────────────────────────────────────────────────
+# 本仓库有 661 处 py3.10+ 联合类型语法(`list | None` 等)。注意这些是**运行时**
+# 求值失败(py3.9 报 TypeError),语法本身合法 —— 所以 py_compile 全过,
+# 但导入即崩,失败清单极具误导性。
+# 实测同一 commit:py3.9 是 173 passed/51 failed,py3.11 是 292 passed/17 failed。
+#
+# 刻意用 warning 而非 hard fail:py3.9 下仍有 173 个测试真实通过,直接拦死会
+# 白扔掉这部分价值。但必须**响亮**提示,否则排查者会把版本不兼容当成代码缺陷。
+if sys.version_info < (3, 10):
+    warnings.warn(
+        f"\n{'='*72}\n"
+        f"⚠️  当前 Python {sys.version_info.major}.{sys.version_info.minor} "
+        f"低于本仓库要求的 3.10\n"
+        f"    仓库有 661 处 py3.10+ 联合类型语法(list | None 等),\n"
+        f"    在此版本下约 34 个失败与 71 个 error 是**版本不兼容而非代码缺陷**。\n"
+        f"    请改用: python3.11 -m pytest tests/\n"
+        f"    依赖安装: python3.11 -m pip install -r requirements-dev.txt\n"
+        f"{'='*72}",
+        RuntimeWarning,
+        stacklevel=2,
+    )
 
 # 本文件位于 <repo>/tests/paths.py → 上两级即仓库根
 PROJECT_ROOT = os.environ.get(

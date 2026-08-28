@@ -48,6 +48,35 @@ for _cfg_path in [
 
 sys.modules['config'] = _unified_config
 
+# === Unified neptune_client_base stub ===
+# neptune_client_base 在生产中来自 Lambda Layer（挂在 /opt/python），测试环境没有,
+# 所以每个 ETL 单测都得自己塞一个桩。原先是**三份各不相同的桩**:
+#
+#   test_12_unit_etl_aws.py   无条件覆盖   3 个属性（缺 REGION）
+#   test_13_unit_etl_deepflow.py  if not in sys.modules   4 个属性
+#   test_14_unit_etl_cfn.py       if not in sys.modules   4 个属性
+#
+# 后果:字母序 test_12 先执行,它无条件塞进缺 REGION 的桩;test_13/14 的条件判断
+# 因此跳过,导入真实 ETL 模块时报
+#   ImportError: cannot import name 'REGION' from 'neptune_client_base'
+#
+# 这个冲突长期被**掩盖**:test_12 在 `import moto` 处就失败(moto 未安装),
+# 根本走不到塞桩那行。2026-08-28 按 requirements-dev.txt 补齐 moto 之后立即暴露
+# —— 即"缺依赖"意外地维持了套件表面正常。属跨测试模块的全局状态泄漏。
+#
+# 修法:在此建立**唯一**的桩,按真实模块的完整公开面来写
+# （infra/lambda/shared/python/neptune_client_base.py:22-65）。
+# conftest 先于所有测试模块加载,故各测试文件里的 `if not in sys.modules` 判断
+# 会一致地跳过,不再取决于收集顺序。
+_nc_base = types.ModuleType('neptune_client_base')
+_nc_base.NEPTUNE_ENDPOINT = os.environ.get('NEPTUNE_ENDPOINT', 'test-endpoint')
+_nc_base.NEPTUNE_PORT = int(os.environ.get('NEPTUNE_PORT', '8182'))
+_nc_base.REGION = os.environ.get('REGION', os.environ.get('AWS_DEFAULT_REGION', 'ap-northeast-1'))
+_nc_base.neptune_query = lambda gremlin: {'result': {'data': {'@value': []}}}
+_nc_base.safe_str = lambda s: str(s).replace("'", "\\'").replace('"', '\\"')[:128] if s is not None else ''
+_nc_base.extract_value = lambda v: v.get('@value', v) if isinstance(v, dict) else v
+sys.modules['neptune_client_base'] = _nc_base
+
 # === Environment defaults ===
 os.environ.setdefault('NEPTUNE_ENDPOINT', 'petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com')
 os.environ.setdefault('REGION', 'ap-northeast-1')

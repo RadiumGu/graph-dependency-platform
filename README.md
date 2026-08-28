@@ -537,6 +537,56 @@ python3 main.py auto --max-hypotheses 5 --top 3 --dry-run
 
 ---
 
+## Running Tests
+
+> **Python 3.10+ is required.** This repository uses PEP 604 union syntax
+> (`list | None`) in 661 places. These are *runtime* evaluation failures on
+> Python 3.9 (`TypeError`), not syntax errors — so `py_compile` passes while
+> imports crash, making the failure list highly misleading. The Lambda runtime is
+> Python 3.12, so production is unaffected — this is purely a local/CI
+> reproducibility concern.
+
+```bash
+python3.11 -m pip install -r requirements-dev.txt
+
+# Full suite
+python3.11 -m pytest tests/
+
+# Skip the Streamlit demo-UI tests (heavy dependency, tests demo/ not production)
+python3.11 -m pytest tests/ --ignore=tests/test_22_ui_streamlit.py
+```
+
+Measured difference between interpreters on the same commit:
+
+| Python | Result |
+|--------|--------|
+| 3.9.25 | 173 passed / 51 failed / 112 skipped / 90 errors |
+| 3.11.15 | **292 passed / 17 failed** / 138 skipped / 19 errors |
+
+### Test configuration
+
+| Concern | Where |
+|---------|-------|
+| pytest settings, custom markers | [`pytest.ini`](pytest.ini) |
+| Test + dev dependencies | [`requirements-dev.txt`](requirements-dev.txt) |
+| Repo-root path derivation (single source) | [`tests/paths.py`](tests/paths.py) |
+| Shared fixtures, `sys.path` wiring | [`tests/conftest.py`](tests/conftest.py) |
+
+Tests that need a live Neptune connection carry `@pytest.mark.neptune` and skip
+themselves when `NEPTUNE_ENDPOINT` is unset. To run them:
+
+```bash
+export NEPTUNE_ENDPOINT=<your-cluster>.neptune.amazonaws.com
+export NEPTUNE_PORT=8182 AWS_DEFAULT_REGION=<region>
+python3.11 -m pytest tests/ -m neptune
+```
+
+If the repository lives somewhere `tests/paths.py` cannot derive (a partial
+checkout, or a CI layout that relocates the tree), set `GDP_PROJECT_ROOT` to the
+repo root explicitly.
+
+---
+
 ## Design Documents
 
 | Document | Location |

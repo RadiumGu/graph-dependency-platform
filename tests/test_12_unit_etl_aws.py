@@ -30,13 +30,20 @@ AWS_REGION = 'ap-northeast-1'
 from paths import ETL_AWS_DIR as ETL_PATH
 
 # ── 1. Mock neptune_client_base (Lambda Layer not present in test env) ───────
+# conftest.py 已建立**唯一**的完整桩（含 REGION/NEPTUNE_ENDPOINT/NEPTUNE_PORT）。
+# 本文件原先在此**无条件**覆盖它,且桩里没有 REGION —— 因字母序本文件先执行,
+# 会让 test_13/test_14 导入真实 ETL 模块时报
+#   ImportError: cannot import name 'REGION' from 'neptune_client_base'
+# 改为仅在 conftest 未提供时兜底,与 test_13/test_14 的写法一致。
 _mock_nc_base = types.ModuleType('neptune_client_base')
 _mock_nc_base.neptune_query = MagicMock(
     return_value={'result': {'data': {'@value': []}}}
 )
 _mock_nc_base.safe_str = lambda s: str(s).replace("'", "\\'") if s is not None else ''
 _mock_nc_base.extract_value = lambda v: v.get('@value', v) if isinstance(v, dict) else v
-sys.modules['neptune_client_base'] = _mock_nc_base
+_mock_nc_base.REGION = AWS_REGION
+if 'neptune_client_base' not in sys.modules:
+    sys.modules['neptune_client_base'] = _mock_nc_base
 
 # ── 2. Merge etl_aws config into sys.modules['config'] ──────────────────────
 # conftest.py sets sys.modules['config'] to a merged rca+dr config;
