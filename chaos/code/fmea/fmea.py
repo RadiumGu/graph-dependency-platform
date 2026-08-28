@@ -363,9 +363,16 @@ def main():
     parser = argparse.ArgumentParser(
         description="FMEA 矩阵生成器 — 从 Neptune + DynamoDB 计算 RPN"
     )
+    # 默认输出路径原先硬编码 /home/ubuntu/tech/chaos/validation-results/ ——
+    # 开发机上 chaos 是独立树时的路径。改为从本文件位置推导：
+    # 本文件在 <repo>/chaos/code/fmea/fmea.py，故上溯三级到仓库根。
+    _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__)))))
+    _default_out = os.path.join(
+        _repo_root, 'chaos', 'validation-results', 'fmea-report.md')
     parser.add_argument(
         "--output", "-o",
-        default="/home/ubuntu/tech/chaos/validation-results/fmea-report.md",
+        default=_default_out,
         help="输出 Markdown 文件路径（默认: validation-results/fmea-report.md）",
     )
     parser.add_argument(

@@ -51,10 +51,14 @@ TYPE_TO_LABEL = {
     'AWS::Lambda::Function': 'LambdaFunction',
     'AWS::StepFunctions::StateMachine': 'StepFunction',
     'AWS::DynamoDB::Table': 'DynamoDBTable',
-    'AWS::SQS::Queue': 'Queue',
+    'AWS::SQS::Queue': 'SQSQueue',
     'AWS::ElasticLoadBalancingV2::LoadBalancer': 'LoadBalancer',
     # TargetGroup 不单独建节点（是 ALB 内部路由细节，不是业务拓扑节点）
     # 'AWS::ElasticLoadBalancingV2::TargetGroup': 'Microservice',  # 已移除：TG ≠ Microservice
+    # 下面两条本账号目前零实例，故刻意**不**写进 profiles/petsite.yaml 的 schema：
+    # schema 会喂给 LLM 做自然语言查询，声明零实例类型等于邀请它推理不存在的东西。
+    # 映射本身保留 —— 若资源将来出现，走 fallback split('::')[-1] 会得到
+    # 'RestApi'/'Stream'，比现在这两个名字更差。真出现时须同步补 schema。
     'AWS::ApiGateway::RestApi': 'APIGateway',
     'AWS::SNS::Topic': 'SNSTopic',
     'AWS::Kinesis::Stream': 'KinesisStream',

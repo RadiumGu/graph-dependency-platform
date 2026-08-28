@@ -110,7 +110,9 @@ st.markdown(
 )
 
 # ── 实验目录 ──────────────────────────────────────────────────────────────────
-CHAOS_CODE_DIR = Path("/home/ubuntu/tech/chaos/code")
+# 原先硬编码 Path("/home/ubuntu/tech/chaos/code") —— 开发机上 chaos 是独立树时的
+# 路径。改为从本文件位置推导：本文件在 <repo>/demo/pages/4_Chaos_Engineering.py。
+CHAOS_CODE_DIR = Path(__file__).resolve().parents[2] / "chaos" / "code"
 
 EXPERIMENT_CATALOG = [
     # --- FIS 实验 ---

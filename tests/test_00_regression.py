@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-PROJECT_ROOT = '/home/ubuntu/tech/graph-dependency-platform'
+from paths import PROJECT_ROOT
 
 
 def test_r01_rca_core_imports():

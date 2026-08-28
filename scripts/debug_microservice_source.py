@@ -6,7 +6,10 @@ os.environ['AWS_REGION'] = 'ap-northeast-1'
 os.environ['AWS_DEFAULT_REGION'] = 'ap-northeast-1'
 os.environ['NEPTUNE_ENDPOINT'] = 'petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com'
 
-sys.path.insert(0, '/home/ubuntu/tech/graph-dependency-platform/infra/lambda/shared/python')
+# 原先硬编码 '/home/ubuntu/tech/graph-dependency-platform/infra/lambda/shared/python'
+# —— 最初开发机路径。改为从本文件位置推导：本文件在 <repo>/scripts/。
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_REPO_ROOT, 'infra', 'lambda', 'shared', 'python'))
 from neptune_client_base import neptune_query
 
 # 查所有 Microservice 节点的 fault_boundary / service_type / source

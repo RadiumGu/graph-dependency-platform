@@ -33,7 +33,7 @@ import pytest
 
 # ─── 路径配置 ─────────────────────────────────────────────────────────────────
 
-PROJECT_ROOT = "/home/ubuntu/tech/graph-dependency-platform"
+from paths import PROJECT_ROOT
 RUNNER_PATH = os.path.join(PROJECT_ROOT, "chaos", "code")
 
 for _p in [

@@ -16,7 +16,7 @@ import types
 
 import pytest
 
-PROJECT_ROOT = "/home/ubuntu/tech/graph-dependency-platform"
+from paths import PROJECT_ROOT
 ETL_DIR = os.path.join(PROJECT_ROOT, "infra", "lambda", "etl_aws")
 INFRA_DIR = os.path.join(PROJECT_ROOT, "infra")
 RCA_DIR = os.path.join(PROJECT_ROOT, "rca")

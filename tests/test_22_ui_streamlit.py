@@ -13,7 +13,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 # ── 路径设置 ──────────────────────────────────────────────────────────────────
-PROJECT_ROOT = "/home/ubuntu/tech/graph-dependency-platform"
+from paths import PROJECT_ROOT
 DEMO_DIR = os.path.join(PROJECT_ROOT, "demo")
 PAGES_DIR = os.path.join(DEMO_DIR, "pages")
 

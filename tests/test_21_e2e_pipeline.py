@@ -16,7 +16,7 @@ import pytest
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = "/home/ubuntu/tech/graph-dependency-platform"
+from paths import PROJECT_ROOT
 
 # ── S7-01 ────────────────────────────────────────────────────────────────────
 

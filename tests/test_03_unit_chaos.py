@@ -9,7 +9,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-PROJECT_ROOT = '/home/ubuntu/tech/graph-dependency-platform'
+from paths import PROJECT_ROOT
 
 
 @pytest.fixture(scope='module')

@@ -27,7 +27,7 @@ os.environ.setdefault('ENVIRONMENT', 'test')
 os.environ.setdefault('AWS_DEFAULT_REGION', 'ap-northeast-1')
 
 AWS_REGION = 'ap-northeast-1'
-ETL_PATH = '/home/ubuntu/tech/graph-dependency-platform/infra/lambda/etl_aws'
+from paths import ETL_AWS_DIR as ETL_PATH
 
 # ── 1. Mock neptune_client_base (Lambda Layer not present in test env) ───────
 _mock_nc_base = types.ModuleType('neptune_client_base')

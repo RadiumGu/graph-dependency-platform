@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-PROJECT_ROOT = "/home/ubuntu/tech/graph-dependency-platform"
+from paths import PROJECT_ROOT
 RCA_DIR = os.path.join(PROJECT_ROOT, "rca")
 
 if RCA_DIR not in sys.path:

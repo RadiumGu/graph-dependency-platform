@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-PROJECT_ROOT = "/home/ubuntu/tech/graph-dependency-platform"
+from paths import PROJECT_ROOT
 DR_PLAN_DIR = os.path.join(PROJECT_ROOT, "dr-plan-generator")
 if DR_PLAN_DIR not in sys.path:
     sys.path.insert(0, DR_PLAN_DIR)
