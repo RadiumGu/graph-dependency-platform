@@ -142,6 +142,66 @@ P2 + 规则分饱和 1.0 + LLM 说 35（证据很弱）
 
 ---
 
+## 部署包已构建并离线验证(2026-08-28 22:08)
+
+按 arm64 配方构建了 `petsite-rca-engine` 的包并做了能在本机做的全部验证。
+**这样部署决定就不再是"赌一个未验证的包"**,而是"提升一个已验证的包"。
+
+### 通过的检查
+
+| 检查 | 结果 |
+|---|---|
+| 包内目录齐备(`shared` / `profiles` / `core` / `neptune` / `collectors` / `actions` / `search` / `engines`) | ✅ 全部存在 |
+| 依赖齐备(`requests` / `yaml` / `pydantic` / `pydantic_core`) | ✅ 全部存在 |
+| `.so` 架构 | ✅ 全部 `cpython-312-aarch64`,**零** x86-64 混入 |
+| 无本机 py3.9 产物残留 | ✅ 无 `cp39*` |
+| **包内每个 `.py` 与分支逐文件对照** | ✅ **0 差异** |
+| 纯 Python 模块导入 | ✅ 10/13 通过 |
+
+前两项正是历史上那次生产中断的两个原因(缺 `shared/`、缺 `pydantic`);
+第三项是那次 ARM 迁移踩的坑(aarch64 `.so` 跑在 x86_64 上静默降级)。
+
+### ⚠️ 本机验证的固有限制 —— 必须知情
+
+3 个模块导入失败,报 `No module named 'pydantic_core._pydantic_core'`。
+**这不是包的缺陷**:`.so` 是 `cp312`,而本机只有 python3.11,**无法加载 cp312 扩展**。
+
+也就是说:**本机只能验证纯 Python 部分,验证不了运行时相关的问题。**
+这恰恰解释了早先那次生产中断为何没被本地验证拦住 —— 唯一能真正验证的是 canary。
+
+所以「已离线验证」的含义是:排除了打包错误(缺文件、缺依赖、错架构、
+与分支不一致),但**没有**也不可能排除运行时行为问题。canary 仍然必要。
+
+### 产物位置
+
+zip 在 `$KIROCREW_SCRATCH/rca-engine-2208.zip`(3.9M)。
+**注意该目录随会话结束回收**,所以真正可靠的是上面那份配方 —— 它已验证可复现。
+
+---
+
+## 方法学更正:标记字符串匹配不可靠(第 5 次)
+
+上面「按标记字符串精确判定」那张表里,**「删除硬编码服务映射」一项的判定方法是
+不可靠的** —— 我用裸词 `registry` 做标记,而 cycle-5 实际改成的是
+`registry.get_cloudwatch_config()`,同一个标记在构建包上也误报为「缺失」。
+
+已用**文件对照**复核该项:生产 538 行 / 分支 550 行,生产里
+`SERVICE_FUNCTION_MAP = {...}` 硬编码字典仍在 —— **结论站得住,该修复确实未部署**。
+但得出结论的方法当时是运气好,不是严谨。
+
+其余 ❌ 项用的都是**唯一标识符名**(`q19_topology_changes`、`prior_root_cause_rate`、
+`_get_frozen_creds`、`AUTO_REQUIRES_LLM_CONFIDENCE`、`raw_score`、
+`delete_incident_vectors`、`_default_namespace`、`generate_group_report`、
+`FEATURE_FLAGS`),这类名字无法被改写措辞,加上 8 个文件的行数差异、
+以及**直接在生产代码上执行** `decision_engine` 求值,结论是可靠的。
+
+**结论**:对源码做判定应优先用**逐文件 diff 对照权威源**,而不是子串匹配。
+这已经是文本匹配第 5 次误导我(前四次:裸 `grep -c` 数装饰器、正则把注释掉的
+映射条目算成生效、把 docstring 散文当代码、把三引号字符串当 docstring)。
+本次的区别是我立刻怀疑了自己的标记并用 diff 复核,而不是去追一个不存在的缺陷。
+
+---
+
 ## 顺带修掉我自己引入的一个错误
 
 `infra/lambda/rca_window_flush/neptune/graph_rag_reporter.py` —— 一份 687 行模块的
