@@ -689,38 +689,118 @@ prompt 相应要求模型回答"最早的告警是否就是源头、拓扑能否
 
 ---
 
-### T-095 · 声明并统一测试运行的 Python 版本 · `todo` · P2
+### T-095 · 声明并统一测试运行的 Python 版本 · `done`
 
-仓库有 **661 处 py3.10+ 联合类型语法**(`list | None` 等),但本机默认
-`python3` 是 **3.9.25**。实测差异:
+新增 **`pytest.ini`**(不是 `pyproject.toml` —— 本仓库不是可安装包,是 Lambda
+部署目录 + 测试 + demo,加 `[project]` 表会误示它是包):
 
-| Python | 结果 |
+| 配置 | 作用 |
 |---|---|
-| 3.9.25 | 173 passed / 51 failed / 112 skipped / 90 errors |
-| **3.11.15** | **208 passed / 22 failed** / 118 skipped / 78 errors |
+| `testpaths` + 固定 rootdir | 测试靠 conftest 注入 `sys.path`,rootdir 漂移会让 import 解析随调用位置变化 |
+| 登记 `neptune` mark | 消掉 **19 条** `PytestUnknownMarkWarning` |
+| `--strict-markers` | 拼错 mark 名(`@pytest.mark.netune`)原先会让该测试**被静默当作无标记执行**,属难以发现的失效。已实测现在直接报错 |
 
-换对版本立刻多 35 个通过、失败减半 —— **过半"失败"根本不是代码缺陷**。
-而仓库**没有任何地方声明这个约束**:无 `pyproject.toml`、无 `pytest.ini`、
-无 `python_requires`、README 未提。任何人在默认 python3 上跑都会得到
-误导性的失败清单。
+版本约束在 `tests/paths.py` 做**运行时检查**——声明式元数据没人读。
+刻意用 warning 而非 hard fail:py3.9 下仍有 173 个测试真实通过,拦死会白扔这部分价值。
+README 补 `Running Tests` 小节。
 
-Lambda 运行时是 py3.12,生产不受影响 —— 纯粹是本地/CI 可复现性问题。
+**关键区分**:那 661 处 `list | None` 是**运行时**求值失败(py3.9 `TypeError`),
+语法本身合法 —— `py_compile` 全过但导入即崩,所以失败清单极具误导性。
 
-**建议**:加 `pyproject.toml` 声明 `requires-python = ">=3.10"`,
-README 测试小节写明用 `python3.11 -m pytest`。
+- 2026-08-28T18:52Z cycle-12: pytest.ini + 运行时检查 + README,commit `def6afe`
 
 ---
 
-### T-096 · 声明测试依赖 · `todo` · P2
+### T-096 · 声明测试依赖 · `done`
 
-`moto` / `streamlit` / `structlog` 是测试依赖,但仓库**无任何 requirements 文件**。
-缺 `structlog` 一项就产生 **36 个 error**;`test_12` 需要 `moto>=5`
-(装了 moto 4 仍报 `mock_aws` 不存在);`test_22` 需要 `streamlit`。
+新增 **`requirements-dev.txt`**,沿用仓库内 7 个组件级 `requirements.txt` 的
+**下限而非钉死**惯例。`moto>=5` 是**硬约束不是偏好**:`mock_aws` 是 moto 5 才有的
+统一装饰器,装 moto 4 会报 `ImportError` 而非版本错误,排查时容易误判为代码问题。
+另补 `pyvis`(demo 的图谱渲染,缺它产生 8 个 error)。
 
-后果:新环境跑测试会得到一堆 `ModuleNotFoundError`,与真实缺陷混在一起,
-无法判断套件到底是什么状态。
+- 2026-08-28T18:52Z cycle-12: requirements-dev.txt,commit `def6afe`
 
-**建议**:加 `requirements-dev.txt`,版本下限写明(`moto>=5` 是硬约束,不是偏好)。
+---
+
+### 🔍 补齐依赖后暴露的 3 个缺陷(均在 cycle-12 修完)
+
+套件此前跑不起来,所以这三个问题长期不可见。
+
+**1. `neptune_client_base` 桩的跨模块污染(顺序依赖)**
+
+三个 ETL 单测各塞一份**不同**的桩:
+
+| 文件 | 方式 | 属性 |
+|---|---|---|
+| `test_12` | **无条件覆盖** | 3 个(**缺 `REGION`**) |
+| `test_13` | 条件塞入 | 4 个 |
+| `test_14` | 条件塞入 | 4 个 |
+
+字母序 `test_12` 先执行,其缺 `REGION` 的桩让后两个文件报
+`ImportError: cannot import name 'REGION'`。
+
+**长期被掩盖的机制**:`test_12` 在 `import moto` 处就失败,**根本走不到塞桩那行**。
+按 `requirements-dev.txt` 补齐 moto 后立即暴露 —— 即「缺依赖」意外地维持了
+套件表面正常。修法:conftest 建**唯一**的桩(按真实模块公开面),test_12 改条件兜底。
+已验证乱序执行稳定。
+
+**2. 两个同名 `collectors` 包互相遮蔽(26 个 error)**
+
+`test_12` 刻意把 `etl_aws` 提到 `sys.path[0]` 遮蔽 `rca/collectors` 并清缓存,
+之后整个 session 的 `sys.modules['collectors']` 都是 etl_aws 那个。
+给 `test_16` 加 autouse fixture 做 save/restore 隔离。根治见 T-097。
+
+**3. `rca/engines/base.py:277` 在 py3.12 以下无法解析(78 个 error)**
+
+```python
+f"Status: {'OK' if healthy else '\u26a0\ufe0f ANOMALY'}"
+```
+
+f-string 表达式部分含反斜杠**在 3.12 之前是 SyntaxError**(PEP 701 才放宽)。
+Lambda 跑 3.12 所以生产可用,但本地 3.10/3.11 连解析都过不去:本文件导入失败
+→ `engines.factory` 失败 → **78 个 error 全部源于这一行**。
+
+**这修正了我自己上一轮的结论**:先前写 `requires >= 3.10`,但这一行实际要求 3.12。
+选择**修那一行**而非把地板抬到 3.12 —— 一行 vs 强迫所有人本地上 3.12,
+且本机只有 3.11,抬地板会让套件在这里根本跑不了。转义提到 f-string 之外,
+行为完全等价(已对比输出)。修后全仓 py3.11 编译 0 失败。
+
+**套件基线变化**
+
+```
+cycle-11 末  426 collected / 2 collection errors
+             208 passed /  22 failed / 118 skipped / 78 errors
+cycle-12     466 collected / 0 collection errors  ← 收集阶段首次完全干净
+             292 passed /  17 failed / 138 skipped / 19 errors
+```
+
+即 **+84 passed、-5 failed、-59 errors**。
+
+---
+
+### T-097 · 给两个同名 `collectors` 包之一改名 · `todo` · P2
+
+| 包 | 子模块 |
+|---|---|
+| `rca/collectors/` | `aws_probers`、`infra_collector`、`eks_auth`、`layer2_tools` |
+| `infra/lambda/etl_aws/collectors/` | `ec2`、`eks`、`rds`、`alb`、`data_stores`、`lambda_sfn` |
+
+两个顶层名相同的包在同一个测试 session 里**无法共存** —— 谁先导入谁赢,
+而两个都要用。cycle-12 已在 `test_16` 加 fixture 做局部隔离,但这只是对症:
+任何将来 import `collectors` 的测试都受最后一个改写者摆布。
+
+**根治**:给其中一个改名(建议 `etl_aws/collectors` → `etl_aws/aws_collectors`,
+因为 rca 那个被更多模块引用)。需同步改 etl_aws 内部 import 与部署包。
+
+---
+
+### T-098 · 查清剩余 17 failed / 19 errors 是否真缺陷 · `todo` · P1
+
+环境已钉住(T-095/T-096),`base.py` 语法已修,现在这些数字**第一次是可信的**。
+在此之前任何"失败清单"都混着版本不兼容与缺依赖,无法判断。
+
+下一步应逐一归因:真缺陷 / 测试自身过期 / 需要真实 AWS 资源。
+优先看 `test_layer2_golden`、`test_10_e2e`、`test_20_integration_schema`。
 
 ---
 
@@ -852,3 +932,17 @@ PR 正文已备在 `todo/goal-loop/PR_BODY.md`。
   同类错误此前已被纠正过;(2) report.py 的目录上溯层级第一版算错,
   靠实测路径存在才发现。新立 T-095(py 版本约束无处声明,换 3.11 失败减半)
   与 T-096(测试依赖无 requirements 声明,缺 structlog 一项即 36 个 error)
+- 2026-08-28T18:52Z cycle-12 T-095+T-096: 新增 pytest.ini(登记 mark、
+  --strict-markers、固定 rootdir)与 requirements-dev.txt,README 补测试小节。
+  **补齐依赖后套件首次真正跑起来,立刻暴露 3 个此前不可见的缺陷并全部修完**:
+  (1) 三份不一致的 neptune_client_base 桩造成跨模块污染 —— 长期被掩盖是因为
+      test_12 在 import moto 处就死了,根本走不到塞桩那行,「缺依赖」意外
+      维持了套件表面正常;(2) 两个同名 collectors 包互相遮蔽,26 个 error;
+  (3) rca/engines/base.py:277 的 f-string 含反斜杠,3.12 之前是 SyntaxError,
+      78 个 error 全源于这一行。
+  **修正了自己上一轮的结论**:先前写 requires >= 3.10,但那一行实际要 3.12;
+  选择修那一行而非抬地板(本机只有 3.11,抬了套件就跑不了)。
+  基线 426 collected/2 errors → **466 collected/0 errors**,
+  208 passed → **292 passed**,78 errors → 19 errors。
+  新立 T-097(给同名 collectors 包改名根治)与 T-098(现在数字可信了,
+  逐一归因剩余 17 failed/19 errors)
