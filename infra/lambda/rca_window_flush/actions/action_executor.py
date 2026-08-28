@@ -30,7 +30,37 @@ REGION = get_region()
 EKS_CLUSTER = (os.environ.get('EKS_CLUSTER')
                or os.environ.get('EKS_CLUSTER_NAME')
                or 'PetSite')
-K8S_NAMESPACE = os.environ.get('K8S_NAMESPACE', 'default')
+
+
+def _default_namespace() -> str:
+    """K8s 命名空间：环境变量优先，其次 profile，最后才是 'default'。
+
+    2026-08-28 修正：本模块原先硬编码 os.environ.get('K8S_NAMESPACE', 'default')，
+    但 PetSite 的服务实际全在 **petadoptions** 命名空间
+    （另有第二个应用 awesomeshop，其 6 个 Deployment 当前副本数均为 0）。
+    profiles/petsite.yaml 的 kubernetes.namespace 已声明 'petadoptions' 但代码不读它，
+    导致 EKS RBAC 401 修好之后，重启动作仍会去 'default' 里找不存在的 Deployment。
+
+    已知局限：本项目存在两个应用命名空间，而本模块只有单一 K8S_NAMESPACE。
+    真正的解法是按服务从 profile 取（服务→命名空间映射），记为 T-091 后续项。
+    """
+    env = os.environ.get('K8S_NAMESPACE')
+    if env:
+        return env
+    try:
+        from config import profile as _profile
+        # 顶层键是 kubernetes（不是 k8s）。chaos.default_namespace 也是同一值，
+        # 作为次级回退 —— 两处都写着 petadoptions。
+        ns = ((_profile.get('kubernetes', {}) or {}).get('namespace')
+              or (_profile.get('chaos', {}) or {}).get('default_namespace'))
+        if ns:
+            return ns
+    except Exception as e:
+        logger.warning(f"读取 profile 的 kubernetes.namespace 失败，回退 default: {e}")
+    return 'default'
+
+
+K8S_NAMESPACE = _default_namespace()
 AUDIT_LOG_GROUP = '/rca/audit'
 RATE_LIMIT_WINDOW = 1800  # 30分钟
 RATE_LIMIT_MAX = 3        # 最多3次

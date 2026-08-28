@@ -31,6 +31,147 @@ KB_ID = os.environ.get('BEDROCK_KB_ID', '')
 # 传规范名或别名都能命中。
 
 
+def _build_group_context(group, rca_result: dict) -> str:
+    """构建聚合告警的上下文文本：时序 + 分组依据 + 拓扑印证。
+
+    这是聚合报告相对单点报告的**唯一增量价值** —— 单条告警看不出传播方向，
+    多条告警的先后顺序配合拓扑才能判断谁是源头。
+
+    Args:
+        group: EventGroup
+        rca_result: rca_engine 输出（用于取 blast_radius 等已算好的结果）
+
+    Returns:
+        供 prompt 使用的文本块
+    """
+    alerts = list(getattr(group, 'all_alerts', []) or [])
+    lines = ["[聚合告警分析]"]
+    lines.append(f"- 本组共 {len(alerts)} 条告警，"
+                 f"分组依据: {getattr(group, 'correlation_type', 'standalone')}"
+                 f"（关联置信度 {getattr(group, 'confidence', 0):.2f}）")
+    root_svc = getattr(group, 'root_candidate_service', '') or ''
+    lines.append(f"- 关联器判定的根因候选: {root_svc or '未定'}")
+
+    # ── 时序：按 start_time 排序，算相对最早告警的时延 ──
+    def _ts(a):
+        return getattr(a, 'start_time', '') or ''
+
+    ordered = sorted([a for a in alerts if _ts(a)], key=_ts)
+    if not ordered:
+        lines.append("- ⚠️ 组内告警均无 start_time，无法做时序分析")
+        return "\n".join(lines)
+
+    import datetime as _dt
+
+    def _parse(s):
+        try:
+            return _dt.datetime.fromisoformat(s.replace('Z', '+00:00'))
+        except (ValueError, AttributeError):
+            return None
+
+    t0 = _parse(_ts(ordered[0]))
+    lines.append("")
+    lines.append("[告警时序（按发生时间排序）]")
+    for i, a in enumerate(ordered):
+        svc = getattr(a, 'service_name', '?') or '?'
+        metric = getattr(a, 'metric_name', '') or ''
+        sev = getattr(a, 'severity', '?')
+        ti = _parse(_ts(a))
+        if t0 and ti:
+            delta = (ti - t0).total_seconds()
+            dstr = "最早" if i == 0 else f"晚 {delta:.0f}s"
+        else:
+            dstr = "时间不可解析"
+        val = getattr(a, 'metric_value', None)
+        thr = getattr(a, 'threshold', None)
+        detail = f" {metric}={val}(阈值 {thr})" if metric else ""
+        lines.append(f"  {i+1}. [{sev}] {svc}{detail} @ {_ts(a)} — {dstr}")
+
+    earliest_svc = getattr(ordered[0], 'service_name', '') or ''
+    later_svcs = [getattr(a, 'service_name', '') for a in ordered[1:]]
+    later_svcs = [s for s in later_svcs if s and s != earliest_svc]
+
+    # ── 拓扑印证：最早告警的服务是否确实是其余服务的上游 ──
+    # 用 kind='live' 而非 'dynamic'：只看当前仍然存在的依赖。
+    # 已下线服务的历史调用边不能用来解释现在的传播链。
+    lines.append("")
+    lines.append("[拓扑印证（是否支持时序推断的传播方向）]")
+    if not later_svcs:
+        lines.append("  组内只涉及单个服务，无跨服务传播可印证")
+    else:
+        try:
+            from neptune import neptune_queries as nq
+            radius = nq.q1_blast_radius(earliest_svc, kind='live')
+            downstream = {r.get('name') for r in (radius.get('services') or [])}
+            explained = [s for s in later_svcs if s in downstream]
+            unexplained = [s for s in later_svcs if s not in downstream]
+            lines.append(f"  最早告警服务: {earliest_svc}")
+            lines.append(f"  其当前活跃下游: {sorted(downstream) or '（无）'}")
+            if explained:
+                lines.append(f"  ✅ 时序与拓扑一致（{earliest_svc} 在上游）: {explained}")
+            if unexplained:
+                lines.append(
+                    f"  ⚠️ 拓扑无法解释（这些服务不在 {earliest_svc} 的活跃下游）: "
+                    f"{unexplained} —— 可能是共因故障（如共享基础设施/AZ），"
+                    f"而非从 {earliest_svc} 传播"
+                )
+            if not explained and not unexplained:
+                lines.append("  拓扑数据为空，无法印证")
+        except Exception as e:
+            # 拓扑印证失败不能让整份报告生成不出来
+            logger.warning(f"聚合报告的拓扑印证失败(non-fatal): {e}")
+            lines.append(f"  拓扑查询失败，本节跳过: {str(e)[:120]}")
+
+    # ── 关联器算出的影响面 ──
+    br = getattr(group, 'blast_radius', None) or rca_result.get('blast_radius') or []
+    if br:
+        names = [b.get('name') if isinstance(b, dict) else str(b) for b in br]
+        lines.append("")
+        lines.append(f"[关联器给出的影响面] {sorted(set(n for n in names if n))}")
+
+    return "\n".join(lines)
+
+
+def generate_group_report(group, classification: dict, rca_result: dict) -> dict:
+    """聚合告警的 Graph RAG 报告（EventGroup 级）。
+
+    此前 window_flush_handler 调用本函数名但它**并不存在** —— 运行时抛
+    AttributeError，靠 fallback 降级到 generate_rca_report()。意味着
+    "按 EventGroup 聚合出报告"这条路径从未实现：聚合做到了，
+    聚合后的联合分析没做到，削弱了告警聚合一半的价值。
+
+    与单点报告的区别只在一处但很关键：注入**多告警时序 + 拓扑印证**，
+    让模型回答"谁先出问题、拓扑能否解释这个顺序"，而不是只描述单个服务的症状。
+
+    Args:
+        group: EventGroup（topology_correlator 输出）
+        classification: fault_classifier.classify_group 输出
+        rca_result: rca_engine.analyze_group 输出
+
+    Returns:
+        与 generate_rca_report 同构的字典，聚合场景下额外含 propagation_analysis
+    """
+    svc = (classification.get('affected_service')
+           or getattr(group, 'root_candidate_service', '')
+           or '')
+    if not svc:
+        raise ValueError("generate_group_report: 无法确定受影响服务")
+
+    group_context = _build_group_context(group, rca_result or {})
+    log_samples = (rca_result or {}).get('log_samples', {})
+
+    report = generate_rca_report(
+        svc, classification, rca_result or {},
+        log_samples=log_samples,
+        group_context=group_context,
+    )
+    # 留痕：便于事后核对报告是基于几条告警得出的
+    report['group_id'] = getattr(group, 'group_id', '')
+    report['alert_count'] = len(getattr(group, 'all_alerts', []) or [])
+    report['correlation_type'] = getattr(group, 'correlation_type', 'standalone')
+    return report
+
+
 # ─── Step 1: Neptune 子图 ───────────────────────────────────────────────────
 
 def _get_neptune_subgraph(affected_service: str) -> str:
@@ -216,9 +357,18 @@ def generate_rca_report(
     classification: dict,
     rca_result: dict,
     log_samples: dict = None,
+    group_context: str = None,
 ) -> dict:
     """
     Graph RAG 主入口：组装所有数据源 → 调用 Bedrock Claude → 返回结构化报告
+
+    Args:
+        affected_service: 受影响服务（聚合场景下传根因候选服务）
+        classification: 故障分类结果
+        rca_result: rca_engine 的输出
+        log_samples: 日志采样
+        group_context: 聚合告警的额外上下文（由 generate_group_report 构建）。
+            为 None 时行为与原先完全一致，保持向后兼容。
     """
     severity = classification.get('severity', 'P1')
     error_services = rca_result.get('error_services', [])
@@ -306,14 +456,26 @@ def generate_rca_report(
         probe_text = "[Layer2 AWS Probers]\nNo anomalies detected across monitored AWS services."
 
     # 6. 构建 Prompt
+    # 聚合场景：把多告警时序与拓扑印证放在最前面 —— 它是判断"谁是源头"的
+    # 首要依据，位置靠前能让模型优先采信，而不是被后面的单服务数据带走。
+    _group_block = f"{group_context}\n\n" if group_context else ""
+    _group_json_field = (
+        '  "propagation_analysis": "传播链分析：谁先出问题、拓扑是否解释这个顺序（2-3句）",\n'
+        if group_context else ""
+    )
+    _group_hint = (
+        "\n本次是**多条告警的聚合分析**。请特别回答：最早出现的告警是否就是根因源头？"
+        "拓扑关系能否解释告警的先后顺序？若时序与拓扑方向矛盾，须明确指出。"
+        if group_context else ""
+    )
     prompt = f"""你是一位资深 SRE，正在分析 PetSite 微服务平台的故障。
-请严格基于以下已验证的系统事实（不要推断图中不存在的关系），输出根因分析报告。
+请严格基于以下已验证的系统事实（不要推断图中不存在的关系），输出根因分析报告。{_group_hint}
 
 故障概况：
 - 受影响服务：{affected_service}
 - 严重度：{severity}
 
-{subgraph_text}
+{_group_block}{subgraph_text}
 
 {df_text}
 
@@ -343,7 +505,7 @@ def generate_rca_report(
     "history": 数字（有历史同类Incident得10，无得0）
   }},
   "evidence": ["证据1", "证据2", "证据3"],
-  "recommended_action": "建议操作",
+{_group_json_field}  "recommended_action": "建议操作",
   "reasoning": "推理过程（3-5句话）",
   "blast_radius": "影响范围描述"
 }}
