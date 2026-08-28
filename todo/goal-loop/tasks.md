@@ -778,29 +778,134 @@ cycle-12     466 collected / 0 collection errors  ← 收集阶段首次完全�
 
 ---
 
-### T-097 · 给两个同名 `collectors` 包之一改名 · `todo` · P2
+### T-097 · 两个同名 `collectors` 包 · `done`(结论与原判断相反)
 
 | 包 | 子模块 |
 |---|---|
-| `rca/collectors/` | `aws_probers`、`infra_collector`、`eks_auth`、`layer2_tools` |
+| `rca/collectors/` | `aws_probers`、`infra_collector`、`eks_auth`、`layer2_*` |
 | `infra/lambda/etl_aws/collectors/` | `ec2`、`eks`、`rds`、`alb`、`data_stores`、`lambda_sfn` |
 
-两个顶层名相同的包在同一个测试 session 里**无法共存** —— 谁先导入谁赢,
-而两个都要用。cycle-12 已在 `test_16` 加 fixture 做局部隔离,但这只是对症:
-任何将来 import `collectors` 的测试都受最后一个改写者摆布。
+**我原先在这张卡里写"根治要给其中一个包改名"—— 那是错的。**
+生产上二者**从不冲突**:etl_aws 与 rca 跑在不同的 Lambda 里,不共处一个进程。
+冲突只存在于测试套件这一个进程内。为一个测试期问题去重命名 Lambda 部署包目录
+并重新部署三个 ETL,代价不对等。
 
-**根治**:给其中一个改名(建议 `etl_aws/collectors` → `etl_aws/aws_collectors`,
-因为 rca 那个被更多模块引用)。需同步改 etl_aws 内部 import 与部署包。
+改为在 conftest 提供 per-module 隔离。**两个实现细节是实测出来的,不是推理出来的**:
+
+1. **fixture 必须 `scope='module'` 而非 `'function'`**。pytest 先实例化高作用域
+   fixture,而 `test_layer2_golden.py` 的 `engine` 就是 module 作用域 ——
+   function 作用域的隔离在它之后才跑,救不了它。改 scope 后 error 归零。
+2. **必须豁免 `test_12`**。它测的就是 etl_aws 那个 collectors,测试体内还有惰性的
+   `collectors.eks` 导入。第一版没豁免,**直接造成 4 个新失败** —— 隔离的目的是
+   让两个包各得其所,不是让 rca 通吃。
+
+也解释了 `test_layer2_*.py` 自己那句 `if p not in sys.path` 为何救不了:
+守卫只检查**存在性**不检查**优先级**。
+
+- 2026-08-28T19:10Z cycle-13: conftest per-module 隔离,commit `e6f0cc8`
 
 ---
 
-### T-098 · 查清剩余 17 failed / 19 errors 是否真缺陷 · `todo` · P1
+### 🔍 顺带发现:conftest 把 Lambda 部署包放进了全局 `sys.path`
 
-环境已钉住(T-095/T-096),`base.py` 语法已修,现在这些数字**第一次是可信的**。
-在此之前任何"失败清单"都混着版本不兼容与缺依赖,无法判断。
+conftest 原先无条件 `sys.path.insert(0, infra/lambda/etl_aws)`。该目录是部署包,
+里面 **vendored 了 5 个第三方包**:`certifi` / `charset_normalizer` / `idna` /
+`requests` / `urllib3`。
 
-下一步应逐一归因:真缺陷 / 测试自身过期 / 需要真实 AWS 资源。
-优先看 `test_layer2_golden`、`test_10_e2e`、`test_20_integration_schema`。
+后果:**整个测试 session 用的是部署包里冻结的副本而不是已安装的版本**。
+证据是警告来自 `infra/lambda/etl_aws/urllib3/connectionpool.py` 而非 site-packages。
+测试结果因此取决于部署包里的版本,且同名模块被连带遮蔽。
+
+只有 `test_12` 需要 etl_aws,它自己会 insert,故移除这行。
+
+---
+
+### T-098 · 归因剩余失败 · `done`(归因完成,分派为 T-099…T-103)
+
+**先修掉两个根因,失败数从 36 项压到 10 项**:
+
+```
+cycle-12  292 passed / 17 failed / 138 skipped / 78 errors
+cycle-13  312 passed / 10 failed / 144 skipped /  0 errors  ← error 首次归零
+```
+
+`${}` 占位符不展开这一项就消掉了 14 个红(chaos 写图谱全部 DNS 失败),
+包遮蔽消掉 12 个 error。**收集与 setup 阶段现在完全干净**,
+所以剩下 10 条第一次是纯粹的断言问题。归因如下:
+
+| 类别 | 条数 | 判定 |
+|---|---|---|
+| Q18 查不到刚写入的 ChaosExperiment | 3 | **待查,疑真缺陷** → T-099 |
+| 向量搜索查不到刚写入的 Incident | 2 | 疑最终一致性 → T-100 |
+| `bedrock_timeout_raises` DID NOT RAISE | 1 | **疑真缺陷(静默吞异常)** → T-101 |
+| NL 查询「上下游拓扑」失败 | 1 | 待查 → T-102 |
+| `cdk synth` FileNotFoundError | 1 | 环境:CDK CLI 未装 → T-103 |
+| `assert 'direct' == 'strands'` | 1 | 环境:strands 未装,引擎回退 → T-103 |
+| test_20 NL 查询 | 1 | 与 T-102 同源 |
+
+---
+
+### T-099 · Q18 查不到刚写入的 ChaosExperiment · `todo` · P1
+
+```
+AssertionError: Q18 未查到 test-auto-chaos-int-01
+  当前结果: ['exp-petsite-fis-eks-pod-network-latency-2026...']
+```
+
+3 个集成测试(`test_06` ×2、`test_10` ×1)先写 ChaosExperiment 再用 Q18 查,查不到。
+
+**此前这几条报的是 URLError**(写入根本没成功),占位符修好后写入应该通了 ——
+所以现在暴露的是**下一层**问题:要么 Q18 的过滤条件排除了新写的节点
+(如按时间窗/tier 过滤),要么写入其实仍未落库。
+
+**优先级 P1**:这是「图谱作为唯一源头」的核心链路 —— 写进去查不出来,
+比查出旧数据更严重。
+
+---
+
+### T-100 · 向量搜索查不到刚写入的 Incident · `todo` · P2
+
+```
+AssertionError: 向量搜索未找到 inc-2026-08-28-f06d13
+  当前结果 IDs: ['inc-2026-08-28-8a9612', ...]
+```
+
+S3 Vectors 写入后立即查询。疑为最终一致性 —— 若确认,测试应加重试而非直接断言;
+若非,则是写入路径缺陷。**先测清楚再改测试** —— 直接给测试加 sleep 是掩盖。
+
+---
+
+### T-101 · `bedrock_timeout_raises` DID NOT RAISE · `todo` · P1
+
+`test_ub2_03_bedrock_timeout_raises` 期望 Bedrock 超时时抛异常,实际没抛。
+
+**疑真缺陷且属本项目的高频模式**:本次工作已累计发现 13+ 个缺陷,其中约 11 个是
+**静默失败**(异常被吞或日志级别过低)。超时被吞掉意味着 NLQuery 会静静返回
+空结果或降级结果,调用方无从判断。需确认是代码吞了异常还是测试的期望过期。
+
+---
+
+### T-102 · NL 查询「上下游拓扑」失败 · `todo` · P2
+
+`test_s6_07_common_nl_query_patterns[petsite 的上下游服务]` 与
+`test_20_integration_schema` 的对应用例失败。需真实 Bedrock 调用,
+可能是 NL→Cypher 生成的查询与新 schema(本次加的 `dependency_kind` /
+`active` / `live` 语义)不匹配 —— 若是,属本次改动的回归,须优先处理。
+
+---
+
+### T-103 · 声明可选测试依赖与外部工具 · `todo` · P3
+
+两条失败纯属环境缺件,不是缺陷:
+
+| 失败 | 缺什么 |
+|---|---|
+| `test_s0_06_cdk_synth` | CDK CLI(`npm i -g aws-cdk`) |
+| `test_strands_memory_under_2gb` | `strands` 包(未装 → 引擎回退 direct) |
+
+这类测试应当在依赖缺失时 **skip 而非 fail** —— 否则每次跑套件都有两条
+恒红,久而久之所有人都学会忽略红色,真缺陷也一起被忽略。
+`requirements-dev.txt` 补可选段并在测试里加 `pytest.importorskip` / 工具存在性检查。
 
 ---
 
@@ -946,3 +1051,21 @@ PR 正文已备在 `todo/goal-loop/PR_BODY.md`。
   208 passed → **292 passed**,78 errors → 19 errors。
   新立 T-097(给同名 collectors 包改名根治)与 T-098(现在数字可信了,
   逐一归因剩余 17 failed/19 errors)
+- 2026-08-28T19:10Z cycle-13 T-098: 归因完成,并先修掉两个根因把 36 项压到 10 项。
+  最重要的发现是 **profile 的 ${} 占位符从来没被展开** —— profile_loader 完全
+  没有展开逻辑,5 个占位符对任何消费方都是字面字符串;chaos 因此拿到
+  'https://${NEPTUNE_ENDPOINT}:8182' 导致写图谱全部 DNS 失败(14 个红)。
+  这直接打在「唯一源头」上:profile 自称单一配置源,对这些键却只是装饰。
+  另修 conftest 把 Lambda 部署包放进全局 sys.path —— 该目录 vendored 了
+  5 个第三方包,整个 session 用的是部署包里冻结的副本而非已安装版本。
+  **更正了自己上一轮 T-097 的判断**:原写"根治要改包名",但生产上两个
+  collectors 从不共处一个进程,为测试期问题改生产包并重部署三个 ETL 代价不对等。
+  两个实测教训:(1) 隔离 fixture 必须 module 作用域,因为 pytest 先实例化
+  高作用域 fixture,function 作用域救不了 module 作用域的 engine;
+  (2) 第一版没豁免 test_12,直接造成 4 个新失败 —— 隔离是让两个包各得其所,
+  不是让 rca 通吃。
+  基线 292 passed/78 errors → **312 passed / 10 failed / 0 errors**,
+  **error 首次归零**,剩余 10 条第一次是纯粹断言问题。
+  分派 T-099(Q18 查不到刚写入,P1)、T-100(向量最终一致性)、
+  T-101(超时未抛,疑静默吞异常,P1)、T-102(NL 查询,疑本次 schema 改动回归)、
+  T-103(环境缺件应 skip 而非 fail)
