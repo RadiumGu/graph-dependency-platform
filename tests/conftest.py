@@ -13,7 +13,16 @@ logger = logging.getLogger(__name__)
 
 # === Path setup ===
 # Insert in reverse priority order: rca inserted last → ends up at sys.path[0] (highest priority).
-PROJECT_ROOT = '/home/ubuntu/tech/graph-dependency-platform'
+#
+# 2026-08-28：PROJECT_ROOT 原先硬编码为 '/home/ubuntu/tech/graph-dependency-platform'
+# —— 那是最初开发机的路径，导致**整个测试套件在其他任何机器上都无法收集**
+# （conftest 导入即 FileNotFoundError）。改为从本文件位置推导。
+# 仓库内还有 20+ 个测试文件带同样的硬编码常量，可通过本变量逐步收敛。
+# 允许用 GDP_PROJECT_ROOT 覆盖，便于在非常规布局下运行。
+PROJECT_ROOT = os.environ.get(
+    'GDP_PROJECT_ROOT',
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+)
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'infra', 'lambda', 'etl_aws'))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'dr-plan-generator'))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'chaos', 'code'))
