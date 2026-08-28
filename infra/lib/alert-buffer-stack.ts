@@ -45,6 +45,10 @@ export class AlertBufferStack extends cdk.Stack {
     const eksClusterName = this.node.tryGetContext('eksClusterName') as string || 'YOUR_EKS_CLUSTER_NAME';
     const bedrockModel = this.node.tryGetContext('bedrockModel') as string || 'global.anthropic.claude-sonnet-4-6';
     const bedrockKbId = this.node.tryGetContext('bedrockKbId') as string || '';
+    // slackWebhookUrl 故意不写进 cdk.json —— 它是 Slack 机密，cdk.json 进 git。
+    // 部署时用 -c slackWebhookUrl=... 传入，否则这里回退成空串，
+    // window_flush_handler 会静默跳过通知（if not webhook: return），
+    // 表现为"RCA 分析完成但无人收到告警"。
     const slackWebhookUrl = this.node.tryGetContext('slackWebhookUrl') as string || '';
 
     const vpcSubnets: ec2.SubnetSelection = {
@@ -153,6 +157,11 @@ export class AlertBufferStack extends cdk.Stack {
     const windowFlushFn = new lambda.Function(this, 'WindowFlushLambda', {
       functionName: 'gp-window-flush',
       runtime: lambda.Runtime.PYTHON_3_12,
+      // Graviton2（arm64）：与 EKS 数据面（t4g.large / AL2023_ARM_64_STANDARD）一致，
+      // 同规格约省 20% 费用。必须显式声明 —— CDK 默认是 X86_64，
+      // 缺这一行会把线上已迁移到 arm64 的函数在下次 deploy 时打回 x86_64，
+      // 而资产里的 .so 是 aarch64 编译产物，架构不符会静默退化成纯 Python 回退实现。
+      architecture: lambda.Architecture.ARM_64,
       handler: 'window_flush_handler.window_flush_handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/rca_window_flush')),
       timeout: cdk.Duration.seconds(60),
@@ -172,6 +181,9 @@ export class AlertBufferStack extends cdk.Stack {
         BEDROCK_KB_ID: bedrockKbId,
         SLACK_WEBHOOK_URL: slackWebhookUrl,
         EKS_CLUSTER_NAME: eksClusterName,
+        // EKS_CLUSTER 是 actions/action_executor.py 读的键名，
+        // 而其余 collectors 读 EKS_CLUSTER_NAME。两个都给，避免半自动动作拿到空串。
+        EKS_CLUSTER: eksClusterName,
       },
       description: 'Alert window flush: aggregate buffered alerts → RCA Lambda trigger',
     });
