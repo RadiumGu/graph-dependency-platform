@@ -7,6 +7,7 @@ Tests: I-01 ~ I-03
 """
 import pytest
 
+from conftest import now_iso as _now_iso
 
 EXP_ID = 'test-auto-chaos-int-01'
 EXP_ID_UPDATE = 'test-auto-chaos-int-02'
@@ -39,7 +40,7 @@ def test_i01_chaos_write_then_rca_q18(neptune_rca):
         'result': 'passed',
         'recovery_time_sec': 45,
         'degradation_rate': 0.12,
-        'timestamp': '2026-04-01T00:00:00Z',
+        'timestamp': _now_iso(),
     })
 
     # Step 2: rca Q18 查询
@@ -61,7 +62,7 @@ def test_i02_chaos_update_then_rca_reads_latest(neptune_rca):
         'result': 'failed',
         'recovery_time_sec': 120,
         'degradation_rate': 0.30,
-        'timestamp': '2026-04-01T01:00:00Z',
+        'timestamp': _now_iso(),
     })
 
     # 更新为 passed
@@ -72,7 +73,7 @@ def test_i02_chaos_update_then_rca_reads_latest(neptune_rca):
         'result': 'passed',
         'recovery_time_sec': 60,
         'degradation_rate': 0.10,
-        'timestamp': '2026-04-01T01:30:00Z',
+        'timestamp': _now_iso(30),
     })
 
     # Q18 应返回最新值

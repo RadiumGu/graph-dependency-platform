@@ -114,39 +114,132 @@ sys.modules['neptune_client_base'] = _nc_base
 _RCA_DIR = os.path.join(PROJECT_ROOT, 'rca')
 
 
+def cleanup_incident(neptune_client, incident_id: str) -> None:
+    """删除测试产生的 Incident:**同时**清理 Neptune 节点与 S3 Vectors 条目。
+
+    2026-08-28 新增。此前各测试只 `DETACH DELETE` Neptune 节点,不删向量 ——
+    实测一天下来向量索引从基线 18 条涨到 **56 条**,38 条测试残留。
+    而 search_similar 取 top_k,索引里塞满内容高度相似的测试 Incident 之后,
+    刚写入的那条排不进 top_k,表现为"向量搜索找不到刚写的 Incident"。
+    起初以为是最终一致性,实际是**索引污染**。
+
+    tests/test_21_e2e_pipeline.py 更是**完全没有清理** —— 它 write_incident
+    之后什么都不删,是节点残留的主要来源。
+
+    两侧都用 try/except 吞掉异常:清理失败不该让测试本身变红,
+    但会记 warning 以免无声堆积。
+    """
+    try:
+        neptune_client.results(
+            "MATCH (n:Incident {id: $id}) DETACH DELETE n", {'id': incident_id},
+        )
+    except Exception as e:
+        logger.warning(f"清理 Incident 节点失败 {incident_id}: {e}")
+    try:
+        from search.incident_vectordb import delete_incident_vectors
+        delete_incident_vectors(incident_id)
+    except Exception as e:
+        logger.warning(f"清理 Incident 向量失败 {incident_id}: {e}")
+
+
+def now_iso(offset_sec: int = 0) -> str:
+    """当前 UTC 时间的 ISO 串,供集成测试写 timestamp 用。
+
+    集成测试原先把 ChaosExperiment 的 timestamp 写死为 '2026-04-01T...'。
+    Q18 是 ``ORDER BY exp.timestamp DESC LIMIT $limit``,而 petsite 在活图里
+    已累积 **24 个** ChaosExperiment,时间戳全部 ≥ 2026-04-02 —— 写死的旧
+    时间戳排在第 25 位,被 LIMIT 20 切掉,测试恒红。
+
+    实测确认过节点与 TestedBy 边都成功落库(`LIMIT 30` 即可查到),
+    所以这不是写入缺陷,是**测试脆弱性**:它在图谱数据还少的时候写的,
+    随着数据累积就静默失效。
+
+    刚跑完的实验本来就该是最新的 —— 用当前时间才是语义正确的写法,
+    且不受活图累积多少历史实验影响。
+    """
+    import datetime
+    t = (datetime.datetime.now(datetime.timezone.utc)
+         + datetime.timedelta(seconds=offset_sec))
+    return t.strftime('%Y-%m-%dT%H:%M:%S.%f+00:00')
+
+
 # scope='module' 而非 'function':pytest **先实例化高作用域 fixture**,
 # 而 test_layer2_golden.py 的 `engine` 是 scope='module' 的 —— function 作用域的
 # 隔离会在它之后才跑,救不了它(实测 12 个 error 由此而来)。
 # 同作用域内 autouse fixture 先于被显式请求的 fixture,故 module 作用域可行。
 #
-# 豁免名单:test_12_unit_etl_aws 测的**就是** etl_aws 那个 collectors 包,
-# 它在测试体内还有惰性的 `collectors.eks` 等导入。强制它走 rca 会让 4 个测试
-# 报 ModuleNotFoundError —— 隔离的目的是让两个包各得其所,不是让 rca 通吃。
-_ETL_COLLECTORS_MODULES = {'test_12_unit_etl_aws'}
+_ETL_AWS_DIR = os.path.join(PROJECT_ROOT, 'infra', 'lambda', 'etl_aws')
+
+# etl_aws 目录里 vendored 的第三方包。**不能**把它们纳入隔离集:
+# 清掉 sys.modules 里的 requests/urllib3 只会让它们从 etl_aws 的 vendored 副本
+# 重新导入,正是要避免的事(见上方移除全局 sys.path 注入的说明)。
+_VENDORED = {'certifi', 'charset_normalizer', 'idna', 'requests', 'urllib3', 'bin'}
+
+
+def _top_level_names(root: str) -> set:
+    """列出某个组件根目录暴露的顶层模块名(第一方,排除 vendored 与 config)。"""
+    if not os.path.isdir(root):
+        return set()
+    out = set()
+    for e in os.listdir(root):
+        if e.startswith('.') or e in ('__pycache__', '__init__.py'):
+            continue
+        if e.endswith('.dist-info'):
+            continue
+        name = e[:-3] if e.endswith('.py') else e
+        if not e.endswith('.py') and not os.path.isdir(os.path.join(root, e)):
+            continue  # 非 .py 文件(json/txt)
+        if name in _VENDORED or name == 'config':
+            # config 由 conftest 刻意合并成一个统一模块,清掉会破坏它
+            continue
+        out.add(name)
+    return out
+
+
+# 真正会互相遮蔽的名字 = 两个组件根都暴露的第一方顶层名。
+# **算出来而不是手写**:实测碰撞不止 collectors —— 还有 handler
+# (rca/handler.py vs infra/lambda/etl_aws/handler.py)。
+# test_12 用 patch.object(h, 'upsert_vertex') 时拿到的是 rca 的 handler,
+# 报 AttributeError: module 'handler' ... does not have the attribute 'upsert_vertex'。
+# 先前两次只隔离 collectors 都没修好,就是因为漏了 handler。
+_SHADOWED = _top_level_names(_RCA_DIR) & _top_level_names(_ETL_AWS_DIR)
+
+# 需要 etl_aws 那一侧的测试模块 → 该模块应优先的组件根
+_COLLECTORS_OWNER = {
+    'test_12_unit_etl_aws': _ETL_AWS_DIR,
+}
+
+
+def _purge(names: set) -> dict:
+    """把 names 及其子模块从 sys.modules 摘出来并返回,便于事后还原。"""
+    saved = {}
+    for k in list(sys.modules):
+        head = k.split('.')[0]
+        if head in names:
+            saved[k] = sys.modules.pop(k)
+    return saved
 
 
 @pytest.fixture(autouse=True, scope='module')
-def _isolate_collectors_package(request):
-    """让 `collectors` 在每个测试**模块**中稳定解析到该模块需要的那一个。"""
-    mod_name = getattr(request.module, '__name__', '')
-    if mod_name.split('.')[-1] in _ETL_COLLECTORS_MODULES:
-        # 该模块要 etl_aws 的 collectors,它自己在模块级已配好 sys.path,不干预
-        yield
-        return
+def _isolate_shadowed_packages(request):
+    """让互相遮蔽的顶层模块在每个测试**模块**中稳定解析到它需要的那一侧。
+
+    必须 scope='module':pytest 先实例化高作用域 fixture,而
+    test_layer2_golden.py 的 `engine` 就是 module 作用域 —— function 作用域的
+    隔离在它之后才跑,救不了它(实测 12 个 error 由此而来)。
+    """
+    mod_name = getattr(request.module, '__name__', '').split('.')[-1]
+    want = _COLLECTORS_OWNER.get(mod_name, _RCA_DIR)
+
     saved_path = list(sys.path)
-    saved_mods = {k: v for k, v in sys.modules.items()
-                  if k == 'collectors' or k.startswith('collectors.')}
-    for k in saved_mods:
-        del sys.modules[k]
-    if _RCA_DIR in sys.path:
-        sys.path.remove(_RCA_DIR)
-    sys.path.insert(0, _RCA_DIR)
+    saved_mods = _purge(_SHADOWED)
+    if want in sys.path:
+        sys.path.remove(want)
+    sys.path.insert(0, want)
     try:
         yield
     finally:
-        for k in [k for k in sys.modules
-                  if k == 'collectors' or k.startswith('collectors.')]:
-            del sys.modules[k]
+        _purge(_SHADOWED)
         sys.modules.update(saved_mods)
         sys.path[:] = saved_path
 

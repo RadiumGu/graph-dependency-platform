@@ -101,6 +101,56 @@ def index_incident(incident_id: str, report_text: str, metadata: dict) -> None:
     logger.info(f"Indexed {len(vectors)} chunks for incident {incident_id}")
 
 
+def delete_incident_vectors(incident_id: str) -> int:
+    """删除某个 Incident 的所有向量分块,返回删除条数。
+
+    2026-08-28 新增。此前**只有写入路径没有删除路径**,后果实测如下:
+
+      集成测试写 Incident 时会连带写向量。test_07/test_10 的清理只
+      `DETACH DELETE` Neptune 节点,删不掉向量 —— 于是节点清干净了,
+      向量却单调累积。一天下来索引从基线 18 条涨到 **56 条**,
+      多出的 38 条全是内容高度相似的测试 Incident(都是 petsite)。
+
+      search_similar 取 top_k,索引里塞满近乎相同的测试数据之后,
+      刚写入的那条**排不进 top_k** —— 表现为"向量搜索找不到刚写的 Incident"。
+      起初以为是最终一致性,实际是**索引污染**。
+
+    这个不对称本身也是运维缺口:Incident 被从图谱删除后,它的向量仍会被
+    检索到并注入 RCA 提示词,即"已删除的历史"继续影响判断。
+
+    Args:
+        incident_id: Incident 唯一标识
+
+    Returns:
+        实际删除的向量条数(找不到时返回 0,不抛异常)
+    """
+    client = _get_client()
+    try:
+        resp = client.list_vectors(vectorBucketName=BUCKET, indexName=INDEX)
+    except Exception as e:
+        logger.warning(f"list_vectors 失败，无法删除 {incident_id} 的向量: {e}")
+        return 0
+
+    prefix = f"{incident_id}.chunk-"
+    keys = [v['key'] for v in resp.get('vectors', [])
+            if v.get('key', '').startswith(prefix)]
+    if not keys:
+        return 0
+
+    deleted = 0
+    for j in range(0, len(keys), _BATCH_SIZE):
+        batch = keys[j:j + _BATCH_SIZE]
+        try:
+            client.delete_vectors(
+                vectorBucketName=BUCKET, indexName=INDEX, keys=batch,
+            )
+            deleted += len(batch)
+        except Exception as e:
+            logger.warning(f"删除向量失败 {batch[:3]}...: {e}")
+    logger.info(f"Deleted {deleted} vector chunks for incident {incident_id}")
+    return deleted
+
+
 def search_similar(query: str, top_k: int = 3, threshold: float = 0.6) -> list:
     """语义搜索与 query 最相似的历史 Incident。
 

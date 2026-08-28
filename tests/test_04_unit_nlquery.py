@@ -69,8 +69,31 @@ def test_ub2_02_empty_results(neptune_rca):
         assert '无结果' in result.get('summary', '') or result.get('summary') == '查询无结果。'
 
 
-def test_ub2_03_bedrock_timeout_raises():
-    """U-B2-03: Bedrock 超时时，_generate_cypher 传播异常（query() 未吞掉 Bedrock 错误）。"""
+def test_ub2_03_bedrock_timeout_returns_error(caplog):
+    """U-B2-03: Bedrock 超时时,query() 返回带 error 的结果并记日志(不静默)。
+
+    2026-08-28 更正:本测试原名 ``..._raises``,断言异常会穿过 query() 传播,
+    注释还写着「_generate_cypher has no try/except」—— 那是 PR2(Strands L1 POC)
+    迁移**之前**的实现细节。迁移到 nl_query_direct.DirectBedrockNLQuery 之后,
+    query() 刻意做了错误收敛:
+
+        try:
+            cypher = self._generate_cypher(question)
+        except Exception as e:
+            logger.warning(f"NLQuery cypher generation failed: {e}")
+            return _base_return({"error": str(e)})
+
+    这**不是**静默吞异常 —— 既 logger.warning,又把 error 放进返回值。
+    且实测两个真实调用方都遵守该契约:
+      rca/scripts/graph-ask.py     if 'error' in result: print + sys.exit(1)
+      demo/pages/2_Smart_Query.py  if result.get("error"): st.error(...)
+
+    NLQuery 会被 RCA 热路径调用,一次 Bedrock 抖动不该让整轮 RCA 崩掉,
+    所以收敛成结构化错误是正确设计。改为断言**契约**(返回 error + 记日志)
+    而非**实现**(异常传播)—— 契约才是调用方依赖的东西。
+    """
+    import logging
+
     from neptune.nl_query import NLQueryEngine
 
     engine = NLQueryEngine.__new__(NLQueryEngine)
@@ -81,9 +104,17 @@ def test_ub2_03_bedrock_timeout_raises():
     mock_bedrock.invoke_model = MagicMock(side_effect=Exception("Connection timeout"))
     engine.bedrock = mock_bedrock
 
-    # _generate_cypher has no try/except → exception propagates through query()
-    with pytest.raises(Exception, match="Connection timeout"):
-        engine.query("petsite 依赖哪些数据库？")
+    with caplog.at_level(logging.WARNING):
+        result = engine.query("petsite 依赖哪些数据库？")
+
+    # 契约 1:错误出现在返回值里,调用方能判断
+    assert 'error' in result, f"query() 应返回 error 字段，实际: {sorted(result)}"
+    assert 'Connection timeout' in result['error'], result['error']
+    # 契约 2:没有伪装成成功 —— 不能返回一个看起来正常的空结果
+    assert not result.get('results'), f"失败时不应返回结果集: {result.get('results')}"
+    # 契约 3:失败可见于日志,不是静默
+    assert any('Connection timeout' in r.message or 'Connection timeout' in str(r.msg)
+               for r in caplog.records), "失败应记 warning 日志，实际日志为空"
 
 
 def test_ub2_04_unsafe_cypher_blocked(neptune_rca):

@@ -11,6 +11,8 @@ import time
 
 import pytest
 
+from conftest import cleanup_incident
+
 
 REPORT_TEXT = (
     'petsite 服务因 DynamoDB PetAdoptions 表 ReadThrottling 导致 5xx，'
@@ -36,11 +38,8 @@ def incident_chain(neptune_rca):
 
     yield inc_id
 
-    # 清理
-    try:
-        neptune_rca.results("MATCH (n:Incident {id: $id}) DETACH DELETE n", {'id': inc_id})
-    except Exception:
-        pass
+    # 清理：节点 + 向量。只删节点会让向量单调累积，污染 search_similar 的 top_k
+    cleanup_incident(neptune_rca, inc_id)
 
 
 def test_i04_incident_full_chain(neptune_rca, incident_chain):

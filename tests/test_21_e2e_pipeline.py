@@ -14,6 +14,8 @@ import uuid
 
 import pytest
 
+from conftest import cleanup_incident
+
 logger = logging.getLogger(__name__)
 
 from paths import PROJECT_ROOT
@@ -257,6 +259,10 @@ def incident_written(neptune_rca):
         )
 
     yield incident_id
+
+    # 2026-08-28 补:本 fixture 原先**完全没有清理**，是 Incident 节点与向量
+    # 残留的主要来源（实测一天累积 15 个节点 + 38 条向量）。
+    cleanup_incident(neptune_rca, incident_id)
 
 
 @pytest.mark.neptune
