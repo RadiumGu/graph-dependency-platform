@@ -845,43 +845,101 @@ cycle-13  312 passed / 10 failed / 144 skipped /  0 errors  ← error 首次归�
 
 ---
 
-### T-099 · Q18 查不到刚写入的 ChaosExperiment · `todo` · P1
+### T-099 · Q18 查不到刚写入的 ChaosExperiment · `done`(非缺陷,是测试脆弱性)
 
-```
-AssertionError: Q18 未查到 test-auto-chaos-int-01
-  当前结果: ['exp-petsite-fis-eks-pod-network-latency-2026...']
-```
+**受控验证先排除了写入缺陷**:直接调 `write_experiment`,节点与 `TestedBy` 边
+**都成功落库**(`LIMIT 30` 就能查到)。
 
-3 个集成测试(`test_06` ×2、`test_10` ×1)先写 ChaosExperiment 再用 Q18 查,查不到。
+真因是 **LIMIT 窗口**:测试把 `timestamp` 写死为 `'2026-04-01T...'`,而 petsite
+在活图里已累积 **24 个** ChaosExperiment,时间戳全部 ≥ 2026-04-02。
+实测新节点在 25 条中排第 **25** 位,被 `LIMIT 20` 精确切掉。
 
-**此前这几条报的是 URLError**(写入根本没成功),占位符修好后写入应该通了 ——
-所以现在暴露的是**下一层**问题:要么 Q18 的过滤条件排除了新写的节点
-(如按时间窗/tier 过滤),要么写入其实仍未落库。
+这个测试是在图谱数据还少的时候写的,**随着数据累积就静默失效**。
+改用当前时间(`conftest.now_iso`)—— 刚跑完的实验本来就该是最新的,
+这才是语义正确的写法,且不受活图累积多少历史实验影响。
 
-**优先级 P1**:这是「图谱作为唯一源头」的核心链路 —— 写进去查不出来,
-比查出旧数据更严重。
-
----
-
-### T-100 · 向量搜索查不到刚写入的 Incident · `todo` · P2
-
-```
-AssertionError: 向量搜索未找到 inc-2026-08-28-f06d13
-  当前结果 IDs: ['inc-2026-08-28-8a9612', ...]
-```
-
-S3 Vectors 写入后立即查询。疑为最终一致性 —— 若确认,测试应加重试而非直接断言;
-若非,则是写入路径缺陷。**先测清楚再改测试** —— 直接给测试加 sleep 是掩盖。
+- 2026-08-28T19:32Z cycle-14: 三条测试全绿,commit `3c6ecaf`
 
 ---
 
-### T-101 · `bedrock_timeout_raises` DID NOT RAISE · `todo` · P1
+### T-101 · Bedrock 超时未抛异常 · `done`(我的判断错了,问题在测试)
 
-`test_ub2_03_bedrock_timeout_raises` 期望 Bedrock 超时时抛异常,实际没抛。
+原先怀疑「静默吞异常」(本项目 13+ 缺陷里约 11 个是这个模式)。**核查后结论相反**:
+`query()` 里的 try/except 既 `logger.warning` 又把 error 放进返回值,**不是静默**。
 
-**疑真缺陷且属本项目的高频模式**:本次工作已累计发现 13+ 个缺陷,其中约 11 个是
-**静默失败**(异常被吞或日志级别过低)。超时被吞掉意味着 NLQuery 会静静返回
-空结果或降级结果,调用方无从判断。需确认是代码吞了异常还是测试的期望过期。
+判定标准不该是偏好,而是**契约是否被下游遵守**。实测两个真实调用方都检查:
+
+| 调用方 | 处理 |
+|---|---|
+| `rca/scripts/graph-ask.py` | `if 'error' in result: print + sys.exit(1)` |
+| `demo/pages/2_Smart_Query.py` | `if result.get("error"): st.error(...)` |
+
+NLQuery 会被 RCA 热路径调用,一次 Bedrock 抖动不该让整轮 RCA 崩掉,
+所以收敛成结构化错误是**正确设计**。测试断言的是 PR2 迁移**之前**的实现细节
+(注释还写着「`_generate_cypher` has no try/except」)。
+
+改为断言**契约**:返回 error + 不伪装成空结果 + 记 warning 日志。
+
+- 2026-08-28T19:36Z cycle-14: 测试改为断言契约,commit `3c6ecaf`
+
+---
+
+### T-100 · 向量搜索查不到刚写入的 Incident · `done`(索引污染,非最终一致性)
+
+**实测写入到可检索只要 0.26s**(首次查询即命中),排除最终一致性。
+
+真因是**评分并列**:新写入得 0.7597,与 **5 个基线 Incident 完全相同** ——
+那 5 条的报告文本与测试的 `REPORT_TEXT` 一字不差,是**同一个测试历次运行的残留**。
+6 条同分抢 `top_k=5` 的 5 个位置,命中与否是抛硬币,故该测试时好时坏。
+
+顺着查下去发现更严重的问题:**18 条向量里 10 条是孤儿(56%)** ——
+图谱里根本没有对应的 Incident 节点。
+
+**这不是卫生问题而是正确性问题**:`search_similar` 的输出会作为「语义相似历史
+案例」注入 RCA 提示词,孤儿向量代表一个图谱中已不存在的故障,等于给 RCA 喂
+**无法核实的先例** —— 与此前删掉的那个 Bedrock KB(1 篇文档语料上返回
+「相似度 89%」的编造先例)属同一类问题。也是对「图谱作为唯一源头」的直接违反:
+向量索引成了第二个源头且已与图谱漂移。
+
+根因是**写入与清理不对称**:`index_incident` 写向量,但**没有对应的删除函数**;
+集成测试只 `DETACH DELETE` Neptune 节点,向量留下来单调累积 ——
+一天内索引从 18 涨到 **56**。
+
+| 修复 | 内容 |
+|---|---|
+| 1 | 新增 `delete_incident_vectors()` |
+| 2 | 新增 `conftest.cleanup_incident()`,节点与向量一起清 |
+| 3 | `test_07`/`test_10` 接入;**`test_21` 原先完全没有清理**,是残留主要来源 |
+| 4 | 清理 10 条孤儿向量(索引 18 → 8,全部有节点支撑) |
+| 5 | 新增 `tests/test_26_vector_graph_consistency.py` 守门 |
+
+守门测试的**断言方向刻意不对称**:向量有图谱无 → **硬失败**(会污染 RCA 推理);
+图谱有向量无 → 只告警(只影响召回,且补向量需要 Bedrock 调用,不该由测试强制)。
+
+实测:跑完整套件后向量数仍为 8,清理自动生效。
+
+- 2026-08-28T19:52Z cycle-14: 孤儿清理 + 对称清理 + 守门测试,commit `3c6ecaf`
+
+---
+
+### 🔍 顺带修掉:遮蔽隔离漏了 `handler`
+
+cycle-13 的隔离只覆盖 `collectors`,`test_12` 仍有 2 条顺序依赖失败。
+**两次靠推理修都没成之后改为取实际错误**,发现是另一个同名模块:
+
+```
+AttributeError: <module 'handler' from '.../rca/handler.py'>
+                does not have the attribute 'upsert_vertex'
+```
+
+`rca/handler.py` 与 `infra/lambda/etl_aws/handler.py` 同名。
+
+改为**算出**碰撞集而非手写:`_top_level_names(rca) & _top_level_names(etl_aws)`,
+排除刻意合并的 `config` 与 vendored 第三方包。结果恰为 `{collectors, handler}`。
+另把 `test_12` 从「跳过不干预」改为「主动指向 etl_aws」—— 收集期结束时
+`sys.modules['collectors']` 已被更靠后的文件改成 rca 那个,仅跳过救不了它。
+
+**教训**:同类问题第三次出现时才停止推理去取实际错误,应该更早。
 
 ---
 
@@ -1069,3 +1127,23 @@ PR 正文已备在 `todo/goal-loop/PR_BODY.md`。
   分派 T-099(Q18 查不到刚写入,P1)、T-100(向量最终一致性)、
   T-101(超时未抛,疑静默吞异常,P1)、T-102(NL 查询,疑本次 schema 改动回归)、
   T-103(环境缺件应 skip 而非 fail)
+- 2026-08-28T19:52Z cycle-14 T-099+T-100+T-101: 三张卡全部收口,且**三次判断
+  中有两次是我原先的假设错了**。
+  T-099 不是写入缺陷 —— 受控验证节点与边都落库,真因是测试写死 2026-04-01
+  的时间戳而 petsite 已累积 24 个实验,新节点排第 25 被 LIMIT 20 切掉;
+  该测试在数据少时写的,随累积静默失效。
+  T-101 不是静默吞异常 —— query() 既记 warning 又返回 error,且两个真实调用方
+  都检查该字段,是正确设计;错的是断言实现细节的测试。
+  T-100 不是最终一致性 —— 实测写入到可检索 0.26s。真因是**18 条向量里 10 条
+  是孤儿**(图谱无对应节点),而孤儿会作为「语义相似历史案例」注入 RCA 提示词,
+  等于喂无法核实的先例,与删掉的那个 Bedrock KB 同一类问题,也直接违反
+  「图谱唯一源头」。根因是写入有 index_incident 而**清理没有对应函数**,
+  测试只删节点不删向量,一天从 18 涨到 56。已补 delete_incident_vectors、
+  conftest.cleanup_incident、给 test_21(原先完全不清理)接上,清掉 10 条孤儿,
+  并加 test_26 守门(向量有图谱无=硬失败,反向只告警)。
+  另修 cycle-13 遗漏:遮蔽隔离漏了 handler(rca 与 etl_aws 同名)。
+  **两次靠推理修都没成之后才去取实际错误 —— 应该更早**。改为从目录算出
+  碰撞集而非手写,结果恰为 {collectors, handler}。
+  基线 312 passed/10 failed → **322 passed / 2 failed**,
+  剩余 2 条均为环境缺件(cdk CLI、strands),非代码缺陷。
+  生产侧清理:向量 56 → 8,Incident 残留 15 → 0,图谱 867 节点/1341 边
