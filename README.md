@@ -4,7 +4,7 @@
 
 A production-grade **Observability → Knowledge Graph → Intelligent RCA → Chaos Validation → DR Planning** closed-loop platform for microservices on AWS EKS.
 
-Built around [PetSite](https://github.com/aws-samples/one-observability-demo) — a polyglot microservice application running on EKS (ARM64 Graviton3) — the platform continuously builds a Neptune knowledge graph from live traffic and infrastructure topology, performs AI-powered root cause analysis when alerts fire, validates system resilience through AI-driven chaos experiments, and generates graph-driven disaster recovery switchover plans.
+Built around [PetSite](https://github.com/aws-samples/one-observability-demo) — a polyglot microservice application running on EKS (ARM64 Graviton2) — the platform continuously builds a Neptune knowledge graph from live traffic and infrastructure topology, performs AI-powered root cause analysis when alerts fire, validates system resilience through AI-driven chaos experiments, and generates graph-driven disaster recovery switchover plans.
 
 ---
 
@@ -22,8 +22,8 @@ Built around [PetSite](https://github.com/aws-samples/one-observability-demo) �
 │  4 Lambda ETL pipelines │          │   Amazon Neptune     │   │ CW Alarm triggered      │
 │  * DeepFlow    every 5m │ =write=> │   (openCypher)       │   │ Multi-layer RCA engine  │
 │  * AWS APIs    every 15m│          │                      │=> │ DeepFlow + CloudTrail   │
-│  * EventBridge realtime │          │   23 node types      │<= │ 6 Layer2 probers        │
-│  * CloudFormation daily │          │   19 edge types      │   │ Graph RAG report→Slack  │
+│  * EventBridge realtime │          │   31 node types      │<= │ 6 Layer2 probers        │
+│  * CloudFormation daily │          │   26 edge types      │   │ Graph RAG report→Slack  │
 └─────────────────────────┘          │                      │   └─────────────────────────┘
                                      │                      │          │
                                      │                      │ RCA root cause events write back
@@ -31,7 +31,7 @@ Built around [PetSite](https://github.com/aws-samples/one-observability-demo) �
                                      │                      │  ┌─────────────────────────┐
                                      │                      │  │ chaos/                  │
                                      │                      │  │ AI hypothesis (graph)   │
-                                     │                      │=>│ 61 fault types × 2 back │
+                                     │                      │=>│ 60 fault types × 2 back │
                                      │                      │<=│ LearningAgent loop      │
                                      │                      │  └─────────────────────────┘
                                      │                      │          │
@@ -95,7 +95,7 @@ Built around [PetSite](https://github.com/aws-samples/one-observability-demo) �
 
 ### Data Flow
 
-1. **infra/** — Modular ETL pipeline continuously ingests infrastructure topology into Neptune (171+ nodes, 19 edge types)
+1. **infra/** — Modular ETL pipeline continuously ingests infrastructure topology into Neptune (runtime-dynamic; measured 867 nodes / 1341 edges on 2026-08-28, 26 edge types)
 2. Real or injected faults trigger CloudWatch Alarms → **rca/** Lambda activates
 3. **rca/** runs multi-layer analysis (DeepFlow L7/L4 + CloudTrail + Neptune graph traversal + Layer2 AWS Service Probers) → Graph RAG report via Bedrock Claude
 4. **chaos/** HypothesisAgent generates hypotheses from Neptune graph → 5-Phase experiment engine injects faults → validates RCA accuracy → LearningAgent feeds results back
@@ -134,7 +134,7 @@ graph-dependency-platform/
 │
 ├── dr-plan-generator/  # Graph-Driven DR Plan Generator
 │   ├── graph/          #   Neptune queries (Q12–Q16) + dependency analyzer
-│   ├── planner/        #   Plan generation (Phase -1 to 4 + Phase 2.5) + rollback
+│   ├── planner/        #   Plan generation (Phase 0 to 4, incl. Phase 2.5 readiness gate) + rollback
 │   ├── registry/       #   ★ Policy system (YAML/Markdown/NL rules/CLI)
 │   ├── assessment/     #   Impact analysis + RTO estimation + SPOF detection
 │   ├── validation/     #   ★ 3-level verification engine (dry-run/step/rehearsal)
@@ -175,7 +175,7 @@ Deploys all AWS resources (EKS, DeepFlow, Neptune, ALB, Lambda) via TypeScript C
 
 **23 vertex types** — Region, AZ, VPC, Subnet, EC2, EKS, K8s Service, Pod, ALB, TargetGroup, Lambda, StepFunction, DynamoDB, RDS, Neptune, S3, SQS, SNS, ECR, SecurityGroup, Microservice, BusinessCapability, **ChaosExperiment**
 
-**19 edge types** — LocatedIn, BelongsTo, Contains, RunsOn, RoutesTo, ForwardsTo, HasRule, HasSG, Invokes, AccessesData, ConnectsTo, WritesTo, PublishesTo, TriggeredBy, Calls, DependsOn, Implements, **TestedBy**, **MentionsResource**
+**26 edge types** (authoritative list in `profiles/petsite.yaml` → `graph_schema_text`). Representative types — LocatedIn, BelongsTo, Contains, RunsOn, RoutesTo, ForwardsTo, HasRule, HasSG, Invokes, AccessesData, ConnectsTo, WritesTo, PublishesTo, TriggeredBy, Calls, DependsOn, Implements, **TestedBy**, **MentionsResource**
 
 ### Modular ETL Architecture
 
@@ -195,7 +195,7 @@ lambda/etl_aws/
 
 ### Key Technical Highlights
 
-- **ARM64 full-stack**: EKS + DeepFlow on Graviton3, ~40% cost reduction
+- **ARM64 full-stack**: EKS + DeepFlow on Graviton2, ~40% cost reduction
 - **eBPF zero-instrumentation**: DeepFlow Agent as DaemonSet, no application code changes
 - **CDK Infrastructure as Code**: VPC → Neptune Cluster → Lambda, fully reproducible
 - **Event-driven sync**: SQS-buffered EventBridge rules for near-real-time graph updates
@@ -221,7 +221,7 @@ handler.py → fault_classifier (P0/P1/P2)
     ├─ Step 1:  DeepFlow L7 (HTTP 5xx call chain)
     ├─ Step 1b: DeepFlow L4 (TCP RST / timeout / SYN retrans)
     ├─ Step 2:  CloudTrail change events
-    ├─ Step 3:  Neptune graph traversal (Q1–Q18)
+    ├─ Step 3:  Neptune graph traversal (Q1–Q11/Q17/Q18)
     │           ├─ Service call chain (Calls / DependsOn)
     │           ├─ Infrastructure: Service → Pod → EC2 → AZ
     │           └─ Blast radius expansion
@@ -270,7 +270,7 @@ class MyServiceProbe(BaseProbe):
 | **P1** | Tier0/1 + moderate impact | Suggest mode + Slack button confirmation |
 | **P2** | Tier1/2 + low impact | Low-risk actions auto-execute |
 
-### Neptune Query Library (Q1–Q18)
+### Neptune Query Library (rca: Q1–Q11, Q17, Q18 — 13 queries)
 
 | Query | Purpose | Layer |
 |-------|---------|-------|
@@ -343,8 +343,8 @@ A chaos engineering platform that uses Neptune graph topology and Bedrock LLM to
 
 | Backend | Coverage | Fault Types |
 |---------|----------|-------------|
-| **Chaos Mesh** | K8s layer | 24 verified types (Pod kill, network, HTTP, DNS, IO, CPU, memory, time, kernel) |
-| **AWS FIS** | AWS managed services | 15 types (Lambda, RDS, EKS node, EBS, VPC network) |
+| **Chaos Mesh** | K8s layer | 19 verified types (Pod kill, network, HTTP, DNS, IO, CPU, memory, time, kernel) |
+| **AWS FIS** | AWS managed services | 37 types (Lambda, RDS, EKS node, EBS, VPC network …) |
 
 ### Industry Alignment
 
@@ -448,20 +448,20 @@ All modules now load from profile with hardcoded fallback:
 
 | Metric | Value |
 |--------|-------|
-| Neptune knowledge graph nodes | **171+** |
-| Neptune node types | **23** |
-| Neptune edge types | **19** |
-| Neptune query library | **Q1–Q18 (18 queries)** |
+| Neptune knowledge graph nodes | **runtime-dynamic** (measured 2026-08-28: 867 nodes / 1341 edges) |
+| Neptune node types | **31** |
+| Neptune edge types | **26** (verified against live graph) |
+| Neptune query library | **Q1–Q18 (13 in rca + 5 in dr, across two modules)** |
 | DR verification levels | **3** (dry-run → step → rehearsal) |
-| DR plan phases | **7** (Phase -1 to 4 + Phase 2.5) |
+| DR plan phases | **5** (Phase 0 to 4; Phase 2.5 is a readiness gate, not a standalone phase) |
 | Policy system layers | **3** (YAML → Markdown/NL → CLI) |
-| Chaos Mesh validated tools | **30** |
-| AWS FIS fault types | **15** |
+| Chaos Mesh validated tools | **19** |
+| AWS FIS fault types | **37** |
 | Layer2 AWS Service Probers | **6** |
 | RCA trigger latency | **< 1 min** |
 | ETL sync cadence | 5min (DeepFlow) + 15min (AWS) + real-time (events) |
 | Functional test pass rate | **47/47** |
-| Cross-module integration tests | **47+** |
+| Cross-module integration tests | **277 test functions** (~53 integration/E2E) |
 | Architecture version | **v18** |
 
 ---
@@ -470,7 +470,7 @@ All modules now load from profile with hardcoded fallback:
 
 | Resource | Identifier | Purpose |
 |----------|-----------|---------|
-| EKS Cluster | `petsite-cluster` (ARM64 Graviton3) | Microservice runtime |
+| EKS Cluster | `PetSite` (ARM64 Graviton2, 4× t4g.large) | Microservice runtime |
 | Neptune | `petsite-neptune` | Knowledge graph storage |
 | Lambda | `petsite-rca-engine` | RCA main engine |
 | Lambda | `petsite-rca-interaction` | Slack button callback |

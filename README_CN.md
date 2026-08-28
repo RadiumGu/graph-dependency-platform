@@ -4,7 +4,7 @@
 
 面向 AWS EKS 微服务的生产级 **可观测 → 知识图谱 → 智能根因分析 → 混沌验证 → 容灾计划** 完整闭环平台。
 
-以 [PetSite](https://github.com/aws-samples/one-observability-demo)（运行在 EKS ARM64 Graviton3 上的多语言微服务应用）为目标系统，平台持续从实时流量和基础设施拓扑构建 Neptune 知识图谱，在告警触发时执行 AI 驱动的根因分析，通过 AI 驱动的混沌实验验证系统韧性，并基于图谱自动生成容灾切换计划。
+以 [PetSite](https://github.com/aws-samples/one-observability-demo)（运行在 EKS ARM64 Graviton2 上的多语言微服务应用）为目标系统，平台持续从实时流量和基础设施拓扑构建 Neptune 知识图谱，在告警触发时执行 AI 驱动的根因分析，通过 AI 驱动的混沌实验验证系统韧性，并基于图谱自动生成容灾切换计划。
 
 ---
 
@@ -22,8 +22,8 @@
 │  4 个 Lambda ETL 管道   │           │   Amazon Neptune     │   │ CW Alarm 触发            │
 │  * DeepFlow    每 5min  │ =write=> │   (openCypher)       │   │ 多层 RCA 引擎             │
 │  * AWS APIs    每 15min │          │                      │=> │ DeepFlow + CloudTrail    │
-│  * EventBridge 实时     │           │   23 种节点类型        │<=│ 6 个 Layer2 探针          │
-│  * CloudFormation 每日  │           │   19 种边类型         │   │ Graph RAG 报告 -> Slack  │
+│  * EventBridge 实时     │           │   31 种节点类型        │<=│ 6 个 Layer2 探针          │
+│  * CloudFormation 每日  │           │   26 种边类型         │   │ Graph RAG 报告 -> Slack  │
 └────────────────────────┘           │                      │   └─────────────────────────┘
                                      │                      │          │
                                      │                      │ RCA 根因事件写回图谱
@@ -31,7 +31,7 @@
                                      │                      │  ┌─────────────────────────┐
                                      │                      │  │ chaos/                  │
                                      │                      │  │ AI 假设生成（图谱驱动）    │
-                                     │                      │=>│ 61 种故障 × 双后端        │
+                                     │                      │=>│ 60 种故障 × 双后端        │
                                      │                      │<=│ 闭环 LearningAgent       │
                                      │                      │  └─────────────────────────┘
                                      │                      │          │
@@ -95,7 +95,7 @@
 
 ### 数据流
 
-1. **infra/** — 模块化 ETL 持续采集基础设施拓扑到 Neptune（171+ 节点，19 种边类型）
+1. **infra/** — 模块化 ETL 持续采集基础设施拓扑到 Neptune（运行期动态（2026-08-28 实测 867 节点 / 1341 边），26 种边类型）
 2. 真实或注入的故障触发 CloudWatch Alarm → **rca/** Lambda 激活
 3. **rca/** 执行多层分析（DeepFlow L7/L4 + CloudTrail + Neptune 图遍历 + Layer2 AWS 服务探针）→ 通过 Bedrock Claude 生成 Graph RAG 报告
 4. **chaos/** HypothesisAgent 基于 Neptune 图谱生成假设 → 5 Phase 实验引擎注入故障 → 验证 RCA 准确性 → LearningAgent 闭环学习
@@ -116,7 +116,7 @@ graph-dependency-platform/
 │
 ├── rca/            # 智能根因分析引擎（原 graph-rca-engine）
 │   ├── core/       #   多层 RCA 引擎 + 故障分级 + Graph RAG 报告生成
-│   ├── neptune/    #   Neptune 查询库（Q1–Q18，openCypher）+ 自然语言查询引擎 + Schema Prompt
+│   ├── neptune/    #   Neptune 查询库（Q1–Q11、Q17、Q18 共 13 个，openCypher）+ 自然语言查询引擎 + Schema Prompt
 │   ├── collectors/ #   Layer2 AWS 服务探针 + 基础设施采集器 + EKS 认证
 │   ├── actions/    #   故障手册 + 半自动修复 + Slack 通知
 │   ├── search/     #   S3 Vectors Incident 语义搜索
@@ -134,7 +134,7 @@ graph-dependency-platform/
 │
 ├── dr-plan-generator/  # 图谱驱动容灾计划生成器
 │   ├── graph/          #   Neptune 查询（Q12–Q16）+ 依赖分析器
-│   ├── planner/        #   计划生成（Phase -1 到 4 + Phase 2.5）+ 回滚
+│   ├── planner/        #   计划生成（Phase 0 到 4，含 Phase 2.5 就绪关卡）+ 回滚
 │   ├── registry/       #   ★ 策略系统（YAML/Markdown/NL 规则/CLI）
 │   ├── assessment/     #   影响评估 + RTO 估算 + SPOF 检测
 │   ├── validation/     #   ★ 三层验证引擎（dry-run/逐步/全量演练）
@@ -173,7 +173,7 @@ graph-dependency-platform/
 
 ### 核心技术亮点
 
-- **ARM64 全栈**：EKS + DeepFlow 运行在 Graviton3，成本降低约 40%
+- **ARM64 全栈**：EKS + DeepFlow 运行在 Graviton2，成本降低约 40%
 - **eBPF 零侵扰**：DeepFlow Agent 作为 DaemonSet 自动采集，无需修改应用代码
 - **CDK 基础设施即代码**：从 VPC 到 Neptune Cluster 到 Lambda 全部代码化
 - **事件驱动同步**：SQS 缓冲的 EventBridge 规则实现近实时图谱更新
@@ -198,7 +198,7 @@ handler.py → fault_classifier (P0/P1/P2)
     ├─ Step 1:  DeepFlow L7（HTTP 5xx 调用链）
     ├─ Step 1b: DeepFlow L4（TCP RST / 超时 / SYN 重传）
     ├─ Step 2:  CloudTrail 变更事件
-    ├─ Step 3:  Neptune 图遍历（Q1–Q18）
+    ├─ Step 3:  Neptune 图遍历（Q1–Q11/Q17/Q18）
     │           ├─ 服务调用链（Calls / DependsOn）
     │           ├─ 基础设施：Service → Pod → EC2 → AZ
     │           └─ 爆炸半径扩展
@@ -234,7 +234,7 @@ Slack 通知 + 半自动修复 + 事件归档
 | **P1** | Tier0/1 + 中等影响 | Suggest 模式 + Slack 按钮确认 |
 | **P2** | Tier1/2 + 低影响 | LOW 风险全自动执行 |
 
-### Neptune 查询库（Q1–Q18）
+### Neptune 查询库（rca：Q1–Q11、Q17、Q18，共 13 个）
 
 | 查询 | 用途 | 层 |
 |------|------|---|
@@ -306,8 +306,8 @@ RCA 报告自动分块 + 向量化（Bedrock Titan v2）+ 写入 S3 Vectors 索�
 
 | 后端 | 覆盖范围 | 故障类型 |
 |------|---------|---------|
-| **Chaos Mesh** | K8s 层 | 24 种已验证（Pod/网络/HTTP/DNS/IO/CPU/内存/时间/内核） |
-| **AWS FIS** | AWS 托管服务层 | 15 种（Lambda/RDS/EKS Node/EBS/VPC 网络） |
+| **Chaos Mesh** | K8s 层 | 19 种已验证（Pod/网络/HTTP/DNS/IO/CPU/内存/时间/内核） |
+| **AWS FIS** | AWS 托管服务层 | 37 种（Lambda/RDS/EKS Node/EBS/VPC 网络） |
 
 📖 **详细文档**：[`chaos/code/README.md`](chaos/code/README.md) | [`chaos/README.md`](chaos/README.md)
 
@@ -374,19 +374,19 @@ RCA 报告自动分块 + 向量化（Bedrock Titan v2）+ 写入 S3 Vectors 索�
 
 | 指标 | 数值 |
 |------|------|
-| Neptune 知识图谱节点 | **171+** |
-| Neptune 节点类型 | **23 种** |
-| Neptune 边类型 | **19 种** |
-| Neptune 查询库 | **Q1–Q18（18 个查询）** |
+| Neptune 知识图谱节点 | **运行期动态**（2026-08-28 实测 867 节点 / 1341 边） |
+| Neptune 节点类型 | **31 种** |
+| Neptune 边类型 | **26 种**（活图谱实测，与 schema 枚举一致） |
+| Neptune 查询库 | **Q1–Q18（rca 13 个 + dr 5 个，分布于两模块）** |
 | DR 验证层级 | **3 层**（dry-run → 逐步 → 全量演练）|
-| DR 计划阶段 | **7 个**（Phase -1 到 4 + Phase 2.5）|
+| DR 计划阶段 | **5 个**（Phase 0 到 4；Phase 2.5 为就绪关卡，非独立阶段）|
 | 策略系统层级 | **3 层**（YAML → Markdown/NL → CLI）|
-| Chaos Mesh 已验证工具 | **30 个** |
-| AWS FIS 故障类型 | **15 种** |
+| Chaos Mesh 已验证工具 | **19 种** |
+| AWS FIS 故障类型 | **37 种** |
 | Layer2 AWS 服务探针 | **6 个** |
 | RCA 触发延迟 | **< 1 分钟** |
 | ETL 同步周期 | 5min（DeepFlow）+ 15min（AWS）+ 实时（事件） |
-| 跨模块集成测试 | **47+** |
+| 跨模块集成测试 | **277 个测试函数**（集成/E2E 约 53） |
 
 ---
 
@@ -394,7 +394,7 @@ RCA 报告自动分块 + 向量化（Bedrock Titan v2）+ 写入 S3 Vectors 索�
 
 | 资源 | 标识 | 用途 |
 |------|------|------|
-| EKS 集群 | `petsite-cluster`（ARM64 Graviton3） | 微服务运行环境 |
+| EKS 集群 | `PetSite`（ARM64 Graviton2，t4g.large ×4） | 微服务运行环境 |
 | Neptune | `petsite-neptune` | 知识图谱存储 |
 | Lambda | `petsite-rca-engine` | RCA 主引擎 |
 | Lambda（×4） | `neptune-etl-from-*` | ETL 管道 |
