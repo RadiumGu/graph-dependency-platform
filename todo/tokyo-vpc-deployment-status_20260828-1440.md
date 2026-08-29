@@ -1186,3 +1186,129 @@ N-04 的第一版是 `assert 'or not vpc_ids' not in source`,**立刻误报** �
 半成品只会留下一批语义不明的边。`remoteResources` 仍为空,跨 VPC 未覆盖。
 `etl_deepflow` 的 `fetch_nfm_throttling()` 与本条路是两条独立实现,待核对。
 
+
+---
+
+# 附录 E：NFM 的三条并存链路与命名问题（2026-08-29 09:10 核对）
+
+用户提示「我好像把 aws-network-flow-monitor-agent 通过什么方法注入到 deepflow 里面了」,
+据此查出的注入机制,以及**纠正附录 D 里「NFM 未经 DeepFlow」的判断**。
+
+## E.0 先纠正两个前提
+
+**① NFM 不是只支持 EKS。** 两种形态都在跑:
+
+| 形态 | 实证 |
+|---|---|
+| EKS | `aws-network-flow-monitor-agent` DaemonSet,ns `amazon-network-flow-monitor`,**4/4 Running,192 天** |
+| 纯 EC2 | `network-flow-monitor.service` systemd,在 `nfm-deepflow-test` 上 running |
+
+监视器的 `localResources` 是 `AWS::EC2::VPC`,范围是**整个 VPC**,与 EKS 无关。
+
+**② NFM 独有的能力要收窄。** 附录 D 说它独有「TCP 层质量」,不准确 ——
+RTT/Retransmissions 在 CloudWatch `AWS/NetworkFlowMonitor` 命名空间里就有。
+**真正独有的是 per-flow 的三样东西**:
+- `traversedConstructs` —— Instance → ENI → ENI → Instance 的实际网络路径
+- `kubernetesMetadata` —— `localServiceName`/`localPodName` 直接给出 K8s 服务对
+- `destinationCategory` —— 内建 `INTRA_AZ` / `INTER_AZ` 区分
+
+所以它值得作为平行源,理由是**路径与服务对归因**,不是「有 RTT 数据」。
+
+## E.1 三条并存链路（此前只看到第 C 条）
+
+| 链路 | 路径 | 落到哪 | 指标 |
+|---|---|---|---|
+| **A** | NFM agent `:9101` → `prometheus-nfm` → `remote_write` → **DeepFlow** → ClickHouse `prometheus.samples` | `etl_deepflow` → **Microservice** | **ENA 限速**计数器 |
+| **B** | CloudWatch `AWS/NetworkFlowMonitor` → **yace** → `prometheus-nfm` → **DeepFlow** | 目前**无消费方** | RTT / 重传 |
+| **C** | CloudWatch + NFM API → **`etl_aws`** | **EC2Instance / VPC** | RTT / 重传 / per-flow |
+
+注入机制在 `deepflow` namespace 的 `prometheus-nfm` 部署(1/1 Running,191 天),
+配置 `prometheus-nfm-config`:
+
+```yaml
+remote_write:
+  - url: "http://deepflow-agent.deepflow/api/v1/prometheus"     # ← 注入点
+scrape_configs:
+  - job_name: 'eks-nfm-agent'
+    kubernetes_sd_configs: [{role: pod}]
+    relabel_configs:
+      - regex: amazon-network-flow-monitor;aws-network-flow-monitor-agent
+      - target_label: __address__
+        replacement: "${1}:9101"
+  - job_name: 'yace-cloudwatch'
+    static_configs: [{targets: ["yace-nfm.deepflow:5000"]}]      # ← 链路 B
+```
+
+`yace-config` 里 `customNamespace: [{name: nfm, namespace: AWS/NetworkFlowMonitor}]`
+把 CloudWatch 的 RoundTripTime 等也导成 Prometheus。
+
+**链路 B 与 C 读同一份 CloudWatch 数据** —— 目前不冲突(etl_deepflow 只消费 ENA
+系列、不消费 yace 那份 RTT),但这是**已经存在的重复采集**:同一份数据付两次成本。
+哪天有人在 etl_deepflow 里开始用 yace 的 RTT 写 Microservice 节点,
+就会与 etl_aws 写 EC2Instance 的同名属性形成两个写入方 —— 本仓库反复出问题的模式。
+
+## E.2 命名问题：`fetch_nfm_throttling` 读的不是 NFM 的指标
+
+它读的四个指标 `bw_in/out_allowance_exceeded`、`pps_allowance_exceeded`、
+`conntrack_allowance_exceeded` 是 **ENA 网卡驱动**的计数器。
+在 `nfm-deepflow-test` 上实测:
+
+```
+$ ethtool -S <iface> | grep allowance
+     bw_in_allowance_exceeded: 481
+     bw_out_allowance_exceeded: 0
+     pps_allowance_exceeded: 105
+     conntrack_allowance_exceeded: 0
+```
+
+同一台机器 **9101 根本没监听**(systemd 版不导出 HTTP 端点),
+所以指标源头是驱动,不是 NFM 的服务端 API。
+
+它们**恰好**由 NFM agent 在 EKS 上经 9101 导出 —— 链路确实经过 NFM agent,
+但语义是 ENA 限速,与 NFM 的 RTT/重传是**两码事**。
+我自己第一次读代码时就误判成「根本不是 NFM」,直到查出 9101 才理清。
+
+**已改名**(2026-08-29):
+- 函数 `fetch_nfm_throttling` → `fetch_ena_allowance_throttling`
+- 属性 `nfm_bw_throttled` → `ena_bw_allowance_exceeded`(pps / conntrack 同理)
+  新名逐字对应驱动计数器名,任何人都能追回源头
+- schema 已声明这三个属性(此前**完全未声明**)
+- 图谱里 13 个节点的旧属性名已 `REMOVE` 清理
+
+## E.3 与 etl_aws 那条核对结论：不重复、不冲突
+
+| | `etl_deepflow.fetch_ena_allowance_throttling` | `etl_aws/cloudwatch.py` |
+|---|---|---|
+| 链路 | A(经 DeepFlow) | C(直连 CloudWatch/NFM API) |
+| 指标 | ENA 限速 | RTT / 重传 / per-flow |
+| 写到 | **Microservice** | **EC2Instance** + **VPC** |
+| 语义 | 网卡配额被打满 | TCP 连接质量 |
+
+节点类型不同、属性名不同,**没有写入冲突**。
+
+## E.4 新发现的缺陷：链路 A 的数据永远进不了图谱
+
+NFM agent 的 DaemonSet 是 **`hostNetwork: True`**,所以它导出的样本携带
+**节点 IP**;而 `fetch_ena_allowance_throttling` 用 `ip_map.get(pod_ip)` 查表,
+`ip_map` 的键是**业务 Pod IP**。实测两个集合是**空集**:
+
+```
+样本 IP    = {11.0.2.51, 11.0.2.129, 11.0.3.205, 11.0.3.141}   ← 正是 4 个节点 IP
+业务 Pod IP = {11.0.2.45, 11.0.3.177, 11.0.3.211, 11.0.3.50, ...}
+交集       = 空
+```
+
+于是每一行都命中 `continue`,函数返回空 dict。图谱里 13 个 Microservice 节点上的
+值全是 `False` —— 那是 `batch_upsert_nodes` 的**默认值**,不是「观测到没有限速」。
+
+注意这与「当前恰好没限速」是两件事:EKS 4 个节点当前计数器确实是 0,
+但**即使有限速也传不进去**,缺陷与当前值无关。
+
+**这也是本仓库第五个「写了但从没被读」的字段**:
+`rca/` `profiles/` `chaos/` `dr-plan-generator/` 全无引用,schema 此前也未声明。
+
+**修法(尚未做,属行为变更不在改名范围内)**:ENA 限速是**节点级**现象,
+应该写到 EC2Instance 节点上,或经 `Pod -[RunsOn]-> EC2Instance` 映射后再归属服务。
+这与 NFM 把 VPC 级聚合当实例级属性是同一类错误:
+**观测粒度与归属实体不匹配**(第三次遇到,前两次是泛化 S3 节点、VPC 聚合广播)。
+

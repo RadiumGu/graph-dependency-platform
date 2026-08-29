@@ -215,7 +215,7 @@ def test_s2_03_malformed_rows_are_skipped():
          patch.object(etl_df, 'fetch_active_connections', return_value={}), \
          patch.object(etl_df, 'fetch_replica_counts', return_value={}), \
          patch.object(etl_df, 'fetch_resource_limits', return_value={}), \
-         patch.object(etl_df, 'fetch_nfm_throttling', return_value={}), \
+         patch.object(etl_df, 'fetch_ena_allowance_throttling', return_value={}), \
          patch.object(etl_df, 'batch_fetch_dependency_and_update'), \
          patch.object(etl_df, 'run_drift_detection'), \
          patch.object(etl_df, 'neptune_query') as mock_nq:

@@ -181,6 +181,16 @@ neptune:
       - 注：service_type='lambda' 的服务（如 petstatusupdater）fault_boundary='region'，由 AWS 自动跨 AZ 管理，没有 az 和 replica_count 属性。这是正常情况，不是状态异常。K8s 服务 fault_boundary='az'，查询副本需要按 AZ 分组。
       - fault_boundary 语义：'az' 表示 AZ 级服务（EC2/K8s Pod/EBS）；'region' 表示 Region 级服务（Lambda/DynamoDB/S3/SQS/SNS/API Gateway）；'global' 表示 Global 服务（IAM/Route53/CloudFront）。
     - K8sService: name(str), namespace(str), svc_type(str), cluster_ip(str), app_label(str)
+      - ENA 限速属性（由 etl_deepflow 的 fetch_ena_allowance_throttling 写入 Microservice）：
+        ena_bw_allowance_exceeded(bool), ena_pps_allowance_exceeded(bool),
+        ena_conntrack_allowance_exceeded(bool)
+        · 源头是 **EC2 ENA 网卡驱动**的计数器（主机上 `ethtool -S` 可见），
+          不是 AWS Network Flow Monitor 的 RTT/重传 —— 后者走 CloudWatch/NFM API
+          经 etl_aws 写 EC2Instance/VPC 节点。原属性名带 nfm_ 前缀会误导，已改名。
+        · ⚠️ 已知缺陷：NFM agent 的 DaemonSet 是 hostNetwork，导出的样本带**节点 IP**，
+          而写入侧用 Pod IP 查表，实测两集合为**空集** —— 这三个属性目前恒为 False，
+          那是默认值不是观测结果。ENA 限速是节点级现象，应写 EC2Instance 或经
+          Pod→Node 映射后归属服务。详见 todo 附录 E。
     - Deployment: name(str), namespace(str), replicas(int), ready_replicas(int), strategy(str), app_label(str)
     - HPA: name(str), namespace(str), min_replicas(int), max_replicas(int), current_replicas(int), target_kind(str), target_name(str)
 

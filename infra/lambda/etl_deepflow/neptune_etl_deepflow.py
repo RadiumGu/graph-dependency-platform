@@ -134,11 +134,45 @@ GROUP BY server_ip
     return result
 
 
-def fetch_nfm_throttling(ip_map: dict) -> dict:
+def fetch_ena_allowance_throttling(ip_map: dict) -> dict:
     """
-    查询 prometheus.samples 最近5分钟内各 pod 的 NFM 限速指标
-    多副本同服务取 OR（任一 pod 被限速，服务即标记）
-    返回 {svc_name: {'nfm_bw_throttled': bool, 'nfm_pps_throttled': bool, 'nfm_conntrack_throttled': bool}}
+    查询 ClickHouse 里 **EC2 ENA 驱动的限速计数器**，按服务取 OR 汇总。
+
+    ## 这不是 AWS Network Flow Monitor 的指标（原名 fetch_nfm_throttling 会误导）
+
+    读的四个指标 `bw_in/out_allowance_exceeded`、`pps_allowance_exceeded`、
+    `conntrack_allowance_exceeded` 是 **ENA 网卡驱动**的计数器，
+    实测在主机上用 `ethtool -S <iface>` 可直接看到（nfm-deepflow-test 上
+    `bw_in_allowance_exceeded: 481` / `pps_allowance_exceeded: 105`）。
+
+    它们**恰好**由 aws-network-flow-monitor-agent 在 EKS 上经 :9101 导出，
+    再由 namespace deepflow 里的 `prometheus-nfm` 抓取、`remote_write` 进 DeepFlow
+    ——所以数据链路确实经过 NFM agent，但**指标语义是 ENA 限速，不是 NFM 的
+    RTT/重传**。原名里的 "nfm" 让人误以为是后者（RTT/Retransmissions 走的是
+    完全另一条路：CloudWatch/NFM API → etl_aws，写 EC2Instance/VPC 节点）。
+
+    ## ⚠️ 已知缺陷：作用域不匹配，这些数据永远进不了图谱
+
+    NFM agent 的 DaemonSet 是 `hostNetwork: True`，所以它导出的样本携带的是
+    **节点 IP**，而本函数用 `ip_map.get(pod_ip)` 查表 —— ip_map 的键是**业务 Pod IP**。
+    实测两个集合是**空集**：
+        样本 IP  = {11.0.2.51, 11.0.2.129, 11.0.3.205, 11.0.3.141}  ← 4 个节点 IP
+        业务 PodIP = {11.0.2.45, 11.0.3.177, 11.0.3.211, ...}        ← 交集为空
+
+    于是每一行都命中 `continue`，返回空 dict。图谱里 13 个 Microservice 节点上的
+    `ena_*_allowance_exceeded` 全是 `False` —— 那是 batch_upsert_nodes 的**默认值**，
+    不是「观测到没有限速」。
+
+    修法（尚未做，属行为变更不在改名范围内）：ENA 限速是**节点级**现象，
+    应该写到 EC2Instance 节点上，或经 Pod→Node 关系映射后再归属到服务。
+    这与 NFM 把 VPC 级聚合当实例级属性是同一类错误：**观测粒度与归属实体不匹配**。
+
+    另：这三个属性目前**零读取方**（rca/ profiles/ chaos/ dr-plan-generator 全无引用），
+    且 schema 未声明 —— 本仓库第五个「写了但从没被读」的字段。
+
+    返回 {svc_name: {'ena_bw_allowance_exceeded': bool,
+                     'ena_pps_allowance_exceeded': bool,
+                     'ena_conntrack_allowance_exceeded': bool}}
     """
     sql = """
 SELECT
@@ -169,18 +203,18 @@ GROUP BY pod_ip
             ct  = float(row.get('conntrack_exceeded', 0) or 0) > 0
             if svc_name not in result:
                 result[svc_name] = {
-                    'nfm_bw_throttled':       False,
-                    'nfm_pps_throttled':      False,
-                    'nfm_conntrack_throttled': False,
+                    'ena_bw_allowance_exceeded':       False,
+                    'ena_pps_allowance_exceeded':      False,
+                    'ena_conntrack_allowance_exceeded': False,
                 }
-            result[svc_name]['nfm_bw_throttled']       |= bw
-            result[svc_name]['nfm_pps_throttled']      |= pps
-            result[svc_name]['nfm_conntrack_throttled'] |= ct
+            result[svc_name]['ena_bw_allowance_exceeded']       |= bw
+            result[svc_name]['ena_pps_allowance_exceeded']      |= pps
+            result[svc_name]['ena_conntrack_allowance_exceeded'] |= ct
             if bw or pps or ct:
                 throttled_count += 1
-        logger.info(f"NFM throttling: {throttled_count} throttled pod(s) across {len(result)} service(s)")
+        logger.info(f"ENA allowance throttling: {throttled_count} throttled pod(s) across {len(result)} service(s)")
     except Exception as e:
-        logger.error(f"fetch_nfm_throttling failed: {e}")
+        logger.error(f"fetch_ena_allowance_throttling failed: {e}")
     return result
 
 
@@ -1198,7 +1232,7 @@ def _first_scalar(resp) -> int:
 def batch_fetch_dependency_and_update(service_names: list, l7_metrics: dict,
                                        ip_map_by_name: dict, replica_counts: dict,
                                        resource_limits: dict, active_connections_map: dict,
-                                       restart_map: dict, nfm_throttling: dict = None):
+                                       restart_map: dict, ena_throttling: dict = None):
     """合并 dependency 查询：每个服务 1 次请求（原来 4 次）+ 1 次 metrics 更新"""
     ts = int(time.time())
     for name in service_names:
@@ -1268,13 +1302,13 @@ def batch_fetch_dependency_and_update(service_names: list, l7_metrics: dict,
         for key in ['is_entry_point', 'has_db_dependency', 'has_cache_dependency']:
             props.append(f".property(single,'{key}',{'true' if dep.get(key) else 'false'})")
         # NFM 限速标志（来自 prometheus.samples，三个 bool 属性）
-        throttling = (nfm_throttling or {}).get(name, {})
-        bw  = throttling.get('nfm_bw_throttled',       False)
-        pps = throttling.get('nfm_pps_throttled',      False)
-        ct  = throttling.get('nfm_conntrack_throttled', False)
-        props.append(f".property(single,'nfm_bw_throttled',{'true' if bw else 'false'})")
-        props.append(f".property(single,'nfm_pps_throttled',{'true' if pps else 'false'})")
-        props.append(f".property(single,'nfm_conntrack_throttled',{'true' if ct else 'false'})")
+        throttling = (ena_throttling or {}).get(name, {})
+        bw  = throttling.get('ena_bw_allowance_exceeded',       False)
+        pps = throttling.get('ena_pps_allowance_exceeded',      False)
+        ct  = throttling.get('ena_conntrack_allowance_exceeded', False)
+        props.append(f".property(single,'ena_bw_allowance_exceeded',{'true' if bw else 'false'})")
+        props.append(f".property(single,'ena_pps_allowance_exceeded',{'true' if pps else 'false'})")
+        props.append(f".property(single,'ena_conntrack_allowance_exceeded',{'true' if ct else 'false'})")
 
         try:
             neptune_query(f"g.V().has('Microservice','name','{n}'){''.join(props)}")
@@ -1441,7 +1475,7 @@ ORDER BY calls DESC LIMIT 100 FORMAT TSV
     resource_limits = fetch_resource_limits(ip_map)
 
     # 7b. NFM 限速指标（bw / pps / conntrack throttling）
-    nfm_throttling = fetch_nfm_throttling(ip_map)
+    ena_throttling = fetch_ena_allowance_throttling(ip_map)
 
     # 8. 合并 dependency 查询 + metrics 更新（每服务 2 次请求，原来 5 次）
     # T03 防复发: 过滤 xray-daemon 等噪音节点
@@ -1450,7 +1484,7 @@ ORDER BY calls DESC LIMIT 100 FORMAT TSV
     logger.info(f"更新 {len(service_names)} 个服务的指标...")
     batch_fetch_dependency_and_update(service_names, l7_metrics, ip_map_by_name,
                                        replica_counts, resource_limits, active_connections_map,
-                                       restart_map, nfm_throttling)
+                                       restart_map, ena_throttling)
 
     # 8b. T13a: DNS/TCP 漂移检测
     try:
