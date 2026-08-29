@@ -1,0 +1,446 @@
+{
+    "serviceTopologyEdgeSummaries": [
+        {
+            "sourceResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-02ebd1dd8d1681da8",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:vpc/vpc-010ab37a3f9f74725",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "CONTAINMENT"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-047a94f9c5ab6302a",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:vpc/vpc-010ab37a3f9f74725",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "CONTAINMENT"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-0600a43fa7ebf1ffe",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:vpc/vpc-010ab37a3f9f74725",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "CONTAINMENT"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-0f801fa79077eb277",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:vpc/vpc-010ab37a3f9f74725",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "CONTAINMENT"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "nat-05584e6b365c2defb",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:vpc/vpc-010ab37a3f9f74725",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "CONTAINMENT"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "nat-05584e6b365c2defb",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-02ebd1dd8d1681da8",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "CONTAINMENT"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "PetSite/petsiteNodegroupworkers1a60-ZJElxYDbKT8H",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-0f801fa79077eb277",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "PetSite/petsiteNodegroupworkers1a60-ZJElxYDbKT8H",
+            "destinationResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-0f801fa79077eb277",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "PetSite/petsiteNodegroupworkers1cFE-rBSMHnU8raBy",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-047a94f9c5ab6302a",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "PetSite/petsiteNodegroupworkers1cFE-rBSMHnU8raBy",
+            "destinationResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-047a94f9c5ab6302a",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "PetSite|amazon-cloudwatch-observability",
+            "destinationResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "PetSite|aws-network-flow-monitoring-agent",
+            "destinationResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "PetSite|eks-pod-identity-agent",
+            "destinationResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:autoscaling:ap-northeast-1:926093770964:autoScalingGroup:882deaf2-601c-421c-ad2b-330445577612:autoScalingGroupName/eks-petsiteNodegroupworkers1cFE-rBSMHnU8raBy-d0cea529-d4f8-d859-812a-f69b5c6f5a0b",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-047a94f9c5ab6302a",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:autoscaling:ap-northeast-1:926093770964:autoScalingGroup:cc525594-a4ca-46f2-ab27-5ec1bc8277a6:autoScalingGroupName/eks-petsiteNodegroupworkers1a60-ZJElxYDbKT8H-8ccea529-d21b-f8e5-1c82-1f0367d29249",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-0f801fa79077eb277",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-02ebd1dd8d1681da8",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-0600a43fa7ebf1ffe",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:elasticloadbalancing:ap-northeast-1:926093770964:loadbalancer/app/Servic-PetSi-by0kpyBtxswj/bbe5082588a126fc",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-0600a43fa7ebf1ffe",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:elasticloadbalancing:ap-northeast-1:926093770964:loadbalancer/app/Servic-PetSi-by0kpyBtxswj/bbe5082588a126fc",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-02ebd1dd8d1681da8",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:elasticloadbalancing:ap-northeast-1:926093770964:targetgroup/Servic-PetSi-7JEWC19HNKSR/6046ee3e74aa7bbf",
+            "destinationResourceIdentifier": "arn:aws:elasticloadbalancing:ap-northeast-1:926093770964:loadbalancer/app/Servic-PetSi-by0kpyBtxswj/bbe5082588a126fc",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:elasticloadbalancing:ap-northeast-1:926093770964:targetgroup/Servic-PetAd-RPOCBTKKJYGI/417efff3f0e07023",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:vpc/vpc-010ab37a3f9f74725",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:elasticloadbalancing:ap-northeast-1:926093770964:targetgroup/Servic-PetSi-7JEWC19HNKSR/6046ee3e74aa7bbf",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:vpc/vpc-010ab37a3f9f74725",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:iam::926093770964:role/ServicesEks2-AdminRole38563C57-ErlQPH1XMnxb|PetSite",
+            "destinationResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:rds:ap-northeast-1:926093770964:db:serviceseks2-databasewriter2462cc03-fwgfu4gossqe",
+            "destinationResourceIdentifier": "arn:aws:rds:ap-northeast-1:926093770964:cluster:serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "https://sqs.ap-northeast-1.amazonaws.com/926093770964/ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+            "destinationResourceIdentifier": "https://sqs.ap-northeast-1.amazonaws.com/926093770964/ServicesEks2-sqspetadoptiondlqEEEFF2AC-EQwBtdEFe8jQ",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+            "destinationResourceIdentifier": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "destinationResourceIdentifier": "arn:aws:rds:ap-northeast-1:926093770964:cluster:serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW",
+                    "label": "EKS workloads read/write to Aurora PostgreSQL (pay-for-adoption, list-adoptions services)"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "destinationResourceIdentifier": "https://sqs.ap-northeast-1.amazonaws.com/926093770964/ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW",
+                    "label": "EKS workloads send/receive messages to SQS pet adoption queue"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "destinationResourceIdentifier": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW",
+                    "label": "EKS workloads read/write pet adoption data to S3 bucket"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:elasticloadbalancing:ap-northeast-1:926093770964:loadbalancer/app/Servic-PetSi-by0kpyBtxswj/bbe5082588a126fc",
+            "destinationResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW",
+                    "label": "ALB routes traffic to EKS cluster workloads (petsite, pethistory)"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:lambda:ap-northeast-1:926093770964:function:ServicesEks2-statusupdaterservicelambdafn37242E00-0SHsIkrhwJ32",
+            "destinationResourceIdentifier": "https://sqs.ap-northeast-1.amazonaws.com/926093770964/ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+            "destinationRegion": "ap-northeast-1",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW",
+                    "label": "Status updater Lambda reads/writes to SQS pet adoption queue"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:lambda:ap-northeast-1:926093770964:function:ServicesEks2-dynamodbqueryfunction3C0E68E0-hSXAsqGf3jXY",
+            "destinationResourceIdentifier": "https://sqs.ap-northeast-1.amazonaws.com/926093770964/ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+            "destinationRegion": "ap-northeast-1",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW",
+                    "label": "DynamoDB query Lambda interacts with pet adoption queue"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:elasticloadbalancing:ap-northeast-1:926093770964:loadbalancer/app/Servic-PetSi-by0kpyBtxswj/bbe5082588a126fc",
+            "destinationResourceIdentifier": "arn:aws:elasticloadbalancing:ap-northeast-1:926093770964:targetgroup/Servic-PetAd-RPOCBTKKJYGI/417efff3f0e07023",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW",
+                    "label": "ALB forwards pet adoption history traffic to target group"
+                }
+            ]
+        }
+    ]
+}

@@ -120,6 +120,121 @@ def test_x05_dynamodb_full_table_name_maps_to_resource_node():
     assert edge == 'AccessesData', "微服务到数据库用 AccessesData，不是 DependsOn"
 
 
+def test_x05b_remote_type_is_not_mistaken_for_an_aws_service():
+    """
+    实测 X-Ray 会用 `Type='remote'` 报一个它无法识别的进程外被调方，
+    名字是主机名 —— 例如 `search-service.petadoptions.svc.cluster.local`。
+
+    这是部署后采集 demo 数据时抓到的真 bug：原兜底逻辑是
+    「任何不认识的 type 都算 aws_service」，于是这个**集群内 K8s 服务**
+    被建成了 AWSServiceEndpoint 节点，而 search-service 在图谱里
+    本来就是个 Microservice —— 凭空多出一个类型错误的重复节点。
+
+    判据必须收紧：只有 type 以 'AWS::' 开头，或名字在别名表里
+    （'Secrets Manager' 那种被报成服务本体的情况），才算 AWS 托管服务。
+    """
+    m = _load_etl()
+    key = m._classify('search-service.petadoptions.svc.cluster.local', 'remote')
+    assert key[1] == 'service', \
+        f"K8s 集群内服务不能被当成 AWS 托管服务，实际 kind={key[1]}"
+    # 剥完 FQDN 后还要过一遍 k8s_alias：图谱里的服务叫 petsearch，
+    # K8s 部署叫 search-service，没有名为 search-service 的 Microservice 节点。
+    assert key[0] == 'petsearch', \
+        f"必须映射到图谱里真实存在的服务名，实际 {key[0]!r}"
+    matcher, edge = m._dst_matcher(key)
+    assert 'AWSServiceEndpoint' not in matcher, \
+        "K8s 服务绝不能指向 AWSServiceEndpoint"
+    assert 'Microservice' in matcher and edge == 'Calls'
+
+
+def test_x05c_public_domain_names_are_not_truncated():
+    """
+    剥 FQDN 只能针对 `.svc.cluster.` 这种明确的集群内形态。
+
+    **不能**对任意含点的名字截断第一段 —— 那会把
+    `logs.ap-northeast-1.amazonaws.com` 误伤成 `logs`，
+    凭空造出一个不存在的服务节点。这类「顺手泛化」是本仓库反复踩的坑。
+    """
+    m = _load_etl()
+    assert m._strip_k8s_fqdn('logs.ap-northeast-1.amazonaws.com') == \
+        'logs.ap-northeast-1.amazonaws.com'
+    # 集群内 FQDN 剥掉后缀，再经 k8s_alias 映射到图谱服务名
+    assert m._strip_k8s_fqdn('search-service.petadoptions.svc.cluster.local') == \
+        'petsearch'
+    assert m._strip_k8s_fqdn('petsearch') == 'petsearch'
+
+
+def test_x05d_k8s_deployment_name_maps_to_graph_service_name():
+    """
+    X-Ray 会把**同一条依赖**用两种身份报两次：
+      PetSite → PetSearch                                     （两端插桩，按服务名）
+      petsite → search-service.petadoptions.svc.cluster.local （Type=remote，按主机名）
+
+    而图谱里那个服务叫 `petsearch` —— **没有** `search-service` 节点
+    （K8s 部署名 ≠ 图谱服务名）。
+
+    这是测 demo 脚本时抓到的 bug：不映射的话第二条边永远写不进去，
+    且当时 edges_created 每轮谎报一次成功（连跑三次都报 created=1，
+    图谱里带 xray 度量的边却始终是 7 条而非 8 条）。
+
+    映射必须复用 etl_deepflow 的 service_mappings.json 的 k8s_alias，
+    **不能另内联一份** —— 两套映射是本仓库反复出问题的模式。
+    """
+    m = _load_etl()
+    assert m.K8S_ALIAS, \
+        "k8s_alias 为空 —— service_mappings.json 未被找到，主机名边会落不进图谱"
+    assert m.K8S_ALIAS.get('search-service') == 'petsearch', \
+        "service_mappings.json 的 k8s_alias 缺 search-service→petsearch"
+    key = m._classify('search-service.petadoptions.svc.cluster.local', 'remote')
+    assert key[0] == 'petsearch', \
+        f"必须映射到图谱里真实存在的服务名，实际 {key[0]!r}"
+    # 映射生效后，两种身份归一成同一条边（不再是两条）
+    other = m._classify('PetSearch', None)
+    assert key[0] == other[0] == 'petsearch'
+
+
+def test_x05e_mapping_is_not_inlined_as_a_second_copy():
+    """
+    锁住「不另造第二套映射」这条纪律：etl_xray 必须**读**
+    service_mappings.json，而不是在源码里内联一份 k8s_alias 字典副本。
+
+    两个实现掩盖同一个缺陷，是本仓库反复出问题的模式。
+    """
+    src_path = os.path.join(_ETL_XRAY, 'neptune_etl_xray.py')
+    with open(src_path, encoding='utf-8') as fh:
+        src = fh.read()
+    assert 'service_mappings.json' in src, \
+        "必须读 service_mappings.json，而不是内联映射"
+    # 内联副本的特征：源码里直接写出映射对
+    assert "'search-service':" not in src and '"search-service":' not in src, \
+        "源码里出现了内联的 search-service 映射 —— 应从 service_mappings.json 读"
+
+
+def test_x05f_created_count_is_verified_not_assumed():
+    """
+    新建分支必须**回读确认边真的落地**才计入 created。
+
+    原实现是「neptune_query 没抛异常就 created += 1」。但目标节点不存在时，
+    `.V().where(<matcher>)` 匹配不到任何东西，整条 traversal 静默产出空集 ——
+    **不抛异常、也不写边**。于是每轮谎报一次成功，而图谱边总数始终不变。
+
+    「写了就算成功」这种假设正是本仓库反复踩的坑。
+    """
+    src_path = os.path.join(_ETL_XRAY, 'neptune_etl_xray.py')
+    with open(src_path, encoding='utf-8') as fh:
+        src = fh.read()
+    fn = src.split('def upsert_xray_edges', 1)[1].split('\ndef ', 1)[0]
+    # 必须存在回读确认，且 created 的自增在回读之后
+    assert 'landed' in fn, "新建分支缺少落地回读确认"
+    idx_verify = fn.index('landed')
+    idx_created = fn.index("stats['created'] += 1")
+    assert idx_created > idx_verify, \
+        "created 自增出现在回读确认之前 —— 会谎报未落地的写入"
+    # write_failed 必须被暴露出去，否则失败被吞
+    assert "'write_failed'" in src, "write_failed 计数缺失"
+    assert "'edges_write_failed'" in src, "write_failed 未暴露到返回结果里"
+
+
 def test_x06_six_hour_window_cap_is_respected():
     """
     X-Ray 的 GetServiceGraph 单次窗口上限 6 小时，超过直接报

@@ -1,8 +1,12 @@
 # 用 AWS Resilience Hub(Next-gen / v2)拓扑发现完善依赖图谱 — 评估与改进方案
 
+> ⚠️ **本文档的结论已于 2026-08-29 被实测推翻。第 5 条 ETL 判定为「已验证不做」。**
+> 下面第 1–6 节是 2026-08-27 基于文档研究得出的**原始结论,已过时,保留作为决策留痕**。
+> **请先读文末的[第 7 节:实测复核与最终判定](#7-实测复核与最终判定2026-08-29)。**
+
 > 生成时间:2026-08-27 16:47 UTC
 > 对象:`/home/ec2-user/works/graph-dependency-platform`
-> 结论速览:**可采纳,但定位为"合规与恢复目标"增量图层,不替代现有 DeepFlow L7 实时调用拓扑。** 建议新增第 5 条 ETL。
+> 原结论速览(**已推翻**):~~可采纳,但定位为"合规与恢复目标"增量图层,不替代现有 DeepFlow L7 实时调用拓扑。建议新增第 5 条 ETL。~~
 
 ---
 
@@ -92,6 +96,105 @@ Amazon Neptune
 
 ---
 
-## 6. 一句话建议
+## 6. 一句话建议(2026-08-27 原文,已推翻)
 
-**值得做,但按"增量图层"接入**:让 Resilience Hub 补齐现有平台最缺的"官方 RTO/RPO 基准 + policy 合规 + SOP"语义层,DeepFlow 的实时 L7 调用拓扑仍是不可替代的核心;先做东京区可用性探测与单组件 PoC,再规划第 5 条 ETL 的全量落地。
+~~**值得做,但按"增量图层"接入**:让 Resilience Hub 补齐现有平台最缺的"官方 RTO/RPO 基准 + policy 合规 + SOP"语义层,DeepFlow 的实时 L7 调用拓扑仍是不可替代的核心;先做东京区可用性探测与单组件 PoC,再规划第 5 条 ETL 的全量落地。~~
+
+---
+
+## 7. 实测复核与最终判定(2026-08-29)
+
+**判定:第 5 条 ETL —— 已验证不做(wontfix)。**
+
+2026-08-29 已把东京区 `vpc-010ab37a3f9f74725` 的全部应用真实纳管进 next-gen ARH
+(1 system / 3 user journey / 3 policy / 4 service / 191 资源,3 个 service 评估成功,
+产出 57 条 findings 与 68 条拓扑边)。完整过程与实测数据见
+[arh-v2-onboarding-20260829-0750.md](./arh-v2-onboarding-20260829-0750.md),
+产出文件在 `goal-loop-arh-v2/exports/`。**基于真实数据,本文档原先的三条采纳理由有两条被推翻,第三条经济上不成立。**
+
+### 7.1 理由一「补依赖发现的短板」——推翻
+
+ARH 的依赖发现机制是 **DNS query log 分析**(35 天回看),
+前置条件明确要求计算资源「make DNS queries through Route 53 resolvers」,
+且「discovers either EC2 instances (**preferred**) or VPC (fallback)」。
+
+这与本项目**已经证实会产生假阴性的是同一个信号** —— `neptune_etl_deepflow.py:328`
+的漂移判定只用 DNS 作观测源,导致 26 条带漂移状态的边里 22 条(85%)被误判
+`declared_not_observed`,因为 AWS SDK 启动时解析一次就复用连接、走 VPC 端点更不产生
+公网 DNS 查询。**ARH v2 有完全相同的盲区。**
+
+实测:`graph-observability` 的依赖发现已完成(`status=ENABLED`、`eligibleResourceCount=3`、
+`message=null`,按官方状态表即「ready to view」),结果为 **0 条依赖**。
+按 5 × 7 天分段覆盖完整 35 天回看期逐段查询 + 最近 24h HOURLY 查询,
+`petsite-core` 与 `graph-observability` **全窗口均返回 0**,已排除时间窗因素。
+
+顺带一条:`eligibleResourceCount=3` 是 39 个资源里只有 3 台 EC2 合格 ——
+「EC2 优先」规则下 EKS pod 与 VPC 内 Lambda 都不计入。而 `petsite-core` 的计算面正是
+EKS pod + Lambda,且其 EKS 节点在 ARH 里被折叠成 `AutoScaling::AutoScalingGroup` +
+`EKS::Nodegroup` 而非 `EC2::Instance`,合格资源数很可能为 0。
+
+### 7.2 理由二「用 ARH 拓扑边补图谱」——推翻:ARH 的边严格更粗
+
+68 条边里 **46 条是基础设施管道**,`etl_aws` 的 Describe 早已覆盖:
+
+| 数量 | 边 |
+|---|---|
+| 12 | `eks/cluster → ec2/subnet`(DATA_FLOW) |
+| 12 | `ec2/subnet → ec2/vpc`(CONTAINMENT) |
+| 6 | `autoScalingGroup → ec2/subnet` |
+| 4 | nodegroup → subnet / cluster |
+| 2 | `iam/role → eks/cluster` |
+| 2+2 | loadbalancer → subnet、targetgroup → vpc |
+
+真正的应用级依赖只有十余条,而且**锚点是 `eks/cluster` 而不是微服务**。与活图对照:
+
+| ARH 给的 | Neptune 已有的 |
+|---|---|
+| `eks/cluster → rds/cluster`(1 条,语义仅「PetSite 集群访问 Aurora」) | `payforadoption → RDSCluster` 证据 `source:repository.go#CreateTransaction`;`pethistory` / `petlistadoptions` / `petsite` / `list-adoptions` 各自独立成边 |
+| `eks/cluster → sqs`(1 条) | `petsite -[PublishesTo]→ SQSQueue` 证据 `source:PaymentController.cs#PostMessageToSqs`;`petstatusupdater -[DependsOn]→ SQSQueue` 与 DLQ |
+| — | `petsearch → DynamoDBTable` 证据 `source:SearchController.java#search` |
+
+**Neptune 是微服务粒度 + 文件行级 provenance,ARH 是集群粒度 + 无 provenance。**
+灌入只会制造一批更粗、更无证据的重复边,直接恶化本项目最大的欠项
+(设计目标「单一事实源」当前仅 ~60%,已有 `managedBy`/`managed_by`、
+`resilience_score`/`chaos_resilience_score` 等多处命名与来源分裂的前例)。
+
+### 7.3 理由三「findings 与 achievability 是新信息」——成立,但撑不起 ETL
+
+findings 与 achievability(按 policy 分量给出 `ACHIEVABLE` / `NOT_ACHIEVABLE`)
+**确实是 Describe API 无法推导的新信息**。但:
+
+- **刷新经济性**:每 service 每月只含 **2 次**评估,第 3 次起 $0.10/资源
+  (`petsite-core` 124 资源 ≈ 每次 $12)。一个月只能刷 2 次的数据源不是 ETL 的对象,
+  是季度审计报告的对象。
+- **无消费方**:`rca` 不读、`dr-plan-generator` 不读、Q1–Q18 无一条查询需要它。
+  本仓库反复出现「写了但没人读」的模式(`graph_mcp_server.py` 410 行零调用、
+  `AlertBuffer` 从未接入、`query_learning_nodes` 读四个不存在的属性),不应再增一例。
+- **会漂移的第二副本**:findings 在每次评估时整批重生成,`status` 还能被人改成
+  `RESOLVED` / `IRRELEVANT`。同步进图谱即制造又一个需要一致性校验的副本 ——
+  与既定偏好「引入第二个存储要等到能同时设计一致性校验时再做」冲突
+  (活证据:S3 Vectors 索引 56% 孤儿向量污染了 RCA 提示词)。
+
+### 7.4 真正值得做的替代方向
+
+57 条 findings 里有两条是**依赖类**问题,本该是本项目图谱的主场却完全没有捕获:
+
+- `External Docker Hub dependency for Prometheus image blocks pod recovery`(SHARED_FATE)
+  —— 外部镜像仓库依赖,Neptune 的 31 种节点类型里没有对应类型
+- `Lambda functions share unreserved concurrency pool creating shared fate`(SHARED_FATE)
+  —— 并发池共享命运,26 种边类型里没有对应边
+
+结论:**图谱缺的不是「更多边」,而是整个维度** —— 外部依赖与资源池共享命运。
+补这两类节点/边由自有 ETL 持续采集即可,不受 2 次/月配额限制,
+比灌 ARH 的粗粒度边价值高得多。
+
+### 7.5 ARH 的正确定位
+
+**当作外部审计工具,产出留在 markdown 报告里定期人读,不进图谱。**
+它的不可替代价值在**配置层**:PodDisruptionBudget 缺失、健康探针缺失、无 HPA、
+Aurora 无 failover replica、备份保留仅 1 天、DynamoDB 未开 PITR、
+单 NAT Gateway 跨 AZ 共享命运、ARC zonal shift 未启用、缺删除保护 ——
+这些既不是拓扑也不是依赖,而是 DeepFlow 的 L7 与 Neptune 的拓扑都不覆盖的资源属性。
+
+对应看板卡:`goal-loop-arh-v2/tasks.md` 的 **T-090 已置 `wontfix`**。
+

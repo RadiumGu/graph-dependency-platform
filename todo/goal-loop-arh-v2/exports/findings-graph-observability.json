@@ -1,0 +1,191 @@
+{
+    "findingsSummary": [
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/graph-observability:577hpo",
+            "findingId": "05446109-588b-48a0-9a0a-ecbe8ded19f9",
+            "name": "Grafana Aurora MySQL has single instance with no failover replica",
+            "description": "The grafana-aurora-mysql Aurora cluster has only one Serverless v2 instance (grafana-aurora-mysql-instance) in ap-northeast-1a with MultiAZ=false and DBClusterMemberCount=1. If this instance or AZ fails, Aurora must create a replacement instance, causing extended downtime for Grafana dashboard access. Aurora storage is multi-AZ, but compute is not redundant.",
+            "failureCategory": "SINGLE_POINT_OF_FAILURE",
+            "severity": "LOW",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:22:23.610000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/graph-observability:577hpo",
+            "findingId": "0ca1d186-5cdb-41f1-bc43-abf99be353a0",
+            "name": "Missing health probes on all containers prevents failure detection",
+            "description": "Neither the yace container in the yace-nfm deployment nor the prometheus container in the prometheus-nfm deployment has any liveness, readiness, or startup probes configured. Both containers expose HTTP ports (yace on 5000, prometheus on 9090) that could serve health check endpoints, but no probes are defined.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "AVAILABILITY_SLO",
+            "updatedAt": "2026-08-29T07:22:23.610000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/graph-observability:577hpo",
+            "findingId": "1447345e-db77-4919-9823-bff8dfb1525f",
+            "name": "ClickHouse on EC2 has no backup strategy for flow data",
+            "description": "ClickHouse runs on EC2 instance i-0cf272a12ecff87f3 with two attached EBS volumes. There is no evidence of EBS snapshots, AWS Backup coverage, or application-level backup for the ClickHouse database storing DeepFlow L7 flow logs. Loss of this instance or its volumes would destroy all historical flow data.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "DATA_RECOVERY",
+            "updatedAt": "2026-08-29T07:22:23.610000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/graph-observability:577hpo",
+            "findingId": "1a9f3b46-9aab-46d6-b5c3-2ef58a7959cd",
+            "name": "No AWS Backup plan protecting stateful resources against destructive scenarios",
+            "description": "No AWS Backup plan exists for the service's stateful resources. The Neptune cluster petsite-neptune and Aurora MySQL cluster grafana-aurora-mysql rely solely on native automated backups. Native backups are tied to the source cluster lifecycle and can be deleted by anyone with sufficient permissions, providing no protection against ransomware, malicious insider deletion, or accidental cluster deletion with its backups.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "DATA_RECOVERY",
+            "updatedAt": "2026-08-29T07:22:23.610000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/graph-observability:577hpo",
+            "findingId": "1f7918e0-d010-45ef-80f2-507ef3aeefa7",
+            "name": "ARC zonal shift not enabled on EKS cluster for AZ evacuation",
+            "description": "The PetSite EKS cluster does not have ARC zonal shift enabled. Without this, operators cannot manually shift in-cluster Pod-to-Pod traffic away from an impaired AZ during a gray failure. This is a low-risk, no-cost control that must be enabled ahead of time — it cannot be turned on during an impairment.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:22:23.610000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/graph-observability:577hpo",
+            "findingId": "2c194427-905f-4644-b757-71c1d98783ac",
+            "name": "Neptune single instance in one AZ is a single point of failure",
+            "description": "The Neptune cluster petsite-neptune has only one instance (petsite-neptune-instance-1) in ap-northeast-1a with MultiAZ=false. If this instance or AZ fails, there is no replica to promote. All four PRIMARY ETL service functions that write topology data to Neptune are completely blocked during recovery, which requires creating a replacement instance from scratch.",
+            "failureCategory": "SINGLE_POINT_OF_FAILURE",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:22:23.610000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/graph-observability:577hpo",
+            "findingId": "54e8fa22-8cd7-4af8-84b2-5c6d59891159",
+            "name": "Lambda functions share unreserved concurrency pool creating shared fate",
+            "description": "All four Lambda functions have no reserved concurrency configured and share the account-level unreserved concurrency pool. Any other Lambda function in the account experiencing a concurrency spike could exhaust the pool, throttling all four ETL functions simultaneously. The neptune-etl-from-aws function has a 300-second timeout, holding concurrency slots for extended periods.",
+            "failureCategory": "SHARED_FATE",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "AVAILABILITY_SLO",
+            "updatedAt": "2026-08-29T07:22:23.610000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/graph-observability:577hpo",
+            "findingId": "6e0de76e-e525-49ef-af9e-5ca74f2cc6a4",
+            "name": "Grafana Aurora MySQL cluster lacks deletion protection",
+            "description": "Both the grafana-aurora-mysql cluster and its instance grafana-aurora-mysql-instance have DeletionProtection set to false. An accidental or unauthorized API call could delete the cluster, removing all Grafana dashboard definitions, user configurations, and alert rules stored in this database.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "DATA_RECOVERY",
+            "updatedAt": "2026-08-29T07:22:23.610000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/graph-observability:577hpo",
+            "findingId": "7ce59eff-a7f7-4893-8794-fe4b729321e4",
+            "name": "EKS cluster deletion protection is disabled",
+            "description": "The PetSite EKS cluster has DeletionProtection set to false. Accidental deletion of this cluster would destroy all EKS workloads including ClickHouse, Grafana, DeepFlow agents, YACE, and Prometheus — causing a complete outage of the entire observability platform.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "LOW",
+            "status": "OPEN",
+            "policyComponent": "AVAILABILITY_SLO",
+            "updatedAt": "2026-08-29T07:22:23.610000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/graph-observability:577hpo",
+            "findingId": "826cbec7-ee6c-4761-816f-fc1548846d10",
+            "name": "Single-replica deployments create SPOF for observability data collection",
+            "description": "Both deployments in the deepflow namespace — yace-nfm and prometheus-nfm — run with replicas: 1. Any pod failure, node failure, or voluntary disruption causes complete loss of that workload. Both pods are co-located on the same node (ip-11-0-2-51) in ap-northeast-1a, meaning a single node failure eliminates both observability collectors simultaneously.",
+            "failureCategory": "SINGLE_POINT_OF_FAILURE",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "AVAILABILITY_SLO",
+            "updatedAt": "2026-08-29T07:22:23.610000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/graph-observability:577hpo",
+            "findingId": "8fc443b9-6a92-4a57-b450-2c20737c1419",
+            "name": "ARC zonal autoshift not enabled on EKS cluster for automatic recovery",
+            "description": "The PetSite EKS cluster does not have ARC zonal autoshift enabled. Without autoshift, automatic recovery from a detected AZ impairment is not possible for in-cluster traffic. Autoshift requires the cluster to have enough spare capacity in the remaining AZs to absorb the full load when one AZ is shifted away.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:22:23.610000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/graph-observability:577hpo",
+            "findingId": "a540039b-00f2-4584-8bf4-5e2c0cc092d1",
+            "name": "External Docker Hub dependency for Prometheus image blocks pod recovery",
+            "description": "The prometheus-nfm deployment uses the image prom/prometheus:latest from Docker Hub with imagePullPolicy: Always. Every pod start (including rescheduling after node failure) requires a successful pull from Docker Hub. A Docker Hub outage or rate limit would prevent new Prometheus pods from starting. The yace-nfm deployment correctly uses a local ECR image.",
+            "failureCategory": "SHARED_FATE",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "AVAILABILITY_SLO",
+            "updatedAt": "2026-08-29T07:22:23.610000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/graph-observability:577hpo",
+            "findingId": "b116f9dc-f0f9-4173-90cd-065405056bc5",
+            "name": "ClickHouse single EC2 instance is a single point of failure",
+            "description": "ClickHouse runs on a single EC2 instance (i-0cf272a12ecff87f3, t4g.xlarge) in ap-northeast-1a with no redundancy — not part of an ASG or cluster. The neptune-etl-from-deepflow Lambda connects via hardcoded IP (11.0.2.30). If this instance or AZ fails, the DeepFlow metrics ETL pipeline and L7 flow data collection pipeline lose their data store entirely.",
+            "failureCategory": "SINGLE_POINT_OF_FAILURE",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:22:23.610000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/graph-observability:577hpo",
+            "findingId": "b7849d1f-d431-49f3-990e-b92f52cb3969",
+            "name": "Missing topology spread constraints allow pod clustering in single AZ",
+            "description": "Neither the yace-nfm nor prometheus-nfm deployment has topologySpreadConstraints configured. Both pods are currently scheduled in ap-northeast-1a. Without topology spread constraints, even after increasing replica counts, the scheduler may place all replicas in the same AZ, negating multi-AZ resilience.",
+            "failureCategory": "SINGLE_POINT_OF_FAILURE",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:22:23.610000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/graph-observability:577hpo",
+            "findingId": "d0fa8c5c-37b9-487e-a117-5e12a23928df",
+            "name": "EKS worker nodes span only two AZs reducing resilience to AZ loss",
+            "description": "The PetSite EKS cluster has worker nodes in only two AZs (ap-northeast-1a and ap-northeast-1c), each with a dedicated ASG. Losing one AZ removes 50% of worker node capacity. Additionally, all three visible EC2 worker instances are currently running in ap-northeast-1a only, meaning the workers1cFE node group appears to have zero running instances despite being configured.",
+            "failureCategory": "SHARED_FATE",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:22:23.610000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/graph-observability:577hpo",
+            "findingId": "dd3085dc-df8b-4334-878b-be45d14390e6",
+            "name": "Neptune cluster has minimal 1-day backup retention risking data loss",
+            "description": "The Neptune cluster petsite-neptune has BackupRetentionPeriod set to 1 day, the minimum value. This provides only a 24-hour window for point-in-time recovery. If data corruption or accidental deletion is not detected within one day, recovery to a clean state becomes impossible through automated snapshots. Neptune is the central graph database for all ETL service functions.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "DATA_RECOVERY",
+            "updatedAt": "2026-08-29T07:22:23.610000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/graph-observability:577hpo",
+            "findingId": "e34b4ba3-4506-4311-8e08-020f24c63b4c",
+            "name": "No PodDisruptionBudgets protect workloads during voluntary disruptions",
+            "description": "Zero PodDisruptionBudgets exist in the deepflow namespace. The yace-nfm and prometheus-nfm deployments have no voluntary disruption protection. Node drains, EKS cluster upgrades, and node consolidation can evict all pods simultaneously without guardrails. Both pods are co-located on the same node, so a single node drain evicts both.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "AVAILABILITY_SLO",
+            "updatedAt": "2026-08-29T07:22:23.610000+00:00"
+        }
+    ]
+}

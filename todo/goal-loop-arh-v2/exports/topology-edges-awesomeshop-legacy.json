@@ -1,0 +1,144 @@
+{
+    "serviceTopologyEdgeSummaries": [
+        {
+            "sourceResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-02ebd1dd8d1681da8",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:vpc/vpc-010ab37a3f9f74725",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "CONTAINMENT"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-047a94f9c5ab6302a",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:vpc/vpc-010ab37a3f9f74725",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "CONTAINMENT"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-0600a43fa7ebf1ffe",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:vpc/vpc-010ab37a3f9f74725",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "CONTAINMENT"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-0f801fa79077eb277",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:vpc/vpc-010ab37a3f9f74725",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "CONTAINMENT"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:autoscaling:ap-northeast-1:926093770964:autoScalingGroup:882deaf2-601c-421c-ad2b-330445577612:autoScalingGroupName/eks-petsiteNodegroupworkers1cFE-rBSMHnU8raBy-d0cea529-d4f8-d859-812a-f69b5c6f5a0b",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-047a94f9c5ab6302a",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:autoscaling:ap-northeast-1:926093770964:autoScalingGroup:cc525594-a4ca-46f2-ab27-5ec1bc8277a6:autoScalingGroupName/eks-petsiteNodegroupworkers1a60-ZJElxYDbKT8H-8ccea529-d21b-f8e5-1c82-1f0367d29249",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-0f801fa79077eb277",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-02ebd1dd8d1681da8",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-0600a43fa7ebf1ffe",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-0f801fa79077eb277",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "destinationResourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-047a94f9c5ab6302a",
+            "sourceRegion": "ap-northeast-1",
+            "destinationRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "destinationAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW"
+                }
+            ]
+        },
+        {
+            "sourceResourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "destinationResourceIdentifier": "arn:aws:elasticache:ap-northeast-1:926093770964:cluster:awesomeshop-redis",
+            "sourceRegion": "ap-northeast-1",
+            "sourceAccount": "926093770964",
+            "properties": [
+                {
+                    "topologyType": "DATA_FLOW",
+                    "label": "EKS workloads read/write cache data to Redis"
+                }
+            ]
+        }
+    ]
+}

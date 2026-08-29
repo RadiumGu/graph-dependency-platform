@@ -86,6 +86,39 @@ XRAY_LOOKBACK_HOURS = int(os.environ.get('XRAY_LOOKBACK_HOURS', '24'))
 XRAY_STALE_SECONDS = int(os.environ.get('XRAY_STALE_SECONDS', str(6 * 3600)))
 
 # ── 名字归一化 ──────────────────────────────────────────────────────────
+# K8s 部署名 → 图谱 Microservice 名的映射，**复用 etl_deepflow 已有的
+# service_mappings.json 的 k8s_alias**，不另造第二套。
+#
+# 为什么必须映射：X-Ray 会把**同一条依赖**用两种身份报两次 ——
+#   PetSite → PetSearch                                    （两端都插桩，按服务名）
+#   petsite → search-service.petadoptions.svc.cluster.local（Type=remote，按主机名）
+# 而图谱里那个服务叫 `petsearch`，**没有** `search-service` 这个节点。
+# 不映射的话第二条边永远写不进去，而且 edges_created 会每轮谎报一次成功。
+#
+# 两套映射是本仓库反复出问题的模式（「两个实现掩盖同一个缺陷」），
+# 所以这里读同一个文件；文件缺失时退化为空表并告警，而不是内联一份副本。
+def _load_k8s_alias() -> dict:
+    import json as _json
+    here = os.path.dirname(os.path.abspath(__file__))
+    for candidate in (
+        os.path.join(here, 'service_mappings.json'),
+        os.path.join(here, '..', 'etl_deepflow', 'service_mappings.json'),
+    ):
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, encoding='utf-8') as fh:
+                    return _json.load(fh).get('k8s_alias', {}) or {}
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("读 service_mappings.json 失败: %s", exc)
+                return {}
+    logger.warning(
+        "找不到 service_mappings.json —— K8s 部署名不会被映射成图谱服务名，"
+        "Type=remote 的主机名边会落不进图谱。部署时需把该文件打进包里。")
+    return {}
+
+
+K8S_ALIAS = _load_k8s_alias()
+
 # X-Ray 的粗粒度 AWS 服务身份 → 规范名。
 # key 用 lower() 后的原始名，避免大小写分支。
 XRAY_SERVICE_ALIASES = {
@@ -272,10 +305,42 @@ def _classify(raw_name: str, xray_type):
     if node_type:
         return (raw_name, 'resource', xray_type)
 
-    # 其余 AWS:: 类型 —— 只有粗粒度服务名
     low = raw_name.lower()
-    canonical = XRAY_SERVICE_ALIASES.get(low, low)
-    return (canonical, 'aws_service', None)
+
+    # 只有**真的是 AWS 托管服务**才落 AWSServiceEndpoint。
+    #
+    # 这里原先的兜底是「任何不认识的 type 都算 aws_service」，太宽松 ——
+    # 实测被 Type='remote' 的
+    # `search-service.petadoptions.svc.cluster.local` 吞掉，
+    # 于是一个**集群内 K8s 服务**被建成了 AWS 托管服务节点，
+    # 而 search-service 在图谱里本来就是个 Microservice。
+    # 判据必须是 type 以 'AWS::' 开头，或名字在别名表里（'Secrets Manager'
+    # 那种被报成服务本体的情况）。
+    if str(xray_type).startswith('AWS::') or low in XRAY_SERVICE_ALIASES:
+        return (XRAY_SERVICE_ALIASES.get(low, low), 'aws_service', None)
+
+    # Type='remote'：X-Ray 无法识别的进程外被调方，通常是一个主机名。
+    # K8s 的集群内 FQDN 剥掉后缀就是服务名，能命中图谱里真实的 Microservice ——
+    # 这样 `search-service.petadoptions.svc.cluster.local` 会变成一条
+    # 真实的 petsite → search-service 调用边，而不是一个垃圾节点。
+    return (_strip_k8s_fqdn(low), 'service', None)
+
+
+def _strip_k8s_fqdn(name: str) -> str:
+    """
+    把 K8s 集群内 FQDN 还原成服务名，再过一遍 k8s_alias 映射到图谱的服务名：
+      search-service.petadoptions.svc.cluster.local → search-service → petsearch
+
+    只剥 `.svc.cluster.` 这种明确的集群内形态。**不**对任意含点的名字截断 ——
+    那会把 `logs.ap-northeast-1.amazonaws.com` 之类的公网域名误伤成 `logs`，
+    凭空造出一个不存在的服务。
+
+    别名映射不可省：图谱里的服务叫 `petsearch`，K8s 部署叫 `search-service`，
+    没有名为 `search-service` 的 Microservice 节点。
+    """
+    if '.svc.cluster.' in name:
+        name = name.split('.', 1)[0]
+    return K8S_ALIAS.get(name, name)
 
 
 def upsert_aws_service_endpoints(nodes: dict, round_ts: int) -> int:
@@ -361,7 +426,7 @@ def upsert_xray_edges(edges: dict, window_hours: int, round_ts: int) -> dict:
     保留「谁первый发现了这条依赖」的 provenance。
     新建的边才带 source='xray'，那是 X-Ray 自己的贡献。
     """
-    stats = {'created': 0, 'corroborated': 0, 'skipped_no_node': 0}
+    stats = {'created': 0, 'corroborated': 0, 'skipped_no_node': 0, 'write_failed': 0}
 
     for (src_key, dst_key), data in edges.items():
         src_name = src_key[0]
@@ -428,11 +493,44 @@ def upsert_xray_edges(edges: dict, window_hours: int, round_ts: int) -> dict:
 
         try:
             neptune_query(g)
-            stats[key] += 1
         except Exception as exc:  # noqa: BLE001
             logger.warning("写边 %s -[%s]-> %s 失败: %s",
                            src_name, edge_type, dst_key[0], exc)
+            stats['write_failed'] += 1
+            continue
+
+        if key == 'corroborated':
+            stats['corroborated'] += 1
+            continue
+
+        # 新建分支必须**复查是否真的落地**。
+        #
+        # 这是测 demo 脚本时抓到的 bug：如果目标节点不存在，
+        # `.V().where(<matcher>)` 匹配不到任何东西，整条 traversal 静默产出空集 ——
+        # **不抛异常、不写边**，而原先这里无条件 `created += 1`，
+        # 于是每一轮都谎报一次「新建成功」，而图谱边总数始终不变。
+        # （实测：连跑三次都报 created=1，带 xray 度量的边却一直是 7 条而非 8 条。）
+        #
+        # 「写了就算成功」这种假设正是本仓库反复踩的坑，所以这里回读确认。
+        verify = (
+            f"{_src_label_clause(src_name)}.as('s')"
+            f".V().where({dst_matcher})"
+            f".inE('{edge_type}').where(__.outV().has('name','{safe_str(src_name)}'))"
+            f".count()"
+        )
+        try:
+            landed = int(extract_value(neptune_query(verify)['result']['data']) or 0)
+        except Exception:  # noqa: BLE001
+            landed = 0
+        if landed > 0:
+            stats['created'] += 1
+        else:
+            # 目标节点不存在 —— 观测到了但图谱里没有对应实体。
+            # 记进 skipped 而不是 created，让计数如实反映图谱状态。
             stats['skipped_no_node'] += 1
+            logger.info(
+                "观测到 %s -[%s]-> %s，但图谱中无匹配目标节点，跳过（未写入）",
+                src_name, edge_type, dst_key[0])
 
     return stats
 
@@ -479,6 +577,7 @@ def run_etl(lookback_hours: int = None) -> dict:
         'edges_created': edge_stats['created'],
         'edges_corroborated': edge_stats['corroborated'],
         'edges_skipped_no_node': edge_stats['skipped_no_node'],
+        'edges_write_failed': edge_stats['write_failed'],
         'edges_deactivated': deactivated,
     }
     logger.info("etl_xray 完成: %s", result)

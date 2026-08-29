@@ -846,3 +846,112 @@ PYTHONPATH=../shared/python python3.11 neptune_etl_xray.py 24
 6 个 CFN 触及的类型在规约后又回到 2 个值。已排除 `property(single)` 失效、
 `upsert_vertex`、生产/分支代码漂移、边写入。**不要臆造根因。**
 
+
+---
+
+# 附录 C：etl_xray 部署为 Lambda（2026-08-29 07:55–08:15 实施）
+
+## C.1 部署结果
+
+| 项 | 值 |
+|---|---|
+| 函数 | `neptune-etl-from-xray` |
+| 运行时 | python3.12 / x86_64 / 180s / 256MB |
+| 角色 | `neptune-etl-lambda-role`(**复用**;`etl-xray-read` 内联策略此前已加) |
+| 层 | **`neptune-client-base:3`**(新发布,见 C.2) |
+| VPC | `subnet-0f801fa79077eb277`,`subnet-047a94f9c5ab6302a` / `sg-078f24929b25f09cd` |
+| 环境变量 | `NEPTUNE_ENDPOINT`,`NEPTUNE_PORT=8182`,`REGION`,`XRAY_LOOKBACK_HOURS=24`,`XRAY_STALE_SECONDS=21600` |
+| 包内容 | `neptune_etl_xray.py` + `service_mappings.json`(10.7KB) |
+| 调度 | EventBridge `neptune-etl-xray-hourly` = `rate(1 hour)`,ENABLED |
+
+**为什么是 1 小时**:X-Ray 服务图按部署节奏变化而非按秒;回看窗口本就 24h,
+5 分钟一轮只是重复读同一批数据;失效阈值 6h,每小时刷新留出 6 次余量。
+
+**VPC 出网到 X-Ray API 已实测可达** —— 首次调用虽失败,但失败点在写 Neptune 阶段,
+说明 `GetServiceGraph` 已成功返回。
+
+## C.2 顺带修掉一个层的根因缺陷：neptune-client-base v2 不带 requests
+
+首次调用报 `No module named 'requests'`。原因是 **层里的
+`neptune_client_base.py` 自己 `import requests`,而层却不打包它** ——
+所以现有四个 ETL 每个都在自己目录里 vendor 了一份(etl_deepflow 里 119 个文件入库)。
+
+修法:发布 **`neptune-client-base:3`**,把 v2 的内容 + 从 etl_deepflow 复制的
+`requests/urllib3/certifi/idna/charset_normalizer`(**已在生产验证过的 vendored 副本,
+未跑 pip**)一起打包,924KB。
+
+**只让新函数指向 `:3`,现有四个 Lambda 仍停在 `:2`** —— 发布新版本是纯增量操作,
+对现有函数零风险。后续若要收敛,可逐个切换并各自验证。
+
+## C.3 部署后抓到两个真 bug（都是写 demo 脚本时暴露的）
+
+### ① `Type='remote'` 被误判成 AWS 托管服务
+
+实测 X-Ray 用 `Type='remote'` 报了
+`search-service.petadoptions.svc.cluster.local`。原兜底逻辑是
+「任何不认识的 type 都算 aws_service」,**太宽松** ——
+一个**集群内 K8s 服务**被建成了 `AWSServiceEndpoint` 节点。
+
+收紧判据:只有 type 以 `AWS::` 开头,或名字在别名表里
+(`Secrets Manager` 那种被报成服务本体的情况),才算 AWS 托管服务。
+其余按 K8s FQDN 处理 —— 剥掉 `.svc.cluster.` 后缀。
+
+**只剥这一种明确形态**,不对任意含点的名字截断:否则
+`logs.ap-northeast-1.amazonaws.com` 会被误伤成 `logs`,凭空造出不存在的服务。
+已由 `test_x05b` / `test_x05c` 锁住。误建节点已 `DETACH DELETE` 清理。
+
+### ② `edges_created` 谎报成功，连续三轮都报 created=1 而边总数不变
+
+现象:连跑三次都报 `created=1`,但图谱边总数始终 1476、
+带 xray 度量的边只有 **7 条而观测到 8 条**。
+
+**双重根因**:
+1. 图谱里那个服务叫 `petsearch`,**没有** `search-service` 节点
+   (K8s 部署名 ≠ 图谱服务名)。修法:剥完 FQDN 再过一遍
+   `service_mappings.json` 的 `k8s_alias`(里面**本来就有**
+   `"search-service": "petsearch"`)—— **复用既有映射,不另造第二套**,
+   两套映射是本仓库反复出问题的模式。
+2. 目标节点不存在时,`.V().where(<matcher>)` 匹配不到任何东西,
+   整条 traversal **静默产出空集,不抛异常也不写边**,而原实现是
+   「`neptune_query` 没抛异常就 `created += 1`」。
+   修法:新建分支**回读确认边真的落地**才计数,落不了记进
+   `skipped_no_node`;另加 `edges_write_failed` 计数,避免失败被吞。
+
+映射生效后 `xray_edges_seen` 从 8 降到 **7** —— 同一条依赖的两种身份
+(按插桩服务名 / 按主机名)在抓取阶段就合并了,这正是正确行为。
+
+由 `test_x05d`(映射)、`test_x05e`(禁止内联第二套映射)、
+`test_x05f`(created 必须回读确认)锁住。
+
+## C.4 最终验证
+
+连跑三次,三次完全一致:
+
+```
+第 1 次: seen=7 created=0 corroborated=7 skipped=0 failed=0
+第 2 次: seen=7 created=0 corroborated=7 skipped=0 failed=0
+第 3 次: seen=7 created=0 corroborated=7 skipped=0 failed=0
+带 xray 度量的边: 7   ← 与 seen 一致
+边总数: 1476          ← 重复跑不增长
+```
+
+三个数字互相对得上,这是幂等与计数诚实性的联合判据。
+**最初正是"三个数字对不上"暴露了 ② 那个 bug。**
+
+## C.5 状态
+
+| 指标 | 附录 B 时 | 现在 |
+|---|---|---|
+| 节点 | 890 | **891** |
+| 边 | 1,475 | **1,476** |
+| AWSServiceEndpoint | 4(含 1 个误建) | **4**(全部正确) |
+| `source='xray'` 边 | 4 | **5** |
+| 带 xray 度量的边 | 6 | **7** |
+| test_33 用例 | 12 | **17** |
+| 测试总计 | 384 passed | **389 passed / 0 failed / 145 skipped** |
+
+Demo 脚本:`todo/demo-script-parallel-sources_20260829-0810.md`(460 行)。
+脚本里每条命令都实跑验证过,每个预期输出都是实测值。
+**幂等演示改为连跑两次** —— X-Ray 的 24h 窗口里随时会滚进新边,
+拿首轮的 `created=0` 当预期,现场会翻车。
+

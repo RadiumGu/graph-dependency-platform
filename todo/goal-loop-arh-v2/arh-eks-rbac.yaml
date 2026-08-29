@@ -61,6 +61,54 @@ rules:
   verbs:
     - get
     - list
+# ---- 以下为 2026-08-29 追加(官方 v1 模板之外) ----
+# 原因:官方 YAML 是 v1 模板,next-gen 的「资源发现」步骤报
+#   "Resource discovery could not access the Kubernetes API for this cluster"
+# 而该模板既无 namespaces(枚举命名空间)也无 services/endpoints(把 pod 映射到网络出口),
+# 也不含 statefulsets/daemonsets/jobs。AWS 未为 next-gen 单独发布 EKS 权限文档,
+# 故按只读最小必要原则补齐常见发现所需类型。全部仅 get/list/watch 中的 get+list,无写权限。
+- apiGroups:
+    - ""
+  resources:
+    - namespaces
+    - services
+    - endpoints
+    - configmaps
+    - persistentvolumeclaims
+  verbs:
+    - get
+    - list
+- apiGroups:
+    - apps
+  resources:
+    - statefulsets
+    - daemonsets
+  verbs:
+    - get
+    - list
+- apiGroups:
+    - batch
+  resources:
+    - jobs
+    - cronjobs
+  verbs:
+    - get
+    - list
+- apiGroups:
+    - discovery.k8s.io
+  resources:
+    - endpointslices
+  verbs:
+    - get
+    - list
+- apiGroups:
+    - networking.k8s.io
+  resources:
+    - ingresses
+    - networkpolicies
+  verbs:
+    - get
+    - list
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

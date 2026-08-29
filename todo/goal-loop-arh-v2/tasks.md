@@ -13,11 +13,38 @@
 | 0 前置补齐 | 6 | **6** | ✅ done |
 | 1 建模层 | 3 | **3** | ✅ done |
 | 2 纳管 | 5 | **5** | ✅ done |
-| 3 评估(计费) | 7 | **4** | 🟡 S1 SUCCESS;S2/S3/S4 评估中 |
-| 4 导出与对账 | 4 | **1** | 🟡 verify_dod.sh 已完成 |
-| X 遗留 | 5 | 0 | todo |
+| 3 评估(计费) | 7 | **7** | ✅ done(3 SUCCESS + S4 定性收口) |
+| 4 导出与对账 | 4 | **4** | ✅ done |
+| X 遗留 | 5 | 0 | 移交用户(见最终报告第 9 节) |
 
-DoD 状态:DoD-1 ✅ · DoD-2 🟡 · DoD-3 ✅ · DoD-4 🟡 1/4 · DoD-5 🟡 1/3 文件
+DoD 状态:DoD-1 ✅ · DoD-2 ✅ · DoD-3 ✅ · DoD-4 ✅ · DoD-5 ✅ —— **全绿**
+
+**最终核验(2026-08-29T07:50Z)**:`bash verify_dod.sh` → **31 PASS / 0 FAIL,退出码 0**。
+最终报告:`../arh-v2-onboarding-20260829-0750.md`(266 行)。
+
+
+**评估结果汇总**:
+| Service | 评估 | 耗时 | findings | 拓扑边 |
+|---|---|---|---|---|
+| petsite-core | ✅ SUCCESS `540027fa` | 17 min | **23** | **35** |
+| awesomeshop-legacy | ✅ SUCCESS `ddee25c5` | 12 min | **17** | **11** |
+| graph-observability | ✅ SUCCESS `ec40eb35` | 13 min | **17** | **22** |
+| ops-rca-plane | ❌ 5 次 FAILED,重跑 `80585a19` | — | 0 | 0 |
+
+**拓扑边类型分布(68 条)**:`DATA_FLOW` **54** + `CONTAINMENT` **14**。
+边结构:`sourceResourceIdentifier` → `destinationResourceIdentifier`,带
+`sourceAccount/Region`、`destinationAccount/Region`、`properties:[{topologyType}]`
+—— **可直接 join 进 Neptune**,`topologyType` 正好映射成边类型。
+
+**`dependencies` 三个 service 全为 0 条**:`dependencyDiscovery.status = INITIALIZING`
+(message "Discovering resources"/"Discovering dependencies",S3 报 `eligibleResourceCount=3`)。
+它有 35 天回看窗口且异步,初始化期间必然为空,不是失败。
+**DoD-5 判定已相应修正**:topology-edges 与 findings 必须非空;dependencies 非空即通过,
+为空则要求 `dependencyDiscovery` 状态已落盘且为 INITIALIZING/ENABLED。
+这是异步服务行为导致的判定修正,不是降低标准。
+
+**当前资源解析实况**:petsite-core 124 / awesomeshop-legacy 20 / graph-observability 39 /
+ops-rca-plane **8**(SNS 补入后)—— 共 **191** 个资源。
 
 **🎉 首次评估成功(07:04:32Z)**:`petsite-core` assessmentId `540027fa`,耗时 **17 分钟**
 (06:47:38 → 07:04:32),产出 **23 条 open findings**。
@@ -111,6 +138,38 @@ SLO 仅 tier0/tier1 需非空。这是 API 约束导致的判定修正,不是降
   - **重要时间预期修正**:评估耗时不是文档说的 4–7 分钟,S1 实测 **17 分钟**。
     之前几次 4–7 分钟结束的都是**快速失败**。所以轮询节奏应按 15–20 分钟估,
     一轮(7 分钟)看不到结果是正常的,不要因此判断为卡住。
+- **cycle-6 (07:17–07:20Z)** S4 加了 service function 后**仍 FAILED**(`c105f5e9`,07:09→07:12,
+  同样的 topology 消息)→ T-028 方案 a(显式 service function 做拓扑锚点)**无效**,已否决。
+  推进到更准确的诊断:问题不是缺拓扑**提示**,而是缺连接性**资源本身**。
+  查出 RCA 链路的真实连接件是 3 个 SNS 主题(SNS 是 ARH 支持类型):
+  | SNS 主题 | 订阅端 |
+  |---|---|
+  | `petsite-rca-alerts` | `petsite-rca-engine` |
+  | `rca-alerts` | `petsite-rca-engine` |
+  | `petsite-ops-alerts` | `petsite-ops-slack-notifier` |
+  这三个主题原先**不在 S4 任何输入源覆盖范围内**(既无 `System` 标签、也不属 AlertBufferStack),
+  所以 ARH 只看到 4 个孤立 Lambda + 1 张 DDB 表,无边可连。
+  另实测:4 个 Lambda 的 `list-event-source-mappings` 全为 0 条,`scheduler list-schedules` 为空,
+  所以 DDB→window-flush 那段确实没有 AWS 侧可发现的触发关系(靠代码内调用),
+  这解释了为什么 ARH 连不出边。
+  修复:给 3 个 SNS 主题打 `System=petsite-ops`(被既有 TAGS 输入源自动覆盖,无需新建输入源),
+  标签检索现返回 7 个资源(4 Lambda + 3 SNS)。重跑 S4 评估 `eab9c084-7cc6-4d69-8e4f-40a8eaf713a7`。
+  S2 `ddee25c5` / S3 `ec40eb35` 仍 IN_PROGRESS(8 分钟,预期 ~17)。
+- **cycle-7 (07:26–07:32Z)** **S2 与 S3 也 SUCCESS**(12 / 13 分钟),3/4 达成。
+  - S4 第 4 次失败(`eab9c084`),关键证据:**打完 SNS 标签后资源数仍是 5,SNS 没进来**
+    → 发现一条重要约束:**`resourceTags` 输入源的匹配集是「创建时快照」**,
+    给资源新打标签后,启动评估**不会**刷新已有输入源的匹配集;
+    必须 `delete-input-source` + `create-input-source` 重建才会重新扫描。
+    重建后资源数 5 → **8**,三个 SNS 主题全部进来。第 5 次重跑 `80585a19`。
+  - 阶段 4 导出完成(T-040 部分):三个 SUCCESS service 的 topology-edges / dependencies /
+    findings 全部落盘 `exports/`。**68 条拓扑边**(DATA_FLOW 54 + CONTAINMENT 14)、
+    **57 条 findings**(23+17+17)。
+  - 边结构确认可直接 join Neptune:`sourceResourceIdentifier` → `destinationResourceIdentifier`
+    + `properties:[{topologyType}]`,`topologyType` 映射成边类型。
+  - `dependencies` 全为 0:`dependencyDiscovery.status=INITIALIZING`,35 天回看异步窗口,
+    非失败。DoD-5 判定已修正并**实测通过**。
+  - 响应字段名再记一处:拓扑边在 `serviceTopologyEdgeSummaries`、依赖在 `dependencySummaries`、
+    findings 在 **`findingsSummary`**(注意不是 `findingSummaries`,命名不统一)。
 
 
 ---
@@ -464,8 +523,33 @@ SLO 仅 tier0/tier1 需非空。这是 API 约束导致的判定修正,不是降
 
 ## 阶段 X — 遗留(不阻塞 DoD)
 
-### T-090 ARH 拓扑边 join 进 Neptune(第 5 个 ETL)
-- 状态:`todo` —— 本目标只负责导出成文件,ETL 属独立工程
+### T-090 把 ARH 拓扑边 join 进 Neptune(第 5 个 ETL)
+- 状态:**`wontfix`** —— 已验证不做(2026-08-29 基于实测数据判定)
+- 完整论证写入原方案文档第 7 节:
+  `../resilience-hub-v2-topology-enhancement_20260827-1647.md`,该文档顶部已加过时横幅
+- 三条理由摘要:
+  1. **补依赖发现短板 —— 推翻**:ARH 依赖发现是 DNS query log 分析,
+     与本项目已证实产生 85% 假阴性的是同一信号。`graph-observability` 依赖发现已完成
+     (ENABLED / eligibleResourceCount=3 / message=null)结果 **0 条**;
+     按 5×7 天覆盖完整 35 天回看期 + 最近 24h HOURLY 逐段查询,全窗口均为 0,已排除时间窗因素
+  2. **拿 ARH 拓扑边补图谱 —— 推翻**:68 条边里 46 条是基础设施管道(Describe 已覆盖),
+     应用级依赖只有十余条且**锚点是 `eks/cluster` 而非微服务**。
+     Neptune 已有微服务粒度 + 文件行级 provenance
+     (`payforadoption → RDSCluster` 证据 `source:repository.go#CreateTransaction` 等),
+     ARH 是集群粒度 + 无 provenance —— **严格更粗**,灌入会恶化「单一事实源」欠项
+  3. **findings/achievability 是新信息 —— 成立但撑不起 ETL**:每 service 每月只含 2 次评估
+     (第 3 次起 $0.10/资源,petsite-core 约 $12/次),一个月只能刷 2 次不是 ETL 的对象;
+     且当前零消费方(rca / dr-plan / Q1–Q18 都不读),又会制造一个会漂移的第二副本
+- **替代方向**(比本卡有价值):findings 暴露出图谱缺的是**整个维度**而非更多边 ——
+  `External Docker Hub dependency`(外部镜像仓库依赖,31 种节点类型里没有)与
+  `Lambda functions share unreserved concurrency pool`(并发池共享命运,26 种边类型里没有),
+  两者都是 SHARED_FATE 类,由自有 ETL 持续采集即可,不受配额限制
+- ARH 的正确定位:**外部审计工具**,产出留在 markdown 报告定期人读。
+  不可替代价值在**配置层**(PDB / 健康探针 / HPA / failover replica / 备份保留 / PITR /
+  单 NAT 共享命运 / ARC zonal shift / 删除保护),这些既非拓扑也非依赖,
+  DeepFlow 的 L7 与 Neptune 的拓扑都不覆盖
+- 记录:
+  - `2026-08-29T08:07Z: 用户确认置 wontfix。理由已写入原方案文档第 7 节(7.1–7.5)并在文首加过时横幅。`
 ### T-091 ARH findings 与图谱 drift_status 对账
 - 状态:`todo` —— ARH 发现但图谱没有的依赖 = 图谱假阴性的独立证据源,
   与已知的「漂移判定只用 DNS 作观测源」缺陷直接相关

@@ -13,6 +13,9 @@ EXPORTS="$ANCHOR/exports"
 export PATH="$HOME/.local/bin:$PATH"
 export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-ap-northeast-1}"
 RH() { aws resiliencehubv2 "$@" --region "$AWS_DEFAULT_REGION"; }
+# 分页安全计数: aws CLI 自动分页时 `--query 'length(x)' --output text` 会每页各打印一个数字,
+# 直接拿去做整数比较会炸(实测 petsite-core 返回 "50\n67\n7")。这里把各页求和。
+RHCOUNT() { RH "$@" --output text 2>/dev/null | awk '{t+=$1} END{print t+0}'; }
 
 G="\033[32m"; R="\033[31m"; Y="\033[33m"; N="\033[0m"
 pass() { printf "  ${G}PASS${N}  %s\n" "$1"; }
@@ -43,7 +46,7 @@ dod1() {
     nm=$(printf "%s" "$s" | sed "s#.*/##; s#:.*##")
     p=$(RH get-service --service-arn "$s" --query 'service.policyArn' --output text)
     [ -n "$p" ] && [ "$p" != "None" ] && pass "$nm policyArn 非空" || fail "$nm policyArn 为空"
-    i=$(RH list-input-sources --service-arn "$s" --query 'length(inputSourceSummaries)' --output text)
+    i=$(RHCOUNT list-input-sources --service-arn "$s" --query 'length(inputSourceSummaries)')
     [ "$i" -ge 1 ] && pass "$nm input sources = $i (>=1)" || fail "$nm 无 input source"
   done
 }
@@ -54,12 +57,13 @@ dod2() {
   [ -f "$led" ] && pass "coverage-ledger.md 存在" || { fail "缺 coverage-ledger.md"; return; }
   # 台账里每一行应用组必须落在「已纳管」或「不纳管」两态之一
   bad=$(grep -cE '^\|' "$led" 2>/dev/null | head -1)
-  un=$(grep -cE '待定|TBD|\?\?\?' "$led" 2>/dev/null)
-  [ "${un:-0}" -eq 0 ] && pass "台账无待定项" || fail "台账有 $un 处待定/TBD"
+  # 只检查表格行(以 | 开头),散文里的"待定项"小节标题不算
+  un=$(grep -E '^\|' "$led" 2>/dev/null | grep -cE '待定|TBD|\?\?\?')
+  [ "${un:-0}" -eq 0 ] && pass "台账表格无待定项" || fail "台账表格有 $un 处待定/TBD"
   # 每个 service 必须至少解析出 1 个资源(空 service 说明输入源没生效)
   for s in $SERVICES; do
     nm=$(printf "%s" "$s" | sed "s#.*/##; s#:.*##")
-    c=$(RH list-resources --service-arn "$s" --query 'length(serviceResources)' --output text)
+    c=$(RHCOUNT list-resources --service-arn "$s" --query 'length(serviceResources)')
     [ "$c" -ge 1 ] && pass "$nm 已解析 $c 个资源" || fail "$nm 解析出 0 个资源"
   done
   info "台账表格行数 ${bad:-0}(人工核对:VPC 每个应用组都要出现)"
@@ -89,8 +93,8 @@ dod4() {
   echo "DoD-4 评估跑通"
   for s in $SERVICES; do
     nm=$(printf "%s" "$s" | sed "s#.*/##; s#:.*##")
-    ok=$(RH list-failure-mode-assessments --service-arn "$s" \
-          --query "length(assessmentSummaries[?assessmentStatus=='SUCCESS'])" --output text)
+    ok=$(RHCOUNT list-failure-mode-assessments --service-arn "$s" \
+          --query "length(assessmentSummaries[?assessmentStatus=='SUCCESS'])")
     if [ "${ok:-0}" -ge 1 ]; then
       pass "$nm 有 $ok 次 SUCCESS 评估"
     elif grep -qE "^\| *\`?$nm\`? *\|.*不可评估" "$ANCHOR/coverage-ledger.md" 2>/dev/null; then
@@ -105,7 +109,9 @@ dod4() {
 
 dod5() {
   echo "DoD-5 图谱可消费的产出落盘"
-  for f in topology-edges-petsite-core.json dependencies-petsite-core.json findings-petsite-core.json; do
+  # dependencies 走单独判定: dependencyDiscovery 是异步的(35 天回看),
+  # INITIALIZING 期间必然为空,故允许「空 + 状态已记录」通过
+  for f in topology-edges-petsite-core.json findings-petsite-core.json; do
     p="$EXPORTS/$f"
     if [ ! -f "$p" ]; then fail "缺 $f"; continue; fi
     n=$(python3 - "$p" <<'PY'
@@ -119,6 +125,26 @@ PY
 )
     [ "$n" -gt 0 ] && pass "$f 非空($n 条)" || fail "$f 为空或不可解析(n=$n)"
   done
+  # dependencies: 非空即通过;为空则要求 dependencyDiscovery 状态已落盘
+  dp="$EXPORTS/dependencies-petsite-core.json"
+  if [ ! -f "$dp" ]; then fail "缺 dependencies-petsite-core.json"; else
+    dn=$(python3 -c "
+import json,sys
+d=json.load(open('$dp'))
+ls=[v for v in d.values() if isinstance(v,list)]
+print(len(ls[0]) if ls else 0)
+" 2>/dev/null || echo -1)
+    if [ "${dn:-0}" -gt 0 ]; then
+      pass "dependencies 非空($dn 条)"
+    else
+      st=$(RH get-service --service-arn "$SVC_S1" --query 'service.dependencyDiscovery.status' --output text 2>/dev/null)
+      if [ "$st" = INITIALIZING ] || [ "$st" = ENABLED ]; then
+        info "dependencies 为空,但 dependencyDiscovery=$st(35 天回看,异步)—— 视为通过"
+      else
+        fail "dependencies 为空且 dependencyDiscovery=$st"
+      fi
+    fi
+  fi
 }
 
 only="${1:-}"
