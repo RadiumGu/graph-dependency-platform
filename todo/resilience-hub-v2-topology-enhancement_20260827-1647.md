@@ -112,26 +112,36 @@ Amazon Neptune
 [arh-v2-onboarding-20260829-0750.md](./arh-v2-onboarding-20260829-0750.md),
 产出文件在 `goal-loop-arh-v2/exports/`。**基于真实数据,本文档原先的三条采纳理由有两条被推翻,第三条经济上不成立。**
 
-### 7.1 理由一「补依赖发现的短板」——推翻
+### 7.1 理由一「补依赖发现的短板」——⚠️ 已作废,须重测(2026-08-29T08:18Z 更正)
 
-ARH 的依赖发现机制是 **DNS query log 分析**(35 天回看),
-前置条件明确要求计算资源「make DNS queries through Route 53 resolvers」,
+> **本节 08:07 之前写下的结论是在错误前提上得出的,现予作废。**
+> 当时判定「ARH 依赖发现无用、与本项目 DNS 假阴性同源」,依据是三个 service 的
+> `list-dependencies` 全窗口为 0。但事后查明:**依赖发现的资源发现步骤当时是静默损坏的** ——
+> 官方 v1 ClusterRole 模板不含 `services`,而 next-gen 每 10 分钟对每个命名空间
+> `list services` 一次并被 403 拒绝(EKS 审计日志确证,从 06:37 到 08:07 连续 1.5 小时)。
+> 后果:`petsite-core` 的 `eligibleResourceCount` 一直是 `null`,**它根本没走到 DNS 分析那一步**。
+> 补齐 `services` 权限后,`petsite-core` 的合格资源数 null→**6**、
+> `graph-observability` 3→**8**,message 转 null(= ready to view)。
+> **因此「依赖发现在本环境无用」这条尚无结论,须在 DNS 分析产出后重测(见 tasks.md T-097)。**
+
+仍然有效的部分:ARH 依赖发现的机制确实是 **DNS query log 分析**(35 天回看),
+前置条件要求计算资源「make DNS queries through Route 53 resolvers」,
 且「discovers either EC2 instances (**preferred**) or VPC (fallback)」。
+这一机制与本项目已证实产生假阴性的信号同源
+(`neptune_etl_deepflow.py:328` 只用 DNS 作观测源 → 26 条边里 22 条误判
+`declared_not_observed`),所以**理论上的盲区风险依然存在** ——
+但这需要用修复后的真实数据验证,不能像本节原先那样直接断言。
 
-这与本项目**已经证实会产生假阴性的是同一个信号** —— `neptune_etl_deepflow.py:328`
-的漂移判定只用 DNS 作观测源,导致 26 条带漂移状态的边里 22 条(85%)被误判
-`declared_not_observed`,因为 AWS SDK 启动时解析一次就复用连接、走 VPC 端点更不产生
-公网 DNS 查询。**ARH v2 有完全相同的盲区。**
+`graph-observability` 修复前那 3 个合格资源(3 台 DeepFlow EC2,经 EC2 API 发现,
+不受 K8s 权限影响)确实产出零依赖,该观察不受此次更正影响。
 
-实测:`graph-observability` 的依赖发现已完成(`status=ENABLED`、`eligibleResourceCount=3`、
-`message=null`,按官方状态表即「ready to view」),结果为 **0 条依赖**。
-按 5 × 7 天分段覆盖完整 35 天回看期逐段查询 + 最近 24h HOURLY 查询,
-`petsite-core` 与 `graph-observability` **全窗口均返回 0**,已排除时间窗因素。
-
-顺带一条:`eligibleResourceCount=3` 是 39 个资源里只有 3 台 EC2 合格 ——
-「EC2 优先」规则下 EKS pod 与 VPC 内 Lambda 都不计入。而 `petsite-core` 的计算面正是
-EKS pod + Lambda,且其 EKS 节点在 ARH 里被折叠成 `AutoScaling::AutoScalingGroup` +
-`EKS::Nodegroup` 而非 `EC2::Instance`,合格资源数很可能为 0。
+**关键教训:评估 SUCCESS ≠ K8s 权限充分。** 三个 service 的 failure mode assessment 全部成功,
+因为评估只读 pods/deployments/replicasets(均被允许);而依赖发现额外需要 `services`,
+被拒后没有任何显式失败信号 —— 只表现为 `eligibleResourceCount` 停在 null。
+`list-service-events` 本应暴露它,但该 API **自身报错**
+`Invalid service response: ServiceEventMetadata must have one and only one member set.`
+(CLI 无法解析承载该错误的事件类型,AWS 侧 union 约束 bug),
+所以唯一可行的诊断路径是 **EKS 控制面审计日志**。
 
 ### 7.2 理由二「用 ARH 拓扑边补图谱」——推翻:ARH 的边严格更粗
 

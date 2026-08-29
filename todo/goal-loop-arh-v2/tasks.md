@@ -408,6 +408,64 @@ SLO 仅 tier0/tier1 需非空。这是 API 约束导致的判定修正,不是降
   - `2026-08-29T06:36Z cycle-1: ClusterRole 与 ClusterRoleBinding created,回读确认 subject 组名正确。`
   - `2026-08-29T06:37Z cycle-1: access entry 建成并回读确认;S1 评估重跑 bb48ed3a-a087-47b7-bb64-0f60889f2fb5 PENDING。`
 
+### T-096 【根因·已修】官方 ClusterRole 模板缺 `services`,导致依赖发现的资源发现静默损坏 1.5 小时
+- 状态:`done`(2026-08-29T08:11:30Z 修复,08:18 验证生效)
+- 现象:控制台报 `Resource discovery could not access the Kubernetes API for this cluster.`
+  且 `petsite-core` 的 `dependencyDiscovery` 卡在 `eligibleResourceCount=null` /
+  message `"Discovering resources"` 长达 1.5 小时。
+- 诊断路径:`list-service-events` **本身报错**
+  `Invalid service response: ServiceEventMetadata must have one and only one member set.`
+  —— CLI 无法解析承载该错误的新事件类型(服务端 union 约束被违反,属 AWS 侧 bug),
+  所以走不通事件流。改用 **EKS 控制面审计日志**定位(用户批准后开启 `audit` + `authenticator`,
+  日志组 `/aws/eks/PetSite/cluster`,保留期设 7 天限成本)。
+- **审计日志给出确凿证据**:身份
+  `arn:aws:sts::926093770964:assumed-role/ResilienceHubV2InvokerRole/resiliencehub-session`
+  (userAgent `Kubernetes Java Client/18.0.0-SNAPSHOT`,源 IP 35.72.62.66):
+  | 请求 | 结果 |
+  |---|---|
+  | `list pods` / `deployments` / `replicasets`(三个命名空间) | ✅ 200 allow |
+  | **`list services`** | ❌ **403 Forbidden** |
+  报错原文:`services is forbidden: User "...ResilienceHubV2InvokerRole/resiliencehub-session"
+  cannot list resource "services" in API group "" in the namespace "deepflow"`
+- **403 的时间分布是决定性的**:按 `requestReceivedTimestamp` 聚合,
+  **每一条 403 都是 `services`,每轮 3 次(petadoptions / awesomeshop / deepflow 各一次),
+  从 06:37 起每 10 分钟一轮,最后一次 08:07** —— 06:37 正是首次应用官方 ClusterRole 的时刻
+  (06:36:56)。修复后(08:11:30)再无 403。
+- **根因**:官方 YAML(v1 文档页)的 ClusterRole **不含 `services`**,而 next-gen 的
+  资源发现每个命名空间都要 `list services`。评估之所以能成功,是因为它只读
+  pods/deployments/replicasets —— 全部被允许。所以**评估绿灯 ≠ K8s 权限充分**。
+- 修复:扩充 `arh-eks-rbac.yaml`,在官方模板之外补只读类型(全部仅 get/list,无写权限):
+  `namespaces / services / endpoints / configmaps / persistentvolumeclaims`、
+  `statefulsets / daemonsets`、`jobs / cronjobs`、`endpointslices`、
+  `ingresses / networkpolicies`。
+- **验证生效**:
+  | Service | 修复前 eligibleResourceCount | 修复后 |
+  |---|---|---|
+  | petsite-core | **null**(message "Discovering resources") | **6**(message null = ready to view) |
+  | graph-observability | 3(仅 3 台 EC2) | **8** |
+- 另修正两处文档说法:官方称依赖发现「Continues monitoring **hourly**」,
+  审计日志实测是**每 10 分钟**一轮;且依赖发现的 K8s 访问用的**就是 invoker role**,
+  不是「ARH 自己的服务凭证」(文档那句只针对 DNS query data)。
+- 记录:
+  - `2026-08-29T08:11Z: 扩充 ClusterRole 并重启依赖发现。`
+  - `2026-08-29T08:13Z: 用户批准后开启 EKS 审计日志,定位到 services 403。`
+  - `2026-08-29T08:18Z: eligibleResourceCount null→6 / 3→8,message 转 null,修复确认。`
+
+### T-097 【需重测】T-090 wontfix 的第一条理由需基于新数据复核
+- 状态:`todo` · 依赖:T-096
+- T-090(第 5 个 ETL)判 wontfix 的三条理由里,**第一条「依赖发现无用、与 DNS 假阴性同源」
+  是在资源发现静默损坏的状态下测的**,`petsite-core` 当时连计算资源都没数出来
+  (eligibleResourceCount=null),根本没走到 DNS 分析。该结论**下得过早,须重测**。
+- 仍然成立且独立支撑 wontfix 的是第二、三条:
+  拓扑边严格更粗(集群粒度 vs 微服务粒度 + 文件行级证据)、
+  每月只含 2 次评估且零消费方。**wontfix 结论本身不变**,但理由一要改写。
+- 重测方法:等 DNS 分析产出(35 天回看 + 每 10 分钟轮询),按 5×7 天分段查
+  `list-dependencies`,看 `petsite-core` 的 6 个合格资源是否产出依赖;
+  若有,评估其粒度与 provenance 再决定是否修改 T-090 的理由一。
+- `graph-observability` 那 3 台 EC2 零依赖的观察不受影响(走 EC2 API 发现,与 K8s 权限无关)。
+- 记录:
+
+
 ### T-028 【新增】S4 修复后仍失败 —— "did not produce a topology" 是字面意思
 - 状态:`doing` · 依赖:T-030 的结论
 - 事实分离(**重要,别把两次失败混为一谈**):

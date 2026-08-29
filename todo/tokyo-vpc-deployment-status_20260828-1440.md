@@ -955,3 +955,130 @@ Demo 脚本:`todo/demo-script-parallel-sources_20260829-0810.md`(460 行)。
 **幂等演示改为连跑两次** —— X-Ray 的 24h 窗口里随时会滚进新边,
 拿首轮的 `created=0` 当预期,现场会翻车。
 
+
+---
+
+# 附录 D：AWS Network Flow Monitor（NFM）—— 被忽略的第三个观测源
+
+2026-08-29 08:25 实测。**在此之前我把可观测性描述成「X-Ray 与 DeepFlow 两个平行源」,
+这个描述是不完整的 —— NFM 早已在链路里,而且已经在往图谱写数据。**
+
+## D.1 部署形态
+
+| 项 | 值 |
+|---|---|
+| 监视器 | `petsite-nfm-monitor`,状态 **ACTIVE**,创建于 2026-02-24 |
+| 监控范围 | `localResources = [AWS::EC2::VPC vpc-010ab37a3f9f74725]`,**整个 VPC**;`remoteResources` 为空 |
+| Scope | `915b7ec7-a8d0-48ab-b9ae-851a50380486`,状态 SUCCEEDED |
+| Agent 所在 | `nfm-deepflow-test`(`i-00f46b680713b9b14`,11.0.2.112) |
+| Agent 进程 | `network-flow-monitor.service` **running**;`/opt/aws/network-flow-monitor/network-flow-monitor-agent --cgroup /mnt/cgroup-nfm --endpoint https://networkflowmonitorreports.ap-northeast-1.api.aws/publish` |
+| 指标来源 | CloudWatch 命名空间 `AWS/NetworkFlowMonitor`,维度 `MonitorId=<monitorArn>` |
+| 采集的指标 | `RoundTripTime`(Avg)、`Retransmissions`(Sum)、`HealthIndicator`(Avg)、`Timeouts`(Sum) |
+
+**这台机器同时跑着 deepflow-agent**(容器版 `deepflow-agent:v7.0` + 原生
+`/bin/deepflow-agent`),所以它本身就是一台 **NFM vs DeepFlow 对比台** —— 名字即用途。
+
+## D.2 已入图谱的部分
+
+`infra/lambda/etl_aws/cloudwatch.py`:
+`fetch_nfm_ec2_metrics()` → `map_nfm_metrics_to_ec2()` → `update_ec2_nfm_metrics()`
+
+写到 EC2Instance 节点上的属性:`net_rtt_avg_ms`、`net_retransmissions`、
+`net_health_score`、`net_timeouts`、`nfm_updated_at`。
+
+IAM 已授权(`infra/README.md` 记录):`networkflowmonitor:GetMonitor`、`ListMonitors`。
+
+## D.3 缺陷一：VPC 级聚合被当成实例级属性
+
+**实测**:11 个带 NFM 指标的节点里,7 个新鲜节点的值**完全相同**
+(`rtt=38.25` / `retrans=5.0`),4 个旧节点也彼此相同(`rtt=38.0` / `retrans=6.0`)。
+
+根因在映射代码里,一眼可见:
+
+```python
+for inst in ec2_instances:
+    if inst.get('vpc_id') in vpc_ids or not vpc_ids:
+        ec2_nfm[inst['name']] = {k: v for k, v in metrics.items() if k != 'monitor_name'}
+```
+
+监视器的范围是**整个 VPC**,只有一份聚合指标;这段代码把它**逐个复制给该 VPC 内每个
+EC2 实例**。所以「PetSite-Node-az1a-1 的 RTT 是 38.25ms」这句话是**假的** ——
+那是整个 VPC 的平均值,不是这台机器的。
+
+这与之前在 etl_xray 里处理泛化 `S3` 节点是**同一类错误**:
+**把粗粒度观测归属到细粒度实体**。当时的处理是另立 `AWSServiceEndpoint`
+并标 `granularity='service'`,如实记录「只知道调了 S3,不知道哪个 bucket」。
+NFM 这里应当同样处理 —— 指标属于 **VPC 节点**,或者留在 EC2 上但显式标注
+`nfm_scope='vpc'`,让查询方知道这个数字的真实粒度。
+
+**危险的兜底**:`or not vpc_ids` —— `get_monitor` 一旦失败,`vpc_ids` 为空集,
+于是**账号内所有实例**都会被写上这份指标,无论在哪个 VPC。
+静默、无报错,写进去的数据与真实数据在图谱里**无法区分**。
+
+## D.4 缺陷二：同一台机器在图谱里有两个 EC2Instance 节点
+
+排查 D.3 时顺带发现的,比 D.3 更严重。
+
+那 4 个「88 天未更新」的节点,`name` 是实例 ID;查 EC2 得到:
+
+```
+i-0c39b7c79dfe93a2c = PetSite-Node-az1a-1
+i-032e64effbbed37dd = PetSite-Node-az1c-2
+i-0aed2b5763456ec10 = PetSite-Node-az1c-1
+i-00188386d18a3095d = PetSite-Node-az1a-2
+```
+
+**它们和 4 个「新鲜」节点是同一批物理实例。** 量化:
+
+| 指标 | 值 |
+|---|---|
+| EC2Instance 节点总数 | **14** |
+| 按 `instance_id` 归并后的重复实体 | **4**(每个 2 份) |
+| 以实例 ID 作为 `name` 的节点 | **4 / 14** |
+| `instance_id` 属性缺失的节点 | **0** ← 可归并的前提已满足 |
+
+即 `EC2Instance.name` **没有单一规范身份**:有时是实例 ID,有时是 Name 标签。
+以 ID 命名的那 4 个在 88 天前停止更新(推测是命名约定改变的时点),
+带着当时的 NFM 值冻结至今。
+
+**后果**:任何「哪些实例 RTT 高」「有几台工作节点」类查询都会
+把同一台机器数两次,且其中一份带的是 3 个月前的陈旧数值。
+这与 `SSM` / `SimpleSystemsManagement` 别名未归一、
+`search-service` / `petsearch` 名字不通 是**同一类身份问题**,
+而这次的可归并线索最强 —— `instance_id` 在两份节点上都存在且相同。
+
+**修法**(尚未执行,先记录):以 `instance_id` 为归并键,
+把以 ID 命名的节点的边迁移到以 Name 标签命名的节点上,再删除前者;
+并在 etl_aws 的写入侧固定 `name` 的取值规则(优先 Name 标签,缺失时回落到 ID),
+否则清理完还会再生 —— 与 `last_scanned` 那个坑同理。
+
+## D.5 三个观测源的正确分工（修正附录 B 的二分法）
+
+| 维度 | X-Ray | DeepFlow | **NFM** |
+|---|---|---|---|
+| 层次 | **应用层**(span) | **L7 + L4**(eBPF) | **L4 网络质量**(TCP) |
+| 前提 | 必须埋点 | 零埋点 | 装 agent,VPC 级监视器 |
+| 覆盖 | 4 个已插桩服务 | 所有 Pod | **VPC 内装了 agent 的主机** |
+| 独有能力 | **精确到 AWS 资源名 + 按下游归因延迟** | **未插桩服务的真实调用** | **RTT / 重传 / 超时 —— TCP 层健康度** |
+| 粒度陷阱 | 泛化 `S3` 不含 bucket 名 | AWS 服务只到域名 | **VPC 聚合,不是单机** |
+
+**NFM 独有的价值,前两者都给不了**:它是唯一给出 **TCP 层质量**(重传、超时、RTT)的源。
+X-Ray 只知道「这次调用花了 458ms」,DeepFlow 知道「这条流的 L7 时延」,
+但**只有 NFM 能回答「这 458ms 里有多少是网络重传导致的」**。
+
+这与第四支柱 profiling 的关系很直接:
+`petsearch → s3` 每次 458ms 属于 Off-CPU 等待,
+要区分「S3 服务端慢」与「网络路径丢包重传」,需要的正是 NFM 的重传/RTT 指标。
+**所以在引入 Pyroscope 之前,NFM 这条已经在跑的源应该先被正确利用起来** ——
+它已经付了采集成本,只是数据被错误地归属了。
+
+## D.6 尚未利用的部分
+
+- `remoteResources` 为空 —— 只监控 VPC 内部,**跨 VPC / 跨 AZ 的流量质量没有覆盖**。
+  而本项目的故障边界模型(`fault_boundary='az'`)最关心的恰恰是跨 AZ。
+- NFM 的 workload insights / top contributors 查询面完全没用 ——
+  它能给出「哪些流贡献了最多重传」,那是比 VPC 平均值有用得多的粒度,
+  也是解决 D.3 的正路(不是把聚合值摊给每台机器,而是取真实的 per-flow 数据)。
+- `etl_deepflow` 里另有一个 `fetch_nfm_throttling()`,与 etl_aws 这条路**是两条独立实现**,
+  需要核对是否重复或冲突(两个实现掩盖同一个缺陷,是本仓库反复出问题的模式)。
+
