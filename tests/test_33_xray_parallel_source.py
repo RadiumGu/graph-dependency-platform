@@ -46,8 +46,10 @@ def test_x01_client_shadow_nodes_are_dropped():
     m = _load_etl()
     assert m._classify('PetSearch', 'client') is None
     assert m._classify('PetSite', 'client') is None
-    # 服务本体（Type=None）必须保留
-    assert m._classify('PetSearch', None) == ('petsearch', 'service', None)
+    # 服务本体（Type=None）必须保留。
+    # 第三位携带**原始大小写名** —— Lambda 函数名大小写敏感，
+    # 只保留小写规范名会让 Lambda 的源侧匹配整批失败。
+    assert m._classify('PetSearch', None) == ('petsearch', 'service', 'PetSearch')
 
 
 def test_x02_ssm_aliases_collapse_to_one_identity():
@@ -545,3 +547,81 @@ def test_x12_live_graph_has_xray_edges(neptune_rca):
             warnings.warn(
                 f"最新的 X-Ray 观测已过去 {age // 3600} 小时 —— "
                 f"etl_xray 可能已停止运行。", UserWarning)
+
+def test_x15_lambda_name_case_is_preserved():
+    """Lambda 函数名**大小写敏感**，规范化时必须把原始大小写一起带走。
+
+    实测缺陷：X-Ray 里一个 Lambda 出现三次（Type=None 服务本体 +
+    AWS::Lambda + AWS::Lambda::Function）。此前只有 neptune-etl-* 被追踪，
+    名字本来全小写，所以「无条件转小写」没暴露问题。
+    traffic-generator 启动后 StepFn 的 Lambda 进入服务图，名字是
+    `ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A`，
+    转小写后匹配不到任何节点 —— 而真正的出边（→ ssm、→ DynamoDB 表）
+    恰恰挂在这个服务本体上，于是整批出边被记成 skipped_no_node。
+    """
+    m = _load_etl()
+    raw = 'ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A'
+    canon, kind, third = m._classify(raw, None)
+    assert canon == raw.lower(), '规范名用小写做键（保证与 remote FQDN 形态归一）'
+    assert kind == 'service'
+    assert third == raw, '原始大小写必须保留，否则 Lambda 匹配不到'
+    # 源侧子句必须同时出现两种形态
+    clause = m._src_label_clause((canon, kind, third))
+    assert raw in clause and canon in clause
+    # 源节点候选标签必须含 StepFunction —— Step Functions 也会作为源出现
+    assert 'StepFunction' in m.SRC_CANDIDATE_LABELS
+
+
+def test_x16_arn_and_url_are_reduced_to_short_names():
+    """X-Ray 对 SQS 给 URL、对 SNS 给完整 ARN，而图谱用短名。
+
+    不剥前缀就永远匹配不上（实测 `petsite -[DependsOn]-> https://sqs...`
+    就是这样被记成 skipped_no_node 的）。
+    只处理 arn: 与 http(s):// 两种**结构明确**的形态，不做通用截断 ——
+    对任意含 ':' 或 '/' 的名字截断会误伤真实资源名。
+    """
+    m = _load_etl()
+    q = 'https://sqs.ap-northeast-1.amazonaws.com/926093770964/MyQueue-abc'
+    assert m._resource_short_name(q) == 'MyQueue-abc'
+    a = 'arn:aws:sns:ap-northeast-1:926093770964:MyTopic-xyz'
+    assert m._resource_short_name(a) == 'MyTopic-xyz'
+    # 普通短名原样返回，不被截断
+    plain = 'ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM'
+    assert m._resource_short_name(plain) == plain
+    # 含冒号但不是 ARN 的名字不能被截断
+    assert m._resource_short_name('weird:name') == 'weird:name'
+
+
+def test_x17_opaque_sql_labels_are_skipped_not_guessed():
+    """X-Ray 的 `pgsql query` / `sql.conn.exec` 是**操作名**，不是被调方。
+
+    它们对应到 Aurora 的调用，但 X-Ray **没给集群标识** ——
+    这是 X-Ray 的粒度局限，不是图谱缺节点。
+    必须刻意跳过（计入 unmapped），而不是去匹配一个不存在的节点
+    然后记成 skipped_no_node：后者会把「X-Ray 说不清」误报成
+    「图谱不完整」，两者的修复方向完全不同。
+    """
+    m = _load_etl()
+    for label in ('PGSQL Query', 'sql.conn.exec', 'sql.conn.reset_session'):
+        assert m._classify(label, 'remote') is None, label
+    # 真实主机名不能被这条规则误伤
+    assert m._classify('search-service.petadoptions.svc.cluster.local', 'remote') is not None
+
+
+def test_x18_self_reference_is_detected_by_entity_not_key_equality():
+    """同一个 Lambda 的多条 X-Ray 表述之间的边是自环，必须过滤。
+
+    原判据 `t_key == key` 只在键完全相等时成立。引入「service kind 携带
+    原始大小写」后，服务本体的键是 (小写名,'service',原名)、
+    函数执行的键是 (原名,'resource','LambdaFunction')，两者不相等，
+    于是自环漏了出去 —— 实测图谱里出现过自己调自己的边。
+    """
+    m = _load_etl()
+    raw = 'ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A'
+    body = m._classify(raw, None)
+    func = m._classify(raw, 'AWS::Lambda::Function')
+    assert body != func, '两个键本身不相等（正是原判据失效的原因）'
+    assert m._is_self_reference(body, func), '但它们指代同一个实体，必须判为自环'
+    # 不同实体不能被误判为自环
+    other = m._classify('petsearch', None)
+    assert not m._is_self_reference(body, other)

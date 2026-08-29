@@ -13,7 +13,11 @@
     "pay-for-adoption": "payforadoption",
     "pethistory-deployment": "pethistory",
     "petadoptionshistory": "pethistory",
-    "pethistory-service": "pethistory"
+    "pethistory-service": "pethistory",
+    "list-adoptions": "petlistadoptions",
+    "petlistadoptions-deployment": "petlistadoptions",
+    "petsearch-deployment": "petsearch",
+    "payforadoption-deployment": "payforadoption"
   },
   "neptune_to_k8s": {
     "petsite": "petsite-deployment",

@@ -75,8 +75,21 @@ services:
 
   petlistadoptions:
     tier: Tier1
-    type: lambda
-    lambda_name: "petlistadoptions"
+    # 曾错误声明为 `type: lambda` + 无 k8s_deployment/k8s_label。
+    # 实测（2026-08-29）：账号里**不存在**名为 petlistadoptions 的 Lambda，
+    # 它是 EKS 部署 `list-adoptions`（petadoptions 命名空间，2/2，已运行 154 天）。
+    #
+    # 这个错声明有两个连带后果，都不只是「少一个别名」：
+    #   ① etl_deepflow 用 `fb = 'region' if svc_type == 'lambda' else 'az'`
+    #      推 fault_boundary，于是这个 EKS 服务的**故障边界被算成 region**
+    #      —— 爆炸半径推理直接错。
+    #   ② 没有 k8s_deployment/k8s_label 就生成不出 k8s_alias，
+    #      DeepFlow 按部署名建了一个独立的 Microservice/list-adoptions 节点，
+    #      与本条目是**同一个服务的两个节点** —— 与 EC2 那次「用可变属性
+    #      当身份键」是同一类重复实体缺陷。
+    type: k8s
+    k8s_deployment: "list-adoptions"
+    k8s_label: "list-adoptions"
     neptune_name: "petlistadoptions"
     cloudwatch:
       namespace: "AWS/ApplicationELB"

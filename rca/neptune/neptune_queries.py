@@ -462,14 +462,16 @@ def q21_observation_source_coverage(service_name: str = None,
     |---|---|---|---|
     | X-Ray (`xray_*` 属性) | 应用必须埋点 | 只有已插桩的服务 | **精确到资源名** |
     | DeepFlow (`deepflow-etl`/`deepflow-dns`) | eBPF，零埋点 | **所有 Pod** | 只到域名 |
+    | NFM (`nfm_*` 属性) | AWS 网络遥测，零部署 | **VPC 内全部流** | 只到服务类别 |
     | AWS/CFN 声明 (`aws-etl`/`cfn-etl`) | 读资源配置 | 全部已声明资源 | 精确，但**不代表被调用过** |
 
     实测差异（2026-08-29，ap-northeast-1）：
-      · X-Ray 只看到 4 个服务；DeepFlow 看到全部 Pod
+      · X-Ray 只在应用埋点后可见；DeepFlow 看到全部 Pod；NFM 看到 VPC 内每条流
       · X-Ray 给出那张 DynamoDB 表的**完整名字**；DeepFlow 只能从
-        DNS 域名反推，而走 VPC 端点时连域名都没有
-      · X-Ray 的 `petsearch → s3` 累计响应 **1,340 秒**，占 petsearch 总响应的 82%
-        —— 「服务慢在哪个下游」只有它能直接回答
+        DNS 域名反推，而走 VPC 端点时连域名都没有；NFM 只给
+        `destinationCategory=AMAZON_DYNAMODB`，**连表名都没有**
+      · 只有 NFM 给出 ENI 级网络路径（`traversedConstructs`）和
+        `INTRA_AZ`/`INTER_AZ` 判定 —— 「这条依赖跨不跨 AZ」只有它能直接回答
 
     所以正确的用法不是「相信其中一个」，而是把图谱当**对账中心**：
     一条边被几个源看到，本身就是这条依赖可信度的度量。
@@ -478,11 +480,22 @@ def q21_observation_source_coverage(service_name: str = None,
 
     | 值 | 含义 | 运维解读 |
     |---|---|---|
-    | `both` | X-Ray 与 DeepFlow 都观测到 | 最可信 —— 两种完全不同的观测机制互相印证 |
+    | `triple_corroborated` | 三个源都观测到 | 最可信 —— 应用埋点 / 内核 eBPF / AWS 网络遥测三种机制互证 |
+    | `double_corroborated` | 两个源观测到 | 可信 —— `seen_by` 说明是哪两个 |
     | `xray_only` | 只有 X-Ray 看到 | 通常是**到 AWS 托管服务**的调用：连接复用或 VPC 端点让 DNS 侧看不见 |
     | `deepflow_only` | 只有 DeepFlow 看到 | 通常是**未插桩服务**发起的调用，X-Ray 里根本不存在 |
+    | `nfm_only` | 只有 NFM 看到 | 走 VPC 端点、且发起方未插桩 —— 另两个源同时有盲点 |
     | `unobservable_by_design` | 业务层逻辑声明，**本质不可观测** | 不该被期待有运行时印证，不是缺陷 |
     | `observable_but_unobserved` | 该被观测到却没有 | **真盲区** —— 死代码，或所有源同时有盲点 |
+
+    `observer_count` 直接给出观测源数量，便于排序和统计。
+
+    > ⚠️ 原先只有 X-Ray / DeepFlow 两源时这里叫 `both`。
+    > 引入 NFM 后该命名不再成立，且**曾产生一次真实误报**：
+    > NFM 独家观测到的 `petsearch → dynamodb` 因为 coverage 判定不认识 NFM，
+    > 被归入 `observable_but_unobserved`（真盲区）—— 一条正在被观测的边
+    > 被报成了没人看见。教训是**加观测源必须同步改对账口径**，
+    > 否则新源写进去的数据在报告里等于不存在。
 
     ## 为什么要把最后两类分开
 
@@ -548,9 +561,15 @@ def q21_observation_source_coverage(service_name: str = None,
            r.xray_total_response_time_s AS xray_rt_seconds,
            r.xray_error_count AS xray_errors,
            r.calls AS deepflow_calls,
+           r.nfm_last_seen AS nfm_last_seen,
+           r.nfm_bytes AS nfm_bytes,
+           r.nfm_cross_az AS nfm_cross_az,
+           r.l4_last_seen AS l4_last_seen,
+           r.l4_flow_count AS l4_flow_count,
+           r.l4_via_instance AS l4_via_instance,
            r.verified_by AS verified_by,
            r.active AS active
-    ORDER BY coalesce(r.xray_call_count, r.calls, 0) DESC
+    ORDER BY coalesce(r.xray_call_count, r.calls, r.nfm_bytes, 0) DESC
     """
     rows = nc.results(cypher, params)
 
@@ -561,23 +580,43 @@ def q21_observation_source_coverage(service_name: str = None,
         # 而能被推导出来的布尔量迟早与来源不一致。
         seen_xray = row.get('xray_calls') is not None
         src_name = row.get('discovered_by') or ''
-        # DeepFlow 的判据有两条，缺一不可：
-        #   · 由 deepflow-* 发现（source）
-        #   · 或带 DeepFlow 独有的 L7 度量 calls（对账时补写在别人发现的边上）
-        seen_deepflow = src_name.startswith('deepflow') or row.get('deepflow_calls') is not None
+        # DeepFlow 的判据有三条，任一成立即算它看到了 ——
+        # DeepFlow 是**一个源、多个通道**，不是三个源：
+        #   · 由 deepflow-* 发现（source，含 deepflow-etl / deepflow-dns / deepflow-l4）
+        #   · 带 L7 度量 calls（对账时补写在别人发现的边上）
+        #   · 带 L4 流度量 l4_last_seen（从 l4_flow_log 按 endpoint 解析出的
+        #     IP 反查得到，覆盖「SDK 连接复用 / 走 VPC 端点导致 L7 与 DNS
+        #     都看不见」的那批微服务→数据存储依赖）
+        #
+        # ⚠️ 加 l4_last_seen 这一条是**补上一次疏漏**：L4 通道上线后
+        # 3 条 `微服务 → Aurora` 边已经被实测印证（l4_flow_count 152/237/164），
+        # 但本判据当时只认 calls，于是它们继续被报成 `observable_but_unobserved`。
+        # 这是「新增观测源却没同步对账口径」的第三次 —— 前两次是 NFM
+        # 和这里的 L4。教训写在文件顶部：**新增写入通道必须同步改 Q21**。
+        seen_deepflow = (src_name.startswith('deepflow')
+                         or row.get('deepflow_calls') is not None
+                         or row.get('l4_last_seen') is not None)
+        # NFM 的判据同样是**度量存在**而非布尔标记，与 X-Ray 一致。
+        # 只看 source=='nfm' 是不够的：NFM 在别人先发现的边上只补度量、
+        # 刻意不覆盖 source，所以那些边的 source 仍是 deepflow-etl / xray。
+        seen_nfm = row.get('nfm_last_seen') is not None or src_name == 'nfm'
 
         seen = []
         if seen_xray:
             seen.append('xray')
         if seen_deepflow:
             seen.append('deepflow')
+        if seen_nfm:
+            seen.append('nfm')
 
-        if seen_xray and seen_deepflow:
-            cov = 'both'
-        elif seen_xray:
-            cov = 'xray_only'
-        elif seen_deepflow:
-            cov = 'deepflow_only'
+        if len(seen) >= 3:
+            cov = 'triple_corroborated'
+        elif len(seen) == 2:
+            cov = 'double_corroborated'
+        elif len(seen) == 1:
+            cov = {'xray': 'xray_only',
+                   'deepflow': 'deepflow_only',
+                   'nfm': 'nfm_only'}[seen[0]]
         elif src_name == 'business-layer':
             # 业务层的逻辑声明**本质不可观测**：「支付流程依赖告警主题」
             # 描述的是业务能力对资源的依赖，运行时永远不会有一条网络包对应它。
@@ -588,6 +627,7 @@ def q21_observation_source_coverage(service_name: str = None,
             cov = 'observable_but_unobserved'
 
         row['seen_by'] = seen
+        row['observer_count'] = len(seen)
         row['coverage'] = cov
         if coverage and cov != coverage:
             continue

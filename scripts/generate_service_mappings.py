@@ -19,6 +19,11 @@ PROFILE_PATH = os.path.join(_PROJECT_ROOT, "profiles", "petsite.yaml")
 LAMBDA_DIRS = [
     os.path.join(_PROJECT_ROOT, "infra", "lambda", "etl_deepflow"),
     os.path.join(_PROJECT_ROOT, "infra", "lambda", "etl_aws"),
+    # etl_xray 也读 service_mappings.json 的 k8s_alias（把 X-Ray 报的
+    # K8s FQDN 映射成图谱服务名）。此前它不在输出列表里，那份文件是手工
+    # 拷进去的 —— 于是 profile 改了别名，etl_xray 拿到的还是旧的，
+    # 正是这个分支要消灭的「同一事实有两个来源」。
+    os.path.join(_PROJECT_ROOT, "infra", "lambda", "etl_xray"),
 ]
 
 def main():

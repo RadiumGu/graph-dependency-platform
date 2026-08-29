@@ -174,6 +174,11 @@ XRAY_TYPE_TO_RESOURCE_NODE = {
     'AWS::DynamoDB::Table': 'DynamoDBTable',
     'AWS::SQS::Queue': 'SQSQueue',
     'AWS::SNS::Topic': 'SNSTopic',
+    # X-Ray 对 SNS 报的 type 是 `AWS::SNS`（不带 ::Topic），Name 是**完整 ARN**。
+    # 图谱里 SNSTopic 用短名（ServicesEks2-topicpetadoption192CAB8F-...），
+    # 由 _resource_short_name 从 ARN 末段取出。
+    'AWS::SNS': 'SNSTopic',
+    'AWS::StepFunctions::StateMachine': 'StepFunction',
     'AWS::S3::Bucket': 'S3Bucket',       # 注意：X-Ray 通常报泛化的 'S3'，
                                           # 只有少数 SDK 会给出这个带 bucket 的 Type
     'AWS::Lambda::Function': 'LambdaFunction',
@@ -184,6 +189,27 @@ XRAY_TYPE_TO_RESOURCE_NODE = {
     # 2026-08-29 给 10 个 Lambda 开启 Active 追踪后才出现这个 type。
     'AWS::Lambda': 'LambdaFunction',
 }
+
+# X-Ray 报的**不透明操作标签** —— 它们看着像被调方名字，其实是 SDK 给
+# subsegment 起的操作名，不指向任何可建模的资源。
+#
+# 实测（traffic-generator 启动后）出现：
+#   payforadoption  -[remote]-> sql.conn.exec / sql.conn.reset_session
+#   petlistadoptions -[remote]-> pgsql query
+# 这三个都是**到 Aurora 的调用**，但 X-Ray 只给了操作名、**没有给集群标识**。
+#
+# 这属于 X-Ray 的粒度局限（与泛化 `S3` 同一类），不是「图谱缺节点」。
+# 所以刻意跳过并计入 unmapped_types，而**不是**让它去匹配一个不存在的
+# 节点然后记成 skipped_no_node —— 后者会把「X-Ray 说不清」
+# 误报成「图谱不完整」，两者的修复方向完全不同。
+#
+# 这批依赖真正的观测源是 DeepFlow：实测 eBPF 完整抓到
+# 3 个 pod group → 11.0.2.135:5432 的流（见 etl_deepflow 的 RDS 反查）。
+XRAY_OPAQUE_LABELS = frozenset({
+    'pgsql query', 'mysql query', 'sql query',
+    'sql.conn.exec', 'sql.conn.reset_session', 'sql.conn.query',
+    'sql.conn.ping', 'sql.conn.prepare', 'sql.conn.begin',
+})
 
 # 边类型选择：目标是数据/存储类 → AccessesData；目标是服务 → Calls。
 # 与 schema 里既有的约定一致（微服务到数据库用 AccessesData，不是 DependsOn）。
@@ -307,10 +333,19 @@ def fetch_xray_service_graph(lookback_hours: int = None) -> dict:
                     if tt != 'client':
                         unmapped.add((tt, target.get('Name')))
                     continue
-                # 过滤自环。X-Ray 用 AWS::Lambda（服务容器）→
-                # AWS::Lambda::Function（函数执行）表示同一个 Lambda 的内部结构，
-                # 那不是依赖关系。键归一化后两端落到同一个 key，正好识别为自环。
-                if t_key == key:
+                # 过滤自环 —— X-Ray 用**多个条目**表示同一个 Lambda 的内部结构
+                # （Type=None 的服务本体 + AWS::Lambda 容器 + AWS::Lambda::Function
+                #   函数执行），它们之间的边不是依赖关系。
+                #
+                # 原判据是 `t_key == key`，只在两端**键完全相等**时成立。
+                # 引入「service kind 携带原始大小写」之后这个判据不够了：
+                # 服务本体的键是 (小写名, 'service', 原名)，
+                # 函数执行的键是 (原名, 'resource', 'LambdaFunction')，
+                # 两者不相等，于是自环漏了出去 —— 实测图谱里出现
+                # `ServicesEks2-StepFnlambdastepreadDDB... -[Calls]->
+                #  ServicesEks2-StepFnlambdastepreadDDB...` 这种自己调自己的边。
+                # 改为按**实体身份**比较（见 _is_self_reference）。
+                if _is_self_reference(key, t_key):
                     continue
                 ek = (key, t_key)
                 estats = edge.get('SummaryStatistics') or {}
@@ -331,6 +366,30 @@ def fetch_xray_service_graph(lookback_hours: int = None) -> dict:
             len(unmapped), sorted(unmapped)[:10])
     return {'nodes': nodes, 'edges': edges, 'window_hours': hours,
             'unmapped': sorted(unmapped)}
+
+
+def _key_lower_names(key) -> set:
+    """一个键可能指代的全部名字（统一小写）。
+
+    `service` kind 的第三位携带原始大小写名（见 _classify），
+    所以规范名与原名都要算进来。
+    """
+    names = {str(key[0]).lower()}
+    if key[1] == 'service' and key[2] and isinstance(key[2], str):
+        names.add(str(key[2]).lower())
+    return names
+
+
+def _is_self_reference(a, b) -> bool:
+    """两个键是否指代**同一个实体**。
+
+    只要有一个小写名重合就算同一实体 —— 在本图谱里名字就是身份，
+    不存在两个不同实体同名的情况（EC2 那次的重复节点正是因为
+    把可变属性当身份键，反过来说明同名即同体）。
+
+    用途是过滤 X-Ray 对同一 Lambda 的多条内部表述之间的边。
+    """
+    return bool(_key_lower_names(a) & _key_lower_names(b))
 
 
 def _classify(raw_name: str, xray_type):
@@ -363,7 +422,23 @@ def _classify(raw_name: str, xray_type):
         # 否则它会被当成一个不存在的微服务，在图谱里变成孤儿节点。
         if low in XRAY_SERVICE_ALIASES:
             return (XRAY_SERVICE_ALIASES[low], 'aws_service', None)
-        return (low, 'service', None)
+        # 规范名用小写（图谱里的 Microservice 名字都是小写），
+        # 但**原始大小写必须一起带走** —— 否则 Lambda 匹配不到。
+        #
+        # 这是第四次「假设只在当时的样本上成立」：
+        # 一个 Lambda 在 X-Ray 里出现**三次** —— Type=None（服务本体）、
+        # AWS::Lambda、AWS::Lambda::Function。此前只有 neptune-etl-* 被追踪，
+        # 它们的名字本来就全小写，所以转小写没暴露问题。
+        # traffic-generator 启动后 StepFn 的 Lambda 进入服务图，名字是
+        # `ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A`
+        # —— **Lambda 函数名大小写敏感**，转小写后匹配不到任何节点，
+        # 而真正的出边（→ ssm、→ ddbpetadoption 表）恰恰挂在这个服务本体上，
+        # 于是整批出边被记成 skipped_no_node。
+        #
+        # 规范名仍用小写做键，保证 Type=None 的 `PetSearch` 与 remote 形态的
+        # `search-service.petadoptions.svc.cluster.local` 归一到**同一个键**，
+        # 不会拆成两个节点、把度量分摊。
+        return (low, 'service', raw_name)
 
     # 有精确资源名的 AWS 资源类型。
     # 身份键的第三位用**映射后的节点类型**而不是原始 xray_type ——
@@ -373,7 +448,7 @@ def _classify(raw_name: str, xray_type):
     # 这与 ssm 因 AWS::SSM / AWS::SimpleSystemsManagement 拆键是同一个坑。
     node_type = XRAY_TYPE_TO_RESOURCE_NODE.get(xray_type)
     if node_type:
-        return (raw_name, 'resource', node_type)
+        return (_resource_short_name(raw_name), 'resource', node_type)
 
     low = raw_name.lower()
 
@@ -397,6 +472,12 @@ def _classify(raw_name: str, xray_type):
 
     # Type='remote'：X-Ray 无法识别的进程外被调方，通常是一个主机名。
     if xray_type == 'remote':
+        # ① 先挡掉**不透明操作标签** —— 它们看着像被调方名字，
+        #    其实是 SDK 给 subsegment 起的操作名（pgsql query / sql.conn.exec）。
+        #    实测这批全部是到 Aurora 的调用，但 X-Ray 没给集群标识。
+        #    这是 X-Ray 的粒度局限，不是图谱缺节点 —— 见 XRAY_OPAQUE_LABELS。
+        if low in XRAY_OPAQUE_LABELS:
+            return None
         # K8s 集群内 FQDN → 服务名（再经 k8s_alias 映射到图谱服务名）
         if '.svc.cluster.' in low:
             return (_strip_k8s_fqdn(low), 'service', None)
@@ -484,14 +565,74 @@ def upsert_aws_service_endpoints(nodes: dict, round_ts: int) -> int:
     return written
 
 
-def _src_label_clause(name: str) -> str:
+# 源节点可能落在哪些节点标签上。
+# 一开始只有 Microservice + LambdaFunction —— 那是「当时被追踪的只有 EKS
+# 服务和 Lambda」这个样本决定的。traffic-generator 启动后 Step Functions
+# 进入服务图，出现 `StepFnStateMachine... -[AccessesData]-> <3 个 Lambda>`，
+# 源是 StepFunction 节点，整批边因为源子句匹配不到而被跳过。
+SRC_CANDIDATE_LABELS = ('Microservice', 'LambdaFunction', 'StepFunction')
+
+
+def _src_names(src_key) -> list:
+    """
+    源节点的候选名字：规范小写名 + 原始大小写名（去重、保持顺序）。
+
+    `service` kind 的键第三位携带原始大小写（见 _classify）。
+    Lambda 函数名**大小写敏感**，只用小写名会整批匹配失败 ——
+    实测 traffic-generator 启动后 StepFn 的 Lambda 就是这样丢掉全部出边的。
+    """
+    names = [src_key[0]]
+    raw = src_key[2] if len(src_key) > 2 else None
+    if raw and isinstance(raw, str) and raw not in names:
+        names.append(raw)
+    return names
+
+
+def _src_label_clause(src_key) -> str:
     """
     源节点可能是 Microservice 也可能是 LambdaFunction。
     X-Ray 只给名字不给类型，所以两种都试 —— 用 or 而非猜测。
+    名字同时试规范小写与原始大小写，理由见 _src_names。
     """
-    n = safe_str(name)
-    return (f"g.V().or(__.hasLabel('Microservice').has('name','{n}'),"
-            f" __.hasLabel('LambdaFunction').has('name','{n}'))")
+    parts = []
+    for nm in _src_names(src_key):
+        n = safe_str(nm)
+        for lbl in SRC_CANDIDATE_LABELS:
+            parts.append(f"__.hasLabel('{lbl}').has('name','{n}')")
+    return "g.V().or(" + ", ".join(parts) + ")"
+
+
+def _src_name_predicate(src_key) -> str:
+    """边查找时用来确认 outV 是源节点的谓词，同样兼容两种大小写形态。"""
+    names = _src_names(src_key)
+    if len(names) == 1:
+        return f"__.outV().has('name','{safe_str(names[0])}')"
+    inner = ", ".join(f"__.has('name','{safe_str(n)}')" for n in names)
+    return f"__.outV().or({inner})"
+
+
+def _resource_short_name(raw: str) -> str:
+    """
+    把 X-Ray 给的资源标识收敛成**图谱里实际使用的短名**。
+
+    X-Ray 对不同服务给的 Name 形态不一致，实测（traffic-generator 启动后）：
+      SQS  → `https://sqs.ap-northeast-1.amazonaws.com/926093770964/ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj`
+      SNS  → `arn:aws:sns:ap-northeast-1:926093770964:ServicesEks2-topicpetadoption192CAB8F-Dn0iiU45RZ1g`
+      DDB  → `ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM`（本来就是短名）
+    而图谱里 SQSQueue / SNSTopic 节点用的都是**短名**，
+    所以 URL 和 ARN 必须先剥掉前缀，否则永远匹配不上（实测
+    `petsite -[DependsOn]-> https://sqs...` 就是这样被记成 skipped_no_node 的）。
+
+    只处理两种**结构明确**的形态，不做通用截断：
+      · 以 `arn:` 开头 → 取最后一个 ':' 之后（ARN 的资源段）
+      · 以 `http://` / `https://` 开头 → 取最后一个 '/' 之后（URL 末段）
+    其余原样返回。对任意含 ':' 或 '/' 的名字截断会误伤真实资源名。
+    """
+    if raw.startswith('arn:'):
+        return raw.rsplit(':', 1)[-1]
+    if raw.startswith('http://') or raw.startswith('https://'):
+        return raw.rstrip('/').rsplit('/', 1)[-1]
+    return raw
 
 
 def _dst_matcher(dst_key) -> tuple:
@@ -504,7 +645,12 @@ def _dst_matcher(dst_key) -> tuple:
     name, kind, node_type = dst_key
     n = safe_str(name)
     if kind == 'service':
+        # `service` kind 的第三位携带**原始大小写的名字**（见 _classify）。
+        # Microservice 用规范小写名匹配，LambdaFunction 用原始大小写匹配 ——
+        # Lambda 函数名大小写敏感，一律转小写会整批匹配失败。
+        raw = safe_str(node_type) if node_type else n
         return (f"__.or(__.hasLabel('Microservice').has('name','{n}'),"
+                f" __.hasLabel('LambdaFunction').has('name','{raw}'),"
                 f" __.hasLabel('LambdaFunction').has('name','{n}'))", 'Calls')
     if kind == 'aws_service':
         return (f"__.hasLabel('AWSServiceEndpoint').has('name','{n}')", 'AccessesData')
@@ -554,9 +700,9 @@ def upsert_xray_edges(edges: dict, window_hours: int, round_ts: int) -> dict:
         # 分两步而不是一条 coalesce：因为两个分支要写的属性集不同，
         # coalesce 里没法只在 addE 分支上写 source。
         probe = (
-            f"{_src_label_clause(src_name)}.as('s')"
+            f"{_src_label_clause(src_key)}.as('s')"
             f".V().where({dst_matcher})"
-            f".inE('{edge_type}').where(__.outV().has('name','{safe_str(src_name)}'))"
+            f".inE('{edge_type}').where({_src_name_predicate(src_key)})"
             f".count()"
         )
         try:
@@ -570,9 +716,9 @@ def upsert_xray_edges(edges: dict, window_hours: int, round_ts: int) -> dict:
 
         if existing > 0:
             g = (
-                f"{_src_label_clause(src_name)}.as('s')"
+                f"{_src_label_clause(src_key)}.as('s')"
                 f".V().where({dst_matcher})"
-                f".inE('{edge_type}').where(__.outV().has('name','{safe_str(src_name)}'))"
+                f".inE('{edge_type}').where({_src_name_predicate(src_key)})"
                 f"{metrics}"
                 # active 回写 true：X-Ray 刚观测到它，无论之前被谁置为 false。
                 f".property('active',true)"
@@ -581,10 +727,10 @@ def upsert_xray_edges(edges: dict, window_hours: int, round_ts: int) -> dict:
             key = 'corroborated'
         else:
             g = (
-                f"{_src_label_clause(src_name)}.as('s')"
+                f"{_src_label_clause(src_key)}.as('s')"
                 f".V().where({dst_matcher})"
                 f".coalesce("
-                f"  __.inE('{edge_type}').where(__.outV().has('name','{safe_str(src_name)}')),"
+                f"  __.inE('{edge_type}').where({_src_name_predicate(src_key)}),"
                 f"  __.addE('{edge_type}').from('s')"
                 f"    .property('source','xray')"
                 f"    .property('dependency_kind','dynamic')"
@@ -618,9 +764,9 @@ def upsert_xray_edges(edges: dict, window_hours: int, round_ts: int) -> dict:
         #
         # 「写了就算成功」这种假设正是本仓库反复踩的坑，所以这里回读确认。
         verify = (
-            f"{_src_label_clause(src_name)}.as('s')"
+            f"{_src_label_clause(src_key)}.as('s')"
             f".V().where({dst_matcher})"
-            f".inE('{edge_type}').where(__.outV().has('name','{safe_str(src_name)}'))"
+            f".inE('{edge_type}').where({_src_name_predicate(src_key)})"
             f".count()"
         )
         try:

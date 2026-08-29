@@ -319,6 +319,286 @@ XRAY_WINDOW_SECONDS = int(os.environ.get('XRAY_WINDOW_SECONDS', '1800'))
 XRAY_DRIFT_ENABLED = os.environ.get('XRAY_DRIFT_ENABLED', 'true').lower() == 'true'
 
 
+def _resolve_datastore_ips() -> dict:
+    """
+    建立 **私有 IP → 图谱数据存储节点** 的反查表。
+
+    做法：从图谱读带 `endpoint` 属性的节点（RDSCluster / RDSInstance /
+    NeptuneCluster / ElastiCache…），把 endpoint 主机名解析成 IP。
+    本函数运行在 **VPC 内的 Lambda**（实测 neptune-etl-from-deepflow 配了
+    2 个子网），所以解析出来的是 RDS/Neptune ENI 的**私有 IP**。
+
+    为什么用 DNS 解析而不是靠主机名字符串猜集群名：
+    DNS 是一次**事实查询**，而截断主机名是推断。本仓库的一贯纪律是
+    「不用推断冒充观测」—— 同一条纪律在 etl_xray 里表现为
+    「按 endpoint 属性精确反查」，这里表现为「按 endpoint 解析出的 IP 反查」。
+
+    为什么不覆盖 S3 / DynamoDB：它们的域名解析到**共享的公网 IP**
+    （实测 `serviceseks2-s3bucket...s3.ap-northeast-1.amazonaws.com`
+     解析出 8 个轮转的 `s3-r-w` 地址，全部是共享的），
+    所以从 IP 反查不出「哪个 bucket / 哪张表」—— 那是物理上不可能，
+    不是本函数没做。这批依赖只能靠应用层（X-Ray）拿到资源级粒度。
+
+    返回 {ip: {'name':…, 'label':…, 'endpoint':…}}
+    """
+    import socket
+    out = {}
+    gremlin = ("g.V().has('endpoint').project('n','l','e')"
+               ".by('name').by(label).by('endpoint')")
+    try:
+        resp = neptune_query(gremlin)
+        items = resp.get('result', {}).get('data', {}).get('@value', []) or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("读取 endpoint 节点失败: %s", exc)
+        return out
+
+    for item in items:
+        vals = item.get('@value') if isinstance(item, dict) else None
+        if not isinstance(vals, list) or len(vals) < 6:
+            continue
+        name = str(extract_value(vals[1]))
+        label = str(extract_value(vals[3]))
+        endpoint = str(extract_value(vals[5]))
+        if not endpoint or '.' not in endpoint:
+            continue
+        try:
+            infos = socket.getaddrinfo(endpoint, None, socket.AF_INET)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("解析 %s 失败（可能不在本 VPC 可解析范围）：%s", endpoint, exc)
+            continue
+        for info in infos:
+            ip = info[4][0]
+            # getaddrinfo 对同一主机返回**多条**记录（不同 socktype/protocol），
+            # 逐条 append 会让同一个目标在表里重复 —— 消费端对每个重复项都
+            # 累加一次，度量会被乘以重复次数。按 (name,label) 去重。
+            bucket = out.setdefault(ip, [])
+            if not any(x['name'] == name and x['label'] == label for x in bucket):
+                bucket.append({'name': name, 'label': label, 'endpoint': endpoint})
+
+    # 实例级 → 集群级的**同时印证**。
+    #
+    # 实测踩到的问题：Aurora 的 endpoint 解析出的是 **writer 实例**的私有 IP，
+    # 于是 L4 建出的边指向 RDSInstance，而声明的盲区边指向 **RDSCluster** ——
+    # 结果盲区没被印证，旁边多了 3 条平行边。这是「粒度/身份错配」的第 5 例。
+    #
+    # 正确解法不是二选一：writer 实例属于哪个集群是**图谱里已有的事实**
+    # （`RDSInstance -[BelongsTo]-> RDSCluster`，由 aws-etl 从 RDS API 写入），
+    # 沿这条边把同一次观测同时记在集群上，既不是推断也不丢失实例级精度。
+    inst_names = {v['name'] for vs in out.values() for v in vs
+                  if v['label'] in ('RDSInstance', 'NeptuneInstance')}
+    belongs = {}
+    if inst_names:
+        quoted = "','".join(sorted(safe_str(n) for n in inst_names))
+        try:
+            resp = neptune_query(
+                f"g.V().hasLabel('RDSInstance','NeptuneInstance')"
+                f".has('name',within('{quoted}')).as('i')"
+                f".out('BelongsTo').as('c')"
+                f".select('i','c').by('name').by(label)")
+            for item in resp.get('result', {}).get('data', {}).get('@value', []) or []:
+                vals = item.get('@value') if isinstance(item, dict) else None
+                if isinstance(vals, list) and len(vals) >= 4:
+                    belongs[str(extract_value(vals[1]))] = str(extract_value(vals[3]))
+        except Exception as exc:  # noqa: BLE001
+            logger.info("查 BelongsTo 失败（实例级边仍会写入）：%s", exc)
+    if belongs:
+        # 需要集群**名字**，上面那次查询取的是 label，再取一次名字
+        try:
+            quoted = "','".join(sorted(safe_str(n) for n in belongs))
+            resp = neptune_query(
+                f"g.V().hasLabel('RDSInstance','NeptuneInstance')"
+                f".has('name',within('{quoted}')).as('i')"
+                f".out('BelongsTo').as('c')"
+                f".select('i','c').by('name').by('name')")
+            cname = {}
+            for item in resp.get('result', {}).get('data', {}).get('@value', []) or []:
+                vals = item.get('@value') if isinstance(item, dict) else None
+                if isinstance(vals, list) and len(vals) >= 4:
+                    cname[str(extract_value(vals[1]))] = str(extract_value(vals[3]))
+            for ip, vs in out.items():
+                for v in list(vs):
+                    c = cname.get(v['name'])
+                    lbl = belongs.get(v['name'])
+                    if c and lbl and not any(
+                            x['name'] == c and x['label'] == lbl for x in vs):
+                        vs.append({'name': c, 'label': lbl,
+                                   'endpoint': v['endpoint'], 'via_instance': v['name']})
+        except Exception as exc:  # noqa: BLE001
+            logger.info("取集群名失败（实例级边仍会写入）：%s", exc)
+
+    total_targets = sum(len(v) for v in out.values())
+    logger.info("endpoint 反查表：%d 个 IP → %d 个目标节点（含沿 BelongsTo 的集群级）",
+                len(out), total_targets)
+    return out
+
+
+def fetch_datastore_flows() -> list:
+    """
+    从 DeepFlow 的 **L4 流日志**里捞出「微服务 → 数据存储」的依赖。
+
+    ## 为什么需要它 —— 这批边不是观测盲区，是 ETL 把已采到的数据丢了
+
+    Q21 长期把 `petlistadoptions / pethistory / payforadoption → Aurora`
+    这 3 条报成 `observable_but_unobserved`（真盲区）。实测证明这个结论是错的：
+
+        SELECT toString(ip4_0), server_port, pod_group_id_0, count()
+        FROM flow_log.l4_flow_log
+        WHERE toString(ip4_1)='11.0.2.135'          -- Aurora writer 私有 IP
+        → 6 个 Pod → 5432 端口，30 分钟 293 条流、约 5.4 MB
+        → pod_group_id_0 ∈ {48, 49, 51}
+           = pay-for-adoption / list-adoptions / pethistory-deployment
+             （查 DeepFlow 自己的 flow_tag.pod_group_map）
+
+    **正好就是那 3 条边的源。** 也就是说 eBPF 一直看得见，
+    而原有的 ETL 只在「两端都能从 Pod IP 表查到」时才建边 ——
+    Aurora 的 IP 不是 Pod IP，查表失败，整批流被丢掉。
+
+    这是本项目第 6 个「写了没人读 / 采了没人用」的实例，
+    也再次说明**「盲区」这个判定本身需要被质疑**：
+    报成盲区的边里，有的是真没人看见，有的是看见了没写进去 ——
+    两者的修复方向完全不同，混在一起会让人去补一个根本不缺的观测源。
+
+    ## L7 为什么帮不上
+
+    实测 `l7_flow_log` 对这批流**没有解析出 PostgreSQL**（查询结果为空），
+    所以拿不到 SQL / 库名 / 表名。只有 L4 层面的连接事实。
+    建依赖边够用，做「访问了哪张表」不够 —— 如实记录，不假装有。
+
+    返回 [{'src','dst','dst_label','flows','bytes','port'}]
+    """
+    ip_map = _resolve_datastore_ips()
+    if not ip_map:
+        logger.info("endpoint 反查表为空，跳过数据存储流采集")
+        return []
+
+    ip_list = "','".join(sorted(ip_map))
+    sql = f"""
+SELECT IPv4NumToString(ip4_1) AS server_ip,
+       server_port,
+       pod_group_id_0,
+       count() AS flows,
+       sum(byte_tx + byte_rx) AS bytes
+FROM flow_log.l4_flow_log
+WHERE time > now() - INTERVAL 60 MINUTE
+  AND IPv4NumToString(ip4_1) IN ('{ip_list}')
+  AND pod_group_id_0 != 0
+GROUP BY server_ip, server_port, pod_group_id_0
+"""
+    try:
+        rows = ch_query_json(sql).get('data', []) or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("查数据存储流失败: %s", exc)
+        return []
+
+    # pod_group_id → 部署名，用 DeepFlow **自己的资源表**，不猜。
+    gids = sorted({str(r.get('pod_group_id_0')) for r in rows if r.get('pod_group_id_0')})
+    gname = {}
+    if gids:
+        try:
+            gsql = (f"SELECT id, name FROM flow_tag.pod_group_map "
+                    f"WHERE id IN ({','.join(gids)})")
+            for r in ch_query_json(gsql).get('data', []) or []:
+                gname[str(r.get('id'))] = str(r.get('name') or '')
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("查 pod_group_map 失败: %s", exc)
+
+    agg = {}
+    for r in rows:
+        gid = str(r.get('pod_group_id_0'))
+        dep = gname.get(gid, '')
+        if not dep:
+            continue
+        # K8s 部署名 → 图谱服务名（search-service → petsearch）。
+        # 复用同一份 k8s_alias，不内联第二份副本。
+        src = K8S_SERVICE_ALIAS.get(dep, dep)
+        # 一个 IP 现在对应**多个目标**：实例级 + 沿 BelongsTo 的集群级。
+        # 同一次观测同时记在两处 —— 实例级保留精度，集群级印证声明的边。
+        for info in ip_map.get(r.get('server_ip') or '', []):
+            key = (src, info['name'], info['label'])
+            e = agg.setdefault(key, {'src': src, 'dst': info['name'],
+                                     'dst_label': info['label'],
+                                     'via_instance': info.get('via_instance'),
+                                     'flows': 0, 'bytes': 0.0,
+                                     'port': r.get('server_port')})
+            e['flows'] += int(float(r.get('flows') or 0))
+            e['bytes'] += float(r.get('bytes') or 0)
+
+    result = list(agg.values())
+    logger.info("数据存储流：%d 条微服务→存储依赖", len(result))
+    return result
+
+
+def upsert_datastore_flows(edges: list) -> dict:
+    """
+    把 L4 观测到的「微服务 → 数据存储」依赖写进图谱。
+
+    写入纪律与 etl_xray / NFM 一致：
+      · 边已存在 → 只补 L4 度量，**绝不覆盖 source / dependency_kind**
+      · 边不存在 → 新建，`source='deepflow-l4'`（与 deepflow-etl 区分开，
+        便于回答「这条边是哪条采集链路带进来的」）
+      · 目标节点不存在 → **回读确认后计入 skipped**，不谎报成功
+    """
+    ts = int(time.time())
+    stats = {'created': 0, 'corroborated': 0, 'skipped_no_node': 0, 'failed': 0}
+    for e in edges:
+        s = safe_str(e['src'])
+        d = safe_str(e['dst'])
+        lbl = safe_str(e['dst_label'])
+        src_clause = (f"g.V().or(__.hasLabel('Microservice').has('name','{s}'),"
+                      f" __.hasLabel('LambdaFunction').has('name','{s}'))")
+        dst_clause = f"__.hasLabel('{lbl}').has('name','{d}')"
+        metrics = (f".property('l4_flow_count',{int(e['flows'])})"
+                   f".property('l4_bytes',{float(e['bytes'])})"
+                   f".property('l4_server_port',{int(e['port'] or 0)})"
+                   f".property('l4_last_seen',{ts})")
+        # 集群级边如实标注「是沿哪个实例观测到的」—— 不假装直接观测到了集群
+        if e.get('via_instance'):
+            metrics += f".property('l4_via_instance','{safe_str(e['via_instance'])}')"
+        probe = (f"{src_clause}.as('s').V().where({dst_clause})"
+                 f".inE('AccessesData').where(__.outV().has('name','{s}')).count()")
+        try:
+            existing = _first_scalar(neptune_query(probe))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("L4 边探测失败 %s → %s: %s", e['src'], e['dst'], exc)
+            stats['failed'] += 1
+            continue
+        if existing > 0:
+            g = (f"{src_clause}.as('s').V().where({dst_clause})"
+                 f".inE('AccessesData').where(__.outV().has('name','{s}'))"
+                 f"{metrics}.property('active',true).property('last_seen',{ts})")
+            key = 'corroborated'
+        else:
+            g = (f"{src_clause}.as('s').V().where({dst_clause})"
+                 f".coalesce(__.inE('AccessesData').where(__.outV().has('name','{s}')),"
+                 f" __.addE('AccessesData').from('s')"
+                 f"  .property('source','deepflow-l4')"
+                 f"  .property('dependency_kind','dynamic')"
+                 f"  .property('first_seen',{ts}))"
+                 f"{metrics}.property('active',true).property('last_seen',{ts})")
+            key = 'created'
+        try:
+            neptune_query(g)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("L4 边写入失败 %s → %s: %s", e['src'], e['dst'], exc)
+            stats['failed'] += 1
+            continue
+        if key == 'corroborated':
+            stats['corroborated'] += 1
+            continue
+        try:
+            landed = _first_scalar(neptune_query(probe))
+        except Exception:  # noqa: BLE001
+            landed = 0
+        if landed > 0:
+            stats['created'] += 1
+        else:
+            stats['skipped_no_node'] += 1
+            logger.info("L4 观测到 %s → %s（%s），但图谱无匹配节点，跳过",
+                        e['src'], e['dst'], e['dst_label'])
+    logger.info("数据存储流写入：%s", stats)
+    return stats
+
+
 def fetch_xray_dependencies() -> dict:
     """从 X-Ray 服务图取「服务 → AWS 托管服务类型」的运行时观测。
 
@@ -1556,11 +1836,24 @@ ORDER BY calls DESC LIMIT 100 FORMAT TSV
     except Exception as e:
         logger.warning(f"ECR startup deps failed (non-fatal): {e}")
 
+    # 「微服务 → 数据存储」依赖：从 L4 流日志按 endpoint 解析出的 IP 反查。
+    # 这批边此前被 Q21 报成真盲区，实测其实 eBPF 一直看得见 ——
+    # 只是原 ETL 要求两端都能从 Pod IP 表查到，Aurora 的 IP 不是 Pod IP。
+    ds_stats = {}
+    try:
+        ds_edges = fetch_datastore_flows()
+        if ds_edges:
+            ds_stats = upsert_datastore_flows(ds_edges)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"datastore flows failed (non-fatal): {e}")
+
     duration = int((time.time() - t0) * 1000)
     logger.info(f"=== ETL 完成: nodes={len(nodes_list)}, edges={len(edges_list)}, {duration}ms ===")
     return {"nodes": len(nodes_list), "edges": len(edges_list),
             "marked_inactive": reconcile_stats.get("marked_inactive", 0),
             "dropped": reconcile_stats.get("dropped", 0),
+            "datastore_edges_created": ds_stats.get("created", 0),
+            "datastore_edges_corroborated": ds_stats.get("corroborated", 0),
             "duration_ms": duration}
 
 
