@@ -102,7 +102,9 @@ from collections import Counter
 rows=json.load(sys.stdin)
 c=Counter(r['coverage'] for r in rows)
 print(f'共 {len(rows)} 条依赖边')
-for k in ('both','xray_only','deepflow_only','declared_only'):
+for k in ('triple_corroborated','double_corroborated','xray_only',
+          'deepflow_only','nfm_only','unobservable_by_design',
+          'observable_but_unobserved'):
     print(f'  {k:16} {c[k]}')
 "
 ```
@@ -110,21 +112,32 @@ for k in ('both','xray_only','deepflow_only','declared_only'):
 **预期输出**：
 
 ```
-共 81 条依赖边
-  both                         1
-  xray_only                    9
-  deepflow_only               52
+共 94 条依赖边
+  triple_corroborated          2
+  double_corroborated          4
+  xray_only                   20
+  deepflow_only               51
+  nfm_only                     1
   unobservable_by_design       6
-  observable_but_unobserved   13
+  observable_but_unobserved   10
 ```
 
-> **要讲的**：这四类不是「数据质量好坏」，而是**两个观测源各自的能力边界**。
+> **要讲的**：这七类不是「数据质量好坏」，而是**三个观测源各自的能力边界**。
 > 逐类看下去，每一类都对应一个真实的技术原因。
+>
+> **注意分类名变过一次**：原来只有 X-Ray / DeepFlow 两源时最高一档叫 `both`。
+> 引入 NFM 后该命名不再成立，改为按观测源数量分级
+> （`triple_corroborated` / `double_corroborated`，另有 `observer_count` 字段）。
+> 这次改名不是美化 —— 它修掉了一次**真实误报**：NFM 独家观测到的
+> `petsearch → dynamodb` 因为 coverage 判定不认识 NFM，被归入了「真盲区」。
+> 一条正在被观测的边被报成没人看见。同一个错误随后又犯了一次（L4 通道）。
+> 教训值得当场讲出来：**每加一个写入通道，必须同步改对账口径，
+> 否则新源写进去的数据在报告里等于不存在。**
 
-### 2.1 `both` —— 两种完全不同的机制互相印证
+### 2.1 `triple_corroborated` —— 三种完全不同的机制互相印证
 
 ```bash
-python3 /tmp/q.py q21_observation_source_coverage coverage=both limit=20
+python3 /tmp/q.py q21_observation_source_coverage coverage=triple_corroborated limit=20
 ```
 
 **预期输出**（截取关键字段）：
@@ -135,7 +148,9 @@ python3 /tmp/q.py q21_observation_source_coverage coverage=both limit=20
   "discovered_by": "deepflow-etl",
   "xray_calls": 381,        "xray_rt_seconds": 88.764,
   "deepflow_calls": 96,
-  "coverage": "both",       "seen_by": ["xray", "deepflow"]
+  "nfm_bytes": 26868143.0,  "nfm_cross_az": true,
+  "coverage": "triple_corroborated",
+  "seen_by": ["xray", "deepflow", "nfm"],  "observer_count": 3
 }]
 ```
 
@@ -226,15 +241,115 @@ trafficgenerator -[Calls ]-> petsite
 > 因为 X-Ray 的前提是应用必须埋点，而这些服务没有。
 > DeepFlow 走 eBPF，**零埋点**，所以它们逃不掉。
 >
-> 换个角度说：如果只用 X-Ray，这张图会少掉 **52/79 ≈ 66%** 的依赖关系，
+> 换个角度说：如果只用 X-Ray，这张图会少掉 **51/94 ≈ 54%** 的依赖关系，
 > 而且你不会收到任何错误提示 —— 它们只是**安静地不存在**。
+>
+> （这个比例从 66% 降到 54%，是因为给 10 个 Lambda 开了 X-Ray 追踪、
+>   而且压测流量恢复后 X-Ray 服务图从 4 个服务涨到 57 个。
+>   **观测覆盖面依赖真实流量** —— 没有流量的链路，任何埋点都是哑的。）
 
 ### 2.4 一句话收束这一节
 
 > X-Ray 知道「谁调了**哪个具体资源**、花了多久」；
-> DeepFlow 知道「网络上**真实发生了什么**，包括没埋点的东西」。
-> 两者的盲区**不重叠**，所以图谱把两边都写下来、都保留，
+> DeepFlow 知道「网络上**真实发生了什么**，包括没埋点的东西」；
+> NFM 知道「这条流**走了哪条 ENI 路径、跨不跨 AZ**」。
+> 三者的盲区**互不重叠**，所以图谱把三边都写下来、都保留，
 > 自己做对账中心 —— 而不是选一个当"真相"。
+
+---
+
+## 2.5 全场最有说服力的一段：「盲区」这个判定本身要被质疑（4 分钟）
+
+这一段建议**留足时间**，它是整个 demo 里唯一能证明「对账中心」不是包装词的部分。
+
+图谱长期把这 3 条报成 `observable_but_unobserved`（真盲区）：
+
+```
+petlistadoptions -[AccessesData]-> serviceseks2-databaseb269d8bb-...  [RDSCluster]
+pethistory       -[AccessesData]-> serviceseks2-databaseb269d8bb-...  [RDSCluster]
+payforadoption   -[AccessesData]-> serviceseks2-databaseb269d8bb-...  [RDSCluster]
+```
+
+按字面解读，结论会是「需要再加一个观测源」。**实测证明这个结论是错的**：
+
+```sql
+SELECT toString(ip4_0) AS client, server_port, pod_group_id_0, count() AS n,
+       sum(byte_tx+byte_rx) AS bytes
+FROM flow_log.l4_flow_log
+WHERE time > now() - INTERVAL 30 MINUTE AND toString(ip4_1)='11.0.2.135'
+GROUP BY client, server_port, pod_group_id_0
+```
+
+```
+11.0.2.105  5432  51  59  783490      11.0.3.236  5432  51  58  694834
+11.0.2.222  5432  48  58  890040      11.0.3.50   5432  48  36  699672
+11.0.2.45   5432  49  58 1620988      11.0.3.177  5432  49  24  678430
+```
+
+`11.0.2.135` 是 Aurora writer 的**私有 IP**。查 DeepFlow 自己的资源表：
+
+```sql
+SELECT id, name FROM flow_tag.pod_group_map WHERE id IN (48,49,51)
+→ 48 = pay-for-adoption
+  49 = list-adoptions
+  51 = pethistory-deployment
+```
+
+**正好就是那 3 条「盲区」边的源。** 30 分钟 293 条流、5.4 MB。
+
+> **要讲的**（这是全场的转折点）：
+> eBPF **一直看得见**。问题在于原有的 ETL 只在「两端都能从 Pod IP 表查到」时才建边
+> —— 而 Aurora 的 IP 不是 Pod IP，整批流在 `continue` 处被丢掉。
+>
+> 所以「盲区」这三个字下面藏着**三种性质完全不同**的东西，
+> 混在一起会把人引向完全错误的修复方向：
+>
+> | 真实性质 | 该做什么 | 本环境实例 |
+> |---|---|---|
+> | **真没人看见** | 加观测源 / 加埋点 | DynamoDB 表级依赖（网络侧物理不可能） |
+> | **看见了没写进去** | 修 ETL，**不需要任何新观测源** | 微服务 → Aurora 这 3 条 |
+> | **声明了但从未实现** | 修声明或删依赖，**观测永远不会有** | `petstatusupdater → SQS`（见下） |
+>
+> 第二类最危险：它长得和第一类**一模一样**，会让人去买/部署一个根本不缺的观测源。
+
+### 修法：按 endpoint 解析出的 IP 反查，不靠猜
+
+图谱里 `RDSCluster` / `RDSInstance` / `NeptuneCluster` 节点都带 `endpoint` 属性。
+ETL Lambda 在 VPC 内，`getaddrinfo(endpoint)` 拿到的就是**私有 IP**。
+DNS 是一次**事实查询**，而截断主机名去猜集群名是**推断** —— 这条纪律贯穿全仓库。
+
+中间踩到一个值得讲的坑（**粒度错配的第 5 例**）：
+Aurora 的 endpoint 解析出的是 **writer 实例**的 IP，第一版只建了指向 `RDSInstance`
+的边，于是**盲区没被印证、旁边多了 3 条平行边**。
+解法不是二选一 —— `RDSInstance -[BelongsTo]-> RDSCluster` 是**图谱里已有的事实**
+（aws-etl 从 RDS API 写入），沿它把同一次观测同时记在集群上，
+集群级边标注 `l4_via_instance`，**不假装直接观测到了集群**。
+
+### 第三类的现场实例：声明了但从未实现
+
+```
+petstatusupdater -[DependsOn]-> ServicesEks2-sqspetadoption2E8B1217-...  [SQSQueue]
+petstatusupdater -[DependsOn]-> ServicesEks2-sqspetadoptiondlqEEEFF2AC-... [SQSQueue]
+```
+
+实测（压测流量恢复后才看得出来）：
+
+```
+SQS  NumberOfMessagesSent      409        ← 有生产者（petsite，X-Ray 实测 ok=246）
+     NumberOfMessagesReceived    0        ← 14 天逐日全为 0
+aws lambda list-event-source-mappings ... → []        ← 全账号 41 个 Lambda，无一挂在此队列
+CFN 模板里没有任何 AWS::Lambda::EventSourceMapping，也没有任何 sqs: 动作
+```
+
+> **要讲的**：**消费者从未部署。** 队列是架构占位 —— 创建出来、URL 发布到 SSM 供
+> 生产者发现，但没有任何东西被接上来排空它。领养业务真实落库走的是
+> petsite → `pay-for-adoption` 的 **HTTP 同步路径**，SQS 是一条**并行的孤儿路径**。
+>
+> 这条边永远不会被任何观测源印证，**因为运行时确实不存在**。
+> 把它算进「盲区」等于要求观测系统去看一件没发生的事。
+>
+> 顺带一个运维要点：现有告警只盯 **DLQ**，主队列积压**无告警**，
+> 所以这个积压会一路涨到 4 天保留期然后**静默过期**，没人会发现。
 
 ---
 
@@ -440,8 +555,9 @@ print('边总数:', nc.results('MATCH ()-[r]->() RETURN count(r) AS n',{})[0]['n
 | 步骤 | 命令 | 一句话 |
 |---|---|---|
 | 1 | ClickHouse 行数 vs 图谱规模 | 789k/小时 是图谱的 900 倍 → 不能存遥测 |
-| 2 | `q21` 无参数 | both=1 / xray=9 / deepflow=52 / 不可观测=6 / 真盲区=13 |
-| 2.1 | `q21 coverage=both` | `discovered_by` 没被覆盖，两源印证 |
+| 2 | `q21` 无参数 | 三源=2 / 双源=4 / xray=20 / deepflow=51 / nfm=1 / 不可观测=6 / 真盲区=10 |
+| 2.1 | `q21 coverage=triple_corroborated` | `discovered_by` 没被覆盖，三源印证 |
+| 2.5 | ClickHouse 查 `ip4_1='11.0.2.135'` | 盲区其实采到了没写 —— 全场转折点 |
 | 2.2 | `q21 coverage=xray_only` | DynamoDB 11,507 次，DNS 完全看不见 |
 | 2.3 | `q21 coverage=deepflow_only` | 52 条来自未埋点服务，X-Ray 里不存在 |
 | 3 | `get-service-graph` + S3Bucket 计数 | X-Ray 只说「S3」，图谱有 33 个 bucket → 不许猜 |
@@ -449,7 +565,9 @@ print('边总数:', nc.results('MATCH ()-[r]->() RETURN count(r) AS n',{})[0]['n
 | 5 | `lambda invoke` 连跑两次 | created=0 / corroborated=7，且 seen=图谱边数=7 |
 
 **如果有人问「为什么不用 X-Ray 的服务图直接看？」**
-答：它只有 4 个服务。这个环境里 66% 的依赖来自没埋点的服务，X-Ray 里根本不存在。
+答：这个环境里 54% 的依赖来自没埋点的服务，X-Ray 里根本不存在。
+而且 X-Ray 的覆盖面**依赖真实流量** —— 压测停掉的 95 天里它只看得到 4 个服务，
+流量恢复后立刻涨到 57 个。埋点开了不等于看得见。
 
 **如果有人问「为什么不干脆全用 DeepFlow？」**
 答：它对 AWS 托管服务只到域名粒度，而连接复用 + VPC 端点让它连域名都拿不到 ——

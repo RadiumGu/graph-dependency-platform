@@ -1758,3 +1758,14 @@ DoD-4 现在成立，靠的是**官方 awslabs.amazon-neptune-mcp-server**
 **未解决且未变的缺口**：无论哪个 server 都需要「VPC 内 + SigV4」。
 VPC 外的异构 agent 接不上——这正是 AgentCore 要解决的，已写进
 `query_catalog.py` 的目标形态图。
+
+## 2026-08-29 15:40 —— 依赖梳理第 2–4 步
+- [x] Q21 LIMIT-before-filter 修复（盲区漏报 62%）— 641f20c
+- [x] NFM 成为第三个拓扑观测源，服务级依赖进图谱 — bb35d7d
+- [x] 微服务→存储「盲区」实为采到没写：L4 按 endpoint 解析 IP 反查 — c4b0a08
+- [x] traffic-generator 暴露的 5 个 etl_xray 缺陷（大小写/ARN-URL/源标签/不透明标签/自环）— c4b0a08
+- [x] petlistadoptions 错误声明为 lambda（导致 fault_boundary 算成 region）— c4b0a08
+- [x] Q21 扩为三源对账，补上两次「新增源未同步对账口径」的疏漏 — c4b0a08
+- [x] demo 讲稿 + 附录 G 更新
+- [ ] SQS 主队列积压告警（消费者从未部署，现有告警只盯 DLQ）
+- [ ] search-service topologySpreadConstraints（当前两 Pod 同处 1c 纯属调度巧合；CDK 会把拓扑注解改回去）

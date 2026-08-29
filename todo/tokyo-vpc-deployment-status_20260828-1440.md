@@ -1461,3 +1461,175 @@ payforadoption -[AccessesData]-> dynamodb     首发=nfm           观测源=nfm
 - **etl_aws 耗时从 47s 升到 78s**（NFM 三次异步查询各约 10 秒）,
   Timeout 300s 余量充足。若后续 category 增多需重估。
 
+
+---
+
+# 附录 G：traffic-generator 恢复 + 「盲区」判定被推翻（2026-08-29 15:05–15:40）
+
+本附录记两件事：环境新增了一个跨 VPC 压测源，以及它带来的真实流量**一次性推翻**了
+若干长期成立的假设。
+
+> 与本附录并行，同环境另有四份专项文档（同一天 15:18 产出，未纳入本文件以免重复）：
+> `trafficgenerator-config-rootcause_20260829-1518.md`（静默失效 95 天的根因）、
+> `crossvpc-loadgen-internal-alb_20260829-1518.md`（跨 VPC 内网入口）、
+> `petsite-traffic-coverage_20260829-1518.md`（覆盖度实测）、
+> `sqs-orphan-and-topology-hints_20260829-1518.md`（SQS 孤儿队列 + 拓扑路由钉死）。
+> 本附录只记与**依赖关系建图**直接相关的部分。
+
+## G.1 新增 EC2：跨 VPC 压测源
+
+| 项 | 值 |
+|---|---|
+| 实例 | `i-05f0b897988a48d17`，Name=`petsite-loadgen` |
+| 规格 | `c7g.xlarge`（arm64），running |
+| 网络 | `10.1.2.66` / `subnet-057b2d3519422d28b` / **`vpc-06731f30388b57818`** |
+| AZ | `ap-northeast-1a` |
+| 启动 | 2026-08-29T14:52:18Z |
+| 图谱 | 已被 etl_aws 自动收录，EC2Instance **10 → 11** |
+
+**它不在 PetSite 的 VPC 里**（PetSite 是 `vpc-010ab37a3f9f74725` / `11.0.x.x`）。
+两个直接后果：
+
+1. **NFM 采不到 loadgen 侧的出流。** monitor `petsite-nfm-monitor` 的
+   `localResources` 只声明了 PetSite VPC，压测源的本地流不在采集范围；
+   PetSite 侧只能看到入流，且会被归入 `INTER_VPC` / `INTERNET` 类别 ——
+   而我做拓扑发现时查的是 `INTRA_AZ` / `INTER_AZ` / `AMAZON_S3` / `AMAZON_DYNAMODB`，
+   所以压测入口这条边 NFM 侧目前是看不到的。
+2. EKS 里原有的 `traffic-generator` deployment 现在是 **0/0**，已被这台 EC2 取代。
+
+## G.2 NFM per-flow API 的实测约束（此前文档未记）
+
+- **时间窗硬上限 1 小时**。传 120 分钟直接报
+  `Time range can not exceed 1 hour`。代码里取 50 分钟而非 60 ——
+  60 正好擦着上限没余量，而窗口右端还要留 5 分钟给数据落地延迟。
+- 合法枚举**由 API 校验错误反推**得到（文档没有列全）：
+  - `metricName`: `DATA_TRANSFERRED` / `TIMEOUTS` / `ROUND_TRIP_TIME` / `RETRANSMISSIONS`
+  - `destinationCategory`: `LOCAL_ZONE` / `INTERNET` / `AMAZON_DYNAMODB` / `INTER_VPC` /
+    `UNCLASSIFIED` / `AWS_SERVICE` / `INTER_REGION` / `TRANSIT_GATEWAY` /
+    `INTRA_AZ` / `AMAZON_S3` / `INTER_AZ`
+- 查询是**异步**的：`StartQuery` → 轮询 `GetQueryStatus` → `GetQueryResults`，
+  实测 `SUCCEEDED` 约需 10 秒。三个 category 串起来把 etl_aws 从 47s 拉到 78s。
+- **做拓扑必须用 `DATA_TRANSFERRED`**。`RETRANSMISSIONS` 只报发生过重传的流，
+  网络正常的业务流产生零行 —— 拿它做拓扑发现实测得到「服务对 0 组」。
+
+## G.3 Aurora 与 S3 的网络身份 —— 粒度边界的物理解释
+
+| 对象 | 网络身份 |
+|---|---|
+| Aurora 集群 `serviceseks2-databaseb269d8bb-efjeyzicx2ak` | aurora-postgresql，端口 5432 |
+| writer endpoint | 解析到**私有 IP `11.0.2.135`**（PetSite VPC 内） |
+| 对应图谱节点 | `RDSInstance/serviceseks2-databasewriter2462cc03-fwgfu4gossqe`，`role=writer`，`instance_class=db.serverless` |
+| 归属关系 | 图谱里**已有** `RDSInstance -[BelongsTo]-> RDSCluster` |
+
+S3 bucket `serviceseks2-s3bucketpetadoptioncb20dce5-69ffx` 的域名解析出
+**8 个轮转的公网 IP**，全部是共享的 `s3-r-w.ap-northeast-1.amazonaws.com`：
+`3.5.155.180` `3.5.157.75` `52.219.172.102` `3.5.157.106`
+`3.5.159.218` `52.219.150.226` `52.219.136.226` `3.5.159.222`
+
+**这从底层解释了粒度边界**：Aurora 有专属私有 IP，所以可以按 IP 反查到具体集群；
+S3 / DynamoDB 走共享端点 + TLS 加密 + L7 无解析（实测 443 端口
+9358 条流、**193 个不同服务端 IP**、17 个 pod group），
+从网络数据反查「哪张表 / 哪个 bucket」**在物理上不可能** ——
+这不是没做，是做不到。那批只能靠应用层（X-Ray）拿资源级粒度。
+
+## G.4 DeepFlow ClickHouse 的实测列名（踩过坑，记下来避免重复）
+
+| 项 | 事实 |
+|---|---|
+| 表 | `flow_log.l4_flow_log`、`flow_log.l7_flow_log` |
+| **不存在**的列 | `pod_service_0`、`pod_group_0`、`server_ip` |
+| 正确列名 | `pod_group_id_0`、`pod_id_0`；服务端 IP 是 `ip4_1`，客户端是 `ip4_0` |
+| pod_group_id → 名字 | 查 `flow_tag.pod_group_map`（DeepFlow 自己的资源表） |
+| 实测取值 | `48=pay-for-adoption`、`49=list-adoptions`、`51=pethistory-deployment` |
+| `l7_protocol` 取值 | **`20` = HTTP，`120` = DNS**（实测分布 20:205456 / 120:179506） |
+| 环境变量名 | `CLICKHOUSE_HOST` / `CLICKHOUSE_PORT`（或 `CH_HOST` / `CH_PORT`），**不是** `CLICKHOUSE_URL` |
+| ClickHouse 版本 | 23.8.7.24 |
+| 真实连接数 | 用 L4 的 `sum(syn_count)`，**不要**用 `uniqExact(client_port)` |
+
+L7 对 Aurora 那批流**没有解析出 PostgreSQL**（查询结果为空），
+所以只有 L4 的连接事实，拿不到 SQL / 库名 / 表名 —— 如实记录，不假装有。
+
+## G.5 Lambda 与权限变更
+
+- `neptune-etl-lambda-role` 新增内联策略 **`etl-sns-list-subscriptions`**
+  （此前 5 个 SNS topic 全部拿不到订阅数，生产日志里一直在报 AuthorizationError，
+   与本轮改动无关的既有缺陷）。
+- `neptune-etl-from-deepflow` **在 VPC 内**
+  （`subnet-0f801fa79077eb277` / `subnet-047a94f9c5ab6302a`），Timeout 240s
+  —— 这是它能解析 RDS 私有 DNS 的前提。
+- `etl_aws` 因 NFM 三次异步查询从 47s → **78s**，Timeout 300s 余量仍充足。
+- ⚠️ **`etl_xray` 部署包必须按目录整体打包**（`zip -qr`），不能只打 `.py`：
+  `service_mappings.json` 必须在包里，否则 `K8S_ALIAS` 恒为空、
+  `Type=remote` 的 K8s FQDN 边全部落不进图谱。
+  本地干跑不会暴露这个问题 —— 相对路径能找到 `etl_deepflow` 那份。
+- `generate_service_mappings.py` 的输出目标已补上 `etl_xray`
+  （此前那份是手工拷的，profile 改了别名它拿到的还是旧的）。
+
+## G.6 EKS 现状
+
+`petadoptions` 命名空间（全部 154 天）：
+
+```
+list-adoptions          2/2      pay-for-adoption   2/2
+pethistory-deployment   2/2      petsite-deployment 2/2
+search-service          2/2      traffic-generator  0/0   ← 已被 EC2 版本取代
+```
+
+`list-adoptions` 带 `aws-otel-collector:v0.47.0` sidecar。
+
+> **图谱里那批 `awesomeshop` 服务不属于 PetSite**：`auth-service`、
+> `gateway-service`、`order-service`、`points-service`、`product-service`、`frontend`
+> 是独立应用，实测 **6 个 Deployment 全部 `0/0`** —— 计算层全停、数据层可能仍在计费
+> （对应既有 T-094）。它们在 Microservice 节点里出现是正确的，
+> 但做 PetSite 依赖分析时应排除。
+
+## G.7 「盲区」判定被推翻 —— 本轮最重要的结论
+
+原先 `observable_but_unobserved` 被当成单一含义（「需要再加观测源」）。
+实测证明它下面藏着**三种性质完全不同**的东西：
+
+| 真实性质 | 该做什么 | 实例 | 条数 |
+|---|---|---|---|
+| **真没人看见** | 加观测源 / 加埋点 | DynamoDB 表级依赖 | 6 |
+| **看见了没写进去** | 修 ETL，**不需要任何新观测源** | 微服务 → Aurora | 3（已消除） |
+| **声明了但从未实现** | 修声明或删依赖，观测永远不会有 | `petstatusupdater → SQS` | 2 |
+
+第二类最危险 —— 它和第一类**长得一模一样**，会让人去部署一个根本不缺的观测源。
+
+**第三类的证据链**（压测流量恢复后才看得出来）：
+`NumberOfMessagesSent=409` 但 `NumberOfMessagesReceived` 14 天逐日全为 0；
+`list-event-source-mappings` 对该队列返回 `[]`（全账号 41 个 Lambda 无一挂上）；
+CFN 模板里没有任何 `AWS::Lambda::EventSourceMapping`、也没有任何 `sqs:` 动作。
+**消费者从未部署**，真实落库走 petsite → `pay-for-adoption` 的 HTTP 同步路径。
+
+## G.8 最终图谱状态
+
+| 指标 | 本轮前 | 本轮后 |
+|---|---|---|
+| 依赖边 | 79 | **94** |
+| `triple_corroborated` | — | **2** |
+| `double_corroborated` | 1（旧 `both`） | **4** |
+| `xray_only` | 6 | **20** |
+| `deepflow_only` | 52 | 51 |
+| `nfm_only` | — | 1 |
+| `unobservable_by_design` | 混在盲区里 | 6 |
+| `observable_but_unobserved` | 20（混着） | **10** |
+| EC2Instance | 10 | 11（新增 loadgen，零重复） |
+| Microservice 重复实体 | 1 组（`list-adoptions`/`petlistadoptions`） | 0 |
+| 测试 | 395 | **404 passed / 0 failed** |
+
+`petsite → petsearch` 与 `petsite → pethistory` 现在被**应用埋点（X-Ray）+
+内核 eBPF（DeepFlow）+ AWS 网络遥测（NFM）**三种完全不同的机制同时观测到。
+
+## G.9 未做与理由
+
+- **不给 SQS 加消费者**。那会改变应用语义，并可能与 HTTP 路径形成双写、重复落库。
+  合理动作是把它记录为已知架构缺口，并给**主队列**加
+  `ApproximateNumberOfMessagesVisible` 告警使积压可见 ——
+  现有告警只盯 DLQ，主队列积压会一路涨到 4 天保留期然后静默过期。
+- **不为 DynamoDB / S3 表级依赖再找网络侧路径**。见 G.3，物理上不可能。
+- `gp-window-flush` / `petsite-rca-engine` 自埋点：arm64 无层，
+  需按 arm64 重新 vendor 依赖，对 2 条边性价比低。
+- NFM 拆成独立 `etl_nfm`（故障隔离）：图谱层面的「平行源」语义已由
+  `source='nfm'` 成立，拆分只剩故障隔离这一项收益。
+
