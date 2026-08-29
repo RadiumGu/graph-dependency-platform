@@ -200,6 +200,18 @@ QUERY_CATALOG = {
                    "limit": "int，默认 20"},
         "required": [],
     },
+    "q20_dependency_verification": {
+        "mod": "queries", "fn": "q20_dependency_verification",
+        "desc": ("依赖边的运行时验证状态：找出「未被观测」「只被单源验证」"
+                 "「验证已过期」的边。漂移判定有 DNS 与 X-Ray 两个观测源，"
+                 "本查询是 verified_by 的读取方 —— X-Ray 若静默失效，"
+                 "判定会悄悄退回 DNS-only 而结果看起来完全正常"),
+        "params": {"service_name": "str，可选（省略=全图）",
+                   "stale_after_seconds": "int，默认 3600",
+                   "only_problematic": "bool，默认 True",
+                   "limit": "int，默认 50"},
+        "required": [],
+    },
     # ── 以下来自 dr-plan-generator ──
     "q12_az_dependency_tree": {
         "mod": "dr", "fn": "q12_az_dependency_tree",

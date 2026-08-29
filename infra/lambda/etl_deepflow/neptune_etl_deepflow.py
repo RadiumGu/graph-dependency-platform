@@ -31,6 +31,7 @@ Neptune 边属性命名约定（Field Naming Convention）
 import os
 import json
 import time
+import datetime
 import logging
 import base64
 import boto3
@@ -253,6 +254,95 @@ for _itype, _rule in INFRA_DRIFT_RULES.items():
         DNS_TO_INFRA[_kw] = (_rule['label'], [_rule['nc']], _itype)
 
 
+# ── X-Ray 作为第二观测源 ──────────────────────────────────────────────────
+# 为什么需要它：漂移判定原先**只用 DNS** 作运行时观测源，而 AWS SDK 通常在
+# 启动时解析一次域名就复用连接，走 VPC 端点更是不产生公网 DNS 查询。
+# 结果一个每 24h 被调用 11,512 次的依赖，在 DNS 窗口里可以完全看不见。
+#
+# 实测证据（2026-08-29）：图谱里 26 条带 drift_status 的边有 **22 条**判为
+# `declared_not_observed`（85%），其中 `petsearch → ServicesEks2-ddbpetadoption…`
+# 被 X-Ray 用 11,512 次调用证否 —— 这是假阴性，不是真漂移。
+#
+# X-Ray 恰好能看到 DeepFlow 的 Calls 边看不到的那一层：
+# 服务 → AWS 托管服务。所以它是这类边**唯一可用**的运行时观测源。
+
+XRAY_TYPE_TO_INFRA = {
+    'AWS::DynamoDB::Table': 'dynamodb',
+    'AWS::SQS::Queue': 'sqs',
+    'AWS::SNS::Topic': 'sns',
+    'AWS::RDS::DBCluster': 'rds',
+    'AWS::RDS': 'rds',
+    'AWS::S3': 's3',
+    'AWS::S3::Bucket': 's3',
+    'AWS::StepFunctions::StateMachine': 'stepfunction',
+    # AWS::STS 刻意不映射：图谱没有 STS 节点类型，映射它只会造孤立节点。
+}
+
+# X-Ray 单次 GetServiceGraph 的时间跨度上限是 6 小时（实测报
+# "Time range cannot be longer than 6 hours"）。这里只要最近一段用于验证
+# 「依赖当前还活着」，取 30 分钟即可，与 CALLS_INACTIVE_AFTER_SECONDS 同量级。
+XRAY_WINDOW_SECONDS = int(os.environ.get('XRAY_WINDOW_SECONDS', '1800'))
+XRAY_DRIFT_ENABLED = os.environ.get('XRAY_DRIFT_ENABLED', 'true').lower() == 'true'
+
+
+def fetch_xray_dependencies() -> dict:
+    """从 X-Ray 服务图取「服务 → AWS 托管服务类型」的运行时观测。
+
+    返回 {svc_name: {infra_type, ...}}，svc_name 已归一化为图谱用的名字。
+
+    名字映射规则（实测确定）：**`lower(X-Ray名)` 即图谱名**，无逐名特例
+    （X-Ray `PetSearch` → 图谱 `petsearch`；`payforadoption` /
+    `petlistadoptions` 两边本就一致）。归一化后再过一遍 K8S_SERVICE_ALIAS，
+    以覆盖 K8s 原名与 Neptune 名不同的情况。
+
+    失败是**非致命**的：拿不到 X-Ray 数据就退回只用 DNS 判定，
+    与本函数引入前的行为一致。
+    """
+    if not XRAY_DRIFT_ENABLED:
+        logger.info("X-Ray drift source disabled by XRAY_DRIFT_ENABLED")
+        return {}
+    result = {}
+    try:
+        end = int(time.time())
+        start = end - XRAY_WINDOW_SECONDS
+        xray = boto3.client('xray', region_name=REGION)
+        resp = xray.get_service_graph(
+            StartTime=datetime.datetime.fromtimestamp(start, datetime.timezone.utc),
+            EndTime=datetime.datetime.fromtimestamp(end, datetime.timezone.utc),
+        )
+        services = resp.get('Services', [])
+        # Edges[].ReferenceId 是 Services 数组的下标，必须映射回去才知道终点是谁
+        by_ref = {}
+        for s in services:
+            rid = s.get('ReferenceId')
+            if rid is not None:
+                by_ref[rid] = s
+        for s in services:
+            # Type 为 None/空 的是被插桩的服务本体；'client' 的是入口影子节点
+            if s.get('Type'):
+                continue
+            raw_name = s.get('Name') or ''
+            svc = K8S_SERVICE_ALIAS.get(raw_name.lower(), raw_name.lower())
+            if not svc:
+                continue
+            for edge in s.get('Edges', []) or []:
+                tgt = by_ref.get(edge.get('ReferenceId'))
+                if not tgt:
+                    continue
+                itype = XRAY_TYPE_TO_INFRA.get(tgt.get('Type') or '')
+                if not itype:
+                    continue
+                result.setdefault(svc, set()).add(itype)
+        logger.info(
+            f"X-Ray drift: {len(result)} services with managed-service calls: "
+            f"{dict((k, sorted(v)) for k, v in result.items())}"
+        )
+    except Exception as e:
+        # 非致命：退回只用 DNS，与本函数引入前的行为一致
+        logger.warning(f"fetch_xray_dependencies failed (non-fatal): {e}")
+    return result
+
+
 def fetch_dns_connections(ip_map: dict) -> dict:
     """
     查询 DeepFlow DNS 流量，返回各服务实际连接的 AWS 服务类型集合
@@ -319,33 +409,86 @@ HAVING query_count >= 1
 
 def run_drift_detection(service_names: list, ip_map: dict):
     """
-    T13a: 对比代码声明边 vs DNS/TCP 运行时观测，写入 drift_status
-    - 代码声明了但没有 DNS → drift_status=declared_not_observed
-    - DNS 有但代码没声明 → drift_status=observed_not_declared（写新边）
+    T13a: 对比代码声明边 vs 运行时观测，写入 drift_status
+    - 代码声明了但运行时看不到 → drift_status=declared_not_observed
+    - 运行时有但代码没声明 → drift_status=observed_not_declared（写新边）
     - 两者都有 → runtime_verified=true, drift_status=ok
+
+    ## 运行时观测有两个源（2026-08-29 起）
+
+    | 源 | 看得见什么 | 盲区 |
+    |---|---|---|
+    | DeepFlow DNS | 域名解析行为 | SDK 启动解析一次即复用连接；VPC 端点不产生公网 DNS |
+    | **AWS X-Ray** | 服务 → AWS 托管服务的**实际调用** | 只覆盖已插桩的服务 |
+
+    两个源是 **OR** 关系：任一看到即算 observed。理由是它们的盲区不重叠 ——
+    DNS 漏掉的是「连接复用」，X-Ray 漏掉的是「未插桩」，
+    要求两者都命中会把假阴性变得更糟。
+
+    实测（引入 X-Ray 前）：26 条带 drift_status 的边有 22 条判为
+    `declared_not_observed`（85%），其中至少一条被 X-Ray 的 11,512 次调用证否。
+
+    ## 为什么必须写 verified_by
+
+    双源验证下，如果 X-Ray 侧静默失效（权限丢失、服务未插桩、时间窗口空），
+    判定会**悄悄退回 DNS-only** 而结果看起来完全正常。`verified_by` 让这件事
+    可观测：其读取方是 q20_dependency_verification 查询（用于找出
+    「只被单一源验证」或「验证已过期」的边）与 tests/test_32。
     """
     ts = int(time.time())
     dns_obs = fetch_dns_connections(ip_map)
+    xray_obs = fetch_xray_dependencies()
 
-    if not dns_obs:
-        logger.info("Drift detection: no DNS data, skipping")
+    if not dns_obs and not xray_obs:
+        # 两个源都没数据才跳过。原实现只看 dns_obs，
+        # 那样即使 X-Ray 有数据也会整体跳过判定。
+        logger.info("Drift detection: neither DNS nor X-Ray has data, skipping")
         return
 
     drift_summary = {'ok': 0, 'declared_not_observed': 0, 'observed_not_declared': 0}
+    source_summary = {'dns': 0, 'xray': 0, 'dns+xray': 0}
 
     for svc_name in service_names:
         observed_keywords = dns_obs.get(svc_name, set())
+        xray_types = xray_obs.get(svc_name, set())
 
         for infra_type, rule in INFRA_DRIFT_RULES.items():
             infra_label = rule['label']
             nc          = rule['nc']
             # 任一关键词匹配即为 observed（多 DNS endpoint 格式兼容）
             has_dns = any(kw in observed_keywords for kw in rule['dns_keywords'])
+            has_xray = infra_type in xray_types
+            has_runtime = has_dns or has_xray
+            if has_dns and has_xray:
+                verified_by = 'dns+xray'
+            elif has_xray:
+                verified_by = 'xray'
+            elif has_dns:
+                verified_by = 'dns'
+            else:
+                verified_by = 'none'
 
             # 查 Neptune 中是否有代码声明边
+            #
+            # 用**精确名匹配**而非 containing()（2026-08-29 修正）：
+            # 原实现 `has('name', containing('petsite'))` 会把
+            # `petsite-rca-engine` / `petsite-ops-slack-notifier` /
+            # `petsite-rca-interaction` /
+            # `ServicesEks2-petsiteapplicationresourcecontrolerDC-…`
+            # 一并匹配上 —— 一个服务名扇出到 **5 个节点**，其中 4 个是 Lambda。
+            # 后果不只是计数虚高：这些 Lambda 的依赖被按「petsite 有没有发 DNS 查询」
+            # 来判定，而两者毫无关系，等于给它们写了凭空的漂移结论。
+            #
+            # service_names 在进入本函数前已过 K8S_SERVICE_ALIAS 归一化为图谱名，
+            # 所以精确匹配是正确的。
+            #
+            # 代价要说清楚：Lambda 发起的依赖边从此不再拿到（错误的）漂移判定。
+            # 它们需要自己的运行时观测源（Lambda 不在 EKS 里，DeepFlow 的 eBPF
+            # 采集不到；X-Ray 若给 Lambda 插桩则可覆盖）——这是独立的待办，
+            # 不该用一个错误的匹配来掩盖。
             try:
                 r = neptune_query(
-                    f"g.V().hasLabel('Microservice','LambdaFunction').has('name',containing('{svc_name}'))"
+                    f"g.V().hasLabel('Microservice','LambdaFunction').has('name','{svc_name}')"
                     f".outE('AccessesData','PublishesTo','InvokesVia','ConsumesFrom')"
                     f".where(inV().hasLabel('{infra_label}').has('name',containing('{nc}')))"
                     f".id().toList()"
@@ -356,7 +499,7 @@ def run_drift_detection(service_names: list, ip_map: dict):
                 logger.warning(f"drift query {svc_name}->{infra_label}: {e}")
                 continue
 
-            if has_declared and has_dns:
+            if has_declared and has_runtime:
                 # 两者一致：标记 runtime_verified=true, drift_status=ok
                 drift_status = 'ok'
                 for eid_raw in edge_ids:
@@ -366,14 +509,17 @@ def run_drift_detection(service_names: list, ip_map: dict):
                             f"g.E('{eid}')"
                             f".property('runtime_verified',true)"
                             f".property('drift_status','ok')"
+                            f".property('verified_by','{verified_by}')"
                             f".property('last_drift_check',{ts})"
                         )
                     except Exception as e:
                         logger.warning(f"drift update edge {eid}: {e}")
                 drift_summary['ok'] += 1
+                if verified_by in source_summary:
+                    source_summary[verified_by] += 1
 
-            elif has_declared and not has_dns:
-                # 代码声明了但运行时没有 DNS → 可能死代码/环境问题
+            elif has_declared and not has_runtime:
+                # 代码声明了但两个运行时源都看不到 → 可能死代码/环境问题
                 drift_status = 'declared_not_observed'
                 for eid_raw in edge_ids:
                     eid = eid_raw.get('@value', eid_raw) if isinstance(eid_raw, dict) else eid_raw
@@ -382,36 +528,50 @@ def run_drift_detection(service_names: list, ip_map: dict):
                             f"g.E('{eid}')"
                             f".property('runtime_verified',false)"
                             f".property('drift_status','declared_not_observed')"
+                            f".property('verified_by','none')"
                             f".property('last_drift_check',{ts})"
                         )
                     except Exception as e:
                         logger.warning(f"drift mark {eid}: {e}")
                 drift_summary['declared_not_observed'] += 1
-                logger.warning(f"DRIFT: {svc_name} -declared-> {infra_label}({nc}) but no DNS observed")
+                logger.warning(
+                    f"DRIFT: {svc_name} -declared-> {infra_label}({nc}) "
+                    f"but neither DNS nor X-Ray observed it"
+                )
 
-            elif not has_declared and has_dns:
-                # 运行时有 DNS 但代码没声明 → 影子依赖，写新边
+            elif not has_declared and has_runtime:
+                # 运行时观测到但代码没声明 → 影子依赖，写新边
                 drift_status = 'observed_not_declared'
+                # source 记录是哪个源发现的，便于回溯这条影子边的来历
+                edge_source = 'deepflow-dns' if has_dns else 'xray'
                 try:
                     r2 = neptune_query(
-                        f"g.V().hasLabel('Microservice','LambdaFunction').has('name',containing('{svc_name}')).as('src')"
+                        f"g.V().hasLabel('Microservice','LambdaFunction').has('name','{svc_name}').as('src')"
                         f".V().hasLabel('{infra_label}').has('name',containing('{nc}'))"
                         f".coalesce("
-                        f"  __.inE('AccessesData').where(outV().has('name',containing('{svc_name}'))),"
+                        f"  __.inE('AccessesData').where(outV().has('name','{svc_name}')),"
                         f"  __.addE('AccessesData').from('src')"
-                        f").property('source','deepflow-dns')"
-                        # DNS 观测得来 → dynamic（与 etl_aws/etl_cfn 声明的 static 相对）
+                        f").property('source','{edge_source}')"
+                        # 运行时观测得来 → dynamic（与 etl_aws/etl_cfn 声明的 static 相对）
                         f".property('dependency_kind','dynamic')"
                         f".property('runtime_verified',true)"
                         f".property('drift_status','observed_not_declared')"
+                        f".property('verified_by','{verified_by}')"
                         f".property('last_drift_check',{ts})"
                     )
                     drift_summary['observed_not_declared'] += 1
-                    logger.warning(f"DRIFT: {svc_name} -DNS-> {infra_label}({nc}) but NOT declared in code")
+                    if verified_by in source_summary:
+                        source_summary[verified_by] += 1
+                    logger.warning(
+                        f"DRIFT: {svc_name} -{verified_by}-> {infra_label}({nc}) "
+                        f"but NOT declared in code"
+                    )
                 except Exception as e:
                     logger.warning(f"drift new edge {svc_name}->{infra_label}: {e}")
 
-    logger.info(f"Drift detection complete: {drift_summary}")
+    # 把「哪个源做出的判定」也打出来：双源验证下，X-Ray 若静默失效
+    # 判定会悄悄退回 DNS-only，只看 drift_summary 是看不出来的。
+    logger.info(f"Drift detection complete: {drift_summary}, verified_by={source_summary}")
 
 # ===== EKS Token & IP 映射 =====
 

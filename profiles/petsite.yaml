@@ -231,13 +231,29 @@ neptune:
                   声明存在不代表实际被调用过
         dynamic = 由 DeepFlow L7 / DNS「运行时观测」到（etl_deepflow 写入），
                   代表这条依赖真实发生过
-    - source: aws-etl | cfn-etl | deepflow-etl | deepflow-dns | business-layer | manual-fix
+    - source: aws-etl | cfn-etl | deepflow-etl | deepflow-dns | xray | business-layer | manual-fix
     - last_seen(int): 最近一次被观测到的 epoch 秒（dynamic 边）
     - first_seen(int): 自埋点起首次观测到的 epoch 秒（dynamic 边，非真实首现时间）
     - active(bool): dynamic 边是否仍被观测到。超过失效阈值未刷新会被置 false，
                     重新观测到会自动写回 true
     Calls 边额外带运行时度量：calls(int), avg_latency_us(int), p99_latency_ms(float),
     error_count(int), error_rate(float), protocol(str), port(int), call_type(str)
+
+    ### 漂移验证属性（AccessesData / PublishesTo / InvokesVia 上，由 etl_deepflow 的对账写入）
+    把「代码/模板声明的依赖」与「运行时实际观测」对账的结果。
+    运行时观测有**两个源，OR 关系**（盲区不重叠：DNS 漏「连接复用」，X-Ray 漏「未插桩」）：
+      · DeepFlow DNS —— 域名解析行为
+      · AWS X-Ray  —— 服务到 AWS 托管服务的实际调用
+    - drift_status: ok | declared_not_observed | observed_not_declared
+    - runtime_verified(bool): 是否被任一运行时源观测到
+    - verified_by: dns | xray | dns+xray | none
+        为什么必须有这个属性：双源验证下，X-Ray 若静默失效（权限丢失、服务未插桩、
+        窗口内无流量），判定会**悄悄退回 DNS-only** 而结果看起来完全正常。
+        读取方是 Q20 q20_dependency_verification —— 它把「单源验证」与
+        「验证已过期」查出来，这是发现该失效的唯一途径。
+    - last_drift_check(int): 最近一次对账的 epoch 秒
+    注意这些是**边属性**，在 Neptune/TinkerPop 里天生单基数，
+    不存在顶点那种 SET 累积问题（顶点必须用 property(single,...)，见 infra/fix_property_cardinality.py）。
 
     ### 拓扑/位置关系
     - (:Region)-[:Contains]->(:AvailabilityZone)

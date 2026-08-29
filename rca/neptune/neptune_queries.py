@@ -351,3 +351,98 @@ def q8_log_source(service_name: str) -> str:
     if rows:
         return rows[0].get('log_source', '')
     return ''
+
+
+def q20_dependency_verification(service_name: str = None,
+                                stale_after_seconds: int = 3600,
+                                only_problematic: bool = True,
+                                limit: int = 50) -> list:
+    """Q20: 查询依赖边的运行时验证状态 —— 找出「未被观测」「只被单源验证」「验证已过期」的边。
+
+    ## 为什么需要它
+
+    漂移判定原先**只用 DeepFlow DNS** 作运行时观测源。但 AWS SDK 通常在启动时
+    解析一次域名就复用连接，走 VPC 端点更是不产生公网 DNS 查询 —— 结果一个
+    每 24h 被调用 11,512 次的依赖，在 DNS 窗口里可以完全看不见。
+
+    实测（2026-08-29，引入 X-Ray 源之前）：26 条带 `drift_status` 的边有
+    **22 条**判为 `declared_not_observed`（85%），其中
+    `petsearch → ServicesEks2-ddbpetadoption…` 被 X-Ray 的 11,512 次调用证否
+    —— 那是**假阴性**，不是真漂移。
+
+    现在有两个观测源（DNS 与 X-Ray，OR 关系，盲区不重叠），边上记 `verified_by`。
+    本查询是 `verified_by` 的**读取方**：双源验证下，如果 X-Ray 侧静默失效
+    （权限丢失、服务未插桩、窗口内无流量），判定会悄悄退回 DNS-only 而
+    结果看起来完全正常。只有把「单源验证」和「验证过期」查出来才能发现这件事。
+
+    ## 三类要关注的边
+
+    | 症状 | 含义 |
+    |---|---|
+    | `drift_status='declared_not_observed'` | 声明了但两个源都没看到 —— 可能是死代码，也可能仍是假阴性 |
+    | `verified_by` 只有 `dns` 或只有 `xray` | 单源验证，另一个源的盲区未被覆盖 |
+    | `last_drift_check` 超过 stale_after_seconds | 验证已过期，判定不再代表当前状态 |
+
+    Args:
+        service_name: 只看该服务出发的依赖边。None 表示全图。
+        stale_after_seconds: 超过这么久未验证即算过期，默认 1h
+                             （对账每 5 分钟一轮，1h = 12 轮未更新才算异常）
+        only_problematic: True 只返回上表三类之一；False 返回全部带验证状态的边
+        limit: 返回条数上限
+
+    Returns:
+        [{'src':..., 'dst':..., 'dst_type':..., 'edge_type':...,
+          'dependency_kind':..., 'source':..., 'drift_status':...,
+          'runtime_verified':..., 'verified_by':..., 'last_drift_check':...,
+          'stale_seconds':..., 'symptom':...}]
+    """
+    import time as _t
+    now = int(_t.time())
+    cutoff = now - int(stale_after_seconds)
+
+    where = ["r.drift_status IS NOT NULL"]
+    params = {"now": now, "cutoff": cutoff, "limit": limit}
+    if service_name:
+        where.append("a.name = $svc")
+        params["svc"] = service_name
+    if only_problematic:
+        # 三类症状之一：未观测 / 单源验证 / 验证过期
+        where.append(
+            "(r.drift_status = 'declared_not_observed'"
+            " OR r.verified_by IS NULL"
+            " OR r.verified_by IN ['dns', 'xray', 'none']"
+            " OR r.last_drift_check IS NULL"
+            " OR r.last_drift_check < $cutoff)"
+        )
+
+    cypher = f"""
+    MATCH (a)-[r]->(b)
+    WHERE {' AND '.join(where)}
+    RETURN a.name AS src, b.name AS dst, labels(b)[0] AS dst_type,
+           type(r) AS edge_type, r.dependency_kind AS dependency_kind,
+           r.source AS source, r.drift_status AS drift_status,
+           r.runtime_verified AS runtime_verified, r.verified_by AS verified_by,
+           r.last_drift_check AS last_drift_check,
+           $now - coalesce(r.last_drift_check, 0) AS stale_seconds
+    ORDER BY r.last_drift_check ASC
+    LIMIT $limit
+    """
+    rows = nc.results(cypher, params)
+
+    # 把症状归类挑明，调用方（含 agent）不必自己重推判定逻辑
+    for row in rows:
+        symptoms = []
+        if row.get('drift_status') == 'declared_not_observed':
+            symptoms.append('not_observed')
+        vb = row.get('verified_by')
+        if vb in (None, 'none'):
+            symptoms.append('no_verification_source')
+        elif vb in ('dns', 'xray'):
+            symptoms.append(f'single_source:{vb}')
+        ldc = row.get('last_drift_check')
+        if ldc is None:
+            symptoms.append('never_checked')
+        elif int(ldc) < cutoff:
+            symptoms.append('stale_verification')
+        row['symptom'] = ','.join(symptoms) if symptoms else 'ok'
+    return rows
