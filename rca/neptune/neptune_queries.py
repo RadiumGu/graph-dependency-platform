@@ -446,3 +446,116 @@ def q20_dependency_verification(service_name: str = None,
             symptoms.append('stale_verification')
         row['symptom'] = ','.join(symptoms) if symptoms else 'ok'
     return rows
+
+
+def q21_observation_source_coverage(service_name: str = None,
+                                    coverage: str = None,
+                                    limit: int = 50) -> list:
+    """Q21: 按**观测源**对账依赖边 —— 谁看到了这条依赖，谁没看到，各自的粒度如何。
+
+    ## 为什么需要它
+
+    图谱里同一条依赖可能被多个来源写入，但它们**不是主备关系，而是盲区不重叠的
+    平行观测源**：
+
+    | 源 | 前提 | 覆盖面 | 对 AWS 托管服务的粒度 |
+    |---|---|---|---|
+    | X-Ray (`xray_*` 属性) | 应用必须埋点 | 只有已插桩的服务 | **精确到资源名** |
+    | DeepFlow (`deepflow-etl`/`deepflow-dns`) | eBPF，零埋点 | **所有 Pod** | 只到域名 |
+    | AWS/CFN 声明 (`aws-etl`/`cfn-etl`) | 读资源配置 | 全部已声明资源 | 精确，但**不代表被调用过** |
+
+    实测差异（2026-08-29，ap-northeast-1）：
+      · X-Ray 只看到 4 个服务；DeepFlow 看到全部 Pod
+      · X-Ray 给出那张 DynamoDB 表的**完整名字**；DeepFlow 只能从
+        DNS 域名反推，而走 VPC 端点时连域名都没有
+      · X-Ray 的 `petsearch → s3` 累计响应 **1,340 秒**，占 petsearch 总响应的 82%
+        —— 「服务慢在哪个下游」只有它能直接回答
+
+    所以正确的用法不是「相信其中一个」，而是把图谱当**对账中心**：
+    一条边被几个源看到，本身就是这条依赖可信度的度量。
+
+    ## coverage 分类
+
+    | 值 | 含义 | 运维解读 |
+    |---|---|---|
+    | `both` | X-Ray 与 DeepFlow 都观测到 | 最可信 —— 两种完全不同的观测机制互相印证 |
+    | `xray_only` | 只有 X-Ray 看到 | 通常是**到 AWS 托管服务**的调用：连接复用或 VPC 端点让 DNS 侧看不见 |
+    | `deepflow_only` | 只有 DeepFlow 看到 | 通常是**未插桩服务**发起的调用，X-Ray 里根本不存在 |
+    | `declared_only` | 只有声明，无任何运行时观测 | 可能是死代码，也可能两个源同时有盲区 —— 要看 Q20 的症状 |
+
+    ## 粒度诚实性
+
+    `dst_granularity='service'` 表示这条边的目标是 **AWSServiceEndpoint** ——
+    X-Ray 只给了粗粒度服务名（字面的 `S3`），拿不到具体是哪个 bucket。
+    图谱里有 30+ 个 S3Bucket，猜其中一个是**推断而非观测**，所以刻意不猜。
+    demo 时这正好是个好对照：同一依赖 aws-etl 给资源级、X-Ray 给服务级。
+
+    Args:
+        service_name: 只看该服务出发的边。None 表示全图。
+        coverage: 只返回某一类，取值 both|xray_only|deepflow_only|declared_only。
+                  None 表示全部。
+        limit: 返回条数上限
+
+    Returns:
+        [{'src':..., 'edge_type':..., 'dst':..., 'dst_type':...,
+          'dst_granularity':..., 'discovered_by':..., 'dependency_kind':...,
+          'coverage':..., 'seen_by':[...],
+          'xray_calls':..., 'xray_rt_seconds':..., 'xray_errors':...,
+          'deepflow_calls':..., 'verified_by':...}]
+    """
+    where = ["r.dependency_kind IS NOT NULL"]
+    params = {"limit": limit}
+    if service_name:
+        where.append("a.name = $svc")
+        params["svc"] = service_name
+
+    cypher = f"""
+    MATCH (a)-[r]->(b)
+    WHERE {' AND '.join(where)}
+    RETURN a.name AS src, type(r) AS edge_type, b.name AS dst,
+           labels(b)[0] AS dst_type, b.granularity AS dst_granularity,
+           r.source AS discovered_by, r.dependency_kind AS dependency_kind,
+           r.xray_call_count AS xray_calls,
+           r.xray_total_response_time_s AS xray_rt_seconds,
+           r.xray_error_count AS xray_errors,
+           r.calls AS deepflow_calls,
+           r.verified_by AS verified_by,
+           r.active AS active
+    ORDER BY coalesce(r.xray_call_count, r.calls, 0) DESC
+    LIMIT $limit
+    """
+    rows = nc.results(cypher, params)
+
+    out = []
+    for row in rows:
+        # X-Ray 观测的判据是 xray_call_count 存在，而**不是**某个布尔标记。
+        # 刻意不引入 observed_by_xray 布尔属性：它可由本字段推导，
+        # 而能被推导出来的布尔量迟早与来源不一致。
+        seen_xray = row.get('xray_calls') is not None
+        src_name = row.get('discovered_by') or ''
+        # DeepFlow 的判据有两条，缺一不可：
+        #   · 由 deepflow-* 发现（source）
+        #   · 或带 DeepFlow 独有的 L7 度量 calls（对账时补写在别人发现的边上）
+        seen_deepflow = src_name.startswith('deepflow') or row.get('deepflow_calls') is not None
+
+        seen = []
+        if seen_xray:
+            seen.append('xray')
+        if seen_deepflow:
+            seen.append('deepflow')
+
+        if seen_xray and seen_deepflow:
+            cov = 'both'
+        elif seen_xray:
+            cov = 'xray_only'
+        elif seen_deepflow:
+            cov = 'deepflow_only'
+        else:
+            cov = 'declared_only'
+
+        row['seen_by'] = seen
+        row['coverage'] = cov
+        if coverage and cov != coverage:
+            continue
+        out.append(row)
+    return out

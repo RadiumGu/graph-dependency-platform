@@ -1,0 +1,61 @@
+# aws-otel-collector sidecar 配置 —— 用于**只有 X-Ray SDK、不发 OTLP** 的服务
+#
+# 适用对象：petsite（.NET，用 AWS X-Ray SDK 走 UDP 发 segment，
+# 环境变量里没有任何 OTEL_*，所以给它加一个只有 otlp receiver 的 sidecar
+# 是空操作 —— sidecar 会正常启动、监听 4317/4318、然后收到零数据）。
+#
+# 解法：用 `awsxray` **receiver** 收 X-Ray SDK 的 UDP segment，
+# 让这个 sidecar 成为 xray-daemon 的原地替代，再扇出到两个目的地。
+# 应用侧只需把 AWS_XRAY_DAEMON_ADDRESS 指向 localhost:2000，**零代码改动**。
+#
+# 已实测（2026-08-29，在低风险的 list-adoptions 上先验证，不在入口服务上做实验）：
+#   awsxrayreceiver@v0.143.0  listening udp 0.0.0.0:2000
+#   X-Ray TCP proxy server started        ← 采样规则 API 的代理
+#   Everything is ready. Begin running and processing data.
+#
+# 前提：Pod 的 ServiceAccount 需要 xray:PutTraceSegments / PutTelemetryRecords。
+# 实测 petsite-sa 的 IRSA 角色
+# （Applications-PetSiteServiceAccount6A1851C9-y5J6EGm1X5bM）两项均为 allowed。
+receivers:
+  awsxray:
+    endpoint: 0.0.0.0:2000
+    transport: udp
+processors:
+  batch/traces:
+    timeout: 1s
+    send_batch_size: 50
+  # 为什么需要这个 processor（2026-08-29 实测得出）：
+  # awsxray receiver 把 X-Ray segment 转成 OTLP 后，span 上**没有 service.name**
+  # —— X-Ray 的服务名在 segment 的 `name` 字段里，不是 OTel 的 resource 属性。
+  # 实测现象：sidecar 无任何导出错误、DeepFlow 返回 HTTP 200，
+  # 但 petsite 的 Pod IP 始终不出现在 l7_flow_log 里 —— 接收了但无法归属，被丢弃。
+  # 对照：另外三个能落库的服务，应用侧都显式设了
+  #   OTEL_RESOURCE_ATTRIBUTES=service.namespace=AWSObservability,service.name=...
+  # 所以这里补齐同形的 resource 属性。
+  resource/petsite:
+    attributes:
+      - key: service.name
+        value: petsite
+        action: upsert
+      - key: service.namespace
+        value: AWSObservability
+        action: upsert
+exporters:
+  awsxray:
+    region: ap-northeast-1
+  otlphttp/deepflow:
+    traces_endpoint: "http://deepflow-agent.deepflow:80/api/v1/otel/trace"
+    tls:
+      insecure: true
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 30s
+    sending_queue:
+      enabled: true
+      queue_size: 500
+service:
+  pipelines:
+    traces:
+      receivers: [awsxray]
+      processors: [resource/petsite, batch/traces]
+      exporters: [awsxray, otlphttp/deepflow]

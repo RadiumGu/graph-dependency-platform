@@ -1,0 +1,76 @@
+# AWS Resilience Hub EKS RBAC — 官方模板(全命名空间只读)
+# 来源: https://docs.aws.amazon.com/resilience-hub/latest/userguide/grant-permissions-to-eks-in-arh.html
+# 名称与 ARH v2 评估失败信息中要求的完全一致:
+#   resilience-hub-eks-access-cluster-role / -binding / group resilience-hub-eks-access-group
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: resilience-hub-eks-access-cluster-role
+rules:
+- apiGroups:
+    - ""
+  resources:
+    - pods
+    - replicationcontrollers
+    - nodes
+  verbs:
+    - get
+    - list
+- apiGroups:
+    - apps
+  resources:
+    - deployments
+    - replicasets
+  verbs:
+    - get
+    - list
+- apiGroups:
+    - policy
+  resources:
+    - poddisruptionbudgets
+  verbs:
+    - get
+    - list
+- apiGroups:
+    - autoscaling.k8s.io
+  resources:
+    - verticalpodautoscalers
+  verbs:
+    - get
+    - list
+- apiGroups:
+    - autoscaling
+  resources:
+    - horizontalpodautoscalers
+  verbs:
+    - get
+    - list
+- apiGroups:
+    - karpenter.sh
+  resources:
+    - provisioners
+    - nodepools
+  verbs:
+    - get
+    - list
+- apiGroups:
+    - karpenter.k8s.aws
+  resources:
+    - awsnodetemplates
+    - ec2nodeclasses
+  verbs:
+    - get
+    - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: resilience-hub-eks-access-cluster-role-binding
+subjects:
+  - kind: Group
+    name: resilience-hub-eks-access-group
+    apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: ClusterRole
+  name: resilience-hub-eks-access-cluster-role
+  apiGroup: rbac.authorization.k8s.io

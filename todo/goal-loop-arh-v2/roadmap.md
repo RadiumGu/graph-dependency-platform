@@ -16,7 +16,7 @@ source 一次性覆盖,拆成 3 个 service 只换来更细的 policy 粒度、�
 |---|---|---|---|---|---|
 | **S1** | `petsite-core` | EKS `petadoptions` ns 全部 Deployment、PetSite ALB + TG、petadoption DDB、2 SQS、StepFn、**tier0 Aurora PG** | `cfnStackArn`(ServicesEks2)**+** `eks{PetSite,[petadoptions]}` 两条 | tier0 | **ENABLED** |
 | **S2** | `awesomeshop-legacy` | EKS `awesomeshop` ns(6 Deployment 全 0 副本)、mysql 单实例、ElastiCache | `cfnStackArn`(AwesomeShopInfra)+ `eks{PetSite,[awesomeshop]}` | tier2 | DISABLED |
-| **S3** | `graph-observability` | deepflow-server / grafana-x86 / nfm-test 三台 EC2、grafana-aurora-mysql、**petsite-neptune** 集群+实例、4 个 neptune-etl Lambda、EKS `deepflow` ns | `resourceTags{System=deepflow}` **+** `eks{PetSite,[deepflow]}` | tier1 | **ENABLED** |
+| **S3** | `graph-observability` | deepflow-server / grafana-x86 / nfm-test 三台 EC2、grafana-aurora-mysql、**petsite-neptune** 集群+实例、4 个 neptune-etl Lambda + trigger + 2 SQS + 9 EventRule、EKS `deepflow` ns | `resourceTags{System=deepflow}` **+** `cfnStackArn`(NeptuneEtlStack) **+** `eks{PetSite,[deepflow]}` 三条 | tier1 | **ENABLED** |
 | **S4** | `ops-rca-plane` | gp-alert-buffer DDB、gp-window-flush、petsite-rca-engine、petsite-rca-interaction、petsite-ops-slack-notifier | `cfnStackArn`(AlertBufferStack)+ `resourceTags{System=petsite-ops}` | tier2 | DISABLED |
 
 **明确不建模为 service**(在 `coverage-ledger.md` 里记不纳管理由):

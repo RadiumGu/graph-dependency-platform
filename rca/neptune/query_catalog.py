@@ -212,6 +212,18 @@ QUERY_CATALOG = {
                    "limit": "int，默认 50"},
         "required": [],
     },
+    "q21_observation_source_coverage": {
+        "mod": "queries", "fn": "q21_observation_source_coverage",
+        "desc": ("按观测源对账依赖边：X-Ray 与 DeepFlow 是盲区不重叠的**平行源**，"
+                 "不是主备。本查询给出每条边被哪些源看到（both / xray_only / "
+                 "deepflow_only / declared_only）以及目标节点的粒度 —— "
+                 "X-Ray 能精确到 AWS 资源名，DeepFlow 只到域名，"
+                 "而走 VPC 端点时 DNS 侧连域名都没有"),
+        "params": {"service_name": "str，可选（省略=全图）",
+                   "coverage": "str，可选：both|xray_only|deepflow_only|declared_only",
+                   "limit": "int，默认 50"},
+        "required": [],
+    },
     # ── 以下来自 dr-plan-generator ──
     "q12_az_dependency_tree": {
         "mod": "dr", "fn": "q12_az_dependency_tree",

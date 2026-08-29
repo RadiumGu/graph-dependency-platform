@@ -1,0 +1,257 @@
+{
+    "findingsSummary": [
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "0487a136-9247-4b0d-9b3c-6b89030e0bb9",
+            "name": "No preStop hooks cause dropped requests during pod termination",
+            "description": "None of the 10 containers across the five production deployments have preStop lifecycle hooks configured. All pods are behind load balancers (ALB for petsite-deployment and pethistory-deployment) or Kubernetes ClusterIP services. The terminationGracePeriodSeconds is the default 30s. Without a preStop sleep, the container may shut down before kube-proxy updates iptables, causing requests to route to dying pods.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "AVAILABILITY_SLO",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "05700b63-8b9b-4fd4-9915-767efd81010b",
+            "name": "EKS workloads in only 2 AZs with insufficient capacity to absorb AZ loss",
+            "description": "EKS worker nodes are distributed across only 2 AZs (ap-northeast-1a and ap-northeast-1c) with one node group per AZ (2 nodes each, max 3). Losing one AZ removes 50% of compute capacity. The remaining AZ has only 2 nodes (max 3), which may not absorb the full workload for six microservices. This is a prerequisite for ARC zonal shift and autoshift to work safely.",
+            "failureCategory": "SHARED_FATE",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "0aadeb90-1b94-4987-b985-2449ad9a284e",
+            "name": "EKS cluster lacks ability to manually shift in-cluster traffic from impaired AZ",
+            "description": "ARC zonal shift is not enabled on EKS cluster PetSite. During an AZ impairment, in-cluster Pod-to-Pod traffic (e.g., petsite-deployment calling search-service, list-adoptions, pay-for-adoption via ClusterIP services) will continue routing to Pods in the impaired AZ, causing elevated latency or errors even if external ALB traffic is shifted away.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "2d02305d-7ee3-4dbc-8b59-9e1335122994",
+            "name": "Single zonal NAT Gateway creates cross-AZ shared fate for outbound traffic",
+            "description": "Only one NAT Gateway (nat-05584e6b365c2defb) exists in the VPC, located in ap-northeast-1a with AvailabilityMode: zonal. EKS worker nodes in both AZs depend on this NAT Gateway for outbound internet access, including ECR image pulls, AWS API calls, and Secrets Manager access. If ap-northeast-1a is impaired, outbound connectivity for workloads in ap-northeast-1c is also disrupted.",
+            "failureCategory": "SINGLE_POINT_OF_FAILURE",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "34fb42fc-e0aa-4772-a62e-3e0dd97cecd4",
+            "name": "No centralized backup plan protecting stateful resources against coordinated data loss",
+            "description": "No AWS Backup plan exists to provide coordinated, centralized backup protection across the service's stateful resources. The Aurora cluster, DynamoDB table, and S3 bucket each lack unified backup governance. Individual resource-level backups alone do not protect against scenarios like ransomware, accidental bulk deletion, or cross-resource data corruption requiring coordinated point-in-time recovery.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "DATA_RECOVERY",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "3bd8654b-bcd9-4c12-99ec-d29c2a68419b",
+            "name": "ALB default keep-alive delays client recovery from impaired load balancer node",
+            "description": "The ALB Servic-PetSi-by0kpyBtxswj has client_keep_alive.seconds set to the default 3600 (1 hour). If the ALB node in one AZ becomes impaired, clients will hold connections to the impaired node for up to an hour before reconnecting to a healthy node, prolonging the impact of partial failures.",
+            "failureCategory": "EXCESSIVE_LATENCY",
+            "severity": "LOW",
+            "status": "OPEN",
+            "policyComponent": "AVAILABILITY_SLO",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "3d523689-b34d-46ae-bd15-9e89bf7bd6b6",
+            "name": "ALB target groups lack fail-open configuration for unhealthy state routing",
+            "description": "Both target groups (Servic-PetSi-7JEWC19HNKSR for petsite and Servic-PetAd-RPOCBTKKJYGI for pethistory) have minimum_healthy_targets.count set to 1 and percentage set to 'off'. With only 2 targets per group, a transient health check failure on both targets simultaneously would cause the ALB to route to zero healthy targets, resulting in 503 errors rather than failing open.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "AVAILABILITY_SLO",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "4e769768-f919-4979-8c4f-a42eb9a64f3b",
+            "name": "DynamoDB table lacks point-in-time recovery for pet adoption data",
+            "description": "The DynamoDB table ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM has PointInTimeRecoveryEnabled set to false. This table stores pet adoption records used by the status updater Lambda, Step Functions orchestration, and EKS workloads. Without PITR, there is no mechanism to recover from accidental writes, deletions, or application-level data corruption.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "DATA_RECOVERY",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "501f8f78-793c-468e-994e-16803eb3121a",
+            "name": "Multiple target groups with different fleet sizes share ALB creating DNS shared fate",
+            "description": "The ALB Servic-PetSi-by0kpyBtxswj hosts target groups with markedly different fleet sizes: petsite TG (2 targets), pethistory TG (2 targets), neptune-ui-tg (1 target), and streamlit-demo-tg (1 target). The single-target groups are much more likely to breach DNS failover thresholds, which would remove the ALB's IP from DNS for that AZ, affecting all target groups including the primary services.",
+            "failureCategory": "SHARED_FATE",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "AVAILABILITY_SLO",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "58c9a955-7fd3-4c24-bc24-265291e61e61",
+            "name": "Frontend petsite-deployment missing all health probes and resource requests",
+            "description": "The petsite container in petsite-deployment has no livenessProbe, no readinessProbe, no startupProbe, and no resource requests or limits (resources: {}). Pod status shows QoS class BestEffort. This is the internet-facing frontend that orchestrates all backend microservice calls and is directly behind the ALB target group on port 8080.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "AVAILABILITY_SLO",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "7002b671-141a-497b-ba3b-2dc64c2a8a0d",
+            "name": "Pethistory-deployment missing readiness probe allows traffic to unready pods",
+            "description": "The pethistory container has a livenessProbe configured (HTTP GET /health/status on port 8080) but no readinessProbe. This deployment serves the Pet Adoption History API through the ALB target group Servic-PetAd-RPOCBTKKJYGI. Without a readiness probe, Kubernetes marks the pod as Ready immediately after container start, and the ALB begins routing traffic before the application is fully initialized.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "AVAILABILITY_SLO",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "83583c66-d9fd-4e97-8c47-ed9312a8a049",
+            "name": "Aurora PostgreSQL cluster has no failover replica creating database SPOF",
+            "description": "Aurora PostgreSQL cluster serviceseks2-databaseb269d8bb-efjeyzicx2ak has only one writer instance (DBClusterMemberCount=1, MultiAZ=false) in ap-northeast-1a with no read replica. If that AZ is impaired, the database becomes completely unavailable with no automatic failover target. All database-dependent microservices (list-adoptions, pay-for-adoption, pethistory-deployment, search-service) fail simultaneously.",
+            "failureCategory": "SINGLE_POINT_OF_FAILURE",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "8c130e5c-fab3-41f0-94a8-a3ca9a452bf7",
+            "name": "No Horizontal Pod Autoscaler on any production deployment",
+            "description": "Zero HorizontalPodAutoscalers exist in the petadoptions namespace. All five production deployments run with a fixed replica count of 2. If one pod fails or is evicted, the remaining single pod must handle 100% of traffic with no ability to scale out. During an AZ failure, surviving pods in the remaining AZ cannot scale to compensate for lost capacity.",
+            "failureCategory": "EXCESSIVE_LOAD",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "AVAILABILITY_SLO",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "9048c8a6-faf6-4872-86ca-e8f5fa7b7823",
+            "name": "No automatic AZ recovery mechanism for ALB-fronted traffic",
+            "description": "Neither ARC zonal autoshift nor ALB Automatic Target Weights (ATW) is enabled on ALB Servic-PetSi-by0kpyBtxswj. The load balancing algorithm is round_robin and anomaly_mitigation is off. During an AZ impairment, there is no automatic mechanism to shift traffic away from the degraded AZ without manual intervention.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "99e4828b-9c9d-4d97-995e-e66bd7d0ce6d",
+            "name": "No pod anti-affinity allows all replicas to land on same node",
+            "description": "All five multi-replica deployments (petsite-deployment, search-service, list-adoptions, pay-for-adoption, pethistory-deployment) lack podAntiAffinity rules. While they have hostname-based topology spread constraints with ScheduleAnyway, this is a soft preference — not a scheduling guarantee. Both replicas of any deployment can be scheduled on the same node.",
+            "failureCategory": "SINGLE_POINT_OF_FAILURE",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "AVAILABILITY_SLO",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "af645284-cb2a-43c4-8b78-5707e603351d",
+            "name": "S3 bucket lacks versioning for pet adoption data protection",
+            "description": "The S3 bucket serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb does not have versioning enabled. Without versioning, accidental overwrites or deletions of pet adoption assets are unrecoverable. Versioning is also a prerequisite for S3 backup and replication features.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "DATA_RECOVERY",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "c5488b1c-d2d1-4527-940f-c48e896fc263",
+            "name": "ALB lacks ability to manually shift traffic away from impaired AZ",
+            "description": "ARC zonal shift is disabled on ALB Servic-PetSi-by0kpyBtxswj (zonal_shift.config.enabled is false). During a gray AZ impairment — elevated latency or intermittent errors in ap-northeast-1a or ap-northeast-1c — there is no pre-enabled mechanism to reliably shift external traffic away from the impaired AZ. Health checks alone may not detect gray failures.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "d57b06f6-8941-4d20-a869-23ae2580d9dc",
+            "name": "EKS node groups have minimal scaling headroom above desired capacity",
+            "description": "Both EKS node groups have MinSize=2, DesiredCapacity=2, and MaxSize=3. This allows only 1 additional node per AZ for scaling. With 6 Kubernetes deployments sharing 4 nodes total, losing even one node during a scaling event or instance failure leaves very little capacity to absorb the workload while a replacement launches.",
+            "failureCategory": "EXCESSIVE_LOAD",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "AVAILABILITY_SLO",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "dc45c043-18ff-46dd-8a3f-2357eb63db38",
+            "name": "No automatic AZ recovery for EKS in-cluster traffic",
+            "description": "ARC zonal autoshift is not enabled on EKS cluster PetSite. Without it, automatic recovery of in-cluster Pod-to-Pod traffic during an AZ impairment requires manual operator intervention to initiate a zonal shift, which may exceed the 15-minute RTO especially during off-hours.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "e0f5e072-9ab0-48b5-b833-a47d32b4bd64",
+            "name": "Status updater Lambda timeout too short for downstream latency variability",
+            "description": "The status updater Lambda function ServicesEks2-statusupdaterservicelambdafn37242E00-0SHsIkrhwJ32 has a 3-second timeout. With a 3-second timeout, any DynamoDB latency spike (throttling, transient errors) will cause the Lambda to time out and return an error. The pay-for-adoption service calling this API will receive failures, potentially leaving pet adoption status in an inconsistent state.",
+            "failureCategory": "EXCESSIVE_LATENCY",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "AVAILABILITY_SLO",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "f21d1f96-9339-441f-86f1-6ee9081bc550",
+            "name": "No PodDisruptionBudgets protect deployments from voluntary disruptions",
+            "description": "Zero PodDisruptionBudgets exist across all deployments in the petadoptions namespace. The five production deployments (petsite-deployment, search-service, list-adoptions, pay-for-adoption, pethistory-deployment) each run only 2 replicas with no PDB protection. Node drains, cluster upgrades, and node group rolling updates can evict all pods of a deployment simultaneously.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "AVAILABILITY_SLO",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "f6b8b2aa-7148-4e89-aabf-c9ea4dd03b13",
+            "name": "Aurora PostgreSQL cluster has minimal 1-day backup retention period",
+            "description": "The Aurora PostgreSQL cluster serviceseks2-databaseb269d8bb-efjeyzicx2ak has BackupRetentionPeriod set to 1 day. This is the minimum allowed value and provides only 24 hours of automated backup history. If data corruption or accidental deletion is not detected within 24 hours, all backup points are lost.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "DATA_RECOVERY",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/petsite-core:sq7g31",
+            "findingId": "fe783b60-bc86-447f-900f-d79cd3ab6e9a",
+            "name": "Critical data stores and infrastructure lack deletion protection",
+            "description": "The Aurora PostgreSQL cluster serviceseks2-databaseb269d8bb-efjeyzicx2ak, DynamoDB table ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM, EKS cluster PetSite, and ALB Servic-PetSi-by0kpyBtxswj all have deletion protection disabled. Accidental deletion of any of these resources would cause severe service disruption or permanent data loss, far exceeding the 15-minute RTO and 22 minutes/month downtime budget.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "AVAILABILITY_SLO",
+            "updatedAt": "2026-08-29T07:04:32.638000+00:00"
+        }
+    ]
+}

@@ -159,7 +159,11 @@ neptune:
   # 从 rca/neptune/schema_prompt.py 的 GRAPH_SCHEMA 迁出（Wave 1, 2026-04-18）
   graph_schema_text: |
 
-    ## 节点类型（31 种）
+    ## 节点类型（33 种，schema 声明数）
+    注意这是**schema 声明**的类型数，与活图谱里实际存在实例的类型数可能不同。
+    TopologyChange 是追加式事件日志，稳态下可以 0 实例 —— 所以活图谱通常少 1 种。
+    test_11 的 PENDING_FIRST_INSTANCE 就是为消解这个差异而存在；
+    新增一个 0 实例的类型时必须同步加进那个集合，否则 schema⊆live 与 live⊆schema 两个断言会互锁。
 
     ### 基础设施层
     - Region: name(str), region_name(str)
@@ -208,6 +212,22 @@ neptune:
     ### 业务层
     - BusinessCapability: name(str), recovery_priority(str), layer(str)
 
+    ### 外部服务（观测源粒度）
+    - AWSServiceEndpoint: name(str), granularity(str), xray_type(str), xray_aliases(str), last_seen(int)
+      - X-Ray 服务图里**只有粗粒度服务名、拿不到具体资源名**的 AWS 托管服务身份。
+        实测 X-Ray 把 S3 报成一个字面叫 `S3` 的节点，没有 bucket 名；STS / SSM /
+        Secrets Manager 同理。图谱里有 30+ 个 S3Bucket，把 `S3` 猜成其中某一个
+        是**推断而非观测** —— 用观测源的名义写推断结果就是编造，所以另立此类型。
+      - granularity 恒为 'service'，与资源级节点（S3Bucket / DynamoDBTable 等）区分。
+        查询时据此判断依赖精度：服务级只能回答「调了 S3」，资源级才能回答「调了哪个 bucket」。
+      - xray_aliases: X-Ray 报过的原始名，'; ' 连接。SSM 与 SimpleSystemsManagement
+        是同一服务的两种 SDK 命名，已归一到 ssm。
+      - xray_type: 观测到的 AWS:: 类型集合，'; ' 连接。**刻意存集合而非取一个** ——
+        ssm 同时以 AWS::SSM 与 AWS::SimpleSystemsManagement 出现，
+        取一个等于记录「碰巧最后写入的那个」。
+      - 由 etl_xray 写入。DeepFlow 侧看不到这一层：它只能从 DNS 域名
+        （ssm.ap-northeast-1.amazonaws.com）反推，而 VPC 端点场景连域名都没有。
+
     ### 运维层
     - Incident: id(str), severity(P0|P1|P2), root_cause(str), resolution(str), start_time(str), status(str), affected_service(str)
     - ChaosExperiment: experiment_id(str), fault_type(str), result(passed|failed), recovery_time_sec(int), degradation_rate(float), timestamp(str)
@@ -255,6 +275,25 @@ neptune:
     注意这些是**边属性**，在 Neptune/TinkerPop 里天生单基数，
     不存在顶点那种 SET 累积问题（顶点必须用 property(single,...)，见 infra/fix_property_cardinality.py）。
 
+    ### X-Ray 观测证据属性（由 etl_xray 写入，与 DeepFlow 平行的第二拓扑源）
+    X-Ray 与 DeepFlow 是**两个独立的拓扑观测源**，不是主备关系：
+      · X-Ray  —— 需应用埋点；只看得到已插桩的服务，但**能精确到 AWS 资源名**
+                  （那张 DynamoDB 表的完整名字），并按下游逐个归因延迟
+      · DeepFlow —— eBPF 零埋点；覆盖所有 Pod，但对 AWS 托管服务**只能到域名粒度**
+    盲区不重叠，所以两者都写、都保留，让图谱成为对账中心。
+    - xray_call_count(int) / xray_error_count(int) / xray_fault_count(int)
+    - xray_total_response_time_s(float): 窗口内该依赖的累计响应时间。
+        这是**只有 X-Ray 能给**的量：petsearch 总响应 1625s，其中 S3 占 1339s（82%），
+        直接回答「服务慢在哪个下游」。DeepFlow 能给单流延迟，但归不到逻辑资源。
+    - xray_window_hours(int): 观测窗口长度。X-Ray GetServiceGraph 单次上限 6 小时
+        （超过报 Time range cannot be longer than 6 hours），24h 视图是分 4 段合并的。
+    - xray_last_seen(int): X-Ray 最近一次观测到这条依赖的 epoch 秒。
+        **刻意不设 observed_by_xray 布尔属性** —— 它完全可由本字段是否为 null 推导，
+        而能被推导出来的布尔量迟早与来源不一致。
+    写入纪律：边**已存在**（无论谁发现）时只补上述度量，
+    **绝不覆盖 source / dependency_kind** —— 原 source 记录的是谁首先发现了这条依赖。
+    只有 X-Ray 独自发现的新边才写 source='xray'。
+
     ### 拓扑/位置关系
     - (:Region)-[:Contains]->(:AvailabilityZone)
     - (:VPC)-[:LocatedIn]->(:Region)
@@ -267,6 +306,7 @@ neptune:
     - (:NeptuneCluster)-[:LocatedIn]->(:Region)
     - (:NeptuneInstance)-[:LocatedIn]->(:AvailabilityZone)
     - (:S3Bucket|:SNSTopic|:SQSQueue|:ECRRepository|:EKSCluster)-[:LocatedIn]->(:Region)
+    - (:AWSServiceEndpoint)-[:LocatedIn]->(:Region)
     - (:LoadBalancer)-[:LocatedIn]->(:AvailabilityZone)
     - (:Microservice)-[:LocatedIn]->(:EKSCluster)
 
@@ -303,6 +343,7 @@ neptune:
     - (:Microservice)-[:AccessesData]->(:RDSCluster|:DynamoDBTable|:S3Bucket|:StepFunction)
     - (:LambdaFunction)-[:AccessesData]->(:DynamoDBTable|:RDSCluster|:LambdaFunction)
     - (:Microservice)-[:ConnectsTo]->(:Database)
+    - (:Microservice|:LambdaFunction)-[:AccessesData]->(:AWSServiceEndpoint)  // X-Ray 观测的服务级依赖
 
     ### 依赖关系（DependsOn 用于镜像依赖和队列依赖，不用于数据库）
     - (:Microservice)-[:DependsOn]->(:ECRRepository|:SQSQueue)

@@ -1,19 +1,29 @@
 # aws-otel-collector sidecar 配置 —— 增加 DeepFlow OTLP exporter
 #
-# 为什么：DeepFlow 的分布式追踪只支持「eBPF 采集」或「经 OpenTelemetry 协议
-# 传入」两种来源。给 http_log_trace_id 加 X-Amzn-Trace-Id 是**行不通**的 ——
-# DeepFlow 只对 traceparent / sw8 / uber-trace-id 三个头做格式感知解析，
-# 其它自定义头整串读取，而 X-Amzn-Trace-Id 的 Parent 字段每跳都不同，
-# 整串因此每跳不同，trace_id 会非 0 但无法把同一条链的各跳归到一起。
+# 为什么不是「给 DeepFlow 加 X-Amzn-Trace-Id 提取头」：
+# DeepFlow 只对 traceparent / sw8·sw6 / uber-trace-id 三个头做格式感知解析，
+# 其它自定义头整串读取。而 X-Amzn-Trace-Id 的值是
+#   Root=1-xxx;Parent=yyy;Sampled=1
+# Parent 每跳都不同 → 整串每跳不同 → trace_id 非 0 但无法把同一条链归到一起。
+# DeepFlow 文档也明确：分布式追踪只支持 eBPF 采集或经 OpenTelemetry 协议传入。
 #
-# 安全性质：两个 exporter 相互独立。即使 DeepFlow 的 38086 完全不可达，
-# awsxray 仍照常导出 —— 现有 X-Ray 链路不承担风险。
+# ── 端点：用 Service，不用 hostIP ────────────────────────────────────────
+# 飞行前实测（2026-08-29）：deepflow-agent DaemonSet 的 hostNetwork=false，
+# 且 38086 **没有 hostPort** —— 所以 `${env:K8S_NODE_IP}:38086` 到不了 agent，
+# 它只监听 Pod IP。正确端点是 Service：
+#   kubectl -n deepflow get svc deepflow-agent
+#     port=80  targetPort=receive(=38086)
+# 实测 POST http://deepflow-agent.deepflow:80/api/v1/otel/trace → HTTP 200
+# 用 Service DNS 的额外好处：不需要注入 K8S_NODE_IP 环境变量，
+# 改动面只剩 AOT_CONFIG_CONTENT 一个字段。
 #
-# 需要给 sidecar 容器补环境变量（DeepFlow agent 是 DaemonSet，必须发本节点）：
-#   - name: K8S_NODE_IP
-#     valueFrom:
-#       fieldRef:
-#         fieldPath: status.hostIP
+# Service 会在 4 个 agent 间负载均衡，span 可能落到任意一个 —— 对 OTLP 摄入
+# 无影响（DeepFlow 对外部推送的 span 不要求节点亲和）。
+#
+# ── 安全性质 ────────────────────────────────────────────────────────────
+# 两个 exporter 相互独立。即使 DeepFlow 端完全不可达，awsxray 仍照常导出，
+# retry_on_failure + sending_queue 会让失败批次重试后丢弃，不会反压。
+# 现有 X-Ray 链路不承担风险。
 receivers:
   otlp:
     protocols:
@@ -29,7 +39,7 @@ exporters:
   awsxray:
     region: ap-northeast-1
   otlphttp/deepflow:
-    traces_endpoint: "http://${env:K8S_NODE_IP}:38086/api/v1/otel/trace"
+    traces_endpoint: "http://deepflow-agent.deepflow:80/api/v1/otel/trace"
     tls:
       insecure: true
     retry_on_failure:

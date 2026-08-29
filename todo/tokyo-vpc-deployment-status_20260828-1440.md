@@ -636,3 +636,213 @@ capture_bpf:
 另注：`l7_log_packet_size: 1024`（协议识别最大长度）、
 `l7_log_collect_nps_threshold: 10000`（超过即采样）——
 当前 789k 行/小时 ≈ 219 行/秒，远低于采样阈值，说明**数据没有被采样丢弃**。
+
+---
+
+# 附录 B：四支柱接入与 X-Ray 平行数据源（2026-08-29 06:00–07:10 实施）
+
+## B.1 目标的修正
+
+出发点是「让图谱存储 4 个支柱的所有数据」。这个目标本身**不成立**：
+L7 flow log 单表 789,055 行/小时,约等于**整个图谱(867 节点/1341 边)的 910 倍**。
+Neptune 不该变成遥测存储。
+
+修正后的目标 =「**4 个支柱的数据都能从图谱一跳可达**」——
+图谱存指针、聚合结论与派生拓扑,原始遥测留在各自的原生存储。
+日志支柱早就是这么做的(只存 `log_source` 指针)。
+
+## B.2 X-Ray 的实际工作范围（24h 实测）
+
+| 节点 | 类型 | 24h 调用 | 累计响应时间 |
+|---|---|---|---|
+| PetSearch | 服务 | 63,306 | 1,625.2s |
+| payforadoption | 服务 | 51,827 | 7.0s |
+| petlistadoptions | 服务 | 51,805 | 6.9s |
+| PetSite | 服务 | 58 | 46.8s |
+| `ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM` | DynamoDB **完整表名** | 11,503 | 66.9s |
+| S3 | AWS::S3(**泛化名**) | 2,923 | **1,338.7s** |
+| STS / SSM / SimpleSystemsManagement / Secrets Manager | 托管服务 | 83/12/67/2 | — |
+
+8 条边,24h 内 **零 Error、零 Fault**。
+
+**只有 X-Ray 能给的结论**:PetSearch 累计响应 1,625.2s,其中 S3 占 **1,338.7s(82%)**
+—— 直接回答「服务慢在哪个下游」。
+
+## B.3 X-Ray 与 DeepFlow 的分工（两者盲区不重叠）
+
+| 维度 | X-Ray | DeepFlow |
+|---|---|---|
+| 前提 | **必须应用埋点** | eBPF 零埋点 |
+| 覆盖面 | 只有 4 个已插桩服务 | **所有 Pod** |
+| AWS 托管服务粒度 | **精确到资源名** | 只到 DNS 域名;**VPC 端点场景连域名都没有** |
+| 延迟归因 | **按下游逐个归因** | 按 flow,归不到逻辑资源 |
+| 噪音 | 几乎没有 | `logs.*.amazonaws.com` 及其 DNS 后缀变体约 66 万行/小时 |
+
+一句话:**X-Ray 知道「谁调了哪个具体资源、花了多久」,DeepFlow 知道「网络上真实发生了什么,包括没埋点的东西」。**
+
+## B.4 新增 etl_xray —— 与 DeepFlow 平行的第二拓扑源
+
+`infra/lambda/etl_xray/neptune_etl_xray.py`
+
+### 为什么是独立 ETL 而不是继续塞进 etl_deepflow
+
+etl_deepflow 里原有的 `fetch_xray_dependencies()` 是**读用途**:
+把 X-Ray 当漂移判定的第二证据源,只翻已存在边的 `verified_by`,**不产生任何自己的边**。
+本模块是**写用途**。独立的三条理由:
+
+1. 「两个独立观测源」必须在架构上真独立。同一个 Lambda 里,一个 bug 同时打掉两边,
+   图谱里「双源印证」的展示就是假的。
+2. 失败模式与节奏不同:X-Ray `GetServiceGraph` 单次窗口上限 **6 小时**
+   (超过报 `Time range cannot be longer than 6 hours`,24h 视图必须分 4 段合并),
+   而 DeepFlow 的 DNS 观测是 30 分钟滑窗。
+3. 权限面不同:只需 `xray:GetServiceGraph`,不碰 ClickHouse、不碰 EKS token。
+
+### 写入纪律：补充证据，不抢 provenance
+
+- 边**已存在**(无论谁发现)→ 只补 X-Ray 度量,**绝不覆盖 `source`/`dependency_kind`**。
+  原 `source` 记录的是「谁首先发现了这条依赖」。
+  实测:`petsearch → DynamoDB表` 由 `aws-etl` 以 `static` 声明发现,
+  补上 X-Ray 的 11,503 次调用后 `source` 仍是 `aws-etl`。
+- 边**不存在** → 新建,`source='xray'`。这才是 X-Ray 自己的贡献。
+
+**刻意不引入 `observed_by_xray` 布尔属性** —— 它完全可由 `xray_last_seen IS NOT NULL` 推导,
+而能被推导出来的布尔量迟早与来源不一致(本仓库「字段有值 ≠ 值有用」已踩过四次)。
+
+### 粒度诚实性：不许把泛化 S3 猜成某个 bucket
+
+X-Ray 把 S3 报成一个**字面叫 `S3` 的节点**,没有 bucket 名;STS/SSM/Secrets Manager 同理。
+图谱里有 **33 个 S3Bucket**。把 `S3` 猜成其中某一个(哪怕「petsearch 在静态边里只连了一个」)
+是**推断而非观测** —— 用观测源的名义写推断结果就是编造。
+
+所以新增节点类型 `AWSServiceEndpoint`,`granularity='service'`,与资源级节点明确区分。
+DynamoDB 是唯一例外:X-Ray 给的是完整表名,逐字符命中图谱已有节点,所以那是资源级精确边。
+
+这反而成了 demo 的好对照:同一依赖 `aws-etl` 给资源级、X-Ray 给服务级。
+
+### 干跑抓到的真 bug：别名合并失败
+
+最初节点 key 是 `(规范名, kind, xray_type)`。`SSM` 与 `SimpleSystemsManagement`
+规范名都归一到 `ssm`,但**因 `xray_type` 不同而 key 没合并** ——
+图谱里出现两个 `ssm` 条目,随后写进同一顶点、`xray_type` 互相覆盖,
+**哪个值留下取决于 dict 迭代顺序**,而 `xray_aliases` 每次只带一半原始名。
+
+修法:对 `aws_service`,**规范名就是身份,type 属于数据不属于键**;
+`xray_type` 改存**集合**。已由 `test_x02` 锁住。
+
+### 实际写入结果
+
+```
+AWSServiceEndpoint 节点 4 个:
+  s3              type=AWS::S3                                 aliases=S3
+  secretsmanager  type=AWS::Unknown                            aliases=Secrets Manager
+  ssm             type=AWS::SSM; AWS::SimpleSystemsManagement  aliases=SSM; SimpleSystemsManagement
+  sts             type=AWS::STS                                aliases=STS
+
+边:4 条新建(source='xray') + 2 条双源印证,0 条跳过
+```
+
+## B.5 Q21 —— 平行源对账查询（demo 的落点）
+
+`rca/neptune/neptune_queries.py:q21_observation_source_coverage`,已注册进 `query_catalog`(22 条)。
+
+X-Ray 的边属性必须有**读取方**,否则就是第五个「写了但从没被读」的字段。
+
+| coverage | 实测数量 | 含义 | 运维解读 |
+|---|---|---|---|
+| `both` | **1** | 两源都观测到 | 最可信 —— 两种完全不同的机制互相印证 |
+| `xray_only` | **5** | 只有 X-Ray | 连接复用/VPC 端点让 DNS 侧看不见 |
+| `deepflow_only` | **52** | 只有 DeepFlow | 未插桩服务发起的调用 |
+| `declared_only` | **20** | 只有声明 | 死代码,或两源同时有盲区 |
+
+`both` 的那一条是 `petsite → petsearch`:DeepFlow 首先发现(96 次),X-Ray 印证(122 次)。
+
+`xray_only` 里最有说服力的是 `petsearch → DynamoDB表` **11,503 次** ——
+DeepFlow 的 DNS 观测**完全看不见**它(AWS SDK 启动时解析一次域名后复用连接)。
+这正是 P0 当初发现的假阴性根因。
+
+## B.6 petsite 入口链路修复 —— 根因是一个命名空间拼写错误
+
+**不是缺 sidecar。** `AWS_XRAY_DAEMON_ADDRESS=xray-service.petadoptions:2000`,
+而 `xray-service` 在 **`default`** 命名空间(headless,2000/UDP)。
+从 petsite pod 内实测:`getent hosts xray-service.petadoptions` **无返回**;
+`xray-service.default` 解析到 3 个 DaemonSet pod IP。pethistory 用的是正确地址。
+
+改成 `xray-service.default:2000` 后,X-Ray 服务图立刻出现:
+
+```
+PetSite → PetSearch                  ← 缺失的入口边
+PetSite → SimpleSystemsManagement    ← 顺带暴露的新依赖(读 Parameter Store)
+```
+
+**这就是 petsite 从来不出现在 X-Ray 服务图里的原因**,与 sidecar 无关。
+
+### 加过 sidecar，验证后撤掉了
+
+设计是用 `awsxray` **receiver** 让 sidecar 成为 xray-daemon 的原地替代,
+再扇出到 X-Ray + DeepFlow,零应用代码改动。
+
+- ✅ `awsxray` receiver 在 `aws-otel-collector:v0.47.0` 中**确实存在并可用**
+  (`awsxrayreceiver@v0.143.0` 监听 udp 0.0.0.0:2000,X-Ray TCP proxy 也起)。
+  **先在低风险的 list-adoptions 上验证,没有在入口服务上做实验。**
+- ✅ sidecar 能收能发:窗口完全位于上线之后的 X-Ray 查询显示 `PetSite ok=6`
+- ❌ 但 petsite 的 span **进不了 DeepFlow**。三次尝试全部无效
+  (`localhost`→`127.0.0.1` 消除 IPv6 歧义、补 `resource` processor 的 `service.name`),
+  且**始终无任何导出错误、DeepFlow 返回 HTTP 200**
+
+第三次失败后停止微调,判断根本差异:能落库的 span 来自 OTel SDK 插桩的 HTTP 服务,
+带 `http.method`/`net.host.ip` 等语义属性;`awsxrayreceiver` 转出的是 X-Ray 形状的 span,
+**缺 DeepFlow 合成流记录所需的网络语义**。这是**结构性不兼容,不是配置旋钮能解决的**。
+
+既然 DeepFlow 那条路走不通,给爆炸半径最大的入口服务白加一个容器和故障面就不合理。
+撤回,只保留真正起作用的地址修复。配置存档在
+`infra/k8s/p2b-collector-config-xray-receiver.yaml`(含全部实测记录)。
+
+## B.7 pethistory：接入了，但它其实没埋点
+
+给了与另外三个一致的 traces-only 双 exporter 配置(它原先**没有** `AOT_CONFIG_CONTENT`,
+跑镜像内置默认配置)。
+
+**没有做「带 metrics pipeline 的配置」,因为那等于复刻一条已经不工作的链路**:
+- 内置默认配置里的 `prometheus` receiver 在抓应用 `:8080`,**每 20 秒失败一次**
+- CloudWatch 里**没有任何 pethistory 相关的自定义指标**
+
+副作用是那条持续报错的死链路消失了:新 Pod 的 `Failed to scrape` 从 25 行降到 **0 行**。
+
+但**它的 Pod IP 始终不出现在 DeepFlow 的 OTLP span 里,且它在 X-Ray 服务图里从来没出现过**
+—— 说明应用侧根本没有活跃的 OTel 插桩。环境变量和 sidecar 都齐,但没有 trace 可转发。
+配置改动无害,不过别把它记成「已接入」。
+
+## B.8 图谱状态变化
+
+| 指标 | 本轮前 | 本轮后 |
+|---|---|---|
+| 节点 | 867 | **890** |
+| 边 | 1,341 | **1,475** |
+| 活图谱节点类型 | 31 | **32**(+AWSServiceEndpoint) |
+| 边类型 | 26 | 26(复用,未新增) |
+| schema 声明节点类型 | 32(表头误写 31) | **33**(表头已修正) |
+| query_catalog | 21 | **22**(+Q21) |
+| 测试 | 372 passed | **384 passed / 0 failed / 145 skipped** |
+
+**顺带修正了一处早就存在的文档错误**:schema 表头写「31 种」,
+但节点段落里程序化统计是 **32** 个声明。差在 `TopologyChange` ——
+它 0 实例(在 `PENDING_FIRST_INSTANCE` 里),所以**活图谱 31 种、schema 声明 32 种**。
+那个表头写的是活图谱数,不是声明数。已改为声明数并写明这个区别。
+
+## B.9 部署状态与未完成项
+
+**etl_xray 目前是手动跑的,尚未部署为 Lambda。**
+现有四个 ETL Lambda 均为 `python3.12`/256MB。部署需要:新建函数、IAM 角色
+(只需 `xray:GetServiceGraph` + Neptune 写权限)、EventBridge 调度。
+`test_x12` 对此只**告警不阻塞** —— 让它阻塞会训练人忽略失败。
+
+本地运行方式(依赖由调用方提供,模块内**不改全局 `sys.path`**):
+```bash
+cd infra/lambda/etl_xray
+PYTHONPATH=../shared/python python3.11 neptune_etl_xray.py 24
+```
+
+仍未定位:**非 `single` 写 `last_updated` 的顶点写入方**。
+6 个 CFN 触及的类型在规约后又回到 2 个值。已排除 `property(single)` 失效、
+`upsert_vertex`、生产/分支代码漂移、边写入。**不要臆造根因。**
+

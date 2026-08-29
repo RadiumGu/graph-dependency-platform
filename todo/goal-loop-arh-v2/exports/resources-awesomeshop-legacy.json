@@ -1,0 +1,265 @@
+{
+    "serviceResources": [
+        {
+            "resourceIdentifier": "PetSite/awesomeshop/deployment/717e372d-20c6-48dd-a35d-0b0e4c649a1c",
+            "inputSource": {
+                "identifier": "EKS",
+                "type": "EKS"
+            },
+            "resource": {
+                "identifier": "PetSite/awesomeshop/deployment/717e372d-20c6-48dd-a35d-0b0e4c649a1c",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::EKS::Deployment"
+            }
+        },
+        {
+            "resourceIdentifier": "PetSite/awesomeshop/deployment/9c830d1d-0daf-483f-bb83-2cec7edbee04",
+            "inputSource": {
+                "identifier": "EKS",
+                "type": "EKS"
+            },
+            "resource": {
+                "identifier": "PetSite/awesomeshop/deployment/9c830d1d-0daf-483f-bb83-2cec7edbee04",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::EKS::Deployment"
+            }
+        },
+        {
+            "resourceIdentifier": "PetSite/awesomeshop/deployment/b87098ce-1958-4cfb-857d-5dc53b3533db",
+            "inputSource": {
+                "identifier": "EKS",
+                "type": "EKS"
+            },
+            "resource": {
+                "identifier": "PetSite/awesomeshop/deployment/b87098ce-1958-4cfb-857d-5dc53b3533db",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::EKS::Deployment"
+            }
+        },
+        {
+            "resourceIdentifier": "PetSite/awesomeshop/deployment/bdbfda32-a8f0-4049-8260-e554970f1f81",
+            "inputSource": {
+                "identifier": "EKS",
+                "type": "EKS"
+            },
+            "resource": {
+                "identifier": "PetSite/awesomeshop/deployment/bdbfda32-a8f0-4049-8260-e554970f1f81",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::EKS::Deployment"
+            }
+        },
+        {
+            "resourceIdentifier": "PetSite/awesomeshop/deployment/c37d5f26-7417-4021-bcf9-a809c1cdfc19",
+            "inputSource": {
+                "identifier": "EKS",
+                "type": "EKS"
+            },
+            "resource": {
+                "identifier": "PetSite/awesomeshop/deployment/c37d5f26-7417-4021-bcf9-a809c1cdfc19",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::EKS::Deployment"
+            }
+        },
+        {
+            "resourceIdentifier": "PetSite/awesomeshop/deployment/eb79acb6-c3d1-4421-b5dc-7f21566b764b",
+            "inputSource": {
+                "identifier": "EKS",
+                "type": "EKS"
+            },
+            "resource": {
+                "identifier": "PetSite/awesomeshop/deployment/eb79acb6-c3d1-4421-b5dc-7f21566b764b",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::EKS::Deployment"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:autoscaling:ap-northeast-1:926093770964:autoScalingGroup:882deaf2-601c-421c-ad2b-330445577612:autoScalingGroupName/eks-petsiteNodegroupworkers1cFE-rBSMHnU8raBy-d0cea529-d4f8-d859-812a-f69b5c6f5a0b",
+            "inputSource": {
+                "identifier": "EKS",
+                "type": "EKS"
+            },
+            "resource": {
+                "identifier": "arn:aws:autoscaling:ap-northeast-1:926093770964:autoScalingGroup:882deaf2-601c-421c-ad2b-330445577612:autoScalingGroupName/eks-petsiteNodegroupworkers1cFE-rBSMHnU8raBy-d0cea529-d4f8-d859-812a-f69b5c6f5a0b",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::AutoScaling::AutoScalingGroup"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:autoscaling:ap-northeast-1:926093770964:autoScalingGroup:cc525594-a4ca-46f2-ab27-5ec1bc8277a6:autoScalingGroupName/eks-petsiteNodegroupworkers1a60-ZJElxYDbKT8H-8ccea529-d21b-f8e5-1c82-1f0367d29249",
+            "inputSource": {
+                "identifier": "EKS",
+                "type": "EKS"
+            },
+            "resource": {
+                "identifier": "arn:aws:autoscaling:ap-northeast-1:926093770964:autoScalingGroup:cc525594-a4ca-46f2-ab27-5ec1bc8277a6:autoScalingGroupName/eks-petsiteNodegroupworkers1a60-ZJElxYDbKT8H-8ccea529-d21b-f8e5-1c82-1f0367d29249",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::AutoScaling::AutoScalingGroup"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-02ebd1dd8d1681da8",
+            "inputSource": {
+                "identifier": "EKS",
+                "type": "EKS"
+            },
+            "resource": {
+                "identifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-02ebd1dd8d1681da8",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::EC2::Subnet"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-047a94f9c5ab6302a",
+            "inputSource": {
+                "identifier": "EKS",
+                "type": "EKS"
+            },
+            "resource": {
+                "identifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-047a94f9c5ab6302a",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::EC2::Subnet"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-0600a43fa7ebf1ffe",
+            "inputSource": {
+                "identifier": "EKS",
+                "type": "EKS"
+            },
+            "resource": {
+                "identifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-0600a43fa7ebf1ffe",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::EC2::Subnet"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-0f801fa79077eb277",
+            "inputSource": {
+                "identifier": "EKS",
+                "type": "EKS"
+            },
+            "resource": {
+                "identifier": "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-0f801fa79077eb277",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::EC2::Subnet"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:ec2:ap-northeast-1:926093770964:vpc/vpc-010ab37a3f9f74725",
+            "inputSource": {
+                "identifier": "EKS",
+                "type": "EKS"
+            },
+            "resource": {
+                "identifier": "arn:aws:ec2:ap-northeast-1:926093770964:vpc/vpc-010ab37a3f9f74725",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::EC2::VPC"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+            "inputSource": {
+                "identifier": "EKS",
+                "type": "EKS"
+            },
+            "resource": {
+                "identifier": "arn:aws:eks:ap-northeast-1:926093770964:cluster/PetSite",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::EKS::Cluster"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:nodegroup/PetSite/petsiteNodegroupworkers1a60-ZJElxYDbKT8H/8ccea529-d21b-f8e5-1c82-1f0367d29249",
+            "inputSource": {
+                "identifier": "EKS",
+                "type": "EKS"
+            },
+            "resource": {
+                "identifier": "arn:aws:eks:ap-northeast-1:926093770964:nodegroup/PetSite/petsiteNodegroupworkers1a60-ZJElxYDbKT8H/8ccea529-d21b-f8e5-1c82-1f0367d29249",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::EKS::Nodegroup"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:eks:ap-northeast-1:926093770964:nodegroup/PetSite/petsiteNodegroupworkers1cFE-rBSMHnU8raBy/d0cea529-d4f8-d859-812a-f69b5c6f5a0b",
+            "inputSource": {
+                "identifier": "EKS",
+                "type": "EKS"
+            },
+            "resource": {
+                "identifier": "arn:aws:eks:ap-northeast-1:926093770964:nodegroup/PetSite/petsiteNodegroupworkers1cFE-rBSMHnU8raBy/d0cea529-d4f8-d859-812a-f69b5c6f5a0b",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::EKS::Nodegroup"
+            }
+        },
+        {
+            "resourceIdentifier": "awesomeshop-redis",
+            "inputSource": {
+                "identifier": "CFN_STACK",
+                "type": "CFN_STACK"
+            },
+            "resource": {
+                "identifier": "awesomeshop-redis",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::ElastiCache::CacheCluster"
+            }
+        },
+        {
+            "resourceIdentifier": "awesomeshopinfra-awesomeshopmysql36bf1715-7hlgoeulquaq",
+            "inputSource": {
+                "identifier": "CFN_STACK",
+                "type": "CFN_STACK"
+            },
+            "resource": {
+                "identifier": "awesomeshopinfra-awesomeshopmysql36bf1715-7hlgoeulquaq",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::RDS::DBInstance"
+            }
+        },
+        {
+            "resourceIdentifier": "sgr-082d07a5c04460eb4",
+            "inputSource": {
+                "identifier": "CFN_STACK",
+                "type": "CFN_STACK"
+            },
+            "resource": {
+                "identifier": "sgr-082d07a5c04460eb4",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::EC2::SecurityGroupIngress"
+            }
+        },
+        {
+            "resourceIdentifier": "sgr-0acbfd7a70996eb39",
+            "inputSource": {
+                "identifier": "CFN_STACK",
+                "type": "CFN_STACK"
+            },
+            "resource": {
+                "identifier": "sgr-0acbfd7a70996eb39",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::EC2::SecurityGroupIngress"
+            }
+        }
+    ],
+    "serviceFunctionId": null
+}

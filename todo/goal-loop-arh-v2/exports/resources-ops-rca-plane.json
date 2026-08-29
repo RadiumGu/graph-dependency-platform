@@ -1,0 +1,70 @@
+{
+    "serviceResources": [
+        {
+            "resourceIdentifier": "arn:aws:lambda:ap-northeast-1:926093770964:function:gp-window-flush",
+            "inputSource": {
+                "identifier": "TAGS",
+                "type": "TAGS"
+            },
+            "resource": {
+                "identifier": "arn:aws:lambda:ap-northeast-1:926093770964:function:gp-window-flush",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::Lambda::Function"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:lambda:ap-northeast-1:926093770964:function:petsite-ops-slack-notifier",
+            "inputSource": {
+                "identifier": "TAGS",
+                "type": "TAGS"
+            },
+            "resource": {
+                "identifier": "arn:aws:lambda:ap-northeast-1:926093770964:function:petsite-ops-slack-notifier",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::Lambda::Function"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:lambda:ap-northeast-1:926093770964:function:petsite-rca-engine",
+            "inputSource": {
+                "identifier": "TAGS",
+                "type": "TAGS"
+            },
+            "resource": {
+                "identifier": "arn:aws:lambda:ap-northeast-1:926093770964:function:petsite-rca-engine",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::Lambda::Function"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:lambda:ap-northeast-1:926093770964:function:petsite-rca-interaction",
+            "inputSource": {
+                "identifier": "TAGS",
+                "type": "TAGS"
+            },
+            "resource": {
+                "identifier": "arn:aws:lambda:ap-northeast-1:926093770964:function:petsite-rca-interaction",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::Lambda::Function"
+            }
+        },
+        {
+            "resourceIdentifier": "gp-alert-buffer",
+            "inputSource": {
+                "identifier": "CFN_STACK",
+                "type": "CFN_STACK"
+            },
+            "resource": {
+                "identifier": "gp-alert-buffer",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::DynamoDB::Table"
+            }
+        }
+    ],
+    "serviceFunctionId": null
+}
