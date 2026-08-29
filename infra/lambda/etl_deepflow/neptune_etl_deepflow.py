@@ -621,7 +621,22 @@ def safe_str(s: str) -> str:
 # ===== 批量 Neptune 操作 =====
 
 def batch_upsert_nodes(services: list):
-    """批量 upsert Microservice 节点，每批 BATCH_SIZE 个"""
+    """批量 upsert Microservice 节点，每批 BATCH_SIZE 个
+
+    基数语义（2026-08-29 修复）：
+    mergeV 的 option-map 用 Gremlin 默认 SET 基数，值追加而不替换。
+    原实现把每轮可能变化的标量（ip / namespace / environment /
+    recovery_priority / fault_boundary）放进 onMatch map —— 这些值恰好稳定，
+    SET 去重压住了增长，所以没爆；但只要任一值变化（例如 Pod 重建换 IP）
+    就会静默留下多值，从此该属性的读取扇出成笛卡尔积。
+
+    并且原代码里那条 NOTE 承诺的「az 改为后置 property(single) 更新」
+    **从未实现** —— 结果 az 在 existing 节点上永远不更新，
+    而旧版曾把它放进 onMatch 累积的残值留存至今（实测 Microservice 上 az 有 2 值）。
+
+    现改为：option-map 只留身份与仅创建一次的字段，所有刷新字段一律
+    尾部 `.property(single, k, v)`，az 也一并兑现。
+    """
     for i in range(0, len(services), BATCH_SIZE):
         batch = services[i:i + BATCH_SIZE]
         # 用链式 mergeV 一次请求写多个节点
@@ -630,44 +645,51 @@ def batch_upsert_nodes(services: list):
             n, ns, ip = safe_str(svc['name']), safe_str(svc['namespace']), safe_str(svc['ip'])
             az = safe_str(svc.get('az', ''))
             priority = MICROSERVICE_RECOVERY_PRIORITY.get(n, 'Tier2')
+            # onCreate 只放身份 + 仅创建时写一次的字段
             create_props = (
-                f"'namespace': '{ns}', 'ip': '{ip}', 'source': 'deepflow', "
-                f"'environment': '{ENVIRONMENT}', 'recovery_priority': '{priority}', "
-                f"'fault_boundary': 'az', 'region': '{REGION}'"
+                f"'source': 'deepflow', 'region': '{REGION}'"
             )
-            match_props = (
-                f"'ip': '{ip}', 'namespace': '{ns}', "
-                f"'environment': '{ENVIRONMENT}', 'recovery_priority': '{priority}', "
-                f"'fault_boundary': 'az'"
+            # 每轮刷新的标量一律 single 基数（含 az，兑现原 NOTE 的承诺）
+            refresh = (
+                f".property(single,'ip','{ip}')"
+                f".property(single,'namespace','{ns}')"
+                f".property(single,'environment','{ENVIRONMENT}')"
+                f".property(single,'recovery_priority','{priority}')"
+                f".property(single,'fault_boundary','az')"
             )
             if az:
-                create_props += f", 'az': '{az}'"
-                # NOTE: az 不放入 match_props（list cardinality），改为后置 property(single) 更新
+                refresh += f".property(single,'az','{az}')"
             parts.append(
                 f"mergeV([(T.label): 'Microservice', 'name': '{n}'])"
                 f".option(Merge.onCreate, [(T.label): 'Microservice', 'name': '{n}', "
                 f"{create_props}])"
-                f".option(Merge.onMatch, [{match_props}])"
+                f"{refresh}"
             )
         gremlin = "g." + ".".join(parts)
         try:
             neptune_query(gremlin)
         except Exception as e:
             logger.error(f"batch_upsert_nodes failed (batch {i}): {e}")
-            # 回退到逐条写入
+            # 回退到逐条写入（同样必须用 single 基数，否则回退路径会重新引入多值）
             for svc in batch:
                 try:
                     n, ns, ip = safe_str(svc['name']), safe_str(svc['namespace']), safe_str(svc['ip'])
+                    az = safe_str(svc.get('az', ''))
                     priority = MICROSERVICE_RECOVERY_PRIORITY.get(n, 'Tier2')
+                    single_props = (
+                        f".property(single,'ip','{ip}')"
+                        f".property(single,'namespace','{ns}')"
+                        f".property(single,'environment','{ENVIRONMENT}')"
+                        f".property(single,'recovery_priority','{priority}')"
+                        f".property(single,'fault_boundary','az')"
+                    )
+                    if az:
+                        single_props += f".property(single,'az','{az}')"
                     neptune_query(
                         f"g.mergeV([(T.label): 'Microservice', 'name': '{n}'])"
                         f".option(Merge.onCreate, [(T.label): 'Microservice', 'name': '{n}', "
-                        f"'namespace': '{ns}', 'ip': '{ip}', 'source': 'deepflow', "
-                        f"'environment': '{ENVIRONMENT}', 'recovery_priority': '{priority}', "
-                        f"'fault_boundary': 'az', 'region': '{REGION}'])"
-                        f".option(Merge.onMatch, ['ip': '{ip}', 'namespace': '{ns}', "
-                        f"'environment': '{ENVIRONMENT}', 'recovery_priority': '{priority}', "
-                        f"'fault_boundary': 'az'])"
+                        f"'source': 'deepflow', 'region': '{REGION}'])"
+                        f"{single_props}"
                     )
                 except Exception as e2:
                     logger.error(f"single upsert node {svc['name']} failed: {e2}")

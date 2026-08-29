@@ -69,7 +69,23 @@ TYPE_TO_LABEL = {
 _vid_cache = {}  # (label, name) → vertex_id
 
 def get_or_create_vertex(label: str, physical_id: str, stack_name: str):
-    """mergeV upsert 顶点，返回 vertex ID，结果写入 _vid_cache"""
+    """mergeV upsert 顶点，返回 vertex ID，结果写入 _vid_cache
+
+    基数语义（2026-08-29 修复）：
+    mergeV 的 option-map **用 Gremlin 默认 SET 基数**，值会追加而不替换。
+    `last_scanned` 是每轮变化的时间戳，放在 onMatch map 里会导致每次运行
+    在同一节点上新增一个 distinct 值 —— 实测已累积到单节点 172 个值，
+    使 `MATCH (n:LambdaFunction) WHERE n.last_scanned IS NOT NULL` 从
+    9 个真节点扇出成 1,253 行（139 倍）。
+
+    因此 option-map 只保留**身份与仅创建时写一次**的字段，
+    所有需要每轮刷新的标量改用尾部 `.property(single, k, v)` 链重写。
+    这与 etl_aws/neptune_client.py:upsert_vertex 的兜底模式一致。
+
+    注意：顶点属性才有基数问题；**边属性在 Neptune/TinkerPop 里天生单值**，
+    所以 upsert_cfn_edge 里不带 single 的 `.property()` 是安全的，
+    但不要把边的写法照搬到顶点。
+    """
     key = (label, physical_id)
     if key in _vid_cache:
         return _vid_cache[key]
@@ -80,8 +96,11 @@ def get_or_create_vertex(label: str, physical_id: str, stack_name: str):
     gremlin = (
         f"g.mergeV([(T.label): '{lb}', 'name': '{pid}'])"
         f".option(Merge.onCreate, [(T.label): '{lb}', 'name': '{pid}', "
-        f"'stack_name': '{sn}', 'source': 'cfn-etl', 'created_at': {ts}])"
-        f".option(Merge.onMatch, ['stack_name': '{sn}', 'last_scanned': {ts}])"
+        f"'created_at': {ts}])"
+        # 每轮刷新的标量一律 single 基数，避免 SET 追加
+        f".property(single,'stack_name','{sn}')"
+        f".property(single,'source','cfn-etl')"
+        f".property(single,'last_scanned',{ts})"
         f".id()"
     )
     result = neptune_query(gremlin)
