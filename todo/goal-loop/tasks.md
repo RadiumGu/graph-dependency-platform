@@ -1684,3 +1684,77 @@ PR 正文已备在 `todo/goal-loop/PR_BODY.md`。
   剩余两项均需用户操作(推送、部署决定),T-031 明确不做。
   已写 todo/HANDOVER_20260828-2215.md 作为可读收口,并创建 STOP 停止循环 ——
   继续自动唤醒只会产出边际价值为负的工作。
+
+
+---
+
+### T-104 · 删除自研 MCP server，DoD-4 判绿依据更正 · `done`
+
+**2026-08-29 03:20，由用户提问「自研 server 还需要吗」触发。结论与 T-013 相反。**
+
+T-013 在 cycle-7 写了 `rca/neptune/graph_mcp_server.py`（410 行，纯标准库
+手写 JSON-RPC 2.0）+ `rca/.mcp.json`，并据此判 DoD-4「图谱可被各类 agent
+快速调用」为绿。本卡推翻它。
+
+**证据一：零消费方。** 全仓库只有两处引用——它配套的 `.mcp.json`（同一
+cycle 一起写的），以及 `test_27` 一条断言「`QUERY_REGISTRY` 里有 q19」。
+没有任何模块 import 它。那条测试是**循环的**：验证我的注册表里有我放进去
+的条目，不能证明有人调用。这是本仓库编目过三次的**模式 A：写了但没人读**
+（`active`/`last_seen`、`causal_weight`、resilience 分数），我自己也犯了。
+
+**证据二：从未被注册过。** 不读凭证目录也能判定——当前 agent 的工具列表里
+只有官方那四个（`get_graph_status` / `get_graph_schema` /
+`run_opencypher_query` / `run_gremlin_query`），没有 `list_queries` /
+`run_query`。这是运行时第一手观察，比 grep 生成物更硬。该端点从 08-28 17:55
+写完到删除约 9.5 小时，一次都没被调用过。
+
+**证据三：我自己的论证不成立。** T-102 记的「NL→Cypher 75% 失败」被我用作
+「固化查询库不可替代」的依据。但本轮我通过官方 server **第一次就写对了**
+核心依赖查询。那 75% 是 `nl_query_direct.py` 在特定提示词框架下用 Bedrock
+的结果——是**特定实现的缺陷**，我把它说成了**能力上限**。
+
+**证据四（用户提供，且是最强的一条）：手写传输层在目标形态里用不上。**
+对外服务的既定方向是把 MCP server 放到 **Bedrock AgentCore** 上。
+AgentCore Gateway 自己承担 MCP 协议与托管鉴权，需要下游提供的是
+**一个可调用的分发面**，不是又一份 stdio JSON-RPC——那 410 行无论如何都会
+被丢掉。这条把删除的理由从「没人用」升级为「形态错了」。
+
+**逐项判定**
+
+| 组件 | 判定 | 理由 |
+|---|---|---|
+| `run_cypher` | 删 | 官方覆盖；只读 IAM 是比客户端 `query_guard` 更强的护栏 |
+| `get_schema` | 删 | 它只回显 `profiles/petsite.yaml` 声明文本；官方是活图谱实测反推，严格更优 |
+| 410 行手写 JSON-RPC | 删 | 原理由「本机 py3.9，官方 mcp 包要 3.10」对官方路径从不成立（它走 uvx）；AgentCore 也不需要 |
+| 跳数限制 / `LIMIT` 注入 | 不足以支撑 | Neptune 有集群级 `queryTimeout`，比客户端正则更可靠 |
+| 20 条查询的统一注册表 | **留，但不该是 MCP server** | 见下 |
+
+**落地**
+
+- 新增 `rca/neptune/query_catalog.py`（普通模块）：`QUERY_CATALOG` 20 条
+  （rca 14 + dr-plan 6）+ `describe()` / `get_query()` / `run_query()`。
+  保留真正有价值的两点：跨连字符目录的统一（`dr-plan-generator` 不能当包
+  导入，调用方本来要自己写 importlib），以及每条查询的参数契约。
+- **刻意不在 import 时改 `sys.path`**（旧 server 会）。库模块改全局 sys.path
+  正是同名包遮蔽缺陷的来源——conftest 曾把 etl_aws 部署包塞进全局路径，
+  导致整个会话跑在 vendored 副本上。`shared` 在仓库根，真实调用方无需这一步：
+  Lambda 部署包把 `shared/` 放在根目录，测试由 conftest 安排。只有
+  `--selftest` 独立入口自行安排并打印它做了什么。
+- 删除 `rca/neptune/graph_mcp_server.py` 与 `rca/.mcp.json`。
+- `test_27` C-04 改为验证 **能解析出可调用对象**（`callable(get_query(...))`）
+  并验证必填参数校验生效，而不是「注册表里有条目」。测试名同步改为
+  `test_c04_query_exists_and_listed_in_catalog`。
+
+**验证**：`--selftest` 20 条目标函数全部可解析；`test_27` 6 passed；
+全套 **364 passed / 0 failed / 145 skipped**，与删除前完全一致，零回归。
+净减约 410 行。
+
+**对 DoD-4 的更正**：一个零消费方的端点不构成「可被调用」的证据。
+DoD-4 现在成立，靠的是**官方 awslabs.amazon-neptune-mcp-server**
+（本机 timeout 由用户从 60 调到 180 后五个工具全通），不是自研端点。
+这是第三次发现 DoD 自身的验收依据有问题——前两次是两条验收命令 grep 到了
+我自己写的注释，以及一条命令用了不存在的属性名。**DoD 是可审计的，不是权威的。**
+
+**未解决且未变的缺口**：无论哪个 server 都需要「VPC 内 + SigV4」。
+VPC 外的异构 agent 接不上——这正是 AgentCore 要解决的，已写进
+`query_catalog.py` 的目标形态图。

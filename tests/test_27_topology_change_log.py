@@ -153,26 +153,34 @@ def test_c03_retention_configured_and_wired():
     )
 
 
-# ── C-04: 有消费方 —— 查询存在且已注册进 MCP ────────────────────────────────
+# ── C-04: 有消费方 —— 查询存在且已进统一目录 ────────────────────────────────
 
 
-def test_c04_query_exists_and_registered_in_mcp():
-    """C-04: Q19 必须存在,且已注册进 MCP 端点。
+def test_c04_query_exists_and_listed_in_catalog():
+    """C-04: Q19 必须存在,且已进 query_catalog 并可被分发。
 
     cycle-1 查出的核心缺陷就是 `active` / `last_seen` 写了但全仓无人读 ——
     加机制不接消费方是重复同一个错误。
+
+    原先这条断言指向 graph_mcp_server.QUERY_REGISTRY,但那个端点自身零消费方
+    (只有它配套的 .mcp.json 和本断言引用它),已删除 —— 断言「注册表里有我放
+    进去的条目」是循环的。改为验证 query_catalog 能真正**解析出可调用对象**,
+    这才是「外部可调用」的可检验形式。
     """
     from neptune import neptune_queries as nq
     assert hasattr(nq, 'q19_topology_changes'), "缺少 Q19 查询"
 
-    import importlib.util
-    mcp_path = os.path.join(PROJECT_ROOT, 'rca', 'neptune', 'graph_mcp_server.py')
-    spec = importlib.util.spec_from_file_location('_mcp_probe', mcp_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    assert 'q19_topology_changes' in mod.QUERY_REGISTRY, (
-        "Q19 未注册进 MCP 的 QUERY_REGISTRY —— 外部 agent 无法调用"
+    from neptune import query_catalog as qc
+    assert 'q19_topology_changes' in qc.QUERY_CATALOG, (
+        "Q19 未进 query_catalog —— 调用方无法从统一入口发现它"
     )
+    # 不只看注册表有条目，要能真正取到可调用对象
+    assert callable(qc.get_query('q19_topology_changes')), (
+        "query_catalog 里的 Q19 条目无法解析为可调用函数"
+    )
+    # 必填参数校验必须生效（Q19 无必填参数，用一条有必填参数的验证机制本身）
+    with pytest.raises(ValueError):
+        qc.run_query('q1_blast_radius')
 
 
 def test_c05_rca_prompt_includes_topology_changes():
