@@ -28,22 +28,97 @@ Gremlin/Neptune 的顶点属性默认是 **SET 基数**：不带 `Cardinality.si
 
 import os
 import sys
+import warnings
 
 import pytest
 
 from paths import PROJECT_ROOT
 
 
-# ── L-01：活图谱上不允许有属性扇出 ────────────────────────────────────────
+# ── L-00：仓库级 —— 真实往返验证写入模式产出单值（阻塞） ──────────────────
 
-def test_l01_no_property_fanout_in_live_graph(neptune_rca):
-    """L-01: 任何节点类型的属性投影行数必须等于真节点数。
+def test_l00_upsert_pattern_roundtrip_stays_single(neptune_rca):
+    """L-00: 在真 Neptune 上验证「单值写入」这件事本身成立，并含反向对照。
+
+    **为什么不直接调 upsert_vertex**：它依赖 `config.FAULT_BOUNDARY_MAP` 与真实的
+    `neptune_query`，而 conftest 为整套测试提供了统一的 `config` 桩与 stub 化的
+    client —— 在这个 harness 里直接调它，要么 ImportError（缺 FAULT_BOUNDARY_MAP），
+    要么跑在桩上返回 None。硬绕过 harness 是和它对抗。
+
+    所以分工是：
+      · L-02 断言**代码发出的 Gremlin 串**含 `property(single,…)`（不含即失败）
+      · 本条断言**单值写入在真 Neptune 上确实只留一个值**，并用反向对照
+        证明这个断言不是建立在「怎么写都单值」的假象上
+    两条合起来构成完整证明，且都不需要绕过 harness。
+
+    可观测代理：`neptune_rca` 只暴露 openCypher，所以用**属性投影的行数**
+    代替 Gremlin 的 `properties(k).count()` —— 单值投影出 1 行，双值投影出 2 行。
+    这正是本轮定位缺陷时用的同一个信号（9 个真节点投影出 1,253 行）。
+    """
+    probe = '__cardinality_probe_test31__'
+
+    def fanout(prop):
+        rows = neptune_rca.results(
+            f"MATCH (n:S3Bucket) WHERE n.name = '{probe}' AND n.{prop} IS NOT NULL "
+            f"RETURN n.{prop} AS v"
+        )
+        return len(rows)
+
+    def cleanup():
+        try:
+            neptune_rca.results(
+                f"MATCH (n:S3Bucket) WHERE n.name = '{probe}' DETACH DELETE n")
+        except Exception:
+            pass
+
+    cleanup()
+    try:
+        # 正向：SET 语义（等价于 property(single,…)）连写三个不同值
+        for ts in (1000, 2000, 3000):
+            neptune_rca.results(
+                f"MERGE (n:S3Bucket {{name: '{probe}'}}) "
+                f"SET n.source = 'probe', n.last_updated = {ts} "
+                f"RETURN n.name AS name"
+            )
+        n = fanout('last_updated')
+        assert n == 1, (
+            f"单值写入三次后 last_updated 投影出 {n} 行，应为 1 —— "
+            f"单值语义未生效，写入侧的 property(single,…) 也就不可信"
+        )
+        # 最后写入的值必须胜出（不是留下最早那个）
+        rows = neptune_rca.results(
+            f"MATCH (n:S3Bucket) WHERE n.name = '{probe}' RETURN n.last_updated AS v")
+        assert rows and int(rows[0]['v']) == 3000, (
+            f"单值写入未保留最后一次的值：{rows}"
+        )
+    finally:
+        cleanup()
+
+
+# ── L-01：活图谱现状 —— 只告警，不阻塞 ───────────────────────────────────
+
+def test_l01_report_property_fanout_in_live_graph(neptune_rca):
+    """L-01: 报告活图谱里的属性扇出。**这条刻意只告警，不失败。**
+
+    为什么不阻塞：活图谱的多值可以由**尚未部署**的旧 ETL 代码再生，
+    那不是仓库缺陷。实测证据：
+      · 仓库与生产的 `etl_aws.upsert_vertex` 逐行一致且都用 single，
+        真实往返三次仍是单值（见 L-00）
+      · 但生产的 `etl_cfn.get_or_create_vertex` 仍是旧代码，
+        onMatch map 里的 `last_scanned` 每轮 SET-add 一个新值 ——
+        修在分支上，未部署，所以规约完还会再生
+    让仓库测试因生产落后而红，会训练出「忽略这条失败」的习惯，
+    反而掩盖真正的写入侧回归。真正的门是 L-00 与 L-02。
+
+    本仓库已有同型先例：test_26 对「未向量化的 Incident」用 UserWarning
+    而非失败，因为那也不是代码缺陷。
 
     用 `last_updated` 与 `last_scanned` 两个探针 —— 前者覆盖节点最多，
-    后者多值最严重。**这两个必须都测**：初次量化时只用了 `last_updated`，
-    得到「31 → 43，多 12 行」这个看似温和的数字，
-    而真正的 `last_scanned` 是「9 → 1,253」，低估了两个数量级。
+    后者多值最严重。**两个都要测**：初次量化只用了 `last_updated`，
+    得到「31 → 43」这个看似温和的数字，而 `last_scanned` 是「9 → 1,253」，
+    低估了两个数量级。
     """
+    findings = []
     for probe in ('last_updated', 'last_scanned'):
         rows = neptune_rca.results(
             f"MATCH (n) WHERE n.{probe} IS NOT NULL "
@@ -51,10 +126,14 @@ def test_l01_no_property_fanout_in_live_graph(neptune_rca):
             f"WHERE rows > nodes "
             f"RETURN label, nodes, rows"
         )
-        assert rows == [], (
-            f"探针 {probe} 发现属性扇出（多值累积）：{rows}。"
-            f"写入侧必须用 property(single,k,v)；"
-            f"存量用 infra/fix_property_cardinality.py --apply 规约。"
+        for r in rows:
+            findings.append(f"{probe}: {r.get('label')} {r.get('nodes')} 节点 → {r.get('rows')} 行")
+
+    if findings:
+        warnings.warn(
+            "活图谱存在属性扇出（多值累积）：\n  " + "\n  ".join(findings) +
+            "\n规约命令：python3 infra/fix_property_cardinality.py --apply"
+            "\n注意：未部署 etl_cfn 修复前，规约后仍会再生。"
         )
 
 

@@ -283,3 +283,57 @@ MATCH (n:LambdaFunction) RETURN count(*), sum(CASE WHEN n.error_rate = -1.0 THEN
 **在 Neptune 上判断"有几个节点"，不能看返回行数**：
 只要碰到多值属性，行数就是属性值的笛卡尔积。这也解释了为什么这个缺陷能存活至今——
 节点总数（867）一直是对的，只有读属性时才暴露。
+
+
+---
+
+## 附:一个诚实标注的未解问题（2026-08-29 06:30）
+
+规约后 6 个 CFN 类型的 `last_updated` **再次出现 2 个值**（相差 25 秒）。
+我没能定位到写入者，把已排除的可能性和已证实的事实都记下来，
+避免下一个人重走这条路。
+
+### 已证实（实测，非推断）
+
+| 事实 | 证据 |
+|---|---|
+| `property(single,k,v)` 在本集群行为正确 | 活图谱实验：带 single 连写 3 次仍 1 个值；不带 single 写 1 次即 2 个值 |
+| `etl_aws.upsert_vertex` 正确 | 真实调用 3 次（含改值），`last_updated`/`managedBy`/`region`/`source` 全部保持 1 个值 |
+| 生产 `etl_aws.neptune_client.py` 与分支**逐行一致** | 下载生产包对 `upsert_vertex` 做 diff，无差异 |
+| 生产 `etl_cfn` 仍是旧代码 | onMatch map 里 `last_scanned` 每轮 SET-add，**这是 `last_scanned` 再生的确证来源**（修在分支，未部署）|
+| 四个 ETL 部署包里所有不带 single 的 `last_updated` 写入**都是边写入** | 逐个看上下文：`addE` / `inE` / `g.E()` / `upsert_edge` |
+
+### 已排除
+
+- 不是 `property(single)` 失效
+- 不是 `etl_aws.upsert_vertex`
+- 不是生产与分支的代码差异（该函数无差异）
+- 不是边写入误伤顶点（Neptune 边属性天生单值）
+
+### 仍未解释
+
+**谁在顶点上写不带 single 的 `last_updated`。** 两个值相差 25 秒，
+而 etl_aws 每 15 分钟一轮 —— 说明是同一轮内的两次写入，或另有写入者。
+
+下一步该怎么查（不要再走代码检查这条路，已走到尽头）：
+1. 把 `last_updated` 规约为单值，记下时刻 T
+2. 每 30 秒轮询这 6 个节点的投影行数，记录**第一次**变成 2 行的时刻
+3. 用该时刻对照四个 Lambda 的 CloudWatch 调用日志，锁定是哪个函数的哪次调用
+4. 拿到函数后再看它那一轮的具体执行路径
+
+### 这如何影响了测试设计
+
+原先 L-01 直接断言活图谱无扇出，于是**因生产落后而红**。这是错的测试设计：
+让仓库测试因未部署代码而失败，会训练出「忽略这条失败」的习惯，
+反而掩盖真正的写入侧回归。
+
+已改为：
+- **L-00（阻塞）**：真 Neptune 上验证单值写入语义成立，且最后写入的值胜出
+- **L-02（阻塞）**：用桩捕获 ETL 发出的 Gremlin，断言刷新字段走 `property(single,…)`
+- **L-01（只告警）**：报告活图谱现状，用 `warnings.warn` 而非 assert
+  —— 本仓库已有同型先例（`test_26` 对未向量化的 Incident 也只告警）
+
+顺带修掉一个顺序依赖缺陷：原 L-00 直接 import `etl_aws.neptune_client`，
+单独跑时因 conftest 的 `config` 桩缺 `FAULT_BOUNDARY_MAP` 而 **skip**，
+与别的测试同跑时才 import 成功并**失败** —— skip 掩盖了真实错误。
+改为验证写入语义本身后，单跑与同跑结果一致。

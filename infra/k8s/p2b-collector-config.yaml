@@ -1,0 +1,46 @@
+# aws-otel-collector sidecar 配置 —— 增加 DeepFlow OTLP exporter
+#
+# 为什么：DeepFlow 的分布式追踪只支持「eBPF 采集」或「经 OpenTelemetry 协议
+# 传入」两种来源。给 http_log_trace_id 加 X-Amzn-Trace-Id 是**行不通**的 ——
+# DeepFlow 只对 traceparent / sw8 / uber-trace-id 三个头做格式感知解析，
+# 其它自定义头整串读取，而 X-Amzn-Trace-Id 的 Parent 字段每跳都不同，
+# 整串因此每跳不同，trace_id 会非 0 但无法把同一条链的各跳归到一起。
+#
+# 安全性质：两个 exporter 相互独立。即使 DeepFlow 的 38086 完全不可达，
+# awsxray 仍照常导出 —— 现有 X-Ray 链路不承担风险。
+#
+# 需要给 sidecar 容器补环境变量（DeepFlow agent 是 DaemonSet，必须发本节点）：
+#   - name: K8S_NODE_IP
+#     valueFrom:
+#       fieldRef:
+#         fieldPath: status.hostIP
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+processors:
+  batch/traces:
+    timeout: 1s
+    send_batch_size: 50
+exporters:
+  awsxray:
+    region: ap-northeast-1
+  otlphttp/deepflow:
+    traces_endpoint: "http://${env:K8S_NODE_IP}:38086/api/v1/otel/trace"
+    tls:
+      insecure: true
+    retry_on_failure:
+      enabled: true
+      max_elapsed_time: 30s
+    sending_queue:
+      enabled: true
+      queue_size: 500
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch/traces]
+      exporters: [awsxray, otlphttp/deepflow]

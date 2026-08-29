@@ -198,3 +198,101 @@ L7 的 `trace_id` 全为 0 说明应用没有传播 W3C traceparent。这需要�
 **结论**：判定某支柱「有没有」，必须查**填充率**和**实际 API 调用**，
 不能查 schema 字段是否存在或函数名叫什么。这与已固化的教训一致
 （用逐文件 diff 对照权威源，不用标记字符串匹配）。
+
+
+---
+
+# 执行结果更正（2026-08-29 06:00）
+
+原文的优先级排序里有**两项被实测/文档否证**，一项按预期完成。逐条更正。
+
+## P0 ✅ 完成，但**价值与原判断不同**
+
+原文写「接入 X-Ray，补齐服务→AWS 托管服务这层依赖」。**这个判断错了**：
+X-Ray 24h 只有 3 条真实边，且**都已存在于图谱**。
+
+真实价值是**纠正假阴性的漂移判定**：
+- 图谱里 26 条带 `drift_status` 的边有 **22 条**判为 `declared_not_observed`（85%）
+- 其中 `petsearch → ServicesEks2-ddbpetadoption…` 被 X-Ray 的 **11,512 次调用**证否
+- 根因：漂移判定**只用 DNS** 作观测源（`neptune_etl_deepflow.py:328`），
+  而 AWS SDK 启动解析一次即复用连接，VPC 端点更不产生公网 DNS
+
+已落地：X-Ray 作为第二观测源（OR 关系，盲区不重叠）、新增 `verified_by` 边属性、
+新增 Q20 `q20_dependency_verification` 作为读取方、IAM 新增内联策略 `etl-xray-read`。
+实测该边翻为 `ok` / `verified_by=xray`。
+
+顺带修掉两处既有缺陷：`if not dns_obs: return`（DNS 一空就整体跳过）
+和 `has('name', containing(svc))`（`petsite` 误匹配到 5 个节点，其中 4 个是 Lambda）。
+
+## P1 ❌ 前提被实测否证，不做
+
+原文写「AutoTracing 已有 10.11% 填充率，不需要应用埋点，可把 `Calls` 边升级为请求链」。
+
+**那 10.11% 是被非业务流量抬高的。** 只看跨 Pod 业务流量：
+
+| 指标 | 值 |
+|---|---|
+| 跨 Pod 流量的 `syscall_trace_id` 覆盖率 | **4.6%**（不是 10.11%） |
+| 跨 Pod 流量里不同的 stid | 15,799 |
+| 其中**横跨多跳**的 | **57（0.36%）** |
+| 单条链最大跳数 | **2** |
+
+抬高它的是 `127.0.0.1` 上的 `/readyz` `/healthz`（kubelet 探针，58.35%）
+与 `169.254.170.23`（Pod Identity Agent，34.21%）。
+
+`syscall_trace_id` 是**进程内**入向/出向关联，不是跨服务链路标识。
+在 0.36% 覆盖率上建缝合没有意义。
+
+**但 P1 的目标是对的，它只是依赖 P2b** —— 有了真正的 span，缝合才有数据基础。
+
+## P2a ❌ 被官方文档否证，不做
+
+原文（以及后续 A.12 节）写「给 `http_log_trace_id` 加 `X-Amzn-Trace-Id`，
+零应用改动即可」。**这条不成立。**
+
+DeepFlow 只对**三个** header 做格式感知解析
+（[HTTP 文档](https://deepflow.io/docs/features/l7-protocols/http/)脚注 [1]）：
+`traceparent` / `sw8`·`sw6` / `uber-trace-id`。
+**其它自定义头「read the full value」。**
+
+`X-Amzn-Trace-Id` 的值是 `Root=…;Parent=…;Sampled=1`，
+`Root` 全链一致但 **`Parent` 每跳都不同** → 整串每跳不同 →
+`trace_id` 会变成非 0 但**同一条链的各跳不会归到一起**。
+
+拿到非 0 的垃圾比 0 更坏，因为 0 至少是诚实的。
+**这是本仓库同一陷阱的第四次：字段有值 ≠ 值有用。**
+（前三次：`profile.in_process` 表在但 0 行；L7 的 span 字段齐全但全空；
+`probe_xray` 函数名写 X-Ray 但只建 stepfunctions/cloudwatch client。）
+
+## P2b ⏸ 方案就绪，待人工放行
+
+正路是让已有的 4 个 `aws-otel-collector` sidecar **把 span 同时发给 DeepFlow**
+（agent 默认就在 38086 收 OTLP）。DeepFlow 文档明确：分布式追踪
+「only supports traces initiated from data collected via eBPF or
+transmitted to DeepFlow through the OpenTelemetry protocol」。
+
+完整方案、离线校验、canary 步骤、三条验证、回滚：
+见 `todo/p2b-otlp-to-deepflow_20260829-0600.md`。
+配置文件：`infra/k8s/p2b-collector-config.yaml`（含原配置存档以便回滚）。
+
+**为什么要放行**：collector 配置通过 `AOT_CONFIG_CONTENT` 环境变量注入
+（实测不走 ConfigMap），改它会触发生产 Deployment 的 Pod 重建，
+失败模式是实的 —— 配置语法错误会让 sidecar 起不来、Pod 无法 Ready、服务不可用。
+
+**一条降低风险的性质**：两个 exporter 相互独立，即使 DeepFlow 的 38086
+完全不可达，`awsxray` 仍照常导出 —— **现有 X-Ray 链路不承担风险**。
+
+## 四支柱现状（更新后）
+
+| 支柱 | 采集 | 图谱存储 | 状态 |
+|---|---|---|---|
+| Metrics | ✅ | 节点属性（聚合快照） | 有 |
+| Logs | ✅ | `log_source` 指针 | 有，指针模式正确 |
+| **Traces** | ✅ X-Ray 6,949/h | **X-Ray 已作为漂移验证源接入**；仍无 span 形态 | **P0 完成；完整链路待 P2b** |
+| Profiling | ❌ CE 版限制 | 无 | 未开始（最贵、收益最不确定） |
+
+对「存储 4 个支柱所有数据」这一提法的反对意见不变：
+L7 每小时 789,055 行 = 全图规模的 910 倍，Neptune 不是遥测存储。
+目标应是**「4 个支柱的数据都能从图谱一跳可达」**，而这正是
+logs 已经做对（只存 `log_source` 指针）、traces 现在也照此办理
+（图谱存漂移验证结论与 `verified_by`，原始 span 留在 X-Ray / DeepFlow）的做法。
