@@ -112,36 +112,54 @@ Amazon Neptune
 [arh-v2-onboarding-20260829-0750.md](./arh-v2-onboarding-20260829-0750.md),
 产出文件在 `goal-loop-arh-v2/exports/`。**基于真实数据,本文档原先的三条采纳理由有两条被推翻,第三条经济上不成立。**
 
-### 7.1 理由一「补依赖发现的短板」——⚠️ 已作废,须重测(2026-08-29T08:18Z 更正)
+### 7.1 理由一「补依赖发现的短板」——成立(2026-08-29T08:42Z 二次改写,基于直接测量)
 
-> **本节 08:07 之前写下的结论是在错误前提上得出的,现予作废。**
-> 当时判定「ARH 依赖发现无用、与本项目 DNS 假阴性同源」,依据是三个 service 的
-> `list-dependencies` 全窗口为 0。但事后查明:**依赖发现的资源发现步骤当时是静默损坏的** ——
-> 官方 v1 ClusterRole 模板不含 `services`,而 next-gen 每 10 分钟对每个命名空间
-> `list services` 一次并被 403 拒绝(EKS 审计日志确证,从 06:37 到 08:07 连续 1.5 小时)。
-> 后果:`petsite-core` 的 `eligibleResourceCount` 一直是 `null`,**它根本没走到 DNS 分析那一步**。
-> 补齐 `services` 权限后,`petsite-core` 的合格资源数 null→**6**、
-> `graph-observability` 3→**8**,message 转 null(= ready to view)。
-> **因此「依赖发现在本环境无用」这条尚无结论,须在 DNS 分析产出后重测(见 tasks.md T-097)。**
+> 本节经历两次修订。08:07 的第一版结论是在**依赖发现的资源发现静默损坏**时得出的
+> (官方 v1 ClusterRole 缺 `services`,详见 tasks.md T-096),依据不可靠,已作废。
+> 08:42 改用**绕开 ARH 直接测量 DNS 数据源**的方法重做,结论与第一版一致但证据强得多。
 
-仍然有效的部分:ARH 依赖发现的机制确实是 **DNS query log 分析**(35 天回看),
-前置条件要求计算资源「make DNS queries through Route 53 resolvers」,
-且「discovers either EC2 instances (**preferred**) or VPC (fallback)」。
-这一机制与本项目已证实产生假阴性的信号同源
-(`neptune_etl_deepflow.py:328` 只用 DNS 作观测源 → 26 条边里 22 条误判
-`declared_not_observed`),所以**理论上的盲区风险依然存在** ——
-但这需要用修复后的真实数据验证,不能像本节原先那样直接断言。
+**方法**:在 `vpc-010ab37a3f9f74725` 上直接建 Route 53 Resolver 查询日志,
+不经过 ARH,直接回答「DNS 里到底有没有那些依赖」。
 
-`graph-observability` 修复前那 3 个合格资源(3 台 DeepFlow EC2,经 EC2 API 发现,
-不受 K8s 权限影响)确实产出零依赖,该观察不受此次更正影响。
+**结果**:5 分钟全 VPC 仅 **93 条** DNS 查询,且:
 
-**关键教训:评估 SUCCESS ≠ K8s 权限充分。** 三个 service 的 failure mode assessment 全部成功,
-因为评估只读 pods/deployments/replicasets(均被允许);而依赖发现额外需要 `services`,
-被拒后没有任何显式失败信号 —— 只表现为 `eligibleResourceCount` 停在 null。
-`list-service-events` 本应暴露它,但该 API **自身报错**
+| 出现的 | n | 性质 |
+|---|---|---|
+| `logs.ap-northeast-1.amazonaws.com` | 12 | CloudWatch agent |
+| `guardduty-data` / `monitoring` | 11 / 11 | 平台 agent |
+| `chronicle.security.aws.a2z.com` | 9 | AWS 内部安全 agent |
+| `search-service.petadoptions.svc.cluster.local` | 7 | 集群内 |
+| `ssm` / `xray` | 5 / 5 | agent |
+| `deepflow-agent` | 4 | 集群内 |
+| **`serviceseks2-s3bucketpetadoption…s3`** | **2** | **唯一一条真实应用依赖** |
+| `iam` / `sts` / `tagging` | 各 2 | 平台 |
+
+**完全缺席的,恰好是真正要紧的业务依赖**:Aurora PostgreSQL 端点、DynamoDB 端点、
+SQS 端点、ElastiCache 端点 —— **各 0 条**。而 Neptune 图谱里
+`payforadoption` / `pethistory` / `petlistadoptions` / `petsite` 访问 Aurora 的边
+都带文件行级证据(`source:repository.go#CreateTransaction` 等)。
+
+**这是本项目 P0 结论的独立直接验证**:`neptune_etl_deepflow.py:328` 的漂移判定只用 DNS
+作观测源,导致 26 条边里 22 条(85%)误判 `declared_not_observed`。
+机制现已直接测得:SDK 启动时解析一次即复用连接池,所以**持续访问数据层的服务在 DNS 里不可见**;
+而观测 agent 每批新建连接,把 DNS 日志刷满。
+
+**推论**:ARH 的依赖发现在本环境最终只能产出 S3 桶 + 集群内服务名 + 一堆平台端点
+(`logs` / `monitoring` / `xray` / `ssm` / `sts` / `iam`),**噪音占绝大多数**,
+灌进图谱是负价值。
+
+诚实限定:35 天历史窗口比这 5 分钟宽,pod 重启会重新解析一次 Aurora 端点,
+故理论上可能出现「volume = 1 / 35 天」的记录。但该量级的信号对依赖判定毫无用处 ——
+它恰恰就是假阴性的成因,而不是解药。
+
+**关键教训(独立于本条结论)**:**评估 SUCCESS ≠ K8s 权限充分。**
+三个 service 的 failure mode assessment 全部成功(评估只读
+pods/deployments/replicasets,均被允许),而依赖发现额外需要 `services`,
+被拒后**没有任何显式失败信号**,只表现为 `eligibleResourceCount` 停在 null,
+且这样静默持续了 1.5 小时(EKS 审计日志:06:37–08:07 每 10 分钟 3 条 403)。
+本该暴露它的 `list-service-events` **自身报错**
 `Invalid service response: ServiceEventMetadata must have one and only one member set.`
-(CLI 无法解析承载该错误的事件类型,AWS 侧 union 约束 bug),
-所以唯一可行的诊断路径是 **EKS 控制面审计日志**。
+(AWS 侧 union 约束 bug),所以唯一可行的诊断路径是 **EKS 控制面审计日志**。
 
 ### 7.2 理由二「用 ARH 拓扑边补图谱」——推翻:ARH 的边严格更粗
 

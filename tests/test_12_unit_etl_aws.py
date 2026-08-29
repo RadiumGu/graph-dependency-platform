@@ -735,7 +735,7 @@ def test_s1_13_handler_run_etl_upserts_ec2_vertices():
     upsert_calls_run1 = []
     upsert_calls_run2 = []
 
-    def _fake_upsert_vertex(label, name, extra_props, managed_by='manual'):
+    def _fake_upsert_vertex(label, name, extra_props, managed_by='manual', **kwargs):
         return f'vid-{label}-{name}'
 
     noop = MagicMock(return_value=None)
@@ -751,7 +751,12 @@ def test_s1_13_handler_run_etl_upserts_ec2_vertices():
         patch.object(h, 'fetch_ec2_cloudwatch_metrics_batch', MagicMock(return_value={})),
         patch.object(h, 'fetch_lambda_cloudwatch_metrics_batch', MagicMock(return_value={})),
         patch.object(h, 'fetch_nfm_ec2_metrics', MagicMock(return_value={})),
-        patch.object(h, 'map_nfm_metrics_to_ec2', MagicMock(return_value={})),
+        # NFM 已从「VPC 聚合广播给每个实例」改为两条路：
+        # 聚合写 VPC 节点（update_vpc_nfm_metrics），
+        # per-flow 逐流数据按 instance_id 写 EC2 节点（fetch/update_ec2_nfm_per_flow）。
+        patch.object(h, 'fetch_nfm_per_flow_metrics', MagicMock(return_value={})),
+        patch.object(h, 'update_vpc_nfm_metrics', MagicMock()),
+        patch.object(h, 'update_ec2_nfm_per_flow', MagicMock()),
         patch.object(h, 'update_ec2_metrics', MagicMock(return_value=False)),
         patch.object(h, 'update_ec2_nfm_metrics', MagicMock()),
         patch.object(h, 'update_lambda_metrics', MagicMock(return_value=False)),
@@ -809,7 +814,12 @@ def test_s1_14_handler_partial_failure_non_fatal():
         patch.object(h, 'fetch_ec2_cloudwatch_metrics_batch', MagicMock(return_value={})),
         patch.object(h, 'fetch_lambda_cloudwatch_metrics_batch', MagicMock(return_value={})),
         patch.object(h, 'fetch_nfm_ec2_metrics', MagicMock(return_value={})),
-        patch.object(h, 'map_nfm_metrics_to_ec2', MagicMock(return_value={})),
+        # NFM 已从「VPC 聚合广播给每个实例」改为两条路：
+        # 聚合写 VPC 节点（update_vpc_nfm_metrics），
+        # per-flow 逐流数据按 instance_id 写 EC2 节点（fetch/update_ec2_nfm_per_flow）。
+        patch.object(h, 'fetch_nfm_per_flow_metrics', MagicMock(return_value={})),
+        patch.object(h, 'update_vpc_nfm_metrics', MagicMock()),
+        patch.object(h, 'update_ec2_nfm_per_flow', MagicMock()),
         patch.object(h, 'update_ec2_metrics', MagicMock(return_value=False)),
         patch.object(h, 'update_ec2_nfm_metrics', MagicMock()),
         patch.object(h, 'update_lambda_metrics', MagicMock(return_value=False)),

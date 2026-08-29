@@ -53,8 +53,36 @@ def _format_prop_val(k: str, v) -> str:
     return f"'{safe_str(v)}'"
 
 
-def upsert_vertex(label: str, name: str, extra_props: dict, managed_by: str = 'manual'):
-    """upsert 节点，返回 vertex ID 并写入缓存"""
+def upsert_vertex(label: str, name: str, extra_props: dict, managed_by: str = 'manual',
+                  identity_prop: str = None):
+    """upsert 节点，返回 vertex ID 并写入缓存
+
+    ## identity_prop —— 为什么需要它
+
+    默认以 `name` 作为身份键（`mergeV([label, name])`）。对大多数类型没问题，
+    但对 **name 可变**的类型是个结构性缺陷：
+
+    EC2 的 name 来自 Name 标签（`collect_ec2_instances` 里
+    `next((t['Value'] for t in tags if t['Key']=='Name'), instance_id)`）。
+    标签随时可以加、改、删 —— 一旦变化，mergeV 匹配不到旧节点就**新建一个**，
+    旧节点带着当时的属性永远孤立在图里。
+
+    实测后果（2026-08-29）：14 个 EC2Instance 节点里 **4 个是重复实体** ——
+    4 台 EKS 工作节点各有两份，一份以实例 ID 命名（那些实例还没打 Name 标签时建的，
+    88 天前停止更新），一份以 Name 标签命名。任何「有几台工作节点」
+    「哪些实例 RTT 高」的查询都会数两次，且其中一份带 3 个月前的陈旧值。
+
+    注意**修 name 的取值规则防不住这件事** —— 那条规则本来就是对的
+    （Name 标签优先、缺失回落 ID）。问题在于拿一个可变属性当身份。
+
+    传入 identity_prop 后，以该属性（EC2 用不可变的 instance_id）匹配，
+    name 降级为普通可变属性，跟着标签变化更新而不再产生新节点。
+
+    Args:
+        identity_prop: 用作身份键的属性名，必须存在于 extra_props 中。
+                       为 None 时行为与原先**完全一致**（以 name 匹配），
+                       保证其余 30 多种节点类型不受影响。
+    """
     n = safe_str(name)
     mb = safe_str(managed_by)
     all_props = {'environment': ENVIRONMENT}
@@ -66,21 +94,41 @@ def upsert_vertex(label: str, name: str, extra_props: dict, managed_by: str = 'm
             all_props['region'] = fb_region
     all_props.update(extra_props)
     ts_now = int(time.time())
+
+    # 身份键的选择。identity_prop 缺失或其值为空时**回落到 name**，
+    # 而不是抛错：一个拿不到 instance_id 的实例仍然应该进图谱，
+    # 只是退回到旧的（有缺陷的）身份语义，比整轮 ETL 失败好。
+    id_key, id_val = 'name', n
+    if identity_prop:
+        raw = all_props.get(identity_prop)
+        if raw not in (None, ''):
+            id_key, id_val = safe_str(identity_prop), safe_str(raw)
+        else:
+            logger.warning(
+                "upsert_vertex(%s): identity_prop=%r 的值为空，回落到以 name 匹配。"
+                "该节点仍可能因 name 变化而产生重复。", label, identity_prop)
+
     props_create = f"'name': '{n}', 'managedBy': '{mb}', 'source': 'aws-etl'"
     props_match = f"'managedBy': '{mb}', 'source': 'aws-etl'"
+    # 以 instance_id 为身份时，name 必须进 onMatch —— 否则标签改名后
+    # 图谱里仍留着旧名字，等于只是把重复换成了陈旧。
+    if id_key != 'name':
+        props_match += f", 'name': '{n}'"
     for k, v in all_props.items():
         ks = safe_str(k)
         fv = _format_prop_val(k, v)
         props_create += f", '{ks}': {fv}"
         props_match  += f", '{ks}': {fv}"
     prop_chain = f".property(single,'managedBy','{mb}').property(single,'source','aws-etl')"
+    if id_key != 'name':
+        prop_chain += f".property(single,'name','{n}')"
     for k, v in all_props.items():
         ks = safe_str(k)
         fv = _format_prop_val(k, v)
         prop_chain += f".property(single,'{ks}',{fv})"
     prop_chain += f".property(single,'last_updated',{ts_now})"
     gremlin = (
-        f"g.mergeV([(T.label): '{label}', 'name': '{n}'])"
+        f"g.mergeV([(T.label): '{label}', '{id_key}': '{id_val}'])"
         f".option(Merge.onCreate, [(T.label): '{label}', {props_create}])"
         f".option(Merge.onMatch, [{props_match}])"
         f"{prop_chain}"

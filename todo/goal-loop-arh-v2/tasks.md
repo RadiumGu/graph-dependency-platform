@@ -451,19 +451,40 @@ SLO 仅 tier0/tier1 需非空。这是 API 约束导致的判定修正,不是降
   - `2026-08-29T08:13Z: 用户批准后开启 EKS 审计日志,定位到 services 403。`
   - `2026-08-29T08:18Z: eligibleResourceCount null→6 / 3→8,message 转 null,修复确认。`
 
-### T-097 【需重测】T-090 wontfix 的第一条理由需基于新数据复核
-- 状态:`todo` · 依赖:T-096
-- T-090(第 5 个 ETL)判 wontfix 的三条理由里,**第一条「依赖发现无用、与 DNS 假阴性同源」
-  是在资源发现静默损坏的状态下测的**,`petsite-core` 当时连计算资源都没数出来
-  (eligibleResourceCount=null),根本没走到 DNS 分析。该结论**下得过早,须重测**。
-- 仍然成立且独立支撑 wontfix 的是第二、三条:
-  拓扑边严格更粗(集群粒度 vs 微服务粒度 + 文件行级证据)、
-  每月只含 2 次评估且零消费方。**wontfix 结论本身不变**,但理由一要改写。
-- 重测方法:等 DNS 分析产出(35 天回看 + 每 10 分钟轮询),按 5×7 天分段查
-  `list-dependencies`,看 `petsite-core` 的 6 个合格资源是否产出依赖;
-  若有,评估其粒度与 provenance 再决定是否修改 T-090 的理由一。
-- `graph-observability` 那 3 台 EC2 零依赖的观察不受影响(走 EC2 API 发现,与 K8s 权限无关)。
+### T-097 【已结】理由一重新成立 —— 直接测量 DNS 数据源本身
+- 状态:`done`(2026-08-29T08:42Z,证据强于最初那次)
+- 方法:**绕开 ARH**,在 `vpc-010ab37a3f9f74725` 上直接建 Route 53 Resolver 查询日志
+  (config `rqlc-e868f3856e554909`,association `rqlca-82bc0e5bdc6d4eb6`,
+  日志组 `/aws/route53resolver/PetSiteVPC`,保留期 3 天),测「DNS 里到底有没有数据」。
+- 结果:5 分钟全 VPC 仅 **93 条** DNS 查询。构成:
+  | query_name | n | 性质 |
+  |---|---|---|
+  | logs.ap-northeast-1.amazonaws.com | 12 | CloudWatch agent |
+  | guardduty-data / monitoring | 11 / 11 | 平台 agent |
+  | chronicle.security.aws.a2z.com | 9 | AWS 内部安全 agent |
+  | search-service.petadoptions.svc.cluster.local | 7 | 集群内 |
+  | ssm / xray | 5 / 5 | agent |
+  | deepflow-agent | 4 | 集群内 |
+  | **serviceseks2-s3bucketpetadoption…s3** | **2** | **唯一真实应用依赖** |
+  | iam / sts / tagging | 各 2 | 平台 |
+- **完全缺席的正是要紧的业务依赖**:Aurora PostgreSQL 端点、DynamoDB 端点、
+  SQS 端点、ElastiCache 端点 —— **各 0 条**。
+  而 Neptune 图谱里 `payforadoption` / `pethistory` / `petlistadoptions` / `petsite`
+  访问 Aurora 的边都带文件行级证据。
+- **结论**:这是本项目 P0 结论(`neptune_etl_deepflow.py:328` 只用 DNS 作观测源 →
+  85% 假阴性)的**独立直接验证**。SDK 启动解析一次即复用连接池,所以持续访问数据层的服务
+  在 DNS 里不可见;而观测 agent 每批新建连接,把 DNS 日志刷满。
+  **ARH 的依赖发现最终只能产出 S3 桶 + 集群内服务名 + 一堆平台端点,噪音占绝大多数。**
+- 诚实限定:35 天历史窗口比这 5 分钟宽,pod 重启会重新解析一次 Aurora 端点,
+  故理论上可能出现「volume=1 / 35 天」的记录。但该量级信号对依赖判定无用,
+  恰恰就是 `declared_not_observed` 假阴性的成因。
+- → **T-090 wontfix 的理由一重新成立**,且证据强于最初那次(最初是在资源发现损坏状态下测的)。
+  原方案文档第 7.1 节据此二次改写。
+- 遗留清理项:Route 53 解析器查询日志与 EKS 审计日志均为诊断而开,
+  用完应关(`disassociate-resolver-query-log-config` + `delete-resolver-query-log-config`;
+  `update-cluster-config` 把 logging 置回 disabled)。
 - 记录:
+  - `2026-08-29T08:42Z: 直接测量完成,理由一重新成立,T-097 关闭。`
 
 
 ### T-028 【新增】S4 修复后仍失败 —— "did not produce a topology" 是字面意思

@@ -50,7 +50,8 @@ from collectors.data_stores import (
 )
 from cloudwatch import (
     fetch_ec2_cloudwatch_metrics_batch, fetch_lambda_cloudwatch_metrics_batch,
-    fetch_nfm_ec2_metrics, map_nfm_metrics_to_ec2,
+    fetch_nfm_ec2_metrics, fetch_nfm_per_flow_metrics,
+    update_vpc_nfm_metrics, update_ec2_nfm_per_flow,
     update_ec2_metrics, update_ec2_nfm_metrics, update_lambda_metrics,
 )
 from business_layer import upsert_business_capabilities, scan_ecr_startup_deps
@@ -136,7 +137,11 @@ def run_etl():
             'health_status': 'healthy' if inst.get('state') == 'running' else 'unhealthy',
             'log_source': _log_source_ec2,
             **extra,
-        }, inst['managed_by'])
+        # identity_prop='instance_id'：EC2 的 name 来自 Name 标签，是**可变属性**。
+        # 以它作身份键时，标签一改 mergeV 就匹配不到旧节点而新建一个 ——
+        # 实测造成 14 个 EC2Instance 里 4 个是重复实体（同一台机器两份，
+        # 一份以实例 ID 命名、88 天前冻结）。改以不可变的 instance_id 匹配。
+        }, inst['managed_by'], identity_prop='instance_id')
         inst_vid_map[inst['id']] = inst_vid
         stats['vertices'] += 1
         upsert_az_region(inst['az'])
@@ -159,12 +164,19 @@ def run_etl():
         except Exception as e:
             logger.warning(f"EC2 CW metrics {inst['name']}: {e}")
 
+    # NFM 有两种粒度，必须分别写到各自真正描述的实体上：
+    #   · 监视器级（= VPC 级）聚合 → 写 VPC 节点。
+    #     原实现把它逐个复制给 VPC 内每个 EC2 实例，实测 7 个节点的
+    #     net_rtt_avg_ms 全等于 38.25 —— 「某台机器的 RTT」成了假数据。
+    #   · per-flow 逐流数据 → 按 instance_id 归集后写 EC2 节点。
+    #     这才是真正的实例级指标，并且能区分 INTER_AZ（跨 AZ 重传），
+    #     对 fault_boundary='az' 模型直接相关。
     nfm_cw = fetch_nfm_ec2_metrics(cw_client)
     if nfm_cw:
-        ec2_nfm_map = map_nfm_metrics_to_ec2(nfm_cw, ec2_instances)
-        for ec2_name, nfm_metrics in ec2_nfm_map.items():
-            update_ec2_nfm_metrics(ec2_name, nfm_metrics)
-        logger.info(f"NFM metrics written to {len(ec2_nfm_map)} EC2 nodes")
+        update_vpc_nfm_metrics(nfm_cw)
+    nfm_flow = fetch_nfm_per_flow_metrics()
+    if nfm_flow:
+        update_ec2_nfm_per_flow(nfm_flow)
 
     # ── Step 3: EKS cluster ──────────────────────────────────────────────────
     eks_cluster = collect_eks_cluster(eks_client)

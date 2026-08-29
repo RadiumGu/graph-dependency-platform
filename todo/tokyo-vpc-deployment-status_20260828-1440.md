@@ -1082,3 +1082,107 @@ X-Ray 只知道「这次调用花了 458ms」,DeepFlow 知道「这条流的 L7 
 - `etl_deepflow` 里另有一个 `fetch_nfm_throttling()`,与 etl_aws 这条路**是两条独立实现**,
   需要核对是否重复或冲突(两个实现掩盖同一个缺陷,是本仓库反复出问题的模式)。
 
+
+## D.7 两个缺陷的修复（2026-08-29 08:35–08:55 实施并已上生产）
+
+### 修 D.4：EC2 身份键 —— 真正的根因不是 name 规则
+
+先纠正 D.4 里的修法建议。查代码后发现 **name 的取值规则本来就是对的**:
+
+```python
+name = next((t['Value'] for t in tags if t['Key'] == 'Name'), instance_id)
+```
+
+Name 标签优先、缺失才回落 ID。所以「修 name 规则」防不住复发。
+
+**真正的缺陷是拿一个可变属性当节点身份**:`upsert_vertex(label, name, ...)`
+以 `name` 做 `mergeV` 的匹配键,而 Name 标签随时可加/改/删 ——
+一改就匹配不到旧节点而新建一个,旧节点永远孤立。
+
+修法:给 `upsert_vertex` 加 `identity_prop` 参数,EC2 传 `'instance_id'`(不可变)。
+两条必须同时具备的语义:
+- 值为空时**回落到 name** 而不是抛错 —— 拿不到 instance_id 的实例仍应进图谱
+- 以非 name 作身份时,`name` 必须进 **onMatch** —— 否则改名后图谱留旧名字,
+  等于把「重复」换成了「陈旧」
+
+`identity_prop` 缺省时行为与原先**完全一致**,保证其余 30 多种节点类型不受影响。
+
+**部署顺序很重要,反了就白做**:先部署写入侧修复,再归并存量。
+反过来的话下一轮 ETL 立刻把重复造回来(与 `last_scanned` 那个坑同理)。
+
+部署后观察到一个**中间态**:身份键生效后,mergeV 按 instance_id 匹配到了
+以 ID 命名的旧节点并把它的 name 更新成 Name 标签 —— 于是两个节点**同名**,
+重复变得更难发现。这印证了归并的紧迫性。
+
+归并脚本 `infra/merge_duplicate_ec2_nodes.py`(`--dry-run` 默认 / `--apply`):
+- 存活方按**边数最多**选,刻意**不按 last_updated** —— 两个同 instance_id 的节点
+  被 mergeV 随机命中,实测 last_updated 已完全相同,按时间选等于抛硬币
+- 迁移边而非直接删:实测边数 42 vs 3、31 vs 3、32 vs 3,以及 **35 vs 16**
+- 全程 openCypher(`neptune_client` 只有这一个通道),不另开 Gremlin 连接
+
+执行结果:**25 条边全部在存活方已存在,需迁移 0 条,删除 4 个重复节点**。
+随后触发 ETL 复查 —— **不再生**。
+
+| 指标 | 修复前 | 修复后 |
+|---|---|---|
+| EC2Instance 节点 | 14 | **10** |
+| 重复实体 | 4 | **0** |
+| 以实例 ID 作为 name 的节点 | 4 | **0** |
+
+### 修 D.3：NFM 改用 per-flow
+
+新增 `fetch_nfm_per_flow_metrics()`,走 `start_query_monitor_top_contributors`。
+按 `instance_id` 归集(不用 name),单独统计 `INTER_AZ`。
+VPC 级聚合改由 `update_vpc_nfm_metrics()` 写到 **VPC 节点**并标 `nfm_scope='vpc'`。
+`map_nfm_metrics_to_ec2` 标记废弃并去掉 `or not vpc_ids` 兜底。
+
+**IAM**:原来只授了 `GetMonitor`/`ListMonitors`,per-flow 需要
+`StartQueryMonitorTopContributors` / `GetQueryStatus...` / `GetQueryResults...`。
+按约定**新增内联策略** `etl-nfm-per-flow-query`,现有 5 个策略未改动。
+带具体资源 ARN 的 `SimulatePrincipalPolicy` 三个动作均 `allowed`
+（不带 ARN 时对资源受限策略必然 implicitDeny,那是模拟方式不对,不是策略问题）。
+权限**逐个动作渐进生效**(先过 StartQuery、再卡 GetQueryStatus、再卡 GetQueryResults),
+是 IAM 最终一致性的正常表现,等约 1 分钟即全通。
+
+修复效果 —— 数值终于各不相同:
+
+| 实例 | 重传 | 其中跨 AZ | 流数 |
+|---|---|---|---|
+| PetSite-Node-az1a-1 | **19** | 4 | 16 |
+| PetSite-Node-az1c-2 | **13** | 1 | 11 |
+| PetSite-Node-az1a-2 | **10** | 0 | 7 |
+| PetSite-Node-az1c-1 | **3** | 0 | 3 |
+| deepflow-server | **1** | 1 | 1 |
+
+对比修复前:7 个节点的 `net_rtt_avg_ms` **全部等于 38.25**。
+VPC 节点现在带 `nfm_scope='vpc'` + `rtt=36.0`,那句话是真的。
+
+### 守门测试
+
+`tests/test_34_ec2_identity_and_nfm.py`,6 个用例:
+N-01(EC2 用 instance_id 作身份)、N-02(回落语义 + name 进 onMatch)、
+N-03(不广播 VPC 聚合)、N-04(无 `or not vpc_ids` 兜底)、
+N-05(单独统计 INTER_AZ)、N-06(活图谱无重复,**只告警**)。
+
+N-04 的第一版是 `assert 'or not vpc_ids' not in source`,**立刻误报** ——
+源码 docstring 里引用了这段旧代码来解释为什么删掉它,
+子串匹配分不清「代码里有」和「文档里引用」。改用 `ast` 遍历 `BoolOp`
+检查真实的条件表达式。这是仓库既有纪律(别用子串/标记匹配)的又一次印证。
+
+### 状态
+
+| 指标 | 本轮前 | 现在 |
+|---|---|---|
+| 节点 | 891 | **910** |
+| 边 | 1,476 | **1,497** |
+| EC2Instance | 14(4 重复) | **10**(0 重复) |
+| 测试 | 389 passed | **395 passed / 0 failed / 145 skipped** |
+
+生产已部署:`neptune-etl-from-aws`(备份在
+`$KIROCREW_SCRATCH/etl_aws-prod-backup.zip`,回滚用 `update-function-code`)。
+
+**仍未做**:NFM 的 `kubernetesMetadata` 足以支撑「service → service + TCP 质量」
+的边(那会让 NFM 成为图谱里第三个平行拓扑源),刻意没有半做 ——
+半成品只会留下一批语义不明的边。`remoteResources` 仍为空,跨 VPC 未覆盖。
+`etl_deepflow` 的 `fetch_nfm_throttling()` 与本条路是两条独立实现,待核对。
+
