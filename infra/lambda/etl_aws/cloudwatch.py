@@ -4,6 +4,7 @@ cloudwatch.py - CloudWatch metrics collection for EC2 and Lambda nodes.
 
 import datetime
 import logging
+import os
 import time
 import boto3
 from neptune_client import neptune_query, safe_str
@@ -249,17 +250,34 @@ def fetch_nfm_ec2_metrics(cw_client) -> dict:
 
 
 # NFM per-flow 查询的 destination category。
-# 实测（2026-08-29，petsite-nfm-monitor）各类别的数据量：
-#   INTRA_AZ 5 条 / INTER_AZ 5 条 / UNCLASSIFIED 5 条
-#   INTER_VPC / AMAZON_S3 / AMAZON_DYNAMODB 均 0 条
+# 实测（2026-08-29，petsite-nfm-monitor）合法枚举由 API 校验错误反推得到：
+#   [LOCAL_ZONE, INTERNET, AMAZON_DYNAMODB, INTER_VPC, UNCLASSIFIED,
+#    AWS_SERVICE, INTER_REGION, TRANSIT_GATEWAY, INTRA_AZ, AMAZON_S3, INTER_AZ]
 # INTER_AZ **有数据且有重传**，这对本项目的 fault_boundary='az' 模型直接相关，
 # 所以必须单独统计，不能与 INTRA_AZ 混在一起。
 NFM_FLOW_CATEGORIES = ('INTRA_AZ', 'INTER_AZ', 'UNCLASSIFIED')
+
+# 做拓扑发现用的 category：服务间 + 到 AWS 托管服务。
+# `AMAZON_S3` / `AMAZON_DYNAMODB` 的远端**没有服务名** —— category 本身就是
+# 远端类型。第一版过滤器要求 remoteServiceName 非空，把这两类整批丢掉了，
+# 于是错误地得出「可用服务对 0 组」。
+NFM_TOPOLOGY_CATEGORIES = {
+    'INTRA_AZ': None,            # 远端是集群内服务，取 remoteServiceName
+    'INTER_AZ': None,
+    'AMAZON_S3': 's3',           # 远端固定，映射到 AWSServiceEndpoint 的规范名
+    'AMAZON_DYNAMODB': 'dynamodb',
+}
+
+# NFM per-flow 查询的时间窗**硬上限 1 小时**。
+# 实测传 120 分钟直接报 `Time range can not exceed 1 hour`。
+# 取 50 分钟而不是 60：60 正好擦着上限、没有余量，
+# 而窗口右端要留 5 分钟给数据落地延迟，两者叠加容易越界。
+NFM_FLOW_WINDOW_MINUTES = 50
 NFM_FLOW_QUERY_TIMEOUT = 40
 NFM_FLOW_LIMIT = 50
 
 
-def fetch_nfm_per_flow_metrics(window_minutes: int = 60) -> dict:
+def fetch_nfm_per_flow_metrics(window_minutes: int = NFM_FLOW_WINDOW_MINUTES) -> dict:
     """
     用 NFM 的 top-contributors 查询取**逐流**网络质量，按实例归集。
 
@@ -270,6 +288,9 @@ def fetch_nfm_per_flow_metrics(window_minutes: int = 60) -> dict:
     「PetSite-Node-az1a-1 的 RTT 是 38.25ms」这句话是**假的**，
     那是整个 VPC 的平均值。这与把泛化的 X-Ray `S3` 节点当成某个具体 bucket
     是同一类错误：**把粗粒度观测归属到细粒度实体**。
+
+    ⚠️ 时间窗**硬上限 1 小时**（实测传 120 分钟报 `Time range can not exceed 1 hour`）。
+    默认取 NFM_FLOW_WINDOW_MINUTES=50 而非 60 —— 60 正好擦着上限没余量。
 
     per-flow 查询给出的字段（实测）：
       localIp / localInstanceId / localAz / localSubnetId
@@ -358,6 +379,262 @@ def fetch_nfm_per_flow_metrics(window_minutes: int = 60) -> dict:
         e['nfm_scope'] = 'instance'
     logger.info("NFM per-flow: %d 个实例有逐流数据", len(per_inst))
     return per_inst
+
+
+def _nfm_run_query(nfm, monitor_name, start, end, metric, category, limit):
+    """跑一次 NFM top-contributors 查询并返回 topContributors 列表。
+
+    查询是异步的：StartQuery → 轮询 GetQueryStatus → GetQueryResults，
+    实测 SUCCEEDED 约需 10 秒。
+    """
+    ts_fmt = '%Y-%m-%dT%H:%M:%S'
+    q = nfm.start_query_monitor_top_contributors(
+        monitorName=monitor_name,
+        startTime=start.strftime(ts_fmt),
+        endTime=end.strftime(ts_fmt),
+        metricName=metric,
+        destinationCategory=category,
+        limit=limit,
+    )
+    qid = q.get('queryId')
+    if not qid:
+        return []
+    waited, status = 0, ''
+    while waited < NFM_FLOW_QUERY_TIMEOUT:
+        time.sleep(4)
+        waited += 4
+        status = nfm.get_query_status_monitor_top_contributors(
+            monitorName=monitor_name, queryId=qid).get('status', '')
+        if status in ('SUCCEEDED', 'FAILED'):
+            break
+    if status != 'SUCCEEDED':
+        logger.warning("NFM 查询未成功 metric=%s category=%s status=%s",
+                       metric, category, status or 'TIMEOUT')
+        return []
+    res = nfm.get_query_results_monitor_top_contributors(
+        monitorName=monitor_name, queryId=qid)
+    return res.get('topContributors', []) or []
+
+
+def fetch_nfm_topology() -> dict:
+    """
+    用 NFM per-flow 发现**服务级依赖拓扑**，作为 DeepFlow / X-Ray 之外的第三个源。
+
+    ## 为什么用 DATA_TRANSFERRED 而不是 RETRANSMISSIONS
+
+    第一版用 RETRANSMISSIONS 做拓扑，实测「可用服务对 0 组」。
+    原因是 RETRANSMISSIONS **只报发生过重传的流** —— 网络正常的业务流产生零行。
+    用它做拓扑发现等于只看异常。DATA_TRANSFERRED 覆盖每条流，才是拓扑指标。
+    （重传仍然采集，但用途是质量而非拓扑，见 fetch_nfm_per_flow_metrics。）
+
+    ## 方向从 targetPort 判定，不靠推断
+
+    NFM 报的是**流**，同一条连接两端各报一次，所以每个服务对会出现两个方向。
+    实测 `targetPort` 能干净地区分：
+        service-petsite → search-service  targetPort=80   ← 客户端侧，真方向
+        search-service  → service-petsite targetPort=0    ← 镜像记录
+    所以只取 `targetPort > 0` 的记录。这是**数据自身携带的信息**，
+    不是从字节数大小去猜谁调用谁。
+
+    ## 远端类型由 category 决定
+
+    `AMAZON_S3` / `AMAZON_DYNAMODB` 的远端**没有服务名** —— category 本身就是
+    远端类型。第一版过滤器要求 remoteServiceName 非空，把这两类整批丢掉了。
+    但注意粒度：NFM 只说「访问了 S3」，**不给具体 bucket** ——
+    所以落 AWSServiceEndpoint（granularity='service'），
+    与 X-Ray 泛化 S3 节点同一处理，绝不猜具体资源。
+
+    返回 [{'src','dst','dst_kind','bytes','flows','category','cross_az'}]
+    dst_kind ∈ {'service', 'aws_service'}
+    """
+    out = {}
+    try:
+        nfm = boto3.client('networkflowmonitor', region_name=REGION)
+        monitors = nfm.list_monitors().get('monitors', [])
+        end = datetime.datetime.utcnow() - datetime.timedelta(minutes=5)
+        start = end - datetime.timedelta(minutes=NFM_FLOW_WINDOW_MINUTES)
+
+        for m in monitors:
+            monitor_name = m.get('monitorName', '')
+            if not monitor_name:
+                continue
+            for category, fixed_remote in NFM_TOPOLOGY_CATEGORIES.items():
+                try:
+                    rows = _nfm_run_query(nfm, monitor_name, start, end,
+                                          'DATA_TRANSFERRED', category,
+                                          NFM_FLOW_LIMIT)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("NFM 拓扑查询失败 category=%s: %s", category, exc)
+                    continue
+
+                for c in rows:
+                    # 只取客户端侧记录 —— 见上方 targetPort 的说明
+                    if int(c.get('targetPort') or 0) <= 0:
+                        continue
+                    k = c.get('kubernetesMetadata') or {}
+                    src = k.get('localServiceName') or ''
+                    if not src:
+                        continue          # 无服务名（裸 Pod / 控制面组件），跳过
+                    if fixed_remote:
+                        dst, dst_kind = fixed_remote, 'aws_service'
+                    else:
+                        dst = k.get('remoteServiceName') or ''
+                        # 'kubernetes' 是 API server，属控制面不是业务依赖
+                        if not dst or dst == 'kubernetes':
+                            continue
+                        dst_kind = 'service'
+                    key = (src, dst, dst_kind)
+                    e = out.setdefault(key, {
+                        'src': src, 'dst': dst, 'dst_kind': dst_kind,
+                        'bytes': 0.0, 'flows': 0, 'cross_az': False,
+                        'categories': set(),
+                    })
+                    e['bytes'] += float(c.get('value') or 0)
+                    e['flows'] += 1
+                    e['categories'].add(category)
+                    if category == 'INTER_AZ':
+                        e['cross_az'] = True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("fetch_nfm_topology failed (non-fatal): %s", exc)
+
+    result = list(out.values())
+    for e in result:
+        e['categories'] = '; '.join(sorted(e['categories']))
+    logger.info("NFM 拓扑：%d 条有向服务级依赖", len(result))
+    return result
+
+
+def upsert_nfm_topology(edges: list) -> dict:
+    """
+    把 NFM 观测到的服务级依赖写进图谱。
+
+    ## 写入纪律与 etl_xray 完全一致
+
+    · 边**已存在**（无论谁发现）→ 只补 NFM 的度量，
+      **绝不覆盖 source / dependency_kind**。原 source 记录「谁首先发现」。
+    · 边**不存在** → 新建，`source='nfm'`。这才是 NFM 自己的贡献。
+    · 目标节点不存在 → **回读确认后计入 skipped**，不谎报成功
+      （etl_xray 踩过「没抛异常就算创建成功」这个坑）。
+
+    源服务名是 **K8s 部署名**（`search-service`），需经 service_mappings.json
+    的 k8s_alias 映射到图谱服务名（`petsearch`）—— 复用同一份映射，不另造。
+    """
+    import json as _json
+    # k8s_alias：与 etl_deepflow / etl_xray 读同一个文件，不内联副本
+    alias = {}
+    here = os.path.dirname(os.path.abspath(__file__))
+    for cand in (os.path.join(here, 'service_mappings.json'),
+                 os.path.join(here, '..', 'etl_deepflow', 'service_mappings.json')):
+        if os.path.isfile(cand):
+            try:
+                with open(cand, encoding='utf-8') as fh:
+                    alias = _json.load(fh).get('k8s_alias', {}) or {}
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("读 service_mappings.json 失败: %s", exc)
+            break
+    if not alias:
+        logger.warning("k8s_alias 为空 —— K8s 部署名不会被映射成图谱服务名，"
+                       "NFM 拓扑边可能大量落不进图谱")
+
+    def _canon(name: str) -> str:
+        # NFM 的 K8s Service 名可能带 'service-' 前缀（实测 service-petsite）
+        n = name
+        if n.startswith('service-'):
+            n = n[len('service-'):]
+        return alias.get(n, n)
+
+    ts = int(time.time())
+    stats = {'created': 0, 'corroborated': 0, 'skipped_no_node': 0, 'failed': 0}
+
+    for e in edges:
+        src = _canon(e['src'])
+        if e['dst_kind'] == 'aws_service':
+            dst_match = (f"__.hasLabel('AWSServiceEndpoint')"
+                         f".has('name','{safe_str(e['dst'])}')")
+            edge_type = 'AccessesData'
+        else:
+            dst = _canon(e['dst'])
+            dst_match = (f"__.or(__.hasLabel('Microservice').has('name','{safe_str(dst)}'),"
+                         f" __.hasLabel('LambdaFunction').has('name','{safe_str(dst)}'))")
+            edge_type = 'Calls'
+
+        src_clause = (f"g.V().or("
+                      f"__.hasLabel('Microservice').has('name','{safe_str(src)}'),"
+                      f" __.hasLabel('LambdaFunction').has('name','{safe_str(src)}'))")
+        metrics = (f".property('nfm_bytes',{float(e['bytes'])})"
+                   f".property('nfm_flow_count',{int(e['flows'])})"
+                   f".property('nfm_cross_az',{'true' if e['cross_az'] else 'false'})"
+                   f".property('nfm_categories','{safe_str(e['categories'])}')"
+                   f".property('nfm_last_seen',{ts})")
+
+        probe = (f"{src_clause}.as('s').V().where({dst_match})"
+                 f".inE('{edge_type}').where(__.outV().has('name','{safe_str(src)}'))"
+                 f".count()")
+        try:
+            resp = neptune_query(probe)
+            existing = int(_extract_count(resp))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("NFM 边探测失败 %s → %s: %s", src, e['dst'], exc)
+            stats['failed'] += 1
+            continue
+
+        if existing > 0:
+            g = (f"{src_clause}.as('s').V().where({dst_match})"
+                 f".inE('{edge_type}').where(__.outV().has('name','{safe_str(src)}'))"
+                 f"{metrics}.property('active',true).property('last_seen',{ts})")
+            key = 'corroborated'
+        else:
+            g = (f"{src_clause}.as('s').V().where({dst_match})"
+                 f".coalesce("
+                 f"  __.inE('{edge_type}').where(__.outV().has('name','{safe_str(src)}')),"
+                 f"  __.addE('{edge_type}').from('s')"
+                 f"    .property('source','nfm')"
+                 f"    .property('dependency_kind','dynamic')"
+                 f"    .property('first_seen',{ts})"
+                 f")"
+                 f"{metrics}.property('active',true).property('last_seen',{ts})")
+            key = 'created'
+
+        try:
+            neptune_query(g)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("NFM 边写入失败 %s → %s: %s", src, e['dst'], exc)
+            stats['failed'] += 1
+            continue
+
+        if key == 'corroborated':
+            stats['corroborated'] += 1
+            continue
+        # 回读确认：目标节点不存在时 .V().where() 静默产出空集、不抛异常也不写边
+        try:
+            landed = int(_extract_count(neptune_query(probe)))
+        except Exception:  # noqa: BLE001
+            landed = 0
+        if landed > 0:
+            stats['created'] += 1
+        else:
+            stats['skipped_no_node'] += 1
+            logger.info("NFM 观测到 %s -[%s]-> %s，但图谱无匹配目标节点，跳过",
+                        src, edge_type, e['dst'])
+
+    logger.info("NFM 拓扑写入：%s", stats)
+    return stats
+
+
+def _extract_count(resp) -> int:
+    """从 Gremlin count() 响应里取标量。"""
+    try:
+        data = resp['result']['data']
+        if isinstance(data, dict):
+            v = data.get('@value')
+            if isinstance(v, list) and v:
+                first = v[0]
+                return int(first.get('@value') if isinstance(first, dict) else first)
+        if isinstance(data, list) and data:
+            return int(data[0])
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
 
 
 def map_nfm_metrics_to_ec2(nfm_metrics: dict, ec2_instances: list) -> dict:

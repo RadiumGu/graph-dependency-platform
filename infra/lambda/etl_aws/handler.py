@@ -51,6 +51,7 @@ from collectors.data_stores import (
 from cloudwatch import (
     fetch_ec2_cloudwatch_metrics_batch, fetch_lambda_cloudwatch_metrics_batch,
     fetch_nfm_ec2_metrics, fetch_nfm_per_flow_metrics,
+    fetch_nfm_topology, upsert_nfm_topology,
     update_vpc_nfm_metrics, update_ec2_nfm_per_flow,
     update_ec2_metrics, update_ec2_nfm_metrics, update_lambda_metrics,
 )
@@ -177,6 +178,16 @@ def run_etl():
     nfm_flow = fetch_nfm_per_flow_metrics()
     if nfm_flow:
         update_ec2_nfm_per_flow(nfm_flow)
+    #   · NFM 还是第三个**拓扑**观测源（X-Ray / DeepFlow 之外）：per-flow 的
+    #     kubernetesMetadata 给出服务对，targetPort 给出方向，
+    #     destinationCategory 给出远端类型（含 AMAZON_S3 / AMAZON_DYNAMODB）。
+    #     用 DATA_TRANSFERRED 而不是 RETRANSMISSIONS —— 后者只报有重传的流，
+    #     实测拿它做拓扑得到「服务对 0 组」。
+    nfm_topo = fetch_nfm_topology()
+    if nfm_topo:
+        topo_stats = upsert_nfm_topology(nfm_topo)
+        stats['nfm_edges_created'] = topo_stats['created']
+        stats['nfm_edges_corroborated'] = topo_stats['corroborated']
 
     # ── Step 3: EKS cluster ──────────────────────────────────────────────────
     eks_cluster = collect_eks_cluster(eks_client)

@@ -1,15 +1,20 @@
-# 压测用 internal ALB 的 TargetGroupBinding
+# 压测 / 跨 VPC 流量生成用的内网入口 —— TargetGroupBinding 清单
 #
-# 作用:把 petadoptions/service-petsite 的 Pod IP 同时注册到压测专用目标组 petsite-lt-tg,
-#      从而让 internal ALB(petsite-internal-lt)也能转发到同一批 Pod。
+# 目的:让 agent-vpc-v2 (10.1.0.0/16) 里的负载生成器经 VPC 对等 + 内网 ALB 访问
+#      PetSite,全程不出公网。
 #
-# 与现有 petsite-tgb 的关系:并存、互不影响。一个 Service 可被多个 TargetGroupBinding 引用,
-#      现有 petsite-tgb -> Servic-PetSi-7JEWC19HNKSR(挂在 internet-facing ALB)保持原样。
+# 内网 ALB : petsite-internal-lt
+#            internal-petsite-internal-lt-1660792065.ap-northeast-1.elb.amazonaws.com
+#   :80    -> petsite-lt-tg        -> service-petsite:80   (Pod targetPort 8080)
+#   :8081  -> petsite-lt-search-tg -> search-service:80    (Pod targetPort 80)
+#
+# 与现有 CDK 管理的 petsite-tgb / pethistory-tgb 并存,互不影响:
+#   一个 Service 可被多个 TargetGroupBinding 引用。
 #
 # 刻意 **不** 带 CDK 的 prune label(aws.cdk.eks/prune-...):
-#      现有 petsite-tgb 带该 label,是 CDK 管的;本资源为手工添加,带上会被下次 CDK 部署清掉。
-#
-# 撤销:kubectl delete -f 本文件  (随后可删 ALB / TG / SG,见文件末尾)
+#   现有 petsite-tgb 带该 label 由 CDK 管理;本文件是手工添加的,
+#   带上会被下一次 CDK 部署清掉。
+---
 apiVersion: elbv2.k8s.aws/v1beta1
 kind: TargetGroupBinding
 metadata:
@@ -20,15 +25,33 @@ metadata:
 spec:
   serviceRef:
     name: service-petsite
-    port: 80          # Service 端口;targetPort=8080 由 controller 解析到 Pod
+    port: 80              # Service 端口;targetPort=8080 由 controller 解析到 Pod
   targetGroupARN: arn:aws:elasticloadbalancing:ap-northeast-1:926093770964:targetgroup/petsite-lt-tg/1fcdf49552117d4c
   targetType: ip
   ipAddressType: ipv4
+---
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: search-loadtest-tgb
+  namespace: petadoptions
+  labels:
+    purpose: loadtest
+spec:
+  serviceRef:
+    name: search-service
+    port: 80              # Service 与 targetPort 同为 80
+  targetGroupARN: arn:aws:elasticloadbalancing:ap-northeast-1:926093770964:targetgroup/petsite-lt-search-tg/202a33d64d7e4a08
+  targetType: ip
+  ipAddressType: ipv4
 
-# ── 完整拆除顺序(需要时) ──────────────────────────────────────────────
+# ── 完整拆除顺序(需要时) ────────────────────────────────────────────────
 # kubectl delete -f petsite-loadtest-tgb.yaml
 # aws elbv2 delete-load-balancer --load-balancer-arn arn:aws:elasticloadbalancing:ap-northeast-1:926093770964:loadbalancer/app/petsite-internal-lt/b651f61f074cbbfe
 # aws elbv2 delete-target-group  --target-group-arn  arn:aws:elasticloadbalancing:ap-northeast-1:926093770964:targetgroup/petsite-lt-tg/1fcdf49552117d4c
+# aws elbv2 delete-target-group  --target-group-arn  arn:aws:elasticloadbalancing:ap-northeast-1:926093770964:targetgroup/petsite-lt-search-tg/202a33d64d7e4a08
 # aws ec2 revoke-security-group-ingress --group-id sg-02df8bc13ac85c4cc \
 #   --ip-permissions 'IpProtocol=tcp,FromPort=8080,ToPort=8080,UserIdGroupPairs=[{GroupId=sg-06d40c8bcd96d347d}]'
+# aws ec2 revoke-security-group-ingress --group-id sg-02df8bc13ac85c4cc \
+#   --ip-permissions 'IpProtocol=tcp,FromPort=80,ToPort=80,UserIdGroupPairs=[{GroupId=sg-06d40c8bcd96d347d}]'
 # aws ec2 delete-security-group --group-id sg-06d40c8bcd96d347d

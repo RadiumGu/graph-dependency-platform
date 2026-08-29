@@ -1312,3 +1312,152 @@ NFM agent 的 DaemonSet 是 **`hostNetwork: True`**,所以它导出的样本携�
 这与 NFM 把 VPC 级聚合当实例级属性是同一类错误:
 **观测粒度与归属实体不匹配**(第三次遇到,前两次是泛化 S3 节点、VPC 聚合广播)。
 
+
+---
+
+# 附录 F：把 profiling 换成「让依赖真正可见」（2026-08-29 14:10–15:05）
+
+用户质疑「Pyroscope 补 Off-CPU 是必须的吗，我的目的是梳理依赖关系」——
+**这个质疑是对的，我的规划偏航了**。本附录记录砍掉 profiling 后的重排与执行。
+
+## F.0 为什么砍掉 Pyroscope
+
+profiling（On-CPU 或 Off-CPU）回答的是「一个进程内部哪段代码耗时」,
+**它不产生任何依赖边**。我给的三条理由逐条不成立:
+
+| 表面理由 | 为什么不成立 |
+|---|---|
+| Off-CPU 能发现未声明的依赖 | DeepFlow 的 eBPF **已零埋点抓到每条 socket 流** |
+| 能区分 458ms 是网络还是服务端 | **NFM 的重传/RTT 已能回答** |
+| 补齐第四支柱 | 那是「完整性」目标,不是「依赖关系」目标 |
+
+profiling 唯一独有的是**把依赖排除掉**（「是它自己代码慢」）——
+那是依赖梳理的逆命题,对 RCA 有用,对建图无用。
+同样降级的还有 ENA 限速:它是节点健康指标,不是依赖数据。
+
+## F.1 第 1 步：Lambda 从「完全不可见」到「有依赖边」
+
+实测起点:**36 个 Lambda 里 36 个是 `PassThrough`**,X-Ray 服务图里一个都没有。
+这解释了 declared_only 里那 7 条 Lambda 边 —— 不是死代码,是没有任何观测源。
+
+给图谱相关的 **10 个函数**开 Active（排除 CDK custom-resource provider、
+openclaw / devops-agent 等无关系统）,并给 **6 个执行角色**新增内联策略
+`lambda-xray-trace-write`。
+
+**但只开 Active 不够** —— 实测只产生 Lambda 节点、**零出边**。
+故发布层 `neptune-client-base:5`（v3 内容 + aws-xray-sdk 2.15.0 + wrapt,
+`--no-deps` 以免带进 botocore 遮蔽运行时、并保住 v3 的 urllib3 2.6.3）,
+在 etl_xray 加 `patch_all()`。
+
+> **v4 是误发的无效版本**:我在验证安装结果之前就 publish 了,pip 其实什么都没装上
+> （`python3.12: command not found` 静默回退到 pip3 且未生效）。
+> 这条记下来当反面教材 —— 「发布成功」不等于「内容正确」。
+
+### 由此暴露并修掉的三个缺陷
+
+| # | 缺陷 | 症状 |
+|---|---|---|
+| ① | 出边只从「服务本体」收集 | 原码 `if xray_type is not None: continue`,而 Lambda 出边挂在 `AWS::Lambda::Function` 上 → `xray_edges_seen` 恒为 7,Lambda 明明有出边却一条不进图谱。修掉后 **7 → 10** |
+| ② | 分类兜底仍太宽（**第三次**同类错误） | `AWS::Lambda` 的 Name 是**真实函数名**,按 type 前缀判定会造出与已有 LambdaFunction 重名的 AWSServiceEndpoint。真正判据不是 type 前缀而是 **Name 是否为服务标签** |
+| ③ | resource 键含原始 xray_type | `AWS::Lambda` 与 `AWS::Lambda::Function` 拆成两个键、度量被分摊。归一后副作用是好的:X-Ray 内部那条边成为**自环**,可直接过滤 |
+
+### 新增：数据库 endpoint 按属性精确反查
+
+自埋点后出现 `petsite-neptune.cluster-...neptune.amazonaws.com` `[remote]`。
+图谱里 NeptuneCluster / RDSCluster 都带 `endpoint` 属性,**按属性精确命中**
+（实测命中 `NeptuneCluster/petsite-neptune`）,不靠主机名截断去猜集群名。
+
+**结果**:declared_only 20 → 19,xray_only 6 → 9,依赖边 79 → 81。
+
+## F.2 第 2 步：Q21 的分类失真与一个漏报 62% 的 bug
+
+原 `declared_only` 20 条里混了**三种性质不同**的东西:
+
+| 类别 | 条数 | 性质 |
+|---|---|---|
+| Lambda 依赖 | 7 | 真盲区 |
+| **BusinessCapability 的边** | **6** | **本质不可观测** —— 「支付流程依赖告警主题」是业务语义,运行时永远没有网络包对应 |
+| 微服务 → 数据存储 | 7 | 真盲区 |
+
+把第二类算进盲区会**高估依赖质量问题**、稀释真问题。拆成
+`unobservable_by_design` 与 `observable_but_unobserved`,
+判据是 **provenance（`source='business-layer'`）** 而非边类型推断。
+实测 19 → **6 不可观测 + 13 真盲区**。
+
+**拆分后立刻暴露一个更严重的 bug**:`coverage` 过滤在 Cypher 的 `LIMIT`
+**之后**执行,而盲区边恰恰是调用量为 0、排最后的那批 ——
+`limit=50` 时只返回 **5** 条,真实 **13** 条,**漏报 62%**,而且返回 5 条看起来完全正常、不报错。
+改法:Cypher 去掉 LIMIT（依赖边是图谱量级、不随遥测量增长）,limit 在过滤之后应用。
+
+## F.3 第 3 步：NFM 成为第三个拓扑观测源
+
+### 两个被自己推翻的中间结论
+
+**① 选错了 metric。** 第一版用 `RETRANSMISSIONS` 做拓扑,实测「可用服务对 0 组」——
+它**只报发生过重传的流**,网络正常的业务流产生零行。改用 `DATA_TRANSFERRED`。
+
+**② 「0 组」是我自己的过滤器造成的。** 我要求 `remoteServiceName` 非空,
+而到 AWS 服务的流**远端本来就没有服务名** —— `destinationCategory` 自己就是远端类型。
+
+合法枚举由 API 校验错误反推得到:
+- metric: `[DATA_TRANSFERRED, TIMEOUTS, ROUND_TRIP_TIME, RETRANSMISSIONS]`
+- category: `[LOCAL_ZONE, INTERNET, AMAZON_DYNAMODB, INTER_VPC, UNCLASSIFIED, AWS_SERVICE, INTER_REGION, TRANSIT_GATEWAY, INTRA_AZ, AMAZON_S3, INTER_AZ]`
+
+### 方向从 targetPort 判定，不靠推断
+
+NFM 报的是**流**,同一条连接两端各报一次。实测 `targetPort` 能干净区分:
+
+```
+service-petsite → search-service  targetPort=80   ← 客户端侧，真方向
+search-service  → service-petsite targetPort=0    ← 镜像记录，丢弃
+list-adoptions  → search-service  targetPort=80   ← 新依赖，方向正确
+```
+
+这是**数据自身携带的信息**,不是从字节数大小去猜谁调用谁。
+
+### 时间窗硬上限 1 小时
+
+实测传 120 分钟报 `Time range can not exceed 1 hour`。
+取 50 分钟而非 60 —— 60 正好擦着上限没余量,而右端还要留 5 分钟给数据落地延迟。
+
+### 写入结果与三源对账
+
+```
+petsite        -[Calls]->        petsearch    首发=deepflow-etl  观测源=xray+deepflow+nfm  跨AZ
+petsearch      -[AccessesData]-> dynamodb     首发=nfm           观测源=nfm
+petsearch      -[AccessesData]-> s3           首发=xray          观测源=xray+nfm
+payforadoption -[AccessesData]-> dynamodb     首发=nfm           观测源=nfm
+```
+
+| 指标 | 值 |
+|---|---|
+| 总依赖边 | **83** |
+| `source='nfm'` 新建 | **2** |
+| 带 nfm 度量 | 4 |
+| 带 xray 度量 | 10 |
+| **三源同时印证** | **1** |
+
+`petsite → petsearch` 现在被**三种完全不同的机制**同时观测到:
+应用埋点（X-Ray）、内核 eBPF（DeepFlow）、AWS 网络遥测（NFM）。
+
+粒度仍如实标注:NFM 只说「访问了 DynamoDB」,**不给表名** ——
+所以落 `AWSServiceEndpoint`（`granularity='service'`）,与 X-Ray 泛化 S3 同一处理。
+`cloudwatch-agent-headless` 图谱里没有对应节点,**如实计入 skipped 而不新建节点**。
+
+### 顺带修掉一个既有缺陷
+
+生产日志暴露 `SNS:ListSubscriptionsByTopic` 权限缺失,5 个 topic 全部拿不到订阅数
+（与本次改动无关）。新增内联策略 `etl-sns-list-subscriptions`。
+
+## F.4 未做与理由
+
+- **`gp-window-flush` / `petsite-rca-engine` 的自埋点**:两者是 **arm64 且无层**,
+  加自埋点需按 arm64 重新 vendor 依赖并重新部署。对 2 条边而言性价比低于
+  NFM per-flow（覆盖所有服务对）。
+- **NFM 独立成 `etl_nfm`**:「两个独立观测源必须架构上真独立」的论证依然成立,
+  但目前 NFM 的查询机制已在 etl_aws 里,拆分是部署重活。
+  边上已用 `source='nfm'` 区分 provenance —— 图谱层面的「平行源」语义已经成立。
+  ETL 拆分的收益是**故障隔离**,记为后续项。
+- **etl_aws 耗时从 47s 升到 78s**（NFM 三次异步查询各约 10 秒）,
+  Timeout 300s 余量充足。若后续 category 增多需重估。
+
