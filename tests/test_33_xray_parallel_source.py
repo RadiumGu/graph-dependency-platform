@@ -114,10 +114,98 @@ def test_x05_dynamodb_full_table_name_maps_to_resource_node():
     m = _load_etl()
     name = 'ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM'
     key = m._classify(name, 'AWS::DynamoDB::Table')
-    assert key == (name, 'resource', 'AWS::DynamoDB::Table')
+    # 键的第三位是**映射后的节点类型**，不是原始 xray_type。
+    # 归一化的理由见 test_x05g：X-Ray 会用多个 type 指同一个资源。
+    assert key == (name, 'resource', 'DynamoDBTable')
     matcher, edge = m._dst_matcher(key)
     assert 'DynamoDBTable' in matcher
     assert edge == 'AccessesData', "微服务到数据库用 AccessesData，不是 DependsOn"
+
+
+def test_x05g_lambda_two_types_collapse_to_one_key():
+    """
+    X-Ray 用**两个条目**表示同一个 Lambda：`AWS::Lambda`（服务容器，代表
+    Lambda 服务收到的调用）与 `AWS::Lambda::Function`（函数本身的执行）。
+    两者的 Name 都是具体函数名。
+
+    键的第三位必须是**映射后的节点类型**，让两个 type 归一成同一个键 ——
+    否则同一条边的度量被拆成两份、写边时后者覆盖前者而不是累加。
+    这与 ssm 因 AWS::SSM / AWS::SimpleSystemsManagement 拆键是同一个坑。
+
+    归一化还有个副作用是好的：X-Ray 内部那条
+    AWS::Lambda → AWS::Lambda::Function 边归一后成为**自环**，
+    可以被直接识别并过滤 —— 它是 X-Ray 的内部结构，不是依赖关系。
+    """
+    m = _load_etl()
+    a = m._classify('neptune-etl-from-aws', 'AWS::Lambda')
+    b = m._classify('neptune-etl-from-aws', 'AWS::Lambda::Function')
+    assert a == b, f"同一个 Lambda 的两个 type 必须归一成同一个键，实际 {a} != {b}"
+    assert a == ('neptune-etl-from-aws', 'resource', 'LambdaFunction')
+    matcher, edge = m._dst_matcher(a)
+    assert 'LambdaFunction' in matcher
+
+
+def test_x05h_lambda_out_edges_are_collected():
+    """
+    出边收集**不能**只从「服务本体」（Type 为 None）的节点取。
+
+    原实现有 `if xray_type is not None: continue`，注释写着「只有服务本体会有
+    出边」—— 那个假设在只有 EKS 服务插桩时成立，加入 Lambda 后就错了：
+    Lambda 的出边挂在 AWS::Lambda::Function 节点上（Type 不为 None）。
+
+    实测症状：xray_edges_seen 始终是 7，而 X-Ray 服务图里 Lambda 明明有出边
+    （neptune-etl-trigger → neptune-etl-from-aws、
+      neptune-etl-from-xray → Neptune endpoint），一条都没进图谱。
+    修掉后边数 7 → 10。
+
+    本测试直接读源码断言那个 guard 已被移除，并且自环过滤在位 ——
+    走活图谱会因窗口内是否恰好有 Lambda 调用而不稳定。
+    """
+    src_path = os.path.join(_ETL_XRAY, 'neptune_etl_xray.py')
+    with open(src_path, encoding='utf-8') as fh:
+        src = fh.read()
+    fn = src.split('def fetch_xray_service_graph', 1)[1].split('\ndef ', 1)[0]
+    # 那个 guard 必须不在**代码**里（docstring/注释里作为反面说明是允许的）
+    import ast
+    tree = ast.parse(src)
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        t = node.test
+        if (isinstance(t, ast.Compare) and isinstance(t.left, ast.Name)
+                and t.left.id == 'xray_type'
+                and any(isinstance(o, ast.IsNot) for o in t.ops)):
+            offenders.append(getattr(node, 'lineno', '?'))
+    assert not offenders, (
+        f"第 {offenders} 行仍有 `xray_type is not None` 的出边收集 guard —— "
+        f"会把所有 Lambda 的下游依赖整批跳过")
+    assert 't_key == key' in fn, \
+        "缺少自环过滤 —— X-Ray 的 AWS::Lambda → AWS::Lambda::Function 内部边会被当成依赖"
+
+
+def test_x05i_db_endpoint_resolves_by_property_not_by_guessing():
+    """
+    数据库/集群 endpoint 主机名必须按图谱的 `endpoint` **属性**反查，
+    不能靠截断主机名去猜集群名。
+
+    实测：图谱里 NeptuneCluster 与 3 个 RDSCluster 都带 endpoint 属性，
+    `petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com`
+    按属性精确命中 NeptuneCluster/petsite-neptune。
+    截断主机名第一段虽然「看起来也能得到 petsite-neptune」，但那是推断 ——
+    本仓库的纪律是不用推断冒充观测。
+    """
+    m = _load_etl()
+    host = 'petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com'
+    key = m._classify(host, 'remote')
+    assert key[1] == 'endpoint', f"数据库 endpoint 应归为 endpoint 类，实际 {key[1]}"
+    assert key[0] == host, "必须原样带上主机名交给属性匹配，不能预先截断"
+    matcher, edge = m._dst_matcher(key)
+    assert "has('endpoint'" in matcher, \
+        f"必须按 endpoint 属性反查，实际 matcher={matcher}"
+    # 反例：K8s 集群内 FQDN 不走 endpoint 分支
+    k8s = m._classify('search-service.petadoptions.svc.cluster.local', 'remote')
+    assert k8s[1] == 'service'
 
 
 def test_x05b_remote_type_is_not_mistaken_for_an_aws_service():

@@ -75,6 +75,32 @@ from neptune_client_base import neptune_query, extract_value, REGION  # noqa: F4
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+# ── X-Ray 自埋点 ────────────────────────────────────────────────────────
+# 为什么需要它：给 Lambda 开 `TracingConfig.Mode=Active` **只让 Lambda 服务端
+# 记录调用**，实测结果是 X-Ray 服务图里出现了 Lambda 节点，但**一条出边都没有**
+# —— 函数对下游（Neptune / X-Ray API / DynamoDB）的调用不产生子段。
+#
+# patch_all() 会包装 botocore 与 requests，让每次下游调用变成一个子段，
+# 于是 `neptune-etl-from-xray → Neptune` 这类依赖才会出现在服务图里。
+# 这是把 declared_only 里那批「声明了但没有任何观测源看得到」的 Lambda 依赖边
+# 变成可印证的唯一低成本途径（对比：引入 Pyroscope 完全不解决依赖可见性）。
+#
+# context_missing='LOG_ERROR' 是必须的：模块 import 发生在 handler 之外，
+# 此时还没有活动 segment，默认行为会抛 SegmentNotFoundException 直接打挂函数。
+_XRAY_PATCHED = False
+try:
+    from aws_xray_sdk.core import xray_recorder, patch_all  # noqa: E402
+
+    xray_recorder.configure(context_missing='LOG_ERROR')
+    patch_all()
+    _XRAY_PATCHED = True
+except Exception as _exc:  # noqa: BLE001
+    # 缺 SDK（层未升级）不该让 ETL 失败 —— 退化为只有 Lambda 节点没有出边，
+    # 与开启自埋点之前的行为一致。但要打日志，否则「以为埋点生效了」比没埋更糟。
+    logging.getLogger().warning(
+        "X-Ray 自埋点未启用（%s）—— 本函数对下游的调用不会出现在 X-Ray 服务图里。"
+        "需要 neptune-client-base:5 或更高版本的层提供 aws_xray_sdk。", _exc)
+
 # ── 配置 ────────────────────────────────────────────────────────────────
 # X-Ray 的 GetServiceGraph 单次调用窗口上限 6 小时，超过直接报错。
 # 想要 24 小时视图必须分段调用再合并，这是 API 的硬约束，不是可调参数。
@@ -133,6 +159,12 @@ XRAY_SERVICE_ALIASES = {
     'sns': 'sns',
     'kinesis': 'kinesis',
     'lambda': 'lambda',
+    # 开启 Lambda 自埋点后实测出现的 AWS::xray —— ETL 自己调 X-Ray API。
+    # 这是真实依赖（etl_xray 读服务图），不是噪音，所以显式登记而不是靠兜底。
+    'xray': 'xray',
+    'cloudwatch': 'cloudwatch',
+    'monitoring': 'cloudwatch',      # CloudWatch 的另一种上报名
+    'logs': 'cloudwatchlogs',
 }
 
 # X-Ray 的 Type → 图谱里已存在的**资源级**节点类型。
@@ -145,6 +177,12 @@ XRAY_TYPE_TO_RESOURCE_NODE = {
     'AWS::S3::Bucket': 'S3Bucket',       # 注意：X-Ray 通常报泛化的 'S3'，
                                           # 只有少数 SDK 会给出这个带 bucket 的 Type
     'AWS::Lambda::Function': 'LambdaFunction',
+    # X-Ray 用**两个条目**表示同一个 Lambda：AWS::Lambda（服务容器，代表
+    # Lambda 服务收到的调用）+ AWS::Lambda::Function（函数本身的执行）。
+    # 两者的 Name 都是**具体函数名**，所以都按资源级映射到同一个
+    # LambdaFunction 节点 —— 边写入是幂等 upsert，两个条目合并成一条边。
+    # 2026-08-29 给 10 个 Lambda 开启 Active 追踪后才出现这个 type。
+    'AWS::Lambda': 'LambdaFunction',
 }
 
 # 边类型选择：目标是数据/存储类 → AccessesData；目标是服务 → Calls。
@@ -193,6 +231,10 @@ def fetch_xray_service_graph(lookback_hours: int = None) -> dict:
 
     nodes = {}
     edges = {}
+    # 被 _classify 跳过的 (type, name)。**刻意统计而不是静默丢弃** ——
+    # 前两次分类缺陷都是因为兜底猜了一个节点类型；现在改成跳过，
+    # 但如果不把跳过的东西暴露出来，就变成了另一种静默失败。
+    unmapped = set()
 
     for start_ts, end_ts in segments:
         try:
@@ -225,6 +267,8 @@ def fetch_xray_service_graph(lookback_hours: int = None) -> dict:
 
             key = _classify(raw_name, xray_type)
             if key is None:
+                if xray_type != 'client':
+                    unmapped.add((str(xray_type), raw_name))
                 continue
 
             stats = svc.get('SummaryStatistics') or {}
@@ -244,15 +288,29 @@ def fetch_xray_service_graph(lookback_hours: int = None) -> dict:
             entry['fault_count'] += (stats.get('FaultStatistics') or {}).get('TotalCount') or 0
             entry['total_response_time'] += stats.get('TotalResponseTime') or 0.0
 
-            # 只有服务本体会有出边（xray_type 为 None）
-            if xray_type is not None:
-                continue
+            # 收集出边。
+            #
+            # 原先这里有 `if xray_type is not None: continue`，注释写着
+            # 「只有服务本体会有出边」—— 那个假设在只有 EKS 服务插桩时成立，
+            # **加入 Lambda 后就错了**：Lambda 的出边挂在 `AWS::Lambda::Function`
+            # 节点上（Type 不为 None），于是所有 Lambda 的下游依赖被整批跳过。
+            # 实测症状是 xray_edges_seen 始终是 7，Lambda 明明在服务图里有出边
+            # （neptune-etl-trigger → neptune-etl-from-aws、
+            #   neptune-etl-from-xray → Neptune endpoint）却一条都没进图谱。
             for edge in svc.get('Edges', []) or []:
                 target = by_ref.get(edge.get('ReferenceId'))
                 if not target:
                     continue
                 t_key = _classify(target.get('Name'), target.get('Type'))
                 if t_key is None:
+                    tt = str(target.get('Type'))
+                    if tt != 'client':
+                        unmapped.add((tt, target.get('Name')))
+                    continue
+                # 过滤自环。X-Ray 用 AWS::Lambda（服务容器）→
+                # AWS::Lambda::Function（函数执行）表示同一个 Lambda 的内部结构，
+                # 那不是依赖关系。键归一化后两端落到同一个 key，正好识别为自环。
+                if t_key == key:
                     continue
                 ek = (key, t_key)
                 estats = edge.get('SummaryStatistics') or {}
@@ -265,7 +323,14 @@ def fetch_xray_service_graph(lookback_hours: int = None) -> dict:
                 ee['fault_count'] += (estats.get('FaultStatistics') or {}).get('TotalCount') or 0
                 ee['total_response_time'] += estats.get('TotalResponseTime') or 0.0
 
-    return {'nodes': nodes, 'edges': edges, 'window_hours': hours}
+    if unmapped:
+        logger.warning(
+            "X-Ray 出现 %d 个未映射的 (type, name)，已跳过未写入图谱："
+            "%s —— 若其中有真实依赖，需在 XRAY_TYPE_TO_RESOURCE_NODE 或 "
+            "XRAY_SERVICE_ALIASES 里显式登记，**不要靠兜底猜类型**",
+            len(unmapped), sorted(unmapped)[:10])
+    return {'nodes': nodes, 'edges': edges, 'window_hours': hours,
+            'unmapped': sorted(unmapped)}
 
 
 def _classify(raw_name: str, xray_type):
@@ -300,30 +365,59 @@ def _classify(raw_name: str, xray_type):
             return (XRAY_SERVICE_ALIASES[low], 'aws_service', None)
         return (low, 'service', None)
 
-    # 有精确资源名的 AWS 资源类型
+    # 有精确资源名的 AWS 资源类型。
+    # 身份键的第三位用**映射后的节点类型**而不是原始 xray_type ——
+    # X-Ray 会用多个 type 表示同一个资源（AWS::Lambda 与
+    # AWS::Lambda::Function 都指同一个函数），带原始 type 会拆成两个 key，
+    # 度量被分摊到两份、写边时后者覆盖前者而不是累加。
+    # 这与 ssm 因 AWS::SSM / AWS::SimpleSystemsManagement 拆键是同一个坑。
     node_type = XRAY_TYPE_TO_RESOURCE_NODE.get(xray_type)
     if node_type:
-        return (raw_name, 'resource', xray_type)
+        return (raw_name, 'resource', node_type)
 
     low = raw_name.lower()
 
-    # 只有**真的是 AWS 托管服务**才落 AWSServiceEndpoint。
+    # 只有**真的是 AWS 托管服务的粗粒度标签**才落 AWSServiceEndpoint。
     #
-    # 这里原先的兜底是「任何不认识的 type 都算 aws_service」，太宽松 ——
-    # 实测被 Type='remote' 的
-    # `search-service.petadoptions.svc.cluster.local` 吞掉，
-    # 于是一个**集群内 K8s 服务**被建成了 AWS 托管服务节点，
-    # 而 search-service 在图谱里本来就是个 Microservice。
-    # 判据必须是 type 以 'AWS::' 开头，或名字在别名表里（'Secrets Manager'
-    # 那种被报成服务本体的情况）。
-    if str(xray_type).startswith('AWS::') or low in XRAY_SERVICE_ALIASES:
-        return (XRAY_SERVICE_ALIASES.get(low, low), 'aws_service', None)
+    # 判据是 **Name 本身是不是一个服务标签**，而不是 type 有没有 'AWS::' 前缀。
+    # 这一点踩过两次才想清楚：
+    #   第一次 —— 兜底「任何不认识的 type 都算 aws_service」，被 Type='remote' 的
+    #     search-service.petadoptions.svc.cluster.local 吞掉，一个集群内 K8s 服务
+    #     被建成了 AWS 托管服务节点。
+    #   第二次 —— 收紧成「type 以 AWS:: 开头才算」之后仍然不对：给 Lambda 开启
+    #     Active 追踪后，X-Ray 用 **AWS::Lambda**（容器）+ AWS::Lambda::Function
+    #     两个条目表示同一个函数，而前者的 Name 是 `neptune-etl-from-aws`
+    #     —— 一个**真实资源名**。按 type 前缀判定会凭空造出一个
+    #     与已有 LambdaFunction 节点重名的 AWSServiceEndpoint。
+    #
+    # 真正的区别：AWS::S3 的 Name 字面就是 `S3`（服务标签），
+    # AWS::Lambda 的 Name 是具体函数名（资源标识）。所以只认别名表。
+    if low in XRAY_SERVICE_ALIASES:
+        return (XRAY_SERVICE_ALIASES[low], 'aws_service', None)
 
     # Type='remote'：X-Ray 无法识别的进程外被调方，通常是一个主机名。
-    # K8s 的集群内 FQDN 剥掉后缀就是服务名，能命中图谱里真实的 Microservice ——
-    # 这样 `search-service.petadoptions.svc.cluster.local` 会变成一条
-    # 真实的 petsite → search-service 调用边，而不是一个垃圾节点。
-    return (_strip_k8s_fqdn(low), 'service', None)
+    if xray_type == 'remote':
+        # K8s 集群内 FQDN → 服务名（再经 k8s_alias 映射到图谱服务名）
+        if '.svc.cluster.' in low:
+            return (_strip_k8s_fqdn(low), 'service', None)
+        # 数据库/集群 endpoint → 按图谱里的 endpoint 属性**精确反查**。
+        #
+        # 开启自埋点后实测出现
+        # `petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com`
+        # 这类主机名。图谱里 NeptuneCluster / RDSCluster 节点带 `endpoint` 属性，
+        # 直接按属性匹配就能命中（实测精确命中 NeptuneCluster/petsite-neptune），
+        # **不需要靠字符串截断去猜集群名** —— 这正是本仓库反复强调的
+        # 「不用推断冒充观测」。解析在 _dst_matcher 里用 Gremlin 完成，
+        # 这里只标记为 endpoint 类型并原样带上主机名。
+        if '.amazonaws.com' in low and any(
+                seg in low for seg in ('.rds.', '.neptune.', '.cache.', '.es.')):
+            return (raw_name, 'endpoint', None)
+        return (_strip_k8s_fqdn(low), 'service', None)
+
+    # 其余 AWS:: 类型：既不在资源类型映射里，Name 也不是已知服务标签。
+    # **刻意跳过而不是猜一个节点类型** —— 前两次都是猜出来的错。
+    # 调用方会把它计入 unmapped_types 并打日志，让它可见而不是静默丢弃。
+    return None
 
 
 def _strip_k8s_fqdn(name: str) -> str:
@@ -401,8 +495,13 @@ def _src_label_clause(name: str) -> str:
 
 
 def _dst_matcher(dst_key) -> tuple:
-    """返回 (gremlin 片段, 边类型)。找不到可建模的目标时返回 (None, None)。"""
-    name, kind, xray_type = dst_key
+    """返回 (gremlin 片段, 边类型)。找不到可建模的目标时返回 (None, None)。
+
+    注意第三位对 kind='resource' 是**映射后的节点类型**（见 _classify 的注释），
+    不是原始 xray_type —— 这样 AWS::Lambda 与 AWS::Lambda::Function 归一成
+    同一个键，不会把同一条边的度量拆成两份。
+    """
+    name, kind, node_type = dst_key
     n = safe_str(name)
     if kind == 'service':
         return (f"__.or(__.hasLabel('Microservice').has('name','{n}'),"
@@ -410,11 +509,17 @@ def _dst_matcher(dst_key) -> tuple:
     if kind == 'aws_service':
         return (f"__.hasLabel('AWSServiceEndpoint').has('name','{n}')", 'AccessesData')
     if kind == 'resource':
-        node_type = XRAY_TYPE_TO_RESOURCE_NODE.get(xray_type)
         if not node_type:
             return (None, None)
         edge = RESOURCE_NODE_TO_EDGE.get(node_type, 'AccessesData')
         return (f"__.hasLabel('{node_type}').has('name','{n}')", edge)
+    if kind == 'endpoint':
+        # 按 `endpoint` 属性精确反查 —— 图谱里 NeptuneCluster / RDSCluster
+        # 都带这个属性，直接匹配即可命中，不靠主机名截断去猜集群名。
+        # 实测 petsite-neptune.cluster-...neptune.amazonaws.com 精确命中
+        # NeptuneCluster/petsite-neptune。
+        # 匹配不到时边写入会计入 skipped_no_node（如实记录，不新建节点）。
+        return (f"__.has('endpoint','{n}')", 'AccessesData')
     return (None, None)
 
 
@@ -573,6 +678,7 @@ def run_etl(lookback_hours: int = None) -> dict:
         'xray_nodes_seen': len(graph['nodes']),
         'xray_nodes_by_kind': dict(kinds),
         'xray_edges_seen': len(graph['edges']),
+        'xray_unmapped_types': graph.get('unmapped', []),
         'aws_service_endpoints_written': endpoints,
         'edges_created': edge_stats['created'],
         'edges_corroborated': edge_stats['corroborated'],
