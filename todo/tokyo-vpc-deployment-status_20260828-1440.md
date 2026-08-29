@@ -380,3 +380,162 @@ ORDER BY cnt DESC
 
 *本报告所有数字均为 2026-08-28 实测值,非引用文档。查询方式:AWS CLI(只读)+ Neptune openCypher(SigV4)+ ClickHouse HTTP SELECT + kubectl(只读)。*
 *本轮为完成盘点在本机安装了 arm64 kubectl 与 python boto3/requests,并生成了 `~/.kube/config` 的 PetSite context —— 均为本机工具配置,未改动任何云端或集群资源。*
+
+
+---
+
+# 附录 A · DeepFlow 与可观测性栈补充盘点
+
+**补充日期**：2026-08-29 05:30 UTC
+**触发**：为四支柱 Traces 缺口接入做准备，需要读到 DeepFlow 实际生效的采集配置。
+**方法**：本轮首次用 **SSM SendCommand** 进入 deepflow-server 实例（全部只读命令），
+此前只从外部访问过 ClickHouse 8123。
+
+## A.1 DeepFlow 相关 EC2（3 台，全部 running）
+
+| Name | Instance ID | 类型 | 私有 IP | AZ | SG | 用途 |
+|---|---|---|---|---|---|---|
+| **deepflow-server** | `i-0cf272a12ecff87f3` | t4g.xlarge (arm64) | **11.0.2.30** | ap-northeast-1a | `sg-0df44a2c5eaebcd7f` | server + ClickHouse + MySQL + app |
+| nfm-deepflow-test | `i-00f46b680713b9b14` | t4g.small | 11.0.2.112 | ap-northeast-1a | `sg-0395b3086a6bb201b` | 标签 `Phase: exploration` |
+| grafana-x86 | `i-077d4ba09815bd2b8` | t3.large | 11.0.2.42 | ap-northeast-1a | `sg-0df44a2c5eaebcd7f` | 展示层 |
+
+三台同在 `vpc-010ab37a3f9f74725` / `subnet-0f801fa79077eb277`，
+启动时间均为 2026-05-26T06:53:55Z，标签 `System=deepflow` / `Team=observability-team` / `ManagedBy=manual`。
+
+## A.2 访问路径（重要，此前未记录）
+
+**三台都挂 `AmazonSSMRoleForInstancesQuickSetup` 实例配置文件，SSM 状态 Online。**
+这是读取 DeepFlow 内部状态的唯一可行路径 —— 安全组只对外暴露 ClickHouse 8123，
+server API 端口从本机不可达（实测 `curl http://11.0.2.30:30417` → HTTP 000）。
+
+Amazon Linux 2023，SSM agent 3.3.4108.0。
+
+## A.3 部署形态：docker-compose，4 个容器
+
+| 容器 | 镜像 | 状态 |
+|---|---|---|
+| `deepflow-server` | `deepflow-ce/deepflow-server:v7.0` | Up 3 months |
+| `deepflow-clickhouse` | `deepflow-ce/clickhouse-server:23.8.7.24` | Up 3 months |
+| `deepflow-mysql` | `deepflow-ce/mysql:8.0.31` | Up 3 months |
+| `deepflow-app` | `deepflow-ce/deepflow-app:v7.0` | Up 3 months |
+
+镜像源为 `registry.cn-hongkong.aliyuncs.com`。
+**注：`chaos/docs/prd.md` 记的 ClickHouse 23.10 是错的，实测 23.8.7.24。**
+
+## A.4 端口映射（容器 → 宿主机）
+
+| 服务 | 容器端口 | 宿主机端口 | 备注 |
+|---|---|---|---|
+| controller HTTP API | 20417 | **30417** | `/v1/vtap-group-configuration/` 等 REST 入口 |
+| querier | 20416 | 20416 | 直通，Go 404 页面可探活 |
+| agent gRPC | 20035 | 30035 | agent ↔ server |
+| — | 20033 | 30033 | |
+| — | 20080 | 20080 | 直通 |
+| deepflow-app | 20418 | 20418 | |
+| ClickHouse HTTP | 8123 | **8123** | **唯一对外可达的端口** |
+| MySQL | **30130** | 未映射 | 见 server.yaml，不是默认 3306 |
+
+**踩过的坑**：宿主机上探 `127.0.0.1:20417` 会得到 HTTP 000 ——
+controller 在宿主机侧是 **30417**。容器内才是 20417。
+
+## A.5 两个访问陷阱
+
+1. **`deepflow-ctl` 不在镜像里。** 宿主机 `/usr/local/bin/` 只有 docker-compose 软链；
+   `deepflow-server` 容器内只有一个 274 MB 的 `/bin/deepflow-server` 单体二进制，
+   `docker exec deepflow-server deepflow-ctl` 会报 `executable file not found in $PATH`。
+   要读配置只能走 REST API 或直查 MySQL。
+
+2. **MySQL root 必须走 TCP，不能走 socket。**
+   `docker exec deepflow-mysql mysql -uroot -p"$MYSQL_ROOT_PASSWORD"` →
+   `ERROR 1045 Access denied for user 'root'@'localhost'`；
+   加上 `-h mysql -P 30130` 强制 TCP 后即成功（授权是 `root@'%'`，不含 `root@'localhost'`）。
+   密码必须**在容器内**用 `$MYSQL_ROOT_PASSWORD` 取用，跨 shell 传会失败。
+
+## A.6 采集配置现状：**从未配置过**
+
+```
+GET http://127.0.0.1:30417/v1/vtap-group-configuration/
+→ HTTP 200  {"OPT_STATUS":"SUCCESS","DESCRIPTION":"","DATA":[]}
+
+mysql> SELECT http_log_trace_id, http_log_span_id, http_log_x_request_id
+       FROM deepflow.vtap_group_configuration;
+→ 零行
+```
+
+`vtap_group_configuration` 表**零行**，说明**没有任何 agent-group 配置被创建过**，
+全部 agent 跑在内置默认值上。而控制 trace 上下文提取的三个列确实存在：
+`http_log_trace_id` / `http_log_span_id` / `http_log_x_request_id`。
+
+**这解释了为什么 `l7_flow_log.trace_id` 是 0 / 789,055**：
+DeepFlow 默认只提取 `traceparent`（W3C）与 `sw8`（SkyWalking），
+而本环境的应用发的是 `X-Amzn-Trace-Id`（AWS X-Ray 传播器，
+aws-otel-collector 与 X-Ray SDK 的默认）。**头对不上，不是没埋点。**
+
+## A.7 EKS 侧追踪现状（补充 §4 的 workload 部分）
+
+**X-Ray 有两套接入并存：**
+
+| 方式 | 服务 |
+|---|---|
+| `xray-daemon` DaemonSet 4/4（`default` ns）+ headless Service `xray-service` UDP 2000 | `petsite`(.NET)、`pethistory` 通过 `AWS_XRAY_DAEMON_ADDRESS` |
+| `aws-otel-collector:v0.47.0` **sidecar** | `search-service`、`pay-for-adoption`、`list-adoptions`、`pethistory` |
+
+**已实测的语言/运行时**（补全此前「6 个服务待声明 language/runtime」的遗留项）：
+
+| Deployment | 图谱服务名 | 运行时 | 副本 | collector sidecar |
+|---|---|---|---|---|
+| `search-service` | petsearch | **Java** (`java -jar app.jar`) | 2/2 | 是 |
+| `pay-for-adoption` | payforadoption | **Go** 1.23.12 | 2/2 | 是 |
+| `list-adoptions` | petlistadoptions | **Go** 1.23.12 | 2/2 | 是 |
+| `pethistory-deployment` | pethistory | **Python 3.12** (Flask) | 2/2 | 是 |
+| `petsite-deployment` | petsite | **.NET** (`dotnet PetSite.dll`) | 2/2 | 否（走 xray-daemon） |
+| `traffic-generator` | trafficgenerator | 压测器 | 1/1 | 否 |
+
+**自动埋点能力现状**：
+- CRD `instrumentations.cloudwatch.aws.amazon.com`（v1alpha1）**存在**，
+  operator `amazon-cloudwatch-observability-controller-manager` **1/1 Running**
+- 但 **`Instrumentation` CR 一个都没有**，从未启用
+- `adot` addon **未安装**
+- CRD 的 `spec` 暴露语言字段：`java, python, dotnet, nodejs, go, apacheHttpd, nginx`，
+  但 **Go 的自动埋点是 eBPF 方案、需特权 sidecar**，成熟度明显弱于字节码语言
+- 该 operator 的目的地是 **CloudWatch Application Signals**，
+  与现有 sidecar→X-Ray 是**两套模型**
+
+## A.8 一个待解决的断裂
+
+**`petsite` 是入口服务（图谱里唯一 active 的 `Calls` 边是 `petsite → petsearch`），
+配了 `AWS_XRAY_DAEMON_ADDRESS`，但在 X-Ray 服务图里完全不出现。**
+
+X-Ray 把 `PetSearch` 当入口看（只有一个 `client` 影子节点指向它），
+说明**没有来自 petsite 的上游 span**。追踪链在入口就断了 ——
+这比 `trace_id` 为 0 更根本，且不是改 DeepFlow 配置能解决的。
+
+## A.9 X-Ray 数据面（24h 实测，需分 4 段查：单次请求上限 6 小时）
+
+只有 3 个被插桩的应用服务 + 3 个托管服务节点，共 **3 条真实边**：
+
+| 源 | 目标 | 目标类型 | 24h OkCount | TotalResponseTime |
+|---|---|---|---|---|
+| PetSearch | S3 | `AWS::S3` | 2,950 | 1,347.54s |
+| PetSearch | STS | `AWS::STS` | 77 | 4.06s |
+| PetSearch | `ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM` | `AWS::DynamoDB::Table` | 11,512 | 61.8s |
+
+PetSearch 本体 63,352 次 / 1,561.2s；payforadoption 51,840 次 / 7.0s；
+petlistadoptions 51,837 次 / 6.93s。**24h 全窗口零 Error、零 Fault。**
+payforadoption 与 petlistadoptions 解析不出任何跨服务下游边。
+
+**名字映射规则：`lower(X-Ray名)` 即图谱名**，无逐名特例
+（`PetSearch`→`petsearch`；`payforadoption`/`petlistadoptions` 本就一致）。
+
+**两个接入障碍**：
+- X-Ray 的 S3 节点名就叫 `S3`，**不是 bucket 名** → 写不出精确的 S3 边
+- 图谱**无 STS 节点类型** → 接入即造孤立节点
+
+## A.10 对四支柱的影响小结
+
+| 支柱 | 采集 | 图谱存储 | 结论 |
+|---|---|---|---|
+| Metrics | ✅ | 节点属性（聚合快照） | 有 |
+| Logs | ✅ | 仅 `log_source` 指针 | 有，指针模式正确 |
+| Traces | ✅ **采集在跑**（X-Ray 6,949/h + AutoTracing 10.11%） | **无任何 trace 形态** | **缺口在存储层，不在采集层** |
+| Profiling | ❌ CE 版仅 On-CPU、不支持 Python，`profile.in_process` 0 行 | 无 | 真的没有 |
