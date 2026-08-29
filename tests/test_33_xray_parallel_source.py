@@ -446,17 +446,51 @@ def test_x13_unobservable_is_separated_from_real_blind_spots():
     判据必须是 **provenance（source='business-layer'）**，
     不是靠边类型或节点类型推断 —— source 本身就记录了这条边的性质。
     """
-    src = _src('rca/neptune/neptune_queries.py')
+    with open(os.path.join(_ROOT, 'rca', 'neptune', 'neptune_queries.py'),
+              encoding='utf-8') as fh:
+        src = fh.read()
     fn = src.split('def q21_observation_source_coverage', 1)[1].split('\ndef ', 1)[0]
-    assert "'unobservable_by_design'" in fn, \
+    # 只检查**代码**，把 docstring 排除 —— docstring 里引用旧分类名解释
+    # 「为什么要拆开」是允许的，子串匹配分不清代码与文档（test_n04 踩过同一个坑）。
+    TQ = chr(34) * 3          # 三引号；避免在本文件里写出会截断字符串的字面量
+    body = fn.split(TQ, 2)[-1] if fn.count(TQ) >= 2 else fn
+    assert "'unobservable_by_design'" in body, \
         "Q21 未区分本质不可观测的边 —— 会把业务层声明当成依赖盲区"
-    assert "'observable_but_unobserved'" in fn, \
+    assert "'observable_but_unobserved'" in body, \
         "Q21 缺少真盲区分类"
-    assert "'declared_only'" not in fn, \
-        "旧的合并分类 declared_only 仍在使用 —— 它混了两种性质不同的边"
+    assert "'declared_only'" not in body, \
+        "旧的合并分类 declared_only 仍在代码里 —— 它混了两种性质不同的边"
     # 判据必须基于 source，而非边类型/节点类型
-    assert "src_name == 'business-layer'" in fn, \
+    assert "src_name == 'business-layer'" in body, \
         "分类判据不是 provenance —— 靠边类型或节点类型推断会误判"
+
+
+def test_x14_coverage_filter_is_applied_before_limit():
+    """
+    `coverage` 过滤必须在 **LIMIT 之前**生效。
+
+    coverage 的判定要读 xray_call_count / calls / source，只能在 Python 侧做。
+    如果 Cypher 先 LIMIT，过滤就发生在截断之后 —— 而盲区边恰恰是**调用量为 0**、
+    在 ORDER BY 里排最后的那批，会被整批截掉。
+
+    实测症状：coverage='observable_but_unobserved' limit=50 只返回 **5** 条，
+    真实数量是 **13** —— 一个专门用来找盲区的查询把盲区漏报了 62%，
+    而且返回 5 条看起来完全正常，不会报错。修掉后 limit=50 返回 13 条。
+
+    依赖边总数是图谱量级（实测 81 条，与 dependency_kind 挂钩，不随遥测量增长），
+    所以全量取回再在 Python 侧截断是安全的。
+    """
+    with open(os.path.join(_ROOT, 'rca', 'neptune', 'neptune_queries.py'),
+              encoding='utf-8') as fh:
+        src = fh.read()
+    fn = src.split('def q21_observation_source_coverage', 1)[1].split('\ndef ', 1)[0]
+    TQ = chr(34) * 3
+    body = fn.split(TQ, 2)[-1] if fn.count(TQ) >= 2 else fn
+    assert 'LIMIT $limit' not in body, (
+        "Cypher 里仍有 LIMIT —— coverage 过滤发生在截断之后，"
+        "调用量为 0 的盲区边会被整批丢掉，本查询会漏报它本该找的东西")
+    assert 'out[:limit]' in body, \
+        "limit 未在过滤之后应用 —— 要么漏报，要么根本不生效"
 
 
 def test_x11_schema_declares_awsserviceendpoint():

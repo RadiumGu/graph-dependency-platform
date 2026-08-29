@@ -510,7 +510,8 @@ def q21_observation_source_coverage(service_name: str = None,
 
     Args:
         service_name: 只看该服务出发的边。None 表示全图。
-        coverage: 只返回某一类，取值 both|xray_only|deepflow_only|declared_only。
+        coverage: 只返回某一类，取值 both|xray_only|deepflow_only|
+                  unobservable_by_design|observable_but_unobserved。
                   None 表示全部。
         limit: 返回条数上限
 
@@ -522,11 +523,21 @@ def q21_observation_source_coverage(service_name: str = None,
           'deepflow_calls':..., 'verified_by':...}]
     """
     where = ["r.dependency_kind IS NOT NULL"]
-    params = {"limit": limit}
+    params = {}
     if service_name:
         where.append("a.name = $svc")
         params["svc"] = service_name
 
+    # ⚠️ 刻意**不在 Cypher 里 LIMIT**。
+    #
+    # coverage 的判定需要读 xray_call_count / calls / source，只能在 Python 侧做，
+    # 所以如果 Cypher 先 LIMIT，过滤就发生在截断之后 —— 而盲区边恰恰是**调用量为 0**、
+    # 在 ORDER BY 里排最后的那批，会被整批截掉。
+    # 实测症状：coverage='observable_but_unobserved' limit=50 只返回 5 条，
+    # 真实数量是 13 —— 一个专门用来找盲区的查询把盲区漏报了 62%。
+    #
+    # 依赖边总数是**图谱量级**（实测 81 条，与 dependency_kind 挂钩，
+    # 不随遥测量增长），全量取回再在 Python 侧截断是安全的。
     cypher = f"""
     MATCH (a)-[r]->(b)
     WHERE {' AND '.join(where)}
@@ -540,7 +551,6 @@ def q21_observation_source_coverage(service_name: str = None,
            r.verified_by AS verified_by,
            r.active AS active
     ORDER BY coalesce(r.xray_call_count, r.calls, 0) DESC
-    LIMIT $limit
     """
     rows = nc.results(cypher, params)
 
@@ -582,4 +592,6 @@ def q21_observation_source_coverage(service_name: str = None,
         if coverage and cov != coverage:
             continue
         out.append(row)
-    return out
+    # limit 在**过滤之后**生效 —— 见上方 Cypher 处的注释：
+    # 先截断会把调用量为 0 的盲区边整批丢掉，让本查询漏报它本该找的东西。
+    return out[:limit] if limit else out
