@@ -140,7 +140,7 @@ zone without exceeding overload threshold (3 endpoints, 2 zones), addressType: I
 | HPA 目标 | 60% | **120%** | 等比补偿，绝对扩容阈值仍是 307m |
 | zone 约束 | ScheduleAnyway | ScheduleAnyway（不动） | 硬约束在当前容量下会死锁 |
 | — 新增 | — | `nodeTaintsPolicy: Honor`<br>`nodeAffinityPolicy: Honor` | 语义正确、无副作用；将来改硬约束时，AZ 故障会自动放松而非死锁 |
-| `topology-mode` 注解 | 已被摘除 | 保持摘除 | 见第四节：与 HPA 结构性冲突 |
+| `topology-mode` 注解 | 已被摘除 | **已恢复 `auto`** | 2 副本跨 AZ 后提示实测正确（2/2 指向自己 AZ）；奇数副本时自我关闭是安全降级，见第七节 |
 | search-service 在 1a 的 Pod | **0 个** | **1 个** | 降 request 后 1a 装得下了 |
 
 **净收益**：1a 从没有 search 端点变成有；总预留从 1088m 降到 768m；
@@ -162,10 +162,28 @@ zone without exceeding overload threshold (3 endpoints, 2 zones), addressType: I
    现实做法是 `minReplicas=maxReplicas=2`（等于放弃自动伸缩），
    或接受提示在奇数副本时自动关闭。
 
-> **判断**：第 3 条与自动伸缩天然矛盾。对这套演示/混沌平台而言，
-> 跨 AZ 流量费远小于「行为可预测」的价值，
-> 所以**保持注解摘除**是合理的，与另一会话的处置一致。
-> 若确实要省跨 AZ 流量，正确做法是钉死 2 副本 + 硬约束 + 加节点，三者一起上。
+> **实测修正了我的判断。** 我原本写的是「保持注解摘除」，理由是第 3 条与
+> 自动伸缩天然矛盾。降 request 之后 HPA 稳定回落到 **2 副本**，
+> 而 `topologySpreadConstraints` 把它们分成了 **1a=1 / 1c=1** ——
+> 偶数端点、每 AZ 一个，正是提示能正确分配的形态。于是恢复注解并实测：
+>
+> ```
+> TopologyAwareHintsEnabled  （事件）
+> 11.0.2.94   zone=ap-northeast-1a  forZones=['ap-northeast-1a']  ✅
+> 11.0.3.232  zone=ap-northeast-1c  forZones=['ap-northeast-1c']  ✅
+> ```
+>
+> **2/2 个端点的提示都指向自己所在 AZ —— 提示现在在做真实工作。**
+>
+> 关键区别在于**失败模式变了，不是消失了**：
+> · 原始缺陷是提示**错误**（两个端点都在 1c，控制器只能把一个标成服务 1a，
+>   零收益 + 确定性钉死 76/24）；
+> · 现在 HPA 扩到奇数副本时提示会**自动关闭**，退回普通随机均衡 ——
+>   那是安全的降级，**不是原来的 bug**。
+>
+> 所以注解可以开着：它在稳态（2 副本）下正确生效，在无法均衡时自我关闭。
+> 前提是 request 已右调、`topologySpreadConstraints` 能把 2 副本分开 ——
+> 这两条现在都成立。
 
 ## 八、CDK 源码修改规格
 
@@ -176,7 +194,7 @@ zone without exceeding overload threshold (3 endpoints, 2 zones), addressType: I
 | CFN 逻辑 ID | 承载的对象 | 需要的改动 |
 |---|---|---|
 | `searchserviceDeployment513D27D7` | `Deployment/search-service` | ① CPU request 512m → 256m（limit 保持 512m）<br>② zone 约束加 `nodeTaintsPolicy: Honor` + `nodeAffinityPolicy: Honor` |
-| `searchserviceService1AA04946` | `Service/search-service` | 移除 `service.kubernetes.io/topology-mode: auto` 注解（理由见第四、七节） |
+| `searchserviceService1AA04946` | `Service/search-service` | **保留** `service.kubernetes.io/topology-mode: auto`（原样，无需改动）—— 它在 request 右调后已能正确生效 |
 | HPA `search-service-hpa` | 伸缩策略 | `averageUtilization` 60 → 120（等比补偿 request 减半） |
 
 CDK 侧的 Deployment 片段应变成：
