@@ -110,11 +110,12 @@ for k in ('both','xray_only','deepflow_only','declared_only'):
 **预期输出**：
 
 ```
-共 79 条依赖边
-  both             1
-  xray_only        6
-  deepflow_only    52
-  declared_only    20
+共 81 条依赖边
+  both                         1
+  xray_only                    9
+  deepflow_only               52
+  unobservable_by_design       6
+  observable_but_unobserved   13
 ```
 
 > **要讲的**：这四类不是「数据质量好坏」，而是**两个观测源各自的能力边界**。
@@ -439,7 +440,7 @@ print('边总数:', nc.results('MATCH ()-[r]->() RETURN count(r) AS n',{})[0]['n
 | 步骤 | 命令 | 一句话 |
 |---|---|---|
 | 1 | ClickHouse 行数 vs 图谱规模 | 789k/小时 是图谱的 900 倍 → 不能存遥测 |
-| 2 | `q21` 无参数 | both=1 / xray=6 / deepflow=52 / declared=20 |
+| 2 | `q21` 无参数 | both=1 / xray=9 / deepflow=52 / 不可观测=6 / 真盲区=13 |
 | 2.1 | `q21 coverage=both` | `discovered_by` 没被覆盖，两源印证 |
 | 2.2 | `q21 coverage=xray_only` | DynamoDB 11,507 次，DNS 完全看不见 |
 | 2.3 | `q21 coverage=deepflow_only` | 52 条来自未埋点服务，X-Ray 里不存在 |

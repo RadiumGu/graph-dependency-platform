@@ -430,6 +430,35 @@ def test_x10_q21_registered_in_catalog():
     assert 'coverage' in spec['params'], "coverage 参数契约缺失"
 
 
+def test_x13_unobservable_is_separated_from_real_blind_spots():
+    """
+    Q21 必须把「本质不可观测」与「该观测到却没观测到」**分成两类**。
+
+    原先合并为一个 `declared_only`，实测 20 条里混了三种东西：
+      Lambda 依赖 7 条（真盲区）
+      BusinessCapability 的边 6 条（**本质不可观测** —— 「支付流程依赖告警主题」
+        是业务语义，运行时永远不会有网络包对应）
+      微服务→数据存储 7 条（真盲区）
+
+    把第二类算进盲区会**高估依赖质量问题**、稀释真问题。
+    拆开后实测 6 条不可观测 + 13 条真盲区。
+
+    判据必须是 **provenance（source='business-layer'）**，
+    不是靠边类型或节点类型推断 —— source 本身就记录了这条边的性质。
+    """
+    src = _src('rca/neptune/neptune_queries.py')
+    fn = src.split('def q21_observation_source_coverage', 1)[1].split('\ndef ', 1)[0]
+    assert "'unobservable_by_design'" in fn, \
+        "Q21 未区分本质不可观测的边 —— 会把业务层声明当成依赖盲区"
+    assert "'observable_but_unobserved'" in fn, \
+        "Q21 缺少真盲区分类"
+    assert "'declared_only'" not in fn, \
+        "旧的合并分类 declared_only 仍在使用 —— 它混了两种性质不同的边"
+    # 判据必须基于 source，而非边类型/节点类型
+    assert "src_name == 'business-layer'" in fn, \
+        "分类判据不是 provenance —— 靠边类型或节点类型推断会误判"
+
+
 def test_x11_schema_declares_awsserviceendpoint():
     """
     新节点类型必须在 schema 里声明 —— 否则 test_11 的

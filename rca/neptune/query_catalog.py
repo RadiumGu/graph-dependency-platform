@@ -220,7 +220,10 @@ QUERY_CATALOG = {
                  "X-Ray 能精确到 AWS 资源名，DeepFlow 只到域名，"
                  "而走 VPC 端点时 DNS 侧连域名都没有"),
         "params": {"service_name": "str，可选（省略=全图）",
-                   "coverage": "str，可选：both|xray_only|deepflow_only|declared_only",
+                   "coverage": ("str，可选：both|xray_only|deepflow_only|"
+                                "unobservable_by_design|observable_but_unobserved。"
+                                "后两类是从原 declared_only 拆出来的 —— business-layer 写入的"
+                                "边本质不可观测，与真盲区混在一起会高估依赖质量问题"),
                    "limit": "int，默认 50"},
         "required": [],
     },

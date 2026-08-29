@@ -481,7 +481,25 @@ def q21_observation_source_coverage(service_name: str = None,
     | `both` | X-Ray 与 DeepFlow 都观测到 | 最可信 —— 两种完全不同的观测机制互相印证 |
     | `xray_only` | 只有 X-Ray 看到 | 通常是**到 AWS 托管服务**的调用：连接复用或 VPC 端点让 DNS 侧看不见 |
     | `deepflow_only` | 只有 DeepFlow 看到 | 通常是**未插桩服务**发起的调用，X-Ray 里根本不存在 |
-    | `declared_only` | 只有声明，无任何运行时观测 | 可能是死代码，也可能两个源同时有盲区 —— 要看 Q20 的症状 |
+    | `unobservable_by_design` | 业务层逻辑声明，**本质不可观测** | 不该被期待有运行时印证，不是缺陷 |
+    | `observable_but_unobserved` | 该被观测到却没有 | **真盲区** —— 死代码，或所有源同时有盲点 |
+
+    ## 为什么要把最后两类分开
+
+    原先它们合并为一个 `declared_only`，实测 20 条里混了三种完全不同的东西：
+
+    | 类别 | 条数 | 性质 |
+    |---|---|---|
+    | Lambda 的依赖 | 7 | 真盲区 —— eBPF 在 EKS 节点上抓不到 Lambda，X-Ray 当时也没覆盖 |
+    | **BusinessCapability 的边** | **6** | **本质不可观测** —— 「支付流程依赖告警主题」是业务语义，不是一次网络调用 |
+    | 微服务 → 数据存储 | 7 | 真盲区 —— SDK 连接复用 + VPC 端点让 DNS 看不见 |
+
+    把第二类算进「盲区」会**高估依赖质量问题**：那 6 条边由 `business-layer`
+    写入，描述的是业务能力对资源的逻辑依赖，运行时永远不会有一条网络包对应它。
+    报告里把它们和「petsearch 每天访问 S3 却没被观测到」并列，等于让真问题被稀释。
+
+    判据是 **source**：`business-layer` 写入的边归为 `unobservable_by_design`。
+    这不是靠边类型或节点类型推断 —— provenance 本身就记录了它的性质。
 
     ## 粒度诚实性
 
@@ -550,8 +568,14 @@ def q21_observation_source_coverage(service_name: str = None,
             cov = 'xray_only'
         elif seen_deepflow:
             cov = 'deepflow_only'
+        elif src_name == 'business-layer':
+            # 业务层的逻辑声明**本质不可观测**：「支付流程依赖告警主题」
+            # 描述的是业务能力对资源的依赖，运行时永远不会有一条网络包对应它。
+            # 把它算进「盲区」会高估依赖质量问题、稀释真问题。
+            # 判据用 provenance（source）而不是边类型或节点类型推断。
+            cov = 'unobservable_by_design'
         else:
-            cov = 'declared_only'
+            cov = 'observable_but_unobserved'
 
         row['seen_by'] = seen
         row['coverage'] = cov
