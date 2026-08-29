@@ -539,3 +539,100 @@ payforadoption 与 petlistadoptions 解析不出任何跨服务下游边。
 | Logs | ✅ | 仅 `log_source` 指针 | 有，指针模式正确 |
 | Traces | ✅ **采集在跑**（X-Ray 6,949/h + AutoTracing 10.11%） | **无任何 trace 形态** | **缺口在存储层，不在采集层** |
 | Profiling | ❌ CE 版仅 On-CPU、不支持 Python，`profile.in_process` 0 行 | 无 | 真的没有 |
+
+
+## A.11 采集配置默认值（实测，逐字来自 server 的 example 配置）
+
+`GET http://127.0.0.1:30417/v1/vtap-group-configuration/example/` → HTTP 200，
+其中与 trace 相关的三项：
+
+```yaml
+# HTTP X-Request-ID Key
+# Default: X-Request-ID
+http_log_x_request_id: X-Request-ID
+
+# TraceID Keys
+# Default: traceparent, sw8.
+# Note: Used to extract the TraceID field in HTTP and RPC headers, supports filling
+#   in multiple values separated by commas. This feature can be turned off by
+#   setting it to empty.
+http_log_trace_id: traceparent, sw8
+
+# SpanID Keys
+# Default: traceparent, sw8.
+http_log_span_id: traceparent, sw8
+```
+
+**默认只提取 `traceparent`（W3C）与 `sw8`（SkyWalking），不含 `X-Amzn-Trace-Id`。**
+而 MySQL 里这三列的 `COLUMN_DEFAULT` 全为 `NULL` ——
+说明默认值不在 DB schema 里，而在 agent 内置逻辑中，**空表即等于走内置默认**。
+
+这就完整闭合了 `l7_flow_log.trace_id = 0 / 789,055` 的因果链：
+应用（经 aws-otel-collector / X-Ray SDK）发的是 `X-Amzn-Trace-Id`，
+DeepFlow 不看这个头，所以字段全空。**不是没埋点，是头对不上。**
+
+## A.12 P2 有两条路，第二条更强
+
+### P2a：只加 trace-id 提取头（最小改动）
+
+建一条 agent-group 配置，把三项改为：
+
+```yaml
+http_log_trace_id: traceparent, sw8, X-Amzn-Trace-Id
+http_log_span_id:  traceparent, sw8, X-Amzn-Trace-Id
+```
+
+- **零应用改动、零 Deployment 改动**
+- 效果：DeepFlow 能从 L7 里提出 trace_id，把自己的 L7 记录按请求链缝合
+- 局限：只拿到 trace-id 关联，拿不到应用侧真正的 span 树与属性
+
+### P2b：让已有的 sidecar collector 同时把 OTLP 发给 DeepFlow（更强）
+
+example 配置里的两项（**默认即开启**）：
+
+```yaml
+# Data Integration Socket
+# Note: Whether to enable receiving external data sources such as Prometheus,
+#   Telegraf, OpenTelemetry, and SkyWalking.
+external_agent_http_proxy_enabled: 1
+
+# Listen Port of the Data Integration Socket
+# Default: 38086
+external_agent_http_proxy_port: 38086
+```
+
+**DeepFlow agent 默认就在 38086 上接收 OpenTelemetry 数据。**
+集群里已经有 4 个 `aws-otel-collector` sidecar 在跑，
+只需在它们的 collector 配置里**增加一个 OTLP exporter** 指向本节点 DeepFlow agent 的 38086
+（现有的 X-Ray exporter 保留不动，OTel collector 支持多 exporter 并行）。
+
+- **零应用代码改动**（只改 collector 的 ConfigMap）
+- 效果：DeepFlow 拿到**完整的 span 树**，而不只是 trace-id
+- 代价：要改集群里的 collector 配置并重启 collector 容器
+- 额外收益：这条路同时把 `petsite`（走 xray-daemon，无 sidecar）的缺口暴露出来
+  —— 它需要单独处理，见 A.8
+
+**判定：P2a 与 P2b 不互斥，建议先 P2a（改配置即可验证 trace_id 从 0 变非 0），
+再评估 P2b。**
+
+## A.13 顺带找到噪音过滤的配置抓手
+
+此前记录「约 76% 的 L7 采集是可观测性自噪音，五个上报 agent 持续发往
+`logs.ap-northeast-1.amazonaws.com`，约 60 万行/小时，而真实业务流量只有 4,760」。
+example 配置里对应的抓手是：
+
+```yaml
+# Traffic Capture Filter
+# Length: [1, 512]
+# Note: If not configured, all traffic will be collected. Please
+#   refer to BPF syntax: https://biot.com/capstats/bpf.html
+capture_bpf:
+```
+
+**当前为空 = 全量采集**，这解释了噪音为何存在。
+过滤要用 BPF 语法（基于 IP/端口，不能按域名），所以需要先解出
+`logs.ap-northeast-1.amazonaws.com` 的 IP 段再写规则。
+
+另注：`l7_log_packet_size: 1024`（协议识别最大长度）、
+`l7_log_collect_nps_threshold: 10000`（超过即采样）——
+当前 789k 行/小时 ≈ 219 行/秒，远低于采样阈值，说明**数据没有被采样丢弃**。
