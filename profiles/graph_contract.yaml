@@ -628,3 +628,29 @@ edge_types:
       - SQSQueue
     dependency: false
     expires_seconds: null
+edge_verification:
+  attrs:
+  - verify_status
+  - verify_confidence
+  - verify_last
+  - verify_by
+  - verify_experiment
+  - verify_degradation
+  authority:
+  - chaos-runner
+  statuses:
+  - untested
+  - confirmed
+  - refuted
+  - inconclusive
+  evidence_weights:
+    static_declaration: 1.0
+    observed_per_source: 0.5
+    observed_cap: 1.5
+    intervention_confirmed: 4.0
+    intervention_refuted: -4.0
+  thresholds:
+    min_observation_requests: 20
+    confirm_degradation_pct: 20.0
+    refute_degradation_pct: 5.0
+    stale_verification_seconds: 2592000

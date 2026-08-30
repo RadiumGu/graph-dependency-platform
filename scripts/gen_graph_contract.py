@@ -64,6 +64,11 @@ def render(contract: dict) -> str:
     )
     parts.append(f"NODE_TYPES = {pp.pformat(contract['node_types'])}\n")
     parts.append(f"EDGE_TYPES = {pp.pformat(contract['edge_types'])}\n")
+    parts.append(
+        "\n# 依赖边验证与置信度的判据。混沌注入与 ETL 共用同一份声明 ——\n"
+        "# 否则「谁能写 verify_* 属性」「confirmed 的阈值」会各处一份、悄悄漂移。\n"
+        f"EDGE_VERIFICATION = {pp.pformat(contract['edge_verification'])}\n"
+    )
     return "\n".join(parts)
 
 

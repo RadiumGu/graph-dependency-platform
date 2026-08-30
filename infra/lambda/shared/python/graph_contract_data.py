@@ -322,3 +322,24 @@ EDGE_TYPES = {   'AccessesData': {   'dependency': True,
                                  ['Microservice', 'SNSTopic'],
                                  ['Microservice', 'SQSQueue']],
                     'src': ['LambdaFunction', 'Microservice']}}
+
+
+# 依赖边验证与置信度的判据。混沌注入与 ETL 共用同一份声明 ——
+# 否则「谁能写 verify_* 属性」「confirmed 的阈值」会各处一份、悄悄漂移。
+EDGE_VERIFICATION = {   'attrs': [   'verify_status',
+                 'verify_confidence',
+                 'verify_last',
+                 'verify_by',
+                 'verify_experiment',
+                 'verify_degradation'],
+    'authority': ['chaos-runner'],
+    'evidence_weights': {   'intervention_confirmed': 4.0,
+                            'intervention_refuted': -4.0,
+                            'observed_cap': 1.5,
+                            'observed_per_source': 0.5,
+                            'static_declaration': 1.0},
+    'statuses': ['untested', 'confirmed', 'refuted', 'inconclusive'],
+    'thresholds': {   'confirm_degradation_pct': 20.0,
+                      'min_observation_requests': 20,
+                      'refute_degradation_pct': 5.0,
+                      'stale_verification_seconds': 2592000}}
