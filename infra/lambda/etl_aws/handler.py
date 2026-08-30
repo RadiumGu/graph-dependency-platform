@@ -555,7 +555,13 @@ def run_etl():
                 logger.debug(f"T12 Pod→EC2 {node_name}: {e}")
 
         if pod['service_name']:
-            svc_vid = find_vertex_by_name(pod['service_name'])
+            # 必须走别名映射：K8s Service 名与 Microservice 名不同名
+            # （search-service→petsearch 等，见 collectors/eks.py:_K8S_SVC_ALIAS）。
+            # 原代码用未映射的原名 + 不带标签的查找，于是命中了同名的
+            # K8sService / Deployment / Namespace 节点 —— 实测 173 条 RunsOn
+            # 边源端点因此错误。Step 8b-post(:592) 一直是映射后再查的，两处不一致。
+            _ms_name = _K8S_SVC_ALIAS.get(pod['service_name'], pod['service_name'])
+            svc_vid = find_vertex_by_name(_ms_name, 'Microservice')
             if svc_vid and p_vid:
                 upsert_edge(svc_vid, p_vid, 'RunsOn', {'source': 'eks-etl'})
                 stats['edges'] += 1
@@ -570,7 +576,7 @@ def run_etl():
         if db_vid and rds_vid:
             upsert_edge(db_vid, rds_vid, 'BelongsTo', {'source': 'eks-etl'})
             stats['edges'] += 1
-        svc_vid = find_vertex_by_name(mapping['service'])
+        svc_vid = find_vertex_by_name(mapping['service'], 'Microservice')
         if svc_vid and db_vid:
             upsert_edge(svc_vid, db_vid, 'ConnectsTo', {'source': 'eks-etl'})
             stats['edges'] += 1
@@ -589,7 +595,7 @@ def run_etl():
                 ms_name = _K8S_SVC_ALIAS.get(pod['service_name'], pod['service_name'])
                 ms_current_ips.setdefault(ms_name, set()).add(pod['pod_ip'])
         for ms_name, ips in ms_current_ips.items():
-            ms_vid = find_vertex_by_name(ms_name)
+            ms_vid = find_vertex_by_name(ms_name, 'Microservice')
             if ms_vid:
                 ip_str = safe_str(','.join(sorted(ips)))
                 neptune_query(f"g.V('{ms_vid}').property(single,'ip','{ip_str}')")
@@ -862,7 +868,7 @@ def run_etl():
 
             # Deployment → Microservice (Manages)
             if dep['ms_alias']:
-                ms_vid = find_vertex_by_name(dep['ms_alias'])
+                ms_vid = find_vertex_by_name(dep['ms_alias'], 'Microservice')
                 if ms_vid and dep_vid:
                     upsert_edge(dep_vid, ms_vid, 'Manages', {'source': 'eks-etl'})
                     stats['edges'] += 1

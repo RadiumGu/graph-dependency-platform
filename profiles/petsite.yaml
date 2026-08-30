@@ -374,7 +374,7 @@ neptune:
 
     ### 消息/事件关系
     - (:Microservice)-[:PublishesTo]->(:SNSTopic|:SQSQueue)
-    - (:Microservice)-[:WritesTo]->(:SQS|:SNS|:S3)
+    - (:Microservice)-[:WritesTo]->(:SQSQueue|:SNSTopic|:S3Bucket)
     - (:LambdaFunction)-[:WritesTo]->(:NeptuneCluster)
     - (:Microservice)-[:InvokesVia]->(:StepFunction)
     - (:SNSTopic)-[:Invokes]->(:LambdaFunction)

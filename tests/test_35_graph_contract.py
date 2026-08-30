@@ -348,6 +348,67 @@ def test_g14_all_etl_label_literals_are_declared(contract):
     )
 
 
+# ── g15/g16 端点配对（防笛卡尔积退化）─────────────────────────────────────
+
+def test_g15_every_edge_has_pairs_consistent_with_src_dst(contract):
+    for lb, spec in contract['edge_types'].items():
+        pairs = spec.get('pairs')
+        assert pairs, f"{lb} 没有 pairs —— 端点校验会退化成笛卡尔积"
+        assert set(spec['src']) == {s for s, _ in pairs}, f"{lb} 的 src 与 pairs 不一致"
+        assert set(spec['dst']) == {d for _, d in pairs}, f"{lb} 的 dst 与 pairs 不一致"
+
+
+def test_g16_cartesian_combination_is_rejected(monkeypatch):
+    """两端各自都在白名单里、但组合从未声明 —— 必须拒绝。
+
+    这条是**回归守门**。改成 pairs 之前，`Manages` 的 src={Deployment,HPA}、
+    dst={Deployment,Microservice,Pod} 会让 Deployment->Deployment 通过 ——
+    而那正是本次在活图谱查出的 4 条错源边之一。
+    退回平铺白名单校验的任何改动都会让这条测试失败。
+    """
+    import graph_contract as gc
+    monkeypatch.setenv('GRAPH_CONTRACT_MODE', 'enforce')
+    monkeypatch.setenv('GRAPH_CONTRACT_ENDPOINTS', 'enforce')
+
+    spec = gc.EDGE_TYPES['Manages']
+    assert 'Deployment' in spec['src'] and 'Deployment' in spec['dst'], \
+        "前提变了：这条测试需要 Deployment 同时出现在 src 和 dst 里"
+    assert ['Deployment', 'Deployment'] not in spec['pairs']
+
+    with pytest.raises(gc.GraphContractError):
+        gc.assert_edge_type('Manages', 'Deployment', 'Deployment')
+
+    # 已声明的组合必须照常放行
+    gc.assert_edge_type('Manages', 'HPA', 'Deployment')
+    gc.assert_edge_type('Manages', 'Deployment', 'Microservice')
+
+
+# ── g17 按名查找必须带标签 ────────────────────────────────────────────────
+
+def test_g17_find_vertex_by_name_requires_label():
+    """`find_vertex_by_name` 的 label 参数不能有默认值。
+
+    有默认值就意味着现有调用点可以继续静默走「不带标签」的错误路径 ——
+    缺陷照旧存在，只是多了一个没人用的正确入口。
+    实测该缺陷造成 183 条边源端点错误（占全图 10%）。
+    """
+    src = (REPO / 'infra' / 'lambda' / 'etl_aws' / 'neptune_client.py').read_text()
+    m = re.search(r'def find_vertex_by_name\(([^)]*)\)', src)
+    assert m, "找不到 find_vertex_by_name 定义"
+    params = [p.strip() for p in m.group(1).split(',') if p.strip()]
+    assert len(params) >= 2, f"缺少 label 参数: {params}"
+    label_param = params[1]
+    assert '=' not in label_param, (
+        f"label 参数有默认值（{label_param}）—— 调用点会继续静默走不带标签的路径")
+
+    # 所有调用点都必须传两个实参
+    handler = (REPO / 'infra' / 'lambda' / 'etl_aws' / 'handler.py').read_text()
+    calls = re.findall(r'find_vertex_by_name\(([^)]*)\)', handler)
+    assert calls, "handler.py 里找不到调用点"
+    for c in calls:
+        assert ',' in c, f"调用点没传 label: find_vertex_by_name({c})"
+
+
 # ── g12 时间戳字段唯一 ────────────────────────────────────────────────────
 
 def test_g12_single_timestamp_field(contract, gc):

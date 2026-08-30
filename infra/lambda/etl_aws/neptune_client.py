@@ -304,12 +304,43 @@ def resolve_resource_tags(tags) -> dict:
     }
 
 
-def find_vertex_by_name(name: str):
-    for (label, cached_name), vid in _vid_cache.items():
-        if cached_name == name:
-            return vid
+def find_vertex_by_name(name: str, label: str):
+    """按 **(label, name)** 查顶点 ID。`label` 是必需参数，刻意不给默认值。
+
+    ## 为什么必须带 label（2026-08-30 修复）
+
+    原实现两层都不带标签：
+
+        for (label, cached_name), vid in _vid_cache.items():   # ← 丢弃 label
+            if cached_name == name: return vid
+        neptune_query(f"g.V().has('name','{name}').id().limit(1)")  # ← 也不带
+
+    而本图里名字**跨标签重复**是常态 —— 实测 12 组，例如 `gateway-service`
+    同时是 Deployment、K8sService 和 Microservice 三个节点。于是返回哪一个
+    取决于 `_vid_cache` 的插入顺序，也就是 ETL 步骤的先后，**不确定**。
+
+    实测后果（活图谱 2026-08-30）：
+      - `Microservice-[RunsOn]->Pod` 正确的只有 36 条，
+        而源端点错成 Namespace / K8sService / Deployment 的有 **173 条**。
+        影响面分析从 Microservice 出发遍历 RunsOn 会漏掉大部分 Pod。
+      - `Deployment-[Manages]->Microservice` 正确 6 条，错 10 条。
+      - handler.py Step 8b-post 把本该写给 Microservice 的 `ip` 属性
+        写到了 Deployment / K8sService 节点上；而它前一句只 drop
+        `hasLabel('Microservice')` 的 ip，所以那些错写的值**永远清不掉**。
+
+    把 label 设为必需参数（而不是可选带默认值）是刻意的：可选参数会让现有
+    调用点继续静默走错误路径，缺陷照旧存在，只是多了一个没人用的正确入口。
+
+    顺带把缓存查找从线性扫描改成 O(1) 直接取键。
+    """
+    assert_node_type(label)
+    vid = _vid_cache.get((label, name))
+    if vid:
+        return vid
     try:
-        result = neptune_query(f"g.V().has('name', '{name}').id().limit(1)")
+        result = neptune_query(
+            f"g.V().hasLabel('{label}').has('name', '{safe_str(name)}').id().limit(1)"
+        )
         ids = result.get('result', {}).get('data', {}).get('@value', [])
         if ids:
             vid = ids[0]

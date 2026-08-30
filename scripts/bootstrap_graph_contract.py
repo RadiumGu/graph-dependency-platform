@@ -188,12 +188,54 @@ ENDPOINT_FIXUPS = {
     'WritesTo': {'dst': {'S3': 'S3Bucket', 'SNS': 'SNSTopic', 'SQS': 'SQSQueue'}},
 }
 
+# 2026-08-30：对活图谱做三元组普查（1740 条边 / 85 种形态）后，确认下列形态
+# **真实存在且语义正确**，只是 graph_schema_text 从未声明它们。逐条给出依据。
+#
+# 这是 Mystery Machine（OSDI'14）的做法反过来用：先假设观测到的边都成立，
+# 再逐条证伪；剩下证伪不掉的补进声明。凭空补声明会把真缺陷一起合法化 ——
+# 同一次普查里另外 183 条就是真缺陷（find_vertex_by_name 不带标签所致），
+# 那些**不补**，改代码 + 清数据。
+PAIR_ADDITIONS = {
+    'Manages': [
+        # handler.py:906 T8g 明确写 HPA → Deployment，语义正确，schema 漏声明
+        ('HPA', 'Deployment'),
+    ],
+    'AccessesData': [
+        # RDSInstance 是已声明节点类型；schema 只写了 RDSCluster
+        ('Microservice', 'RDSInstance'),
+        # Step Functions 调 Lambda，cfn 模板里的真实依赖
+        ('StepFunction', 'LambdaFunction'),
+        # 本项目自己的 ETL Lambda 写 Neptune —— 图谱在描述自己
+        ('LambdaFunction', 'NeptuneCluster'),
+        # Lambda 读写 S3。平铺白名单下这条是「合规」的（LambdaFunction 在 src、
+        # S3Bucket 在 dst），改成配对校验后才暴露它从未被显式声明 ——
+        # 这正是收紧端点约束的预期代价：被笛卡尔积掩盖的合法组合会浮出来。
+        ('LambdaFunction', 'S3Bucket'),
+    ],
+    'Calls': [
+        # Lambda 直接调 Lambda；schema 只写了 Microservice→Microservice
+        ('LambdaFunction', 'LambdaFunction'),
+    ],
+}
+
 
 def parse_schema_text(txt: str) -> tuple[list[str], dict]:
     """从 graph_schema_text 抽出节点类型与边类型（含端点约束）。
 
     注意字符类必须含 0-9 —— EC2Instance / K8sService / S3Bucket 都带数字，
     漏掉会让整行不匹配（实测会把 26 种边少解析成 23 种）。
+
+    ## 为什么记 pairs 而不只记 src/dst 两个集合
+
+    schema 文本是 `(:A)-[:X]->(:B|:C)` 形式，**配对信息在解析时天然就有**。
+    原实现把它拆成 src={A} / dst={B,C} 两个平铺集合，于是校验退化成笛卡尔积：
+      - `Manages` src={Deployment} dst={Microservice,Pod}，加进真实存在的
+        HPA→Deployment 后就变成 src={Deployment,HPA} dst={Deployment,...}，
+        连 **Deployment→Deployment**（本次查出的真缺陷之一）都会被放行。
+      - `RunsOn` src={Microservice,Pod} dst={EC2Instance,Pod}，平铺白名单
+        已经在放行从未声明的 Microservice→EC2Instance 和 Pod→Pod。
+    保留 pairs 才能让端点约束真正有分辨力。src/dst 仍然生成，作为兼容字段
+    与「只知道一端」时的宽松校验。
     """
     lines = txt.splitlines()
     ni = next(i for i, l in enumerate(lines) if l.strip().startswith('## 节点类型'))
@@ -206,7 +248,8 @@ def parse_schema_text(txt: str) -> tuple[list[str], dict]:
             nodes.append(m.group(1))
 
     pat = re.compile(r'\(:([A-Za-z0-9|:]+)\)-\[:([A-Za-z0-9|:]+)\]->\(:([A-Za-z0-9|:]+)\)')
-    edges: dict[str, dict] = collections.defaultdict(lambda: {'src': set(), 'dst': set()})
+    edges: dict[str, dict] = collections.defaultdict(
+        lambda: {'src': set(), 'dst': set(), 'pairs': set()})
     for m in pat.finditer(txt):
         srcs = [s for s in m.group(1).split('|:') if s]
         labs = [s for s in m.group(2).split('|:') if s]
@@ -214,6 +257,7 @@ def parse_schema_text(txt: str) -> tuple[list[str], dict]:
         for lb in labs:
             edges[lb]['src'].update(srcs)
             edges[lb]['dst'].update(dsts)
+            edges[lb]['pairs'].update((s, d) for s in srcs for d in dsts)
     return nodes, edges
 
 
@@ -236,11 +280,16 @@ def build(nodes: list[str], edges: dict) -> dict:
     for e in sorted(edges):
         a = EDGE_ANNOTATIONS[e]
         fix = ENDPOINT_FIXUPS.get(e, {})
-        src = sorted(fix.get('src', {}).get(s, s) for s in edges[e]['src'])
-        dst = sorted(fix.get('dst', {}).get(s, s) for s in edges[e]['dst'])
+        _fs = lambda s: fix.get('src', {}).get(s, s)   # noqa: E731
+        _fd = lambda s: fix.get('dst', {}).get(s, s)   # noqa: E731
+        pairs = {(_fs(s), _fd(d)) for s, d in edges[e]['pairs']}
+        pairs |= set(PAIR_ADDITIONS.get(e, ()))
+        src = sorted({s for s, _ in pairs})
+        dst = sorted({d for _, d in pairs})
         entry = {
             'src': src,
             'dst': dst,
+            'pairs': [list(p) for p in sorted(pairs)],
             'dependency': a['dependency'],
             'expires_seconds': a['expires_seconds'],
         }

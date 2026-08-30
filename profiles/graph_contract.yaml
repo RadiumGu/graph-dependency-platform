@@ -180,13 +180,43 @@ edge_types:
     src:
     - LambdaFunction
     - Microservice
+    - StepFunction
     dst:
     - AWSServiceEndpoint
     - DynamoDBTable
     - LambdaFunction
+    - NeptuneCluster
     - RDSCluster
+    - RDSInstance
     - S3Bucket
     - StepFunction
+    pairs:
+    - - LambdaFunction
+      - AWSServiceEndpoint
+    - - LambdaFunction
+      - DynamoDBTable
+    - - LambdaFunction
+      - LambdaFunction
+    - - LambdaFunction
+      - NeptuneCluster
+    - - LambdaFunction
+      - RDSCluster
+    - - LambdaFunction
+      - S3Bucket
+    - - Microservice
+      - AWSServiceEndpoint
+    - - Microservice
+      - DynamoDBTable
+    - - Microservice
+      - RDSCluster
+    - - Microservice
+      - RDSInstance
+    - - Microservice
+      - S3Bucket
+    - - Microservice
+      - StepFunction
+    - - StepFunction
+      - LambdaFunction
     dependency: true
     expires_seconds: 21600
     note: 四个源都写（aws/cfn 静态，deepflow 动态，xray 补度量）；取最长源窗口 = xray 的 6h，否则会误杀 xray 发现的边
@@ -195,6 +225,9 @@ edge_types:
     - Incident
     dst:
     - Microservice
+    pairs:
+    - - Incident
+      - Microservice
     dependency: false
     expires_seconds: null
   BelongsTo:
@@ -210,13 +243,33 @@ edge_types:
     - K8sService
     - NeptuneCluster
     - RDSCluster
+    pairs:
+    - - Database
+      - RDSCluster
+    - - EC2Instance
+      - EKSCluster
+    - - Namespace
+      - EKSCluster
+    - - NeptuneInstance
+      - NeptuneCluster
+    - - Pod
+      - K8sService
+    - - RDSInstance
+      - RDSCluster
     dependency: false
     expires_seconds: null
   Calls:
     src:
+    - LambdaFunction
     - Microservice
     dst:
+    - LambdaFunction
     - Microservice
+    pairs:
+    - - LambdaFunction
+      - LambdaFunction
+    - - Microservice
+      - Microservice
     dependency: true
     expires_seconds: 1800
     retention_seconds: 604800
@@ -226,6 +279,9 @@ edge_types:
     - Microservice
     dst:
     - Database
+    pairs:
+    - - Microservice
+      - Database
     dependency: false
     expires_seconds: null
   Contains:
@@ -233,6 +289,9 @@ edge_types:
     - Region
     dst:
     - AvailabilityZone
+    pairs:
+    - - Region
+      - AvailabilityZone
     dependency: false
     expires_seconds: null
   DependsOn:
@@ -244,6 +303,17 @@ edge_types:
     - RDSCluster
     - SNSTopic
     - SQSQueue
+    pairs:
+    - - BusinessCapability
+      - RDSCluster
+    - - BusinessCapability
+      - SNSTopic
+    - - BusinessCapability
+      - SQSQueue
+    - - Microservice
+      - ECRRepository
+    - - Microservice
+      - SQSQueue
     dependency: true
     expires_seconds: 21600
     note: aws + cfn 静态 + deepflow 动态
@@ -255,6 +325,13 @@ edge_types:
     dst:
     - Microservice
     - TargetGroup
+    pairs:
+    - - ListenerRule
+      - TargetGroup
+    - - LoadBalancer
+      - TargetGroup
+    - - TargetGroup
+      - Microservice
     dependency: false
     expires_seconds: null
   HasRule:
@@ -262,6 +339,9 @@ edge_types:
     - LoadBalancer
     dst:
     - ListenerRule
+    pairs:
+    - - LoadBalancer
+      - ListenerRule
     dependency: false
     expires_seconds: null
   HasSG:
@@ -273,6 +353,17 @@ edge_types:
     - RDSCluster
     dst:
     - SecurityGroup
+    pairs:
+    - - EC2Instance
+      - SecurityGroup
+    - - EKSCluster
+      - SecurityGroup
+    - - LoadBalancer
+      - SecurityGroup
+    - - NeptuneCluster
+      - SecurityGroup
+    - - RDSCluster
+      - SecurityGroup
     dependency: false
     expires_seconds: null
   Implements:
@@ -284,6 +375,15 @@ edge_types:
     - BusinessCapability
     - LambdaFunction
     - Microservice
+    pairs:
+    - - K8sService
+      - LambdaFunction
+    - - K8sService
+      - Microservice
+    - - LambdaFunction
+      - BusinessCapability
+    - - Microservice
+      - BusinessCapability
     dependency: false
     expires_seconds: null
   Invokes:
@@ -293,6 +393,13 @@ edge_types:
     - StepFunction
     dst:
     - LambdaFunction
+    pairs:
+    - - LambdaFunction
+      - LambdaFunction
+    - - SNSTopic
+      - LambdaFunction
+    - - StepFunction
+      - LambdaFunction
     dependency: false
     expires_seconds: null
   InvokesVia:
@@ -300,6 +407,9 @@ edge_types:
     - Microservice
     dst:
     - StepFunction
+    pairs:
+    - - Microservice
+      - StepFunction
     dependency: false
     expires_seconds: 21600
     note: 受 drift 对账覆盖
@@ -308,6 +418,9 @@ edge_types:
     - Incident
     dst:
     - Microservice
+    pairs:
+    - - Incident
+      - Microservice
     dependency: false
     expires_seconds: null
   LocatedIn:
@@ -334,14 +447,60 @@ edge_types:
     - Region
     - Subnet
     - VPC
+    pairs:
+    - - AWSServiceEndpoint
+      - Region
+    - - EC2Instance
+      - AvailabilityZone
+    - - EC2Instance
+      - Subnet
+    - - ECRRepository
+      - Region
+    - - EKSCluster
+      - Region
+    - - LoadBalancer
+      - AvailabilityZone
+    - - Microservice
+      - EKSCluster
+    - - NeptuneCluster
+      - Region
+    - - NeptuneInstance
+      - AvailabilityZone
+    - - Pod
+      - AvailabilityZone
+    - - RDSCluster
+      - Region
+    - - RDSInstance
+      - AvailabilityZone
+    - - S3Bucket
+      - Region
+    - - SNSTopic
+      - Region
+    - - SQSQueue
+      - Region
+    - - Subnet
+      - AvailabilityZone
+    - - Subnet
+      - VPC
+    - - VPC
+      - Region
     dependency: false
     expires_seconds: null
   Manages:
     src:
     - Deployment
+    - HPA
     dst:
+    - Deployment
     - Microservice
     - Pod
+    pairs:
+    - - Deployment
+      - Microservice
+    - - Deployment
+      - Pod
+    - - HPA
+      - Deployment
     dependency: false
     expires_seconds: null
   MentionsResource:
@@ -350,6 +509,11 @@ edge_types:
     dst:
     - EC2Instance
     - Microservice
+    pairs:
+    - - Incident
+      - EC2Instance
+    - - Incident
+      - Microservice
     dependency: false
     expires_seconds: null
   OwnedBy:
@@ -357,6 +521,9 @@ edge_types:
     - Microservice
     dst:
     - Namespace
+    pairs:
+    - - Microservice
+      - Namespace
     dependency: false
     expires_seconds: null
   ProtectsAccess:
@@ -364,6 +531,9 @@ edge_types:
     - SecurityGroup
     dst:
     - LambdaFunction
+    pairs:
+    - - SecurityGroup
+      - LambdaFunction
     dependency: false
     expires_seconds: null
   PublishesTo:
@@ -372,6 +542,11 @@ edge_types:
     dst:
     - SNSTopic
     - SQSQueue
+    pairs:
+    - - Microservice
+      - SNSTopic
+    - - Microservice
+      - SQSQueue
     dependency: false
     expires_seconds: 21600
     note: 受 drift 对账覆盖
@@ -380,6 +555,9 @@ edge_types:
     - K8sService
     dst:
     - Pod
+    pairs:
+    - - K8sService
+      - Pod
     dependency: false
     expires_seconds: null
   RoutesTo:
@@ -387,6 +565,9 @@ edge_types:
     - LoadBalancer
     dst:
     - TargetGroup
+    pairs:
+    - - LoadBalancer
+      - TargetGroup
     dependency: false
     expires_seconds: null
   RunsOn:
@@ -396,6 +577,11 @@ edge_types:
     dst:
     - EC2Instance
     - Pod
+    pairs:
+    - - Microservice
+      - Pod
+    - - Pod
+      - EC2Instance
     dependency: false
     expires_seconds: null
   TestedBy:
@@ -403,6 +589,9 @@ edge_types:
     - Microservice
     dst:
     - ChaosExperiment
+    pairs:
+    - - Microservice
+      - ChaosExperiment
     dependency: false
     expires_seconds: null
   TriggeredBy:
@@ -412,6 +601,11 @@ edge_types:
     dst:
     - LambdaFunction
     - Microservice
+    pairs:
+    - - Incident
+      - Microservice
+    - - SQSQueue
+      - LambdaFunction
     dependency: false
     expires_seconds: null
   WritesTo:
@@ -423,5 +617,14 @@ edge_types:
     - S3Bucket
     - SNSTopic
     - SQSQueue
+    pairs:
+    - - LambdaFunction
+      - NeptuneCluster
+    - - Microservice
+      - S3Bucket
+    - - Microservice
+      - SNSTopic
+    - - Microservice
+      - SQSQueue
     dependency: false
     expires_seconds: null

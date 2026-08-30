@@ -94,7 +94,15 @@ def assert_node_type(label: str) -> None:
 
 
 def assert_edge_type(label: str, src_label: str = None, dst_label: str = None) -> None:
-    """边类型必须已声明；端点若给出则按声明的白名单核对（默认只 warn）。"""
+    """边类型必须已声明；端点若给出则按声明核对（端点部分默认只 warn）。
+
+    ## 两端都知道时按 **配对** 校验，只知道一端时退回平铺白名单
+
+    平铺 src/dst 白名单的校验强度退化成笛卡尔积，实测会放行真缺陷：
+    `Manages` 加进真实存在的 HPA→Deployment 后，平铺白名单连
+    Deployment→Deployment（本次查出的错源边之一）都会放行。
+    所以两端已知时一律走 `pairs`。
+    """
     mode = _mode()
     if mode == MODE_OFF:
         return
@@ -106,6 +114,15 @@ def assert_edge_type(label: str, src_label: str = None, dst_label: str = None) -
     emode = _endpoints_mode()
     if emode == MODE_OFF:
         return
+
+    pairs = spec.get('pairs')
+    if pairs and src_label and dst_label:
+        if [src_label, dst_label] not in pairs and (src_label, dst_label) not in pairs:
+            _violate(emode,
+                     f"边 {label} 的端点组合 ({src_label})->({dst_label}) 未声明。"
+                     f"已声明的组合: {[f'{s}->{d}' for s, d in pairs]}")
+        return
+
     if src_label and src_label not in spec['src']:
         _violate(emode, f"边 {label} 的源类型 {src_label!r} 不在声明的白名单 {spec['src']}")
     if dst_label and dst_label not in spec['dst']:

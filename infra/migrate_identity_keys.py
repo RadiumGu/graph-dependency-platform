@@ -155,8 +155,13 @@ def merge_group(label: str, id_key: str, idv, group: list, apply: bool) -> None:
         if not apply:
             continue
         # 把出边与入边改挂到保留节点上，再删除。
-        # 用 addE 复制而非移动 —— Gremlin 没有移动边的原语；重复边由目标侧的
-        # coalesce upsert 语义吸收（同 (src,label,dst) 只会有一条）。
+        # Gremlin 没有「移动边」的原语，只能用 addE 复制。
+        #
+        # 2026-08-30 修：这里原本的注释写着「重复边由目标侧的 coalesce upsert
+        # 语义吸收（同 (src,label,dst) 只会有一条）」—— **那个假设是错的**。
+        # addE 无条件建新边，这段路径里根本没有 coalesce。实测合并一组 VPC 后
+        # 造出了 13 条平行重复的 LocatedIn 边（保留节点的入边从 12 变成 24）。
+        # 所以改挂之后必须显式去重。
         _neptune_query(
             f"g.V('{vid}').outE().as('e').inV().as('dst').select('e').label().as('lb')"
             f".select('dst').addE(select('lb')).from(V('{keep_vid}')).iterate()")
@@ -164,6 +169,38 @@ def merge_group(label: str, id_key: str, idv, group: list, apply: bool) -> None:
             f"g.V('{vid}').inE().as('e').outV().as('src').select('e').label().as('lb')"
             f".select('src').addE(select('lb')).to(V('{keep_vid}')).iterate()")
         _neptune_query(f"g.V('{vid}').drop()")
+        n = dedupe_parallel_edges(keep_vid)
+        if n:
+            print(f"    去重: 删掉 {n} 条平行重复边")
+
+
+def dedupe_parallel_edges(vid) -> int:
+    """删掉某节点上 (对端, 标签, 方向) 相同的多余边，每组保留一条。
+
+    平行重复边对影响面分析是有害的：一条依赖被计两次，会让扇出统计和
+    关键路径打分虚高。Neptune / TinkerPop 允许平行边，所以不会报错，只会静默失真。
+    """
+    dropped = 0
+    for direction, peer in (('outE', 'inV'), ('inE', 'outV')):
+        r = _neptune_query(
+            f"g.V('{vid}').{direction}().project('id','peer','lb')"
+            f".by(__.id()).by(__.{peer}().id()).by(__.label()).fold()")
+        rows = _unwrap(_values(r))
+        while isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], list):
+            rows = rows[0]
+        if not rows:
+            continue
+        seen = set()
+        for e in rows:
+            if not isinstance(e, dict):
+                continue
+            key = (e.get('peer'), e.get('lb'))
+            if key in seen:
+                _neptune_query(f"g.E('{e['id']}').drop().iterate()")
+                dropped += 1
+            else:
+                seen.add(key)
+    return dropped
 
 
 def main() -> None:
