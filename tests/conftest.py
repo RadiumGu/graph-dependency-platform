@@ -37,6 +37,21 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, 'dr-plan-generator'))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'chaos', 'code'))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'rca'))  # highest priority
 
+# === Lambda Layer 路径（graph_contract 门禁）===
+# 生产里 Layer 内容挂在 /opt/python，测试里直接把仓库中的层目录放上 sys.path。
+#
+# 为什么这里放**真实路径**而不是像 neptune_client_base 那样塞桩：
+#   neptune_client_base 会发真实 SigV4 HTTP 请求，测试里必须桩掉；
+#   graph_contract 是纯逻辑（读生成的数据字面量 + 校验），桩掉就等于门禁不受测 ——
+#   而 test_35 的存在意义正是证明门禁会拒绝。
+#
+# 与下面 neptune_client_base 桩不冲突：conftest 把桩写进 sys.modules，
+# 而 sys.modules 的优先级高于 sys.path，所以那个模块仍然用桩。
+#
+# 该目录**没有** vendored 第三方包（只有 3 个模块），不存在上面 etl_aws 那种
+# 「整个 session 用到部署包里冻结的 urllib3」的遮蔽问题。
+sys.path.insert(0, os.path.join(PROJECT_ROOT, 'infra', 'lambda', 'shared', 'python'))
+
 # === Unified config module ===
 # Both rca/config.py and dr-plan-generator/config.py share the module name 'config'
 # but have different attributes.  Build a merged module that satisfies both so that

@@ -1,0 +1,427 @@
+# 图谱契约 —— 机器可读的权威声明
+#
+# 这份文件是 **ETL 写入门禁读取的权威**。profiles/petsite.yaml 的
+# neptune.graph_schema_text 是给人和 LLM 读的叙述，两者平级、互不生成。
+# 类型名集合必须完全相同，由 tests/test_35_graph_contract.py 强制；
+# 漂移即测试失败。这样就不会再出现「声明说 33 种、代码里写进去 34 种」。
+#
+# 为什么需要它：在引入本文件之前，四个写入 ETL 无一 import profiles，
+# 运行时对节点/边类型零校验 —— 任何拼错或新造的标签都会被静默写进 Neptune。
+# 参见 todo/graph-correctness-audit-and-gaps_20260830-1435.md 缺口 1。
+#
+# 由 scripts/bootstrap_graph_contract.py 初次生成，此后手工维护。
+# Lambda 层产物 infra/lambda/shared/python/graph_contract.py
+# 由 scripts/gen_graph_contract.py 从本文件生成（test_35 校验未过期）。
+version: 1
+timestamp_field: last_seen
+timestamp_legacy_aliases:
+- last_updated
+- last_scanned
+sources:
+- aws-etl
+- cfn-etl
+- deepflow-etl
+- deepflow-l4
+- deepflow-dns
+- nfm
+- xray
+- business-layer
+- manual-fix
+edge_write_once_attrs:
+- source
+- dependency_kind
+- first_seen
+node_attr_authority:
+  Microservice:
+    az:
+    - aws-etl
+    fault_boundary:
+    - aws-etl
+    recovery_priority:
+    - aws-etl
+    - business-layer
+node_types:
+  Region:
+    identity: name
+    immutable: true
+    note: region code，AWS 侧不可变
+  AvailabilityZone:
+    identity: name
+    immutable: true
+    note: az name，AWS 侧不可变
+  VPC:
+    identity: vpc_id
+    immutable: true
+    note: name 取自 Name 标签（collectors/ec2.py:76 tags.get('Name', v['VpcId'])）是可变的，必须以 vpc_id 为身份
+  Subnet:
+    identity: subnet_id
+    immutable: true
+    note: name 取自 Name 标签（collectors/ec2.py:56）是可变的，必须以 subnet_id 为身份
+  SecurityGroup:
+    identity: sg_id
+    immutable: true
+    note: GroupName 创建后不可改，但 sg_id 更稳且已在 dict 里
+  EC2Instance:
+    identity: instance_id
+    immutable: true
+    note: name 取自 Name 标签，已于 2026-08-29 改以 instance_id 为身份
+  EKSCluster:
+    identity: name
+    immutable: true
+  Namespace:
+    identity: name
+    immutable: true
+    scope_note: 未按 cluster 限定；多集群场景同名 namespace 会碰撞
+  Pod:
+    identity: name
+    immutable: lifetime
+    scope_note: 未按 namespace 限定；Pod 重建即换名，属预期
+  Microservice:
+    identity: name
+    immutable: true
+    note: 规范服务名，来自 service_mappings.json，是声明而非观测值
+  K8sService:
+    identity: name
+    immutable: lifetime
+    scope_note: 未按 namespace 限定
+  Deployment:
+    identity: name
+    immutable: lifetime
+    scope_note: 未按 namespace 限定
+  HPA:
+    identity: name
+    immutable: lifetime
+    scope_note: 未按 namespace 限定
+  LoadBalancer:
+    identity: name
+    immutable: true
+    preferred: arn
+    note: ALB 创建后不可改名；dict 里已有 arn，可升级
+  TargetGroup:
+    identity: name
+    immutable: true
+    preferred: arn
+    note: TargetGroupName 在 AWS 侧创建后不可改，所以 name 是合法身份键。arn 更稳（跨账号/区域唯一），但**切换需要先回填** —— 2026-08-30 活图谱审计：18
+      个现存 TargetGroup 节点全部没有 arn 属性，直接切会在首轮 ETL 造 18 个重复节点。现已把 arn 作为普通属性写入（此前图谱里根本没有该字段），待存量都带上 arn 后可用
+      infra/migrate_identity_keys.py 复核再切
+  ListenerRule:
+    identity: name
+    immutable: true
+    note: name 传入的就是 rule_arn（handler.py:273）
+  RDSCluster:
+    identity: name
+    immutable: true
+    note: DBClusterIdentifier
+  RDSInstance:
+    identity: name
+    immutable: true
+    note: DBInstanceIdentifier
+  Database:
+    identity: name
+    immutable: true
+    note: 逻辑库名
+  DynamoDBTable:
+    identity: name
+    immutable: true
+    preferred: arn
+  NeptuneCluster:
+    identity: name
+    immutable: true
+  NeptuneInstance:
+    identity: name
+    immutable: true
+  S3Bucket:
+    identity: name
+    immutable: true
+    note: 桶名全局唯一且不可变
+  SQSQueue:
+    identity: name
+    immutable: true
+    preferred: arn
+  SNSTopic:
+    identity: name
+    immutable: true
+    preferred: arn
+  LambdaFunction:
+    identity: name
+    immutable: true
+    preferred: arn
+  StepFunction:
+    identity: name
+    immutable: true
+    preferred: arn
+  ECRRepository:
+    identity: name
+    immutable: true
+    preferred: arn
+  BusinessCapability:
+    identity: name
+    immutable: true
+    note: 业务声明，来自 business_config.json
+  AWSServiceEndpoint:
+    identity: name
+    immutable: true
+    note: 归一化后的服务名（ssm 与 SimpleSystemsManagement 已归一）
+  Incident:
+    identity: id
+    immutable: true
+    writer: rca_window_flush
+  ChaosExperiment:
+    identity: experiment_id
+    immutable: true
+    writer: chaos
+  TopologyChange:
+    identity: change_id
+    immutable: true
+    note: 追加式事件日志，稳态可 0 实例
+    writer: etl_deepflow
+edge_types:
+  AccessesData:
+    src:
+    - LambdaFunction
+    - Microservice
+    dst:
+    - AWSServiceEndpoint
+    - DynamoDBTable
+    - LambdaFunction
+    - RDSCluster
+    - S3Bucket
+    - StepFunction
+    dependency: true
+    expires_seconds: 21600
+    note: 四个源都写（aws/cfn 静态，deepflow 动态，xray 补度量）；取最长源窗口 = xray 的 6h，否则会误杀 xray 发现的边
+  AffectedService:
+    src:
+    - Incident
+    dst:
+    - Microservice
+    dependency: false
+    expires_seconds: null
+  BelongsTo:
+    src:
+    - Database
+    - EC2Instance
+    - Namespace
+    - NeptuneInstance
+    - Pod
+    - RDSInstance
+    dst:
+    - EKSCluster
+    - K8sService
+    - NeptuneCluster
+    - RDSCluster
+    dependency: false
+    expires_seconds: null
+  Calls:
+    src:
+    - Microservice
+    dst:
+    - Microservice
+    dependency: true
+    expires_seconds: 1800
+    retention_seconds: 604800
+    note: 唯一写入源是 deepflow，阈值同 CALLS_INACTIVE_AFTER_SECONDS
+  ConnectsTo:
+    src:
+    - Microservice
+    dst:
+    - Database
+    dependency: false
+    expires_seconds: null
+  Contains:
+    src:
+    - Region
+    dst:
+    - AvailabilityZone
+    dependency: false
+    expires_seconds: null
+  DependsOn:
+    src:
+    - BusinessCapability
+    - Microservice
+    dst:
+    - ECRRepository
+    - RDSCluster
+    - SNSTopic
+    - SQSQueue
+    dependency: true
+    expires_seconds: 21600
+    note: aws + cfn 静态 + deepflow 动态
+  ForwardsTo:
+    src:
+    - ListenerRule
+    - LoadBalancer
+    - TargetGroup
+    dst:
+    - Microservice
+    - TargetGroup
+    dependency: false
+    expires_seconds: null
+  HasRule:
+    src:
+    - LoadBalancer
+    dst:
+    - ListenerRule
+    dependency: false
+    expires_seconds: null
+  HasSG:
+    src:
+    - EC2Instance
+    - EKSCluster
+    - LoadBalancer
+    - NeptuneCluster
+    - RDSCluster
+    dst:
+    - SecurityGroup
+    dependency: false
+    expires_seconds: null
+  Implements:
+    src:
+    - K8sService
+    - LambdaFunction
+    - Microservice
+    dst:
+    - BusinessCapability
+    - LambdaFunction
+    - Microservice
+    dependency: false
+    expires_seconds: null
+  Invokes:
+    src:
+    - LambdaFunction
+    - SNSTopic
+    - StepFunction
+    dst:
+    - LambdaFunction
+    dependency: false
+    expires_seconds: null
+  InvokesVia:
+    src:
+    - Microservice
+    dst:
+    - StepFunction
+    dependency: false
+    expires_seconds: 21600
+    note: 受 drift 对账覆盖
+  Involves:
+    src:
+    - Incident
+    dst:
+    - Microservice
+    dependency: false
+    expires_seconds: null
+  LocatedIn:
+    src:
+    - AWSServiceEndpoint
+    - EC2Instance
+    - ECRRepository
+    - EKSCluster
+    - LoadBalancer
+    - Microservice
+    - NeptuneCluster
+    - NeptuneInstance
+    - Pod
+    - RDSCluster
+    - RDSInstance
+    - S3Bucket
+    - SNSTopic
+    - SQSQueue
+    - Subnet
+    - VPC
+    dst:
+    - AvailabilityZone
+    - EKSCluster
+    - Region
+    - Subnet
+    - VPC
+    dependency: false
+    expires_seconds: null
+  Manages:
+    src:
+    - Deployment
+    dst:
+    - Microservice
+    - Pod
+    dependency: false
+    expires_seconds: null
+  MentionsResource:
+    src:
+    - Incident
+    dst:
+    - EC2Instance
+    - Microservice
+    dependency: false
+    expires_seconds: null
+  OwnedBy:
+    src:
+    - Microservice
+    dst:
+    - Namespace
+    dependency: false
+    expires_seconds: null
+  ProtectsAccess:
+    src:
+    - SecurityGroup
+    dst:
+    - LambdaFunction
+    dependency: false
+    expires_seconds: null
+  PublishesTo:
+    src:
+    - Microservice
+    dst:
+    - SNSTopic
+    - SQSQueue
+    dependency: false
+    expires_seconds: 21600
+    note: 受 drift 对账覆盖
+  Routes:
+    src:
+    - K8sService
+    dst:
+    - Pod
+    dependency: false
+    expires_seconds: null
+  RoutesTo:
+    src:
+    - LoadBalancer
+    dst:
+    - TargetGroup
+    dependency: false
+    expires_seconds: null
+  RunsOn:
+    src:
+    - Microservice
+    - Pod
+    dst:
+    - EC2Instance
+    - Pod
+    dependency: false
+    expires_seconds: null
+  TestedBy:
+    src:
+    - Microservice
+    dst:
+    - ChaosExperiment
+    dependency: false
+    expires_seconds: null
+  TriggeredBy:
+    src:
+    - Incident
+    - SQSQueue
+    dst:
+    - LambdaFunction
+    - Microservice
+    dependency: false
+    expires_seconds: null
+  WritesTo:
+    src:
+    - LambdaFunction
+    - Microservice
+    dst:
+    - NeptuneCluster
+    - S3Bucket
+    - SNSTopic
+    - SQSQueue
+    dependency: false
+    expires_seconds: null

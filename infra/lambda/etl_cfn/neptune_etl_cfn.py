@@ -24,6 +24,12 @@ import boto3
 from typing import Optional
 
 from neptune_client_base import neptune_query, safe_str, extract_value, REGION  # noqa: F401
+from graph_contract import (  # 同属 neptune-client-base Layer
+    TIMESTAMP_FIELD,
+    assert_edge_type,
+    assert_node_type,
+    is_dependency_edge,
+)
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -93,6 +99,10 @@ def get_or_create_vertex(label: str, physical_id: str, stack_name: str):
     lb = safe_str(label)
     sn = safe_str(stack_name)
     ts = int(time.time())
+
+    # 契约门禁：未在 profiles/graph_contract.yaml 声明的类型不得写入。
+    assert_node_type(lb)
+
     gremlin = (
         f"g.mergeV([(T.label): '{lb}', 'name': '{pid}'])"
         f".option(Merge.onCreate, [(T.label): '{lb}', 'name': '{pid}', "
@@ -101,6 +111,10 @@ def get_or_create_vertex(label: str, physical_id: str, stack_name: str):
         f".property(single,'stack_name','{sn}')"
         f".property(single,'source','cfn-etl')"
         f".property(single,'last_scanned',{ts})"
+        # 统一时间戳字段（契约 timestamp_field）。last_scanned 保留是过渡态 ——
+        # 跨源查询「这条记录最后何时被看到」此前无统一字段可用：
+        # aws 写 last_updated、cfn 写 last_scanned、deepflow/xray 写 last_seen。
+        f".property(single,'{TIMESTAMP_FIELD}',{ts})"
         f".id()"
     )
     result = neptune_query(gremlin)
@@ -123,13 +137,27 @@ def upsert_cfn_edge(src_vid, dst_vid, rel_type: str, stack_name: str, evidence: 
     sn = safe_str(stack_name)
     ev = safe_str(evidence)
     rt = safe_str(rel_type)
-    # dependency_kind='static'：CFN 模板「声明」的依赖，未必被实际调用过。
-    # 同时补 source 与 etl_aws / etl_deepflow 对齐 —— 本文件原先只写 declared_in，
-    # 字段名与另两个 ETL 不一致，导致无法按统一字段判定溯源。declared_in 保留不动，
-    # 避免破坏既有查询。
-    # 依赖语义边集合见 etl_aws/neptune_client.py 的 DEPENDENCY_EDGE_LABELS 注释。
-    _dep_kind = (".property('dependency_kind', 'static')"
-                 if rt in ('Calls', 'DependsOn', 'AccessesData') else "")
+
+    # 契约门禁：未声明的边类型不得写入。
+    assert_edge_type(rt)
+
+    # ── 溯源写一次（write-once）──────────────────────────────────────────
+    # 原实现是无条件 `.property('source','cfn-etl')` —— coalesce 命中一条**已存在**
+    # 的边之后照写，会把 deepflow / xray 先写的 source 静默改成 cfn-etl，
+    # 等于抹掉「谁首先发现了这条依赖」。而 xray / deepflow-L4 / NFM 三个源本来就
+    # 刻意保护这些属性，只有 aws 与 cfn 两处覆盖 —— 行为自相矛盾。
+    # 改法同 etl_aws：coalesce(values(k), constant(v)) —— 已有值保留，没有才写。
+    #
+    # dependency 判定改由契约提供，不再本地硬编码 ('Calls','DependsOn','AccessesData')。
+    # 那份常量原先在三个 ETL 里各存一份，作者已在 etl_aws 的注释里标为待收敛项。
+    write_once = {'source': 'cfn-etl'}
+    if is_dependency_edge(rt):
+        # dependency_kind='static'：CFN 模板「声明」的依赖，未必被实际调用过。
+        write_once['dependency_kind'] = 'static'
+    once_chain = ''.join(
+        f".property('{k}', __.coalesce(__.values('{k}'), __.constant('{safe_str(v)}')))"
+        for k, v in write_once.items())
+
     # Use V(id) lookups to get vertex refs, then coalesce to find or create edge
     gremlin = (
         f"g.V('{src_vid}').as('s').V('{dst_vid}').as('d')"
@@ -138,12 +166,13 @@ def upsert_cfn_edge(src_vid, dst_vid, rel_type: str, stack_name: str, evidence: 
         f"  __.outE('{rt}').where(__.inV().hasId('{dst_vid}')),"
         f"  __.addE('{rt}').to(__.V('{dst_vid}'))"
         f")"
+        # declared_in 是 cfn 独有的证据字段，保留不动，避免破坏既有查询
         f".property('declared_in', 'cfn')"
-        f".property('source', 'cfn-etl')"
-        + _dep_kind
+        + once_chain
         + f".property('stack_name', '{sn}')"
         f".property('evidence', '{ev}')"
         f".property('last_scanned', {ts})"
+        f".property('{TIMESTAMP_FIELD}', {ts})"
     )
     neptune_query(gremlin)
     return True

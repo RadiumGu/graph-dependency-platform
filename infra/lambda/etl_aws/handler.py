@@ -97,7 +97,12 @@ def run_etl():
             'cidr': sn['cidr'],
             'az': sn['az'],
             'vpc_id': sn['vpc_id'],
-        }, 'cloudformation')
+        # identity_prop='subnet_id'：Subnet 的 name 取自 Name 标签
+        # （collectors/ec2.py:56 next((t['Value'] ... 'Name'), sn['SubnetId'])），
+        # 是**可变属性**。与 EC2Instance 同一个缺陷 —— 标签一改 mergeV 匹配不到
+        # 旧节点就新建一个，同一子网在图里裂成两份。身份键声明见
+        # profiles/graph_contract.yaml，由 test_35 的 g11 强制一致。
+        }, 'cloudformation', identity_prop='subnet_id')
         subnet_map[sn['subnet_id']] = sn['name']
         subnet_vid_map[sn['subnet_id']] = sn_vid
         stats['vertices'] += 1
@@ -241,9 +246,15 @@ def run_etl():
             if not lb_vid:
                 continue
             tg_vid = upsert_vertex('TargetGroup', tg['name'], {
+                'arn': tg['arn'],
                 'port': str(tg['port']),
                 'protocol': tg['protocol'],
                 'role': 'target-group',
+            # arn 作为普通属性写入 —— 原先只在循环变量里，图谱上取不到。
+            # 身份键仍是 name（TargetGroupName 在 AWS 侧不可改，是合法身份键）：
+            # 2026-08-30 活图谱审计显示 18 个现存节点全无 arn 属性，
+            # 直接切成 arn 身份会在首轮 ETL 造 18 个重复。待存量都带上 arn 后
+            # 用 infra/migrate_identity_keys.py 复核再切。
             }, 'cloudformation')
             stats['vertices'] += 1
             if tg_vid:
@@ -256,6 +267,7 @@ def run_etl():
         tg_arn_to_vid = {tg['arn']: None for tg in target_groups}
         for tg in target_groups:
             tg_name_v = upsert_vertex('TargetGroup', tg['name'], {
+                'arn': tg['arn'],
                 'port': str(tg['port']), 'protocol': tg['protocol'], 'role': 'target-group',
             }, 'cloudformation')
             tg_arn_to_vid[tg['arn']] = tg_name_v
@@ -636,7 +648,10 @@ def run_etl():
             v_vid = upsert_vertex('VPC', vpc['name'], {
                 'vpc_id': vpc['vpc_id'],
                 'cidr':   vpc['cidr'],
-            }, 'cloudformation')
+            # identity_prop='vpc_id'：VPC 的 name 取自 Name 标签
+            # （collectors/ec2.py:76 tags.get('Name', v['VpcId'])），是可变属性。
+            # 与 EC2Instance / Subnet 同一缺陷。声明见 profiles/graph_contract.yaml。
+            }, 'cloudformation', identity_prop='vpc_id')
             vpc_vid_map[vpc['vpc_id']] = v_vid
             stats['vertices'] += 1
             region_vid_q = neptune_query(
@@ -674,7 +689,10 @@ def run_etl():
                 'sg_id':       sg['sg_id'],
                 'description': sg['description'][:200],
                 'vpc_id':      sg['vpc_id'],
-            }, 'cloudformation')
+            # identity_prop='sg_id'：GroupName 在 AWS 侧创建后不可改，所以这不是
+            # 缺陷修复而是健壮性升级 —— sg_id 是资源标识符，跨账号/区域也唯一，
+            # 且已在属性里。声明见 profiles/graph_contract.yaml。
+            }, 'cloudformation', identity_prop='sg_id')
             sg_id_to_vid[sg['sg_id']] = sg_vid
             stats['vertices'] += 1
 

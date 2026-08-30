@@ -9,6 +9,15 @@ import time
 import logging
 
 from neptune_client_base import neptune_query, safe_str, extract_value  # noqa: F401 (re-exported)
+from graph_contract import (
+    TIMESTAMP_FIELD,
+    assert_edge_type,
+    assert_node_type,
+    dependency_edge_labels,
+    filter_node_props,
+    identity_prop_for,
+    is_dependency_edge,
+)
 from config import (
     REGION,
     FAULT_BOUNDARY_MAP, ENVIRONMENT,
@@ -85,6 +94,12 @@ def upsert_vertex(label: str, name: str, extra_props: dict, managed_by: str = 'm
     """
     n = safe_str(name)
     mb = safe_str(managed_by)
+
+    # ── 契约门禁 ──────────────────────────────────────────────────────────
+    # 未在 profiles/graph_contract.yaml 声明的类型不得写入。引入之前任何拼错的
+    # 标签都会被静默写进 Neptune（缺口 1）。GRAPH_CONTRACT_MODE=warn 可灰度。
+    assert_node_type(label)
+
     all_props = {'environment': ENVIRONMENT}
     fb_entry = FAULT_BOUNDARY_MAP.get(label)
     if fb_entry:
@@ -93,20 +108,41 @@ def upsert_vertex(label: str, name: str, extra_props: dict, managed_by: str = 'm
         if fb_region:
             all_props['region'] = fb_region
     all_props.update(extra_props)
+
+    # ── 属性权威过滤 ──────────────────────────────────────────────────────
+    # 契约的 node_attr_authority 是**例外清单**（只登记已实测出冲突的属性），
+    # 未登记的一律放行。被拒的属性**明示 log** 而不是静默丢弃 —— 对应
+    # ServiceNow IRE 的 maskedAttributes：不明示，「谁赢」永远查不清。
+    all_props, masked = filter_node_props(label, all_props, 'aws-etl')
+    if masked:
+        logger.warning(
+            "upsert_vertex(%s, %s): 属性 %s 的权威来源不是 aws-etl，已拒绝写入。"
+            "权威声明见 profiles/graph_contract.yaml 的 node_attr_authority。",
+            label, n, masked)
+
     ts_now = int(time.time())
 
-    # 身份键的选择。identity_prop 缺失或其值为空时**回落到 name**，
-    # 而不是抛错：一个拿不到 instance_id 的实例仍然应该进图谱，
-    # 只是退回到旧的（有缺陷的）身份语义，比整轮 ETL 失败好。
+    # 身份键的选择。优先级：显式传入的 identity_prop > 契约声明 > name。
+    #
+    # 从契约派生是这一层的关键改动 —— 它让 profiles/graph_contract.yaml 真正
+    # **载荷**：新增一个身份键非 name 的类型时，只改契约即自动生效，
+    # 不必再逐个调用点补参数（那正是此前 Subnet / VPC / SecurityGroup /
+    # TargetGroup 四处漏掉的原因）。调用点仍保留显式传参作为文档，
+    # 由 test_35 的 g11 强制两者一致。
+    #
+    # identity_prop 缺失或其值为空时**回落到 name** 而不是抛错：
+    # 一个拿不到 instance_id 的实例仍然应该进图谱，只是退回到旧的
+    # （有缺陷的）身份语义，比整轮 ETL 失败好。
     id_key, id_val = 'name', n
-    if identity_prop:
-        raw = all_props.get(identity_prop)
+    chosen = identity_prop or identity_prop_for(label)
+    if chosen and chosen != 'name':
+        raw = all_props.get(chosen)
         if raw not in (None, ''):
-            id_key, id_val = safe_str(identity_prop), safe_str(raw)
+            id_key, id_val = safe_str(chosen), safe_str(raw)
         else:
             logger.warning(
-                "upsert_vertex(%s): identity_prop=%r 的值为空，回落到以 name 匹配。"
-                "该节点仍可能因 name 变化而产生重复。", label, identity_prop)
+                "upsert_vertex(%s): 契约声明身份键 %r 但其值为空，回落到以 name 匹配。"
+                "该节点仍可能因 name 变化而产生重复。", label, chosen)
 
     props_create = f"'name': '{n}', 'managedBy': '{mb}', 'source': 'aws-etl'"
     props_match = f"'managedBy': '{mb}', 'source': 'aws-etl'"
@@ -144,29 +180,56 @@ def upsert_vertex(label: str, name: str, extra_props: dict, managed_by: str = 'm
     return None
 
 
-# 依赖语义边的标签集合。只有这些边代表「A 依赖 B」，才需要 dependency_kind；
-# LocatedIn / Contains / BelongsTo 等结构边不是依赖，不打该标记。
-# 规范定义见 profiles/petsite.yaml 的边类型声明。
-# 三个 ETL 各自持有一份同样的常量：跨 Lambda 共享需要改 neptune-client-base layer
-# 并同步升级 3 个函数，代价高于复制一个 3 元素集合；后续 graph SDK 收敛时统一。
-DEPENDENCY_EDGE_LABELS = frozenset({'Calls', 'DependsOn', 'AccessesData'})
+# 依赖语义边的标签集合。**从契约派生**，不再各 ETL 各存一份 ——
+# 原先三个 ETL 各自复制一份同样的 frozenset，作者在注释里已标为待收敛项
+# （「后续 graph SDK 收敛时统一」）。现在唯一来源是
+# profiles/graph_contract.yaml 里每个边类型的 dependency 标记。
+DEPENDENCY_EDGE_LABELS = dependency_edge_labels()
 
 
 def upsert_edge(src_id, dst_id, label: str, props: dict = None):
-    """upsert 边（by vertex ID）"""
+    """upsert 边（by vertex ID）。
+
+    ## 溯源属性写一次（write-once）
+
+    `source` / `dependency_kind` / `first_seen` 只由**首个发现者**写入。
+    原实现是无条件 `.property('source','aws-etl')` —— coalesce 命中一条已存在的
+    边之后照写，会把 deepflow / xray 先写的 source 静默改成 aws-etl，
+    等于抹掉「谁首先发现了这条依赖」。而 xray / deepflow-L4 / NFM 三个源本来就
+    刻意保护这些属性，只有 aws 与 cfn 两处覆盖 —— 行为自相矛盾（缺口 3）。
+
+    改法是 Gremlin 侧的 `coalesce(values(k), constant(v))`：属性已存在则保留原值，
+    不存在才写入。新建边走 addE 时必然不存在，所以首写者照常写上。
+    """
     if src_id is None or dst_id is None:
         return None
-    ts = int(time.time())
     lb = safe_str(label)
-    prop_str = f".property('source', 'aws-etl').property('last_updated', {ts})"
-    # dependency_kind='static'：本 ETL 的边来自 AWS 资源配置「声明」的关系，
-    # 而非运行时观测。与 deepflow 的 dynamic 相对，供 q1/q3 按类型过滤，
-    # 避免「模板里声明但从未调用的依赖」和「每秒数百次的真实调用」在影响面分析里等权。
-    if lb in DEPENDENCY_EDGE_LABELS:
-        prop_str += ".property('dependency_kind', 'static')"
+
+    # 契约门禁：未声明的边类型不得写入。端点类型这里拿不到（只有 vertex id），
+    # 故不做端点核对 —— 端点约束由 test_35 的 g06 在契约层面保证。
+    assert_edge_type(lb)
+
+    ts = int(time.time())
+    write_once = {'source': 'aws-etl'}
+    if is_dependency_edge(lb):
+        # dependency_kind='static'：本 ETL 的边来自 AWS 资源配置「声明」的关系，
+        # 而非运行时观测。与 deepflow 的 dynamic 相对，供 q1/q3 按类型过滤。
+        write_once['dependency_kind'] = 'static'
+
+    prop_str = ''
+    for k, v in write_once.items():
+        prop_str += (f".property('{k}', __.coalesce(__.values('{k}'),"
+                     f" __.constant('{safe_str(v)}')))")
+    # 统一时间戳字段（契约的 timestamp_field）。仍同时写 last_updated：
+    # 读取侧还有查询在用它，两者并存是过渡态，摘除 last_updated 需要先迁读取方。
+    prop_str += f".property('{TIMESTAMP_FIELD}', {ts}).property('last_updated', {ts})"
+
     if props:
         for k, v in props.items():
             ks = safe_str(k)
+            # 调用方传进来的 source 等写一次属性不得绕过上面的保护
+            if ks in write_once:
+                continue
             vs = safe_str(v)
             prop_str += f".property('{ks}', '{vs}')"
     gremlin = (

@@ -797,7 +797,12 @@ def test_s1_14_handler_partial_failure_non_fatal():
 
     ec2_client = boto3.client('ec2', region_name=AWS_REGION)
 
-    def _fake_uv(label, name, extra_props, managed_by='manual'):
+    def _fake_uv(label, name, extra_props, managed_by='manual', **kwargs):
+        # **kwargs 吸收 identity_prop 等关键字参数 —— 与本文件 738 行的
+        # _fake_upsert_vertex 一致。替身不加 **kwargs 时，生产侧新增一个
+        # 关键字参数就会让这个测试以 TypeError 的形式假失败
+        # （实测：给 Subnet 补 identity_prop='subnet_id' 后即触发，
+        #  因为 moto 有默认 VPC/子网，这条路径会被走到）。
         return f'vid-{label}-{name}'
 
     # Capture mock reference explicitly so we can inspect call_count after patches stop
