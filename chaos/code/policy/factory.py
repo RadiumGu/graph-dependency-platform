@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 def make_policy_guard(rules_path: str | None = None):
     """构造 PolicyGuard 引擎，切换 env：POLICY_GUARD_ENGINE=direct|strands。"""
-    engine = (os.environ.get("POLICY_GUARD_ENGINE") or "direct").lower()
+    engine = (os.environ.get("POLICY_GUARD_ENGINE") or "strands").lower()
     if engine == "strands":
         try:
             from policy.guard_strands import StrandsPolicyGuard  # type: ignore

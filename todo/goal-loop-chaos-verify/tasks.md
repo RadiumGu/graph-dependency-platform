@@ -12,7 +12,7 @@
 | Stage | 卡数 | done | doing | blocked | todo |
 |---|--:|--:|--:|--:|--:|
 | 0 卫生与基线 | 4 | 0 | 0 | 0 | 4 |
-| **0.5 把 Strands 跑起来** ★ | 3 | 0 | 0 | 0 | 3 |
+| **0.5 把 Strands 跑起来** ★ | 4 | 2 | 1 | 0 | 1 |
 | **0.6 接入 AgentCore** | 1 | 0 | 0 | 0 | 1 |
 | 1 边验证接入 runner ★ | 5 | 2 | 0 | 0 | 3 |
 | 2 判定分辨力 | 4 | 0 | 0 | 0 | 4 |
@@ -23,11 +23,13 @@
 | 7 部署与清理 | 3 | 0 | 0 | 3 | 0 |
 | **8 闭环校正** ★ 终点 | 4 | 0 | 0 | 0 | 4 |
 | （T-202 方向写反，作废） | 1 | — | — | — | wontfix |
-| **合计** | **42** | **2** | **0** | **3** | **36** |
+| **合计** | **43** | **4** | **1** | **3** | **35** |
 
-基线：提交 `3477896`，`python3.11 -m pytest` **442 passed / 145 skipped / 0 failed**（已实跑复验）。
+基线：提交 `3477896` 时 **442 passed / 145 skipped / 0 failed**。
+**当前水位（cycle-1 后）：443 passed / 144 skipped / 0 failed**（装 strands 净解锁 1 个测试）。
 活图谱基线：1731 边、94 条依赖边、`verify_status=untested` 94 条（已验证占比 **0.0**）。
-`verify_dod.sh --local-only` 首跑：**PASS=3 FAIL=5 SKIP=4**（DoD-9/10 的检查项待补进脚本）。
+`verify_dod.sh --local-only`：cycle-0 首跑 PASS=3 FAIL=5 SKIP=4 → 补 DoD-9/10 检查后 PASS=3 FAIL=9
+→ **cycle-1 后 PASS=6 FAIL=6 SKIP=5**。
 
 ---
 
@@ -57,31 +59,52 @@
 
 ## Stage 0.5 —— 把 Strands 跑起来（所有 LLM 工作的硬前置）★
 
-### T-205 安装 strands 依赖并解注释 · `todo` ★
-- 安装 `strands-agents>=1.36`、`strands-agents-tools>=0.5`
-  （PyPI 现值 **1.54.0 / 0.8.7**，同主版本线，移植风险低）
-- 取消 `requirements-dev.txt:56` 的 `# strands-agents>=0.1` 注释，
-  **并把下界改成 `>=1.36`** —— `>=0.1` 与 `factory.py:36` 的实际要求不一致
-- 验收：`python3.11 -c "import strands; print(strands.__version__)"` 成功；
-  `python3.11 -c "from strands import Agent, tool"` 成功
-- 依赖：无。**这张卡不做，Stage 4 的一切都是加在没人跑的代码上**
+### T-205 安装 strands 依赖并解注释 · `done`（cycle-1）
+- 已装 **strands-agents 1.54.0** + **strands-agents-tools 0.8.7**（`python3.11 -m pip install --user`，
+  沿用 boto3 所在的 user site；本机无 venv、`sudo` 被 `no_new_privs` 禁用）
+- `requirements-dev.txt` 从「可选依赖」段**上移为必装**，下界 `>=1.36` / `>=0.5`
+  —— 原先写 `>=0.1` 与 `rca/engines/factory.py:36` 的实际要求不一致
+- 五个 import 路径全部实测可用：`Agent`、`tool`、`strands.models.{BedrockModel,CacheConfig}`、
+  `strands.telemetry.StrandsTelemetry`、`SlidingWindowConversationManager`
+- 最小端到端调用 **1.2s** 成功（`global.anthropic.claude-sonnet-4-6` @ ap-northeast-1）
+- 全量测试 **443 passed / 144 skipped / 0 failed**（基线 442/145/0）——
+  装上没破任何东西，净解锁 1 个测试
+- ⚠️ **抓到一个 1.54 的 API 变更**：`cache_prompt is deprecated. Use SystemContentBlock with
+  cachePoint instead.` 影响 `rca/engines/strands_common.py` 的 `build_bedrock_model`。
+  目前只是 DeprecationWarning、功能正常 → 新卡 **T-209**
 
-### T-206 六个引擎开关默认切到 strands · `todo` ★
-- 开关：`HYPOTHESIS_ENGINE`、`LEARNING_ENGINE`、`NLQUERY_ENGINE`、`LAYER2_ENGINE`、
-  `GUARD_ENGINE`、`RUNNER_ENGINE`（位置：`chaos/code/runner/factory.py:26`、
-  `chaos/code/policy/factory.py`、`rca/engines/factory.py:29/61/85`）
-- 做法：默认值 `direct` → `strands`；逐个实测跑通一次，记录每个开关的实测结果
-- 保持 Bedrock inference profile（`global.*`）形态、显式 `ap-northeast-1`（现存代码已如此，别退回裸 model id）
-- 验收：六个开关不设 env 时走 strands；六次实测各留一条日志证据
-- 依赖：T-205
+### T-206 六个引擎开关默认切到 strands · `done`（cycle-1）
+- **真实 env 名与初版记录不同**（已同步修正 north_star）：
+  `CHAOS_RUNNER_ENGINE`（不是 `RUNNER_ENGINE`）、`POLICY_GUARD_ENGINE`（不是 `GUARD_ENGINE`）
+- 六处默认值 `direct` → `strands`：
+  `chaos/code/runner/factory.py:17`、`chaos/code/policy/factory.py:14`、
+  `rca/engines/factory.py:28/60/90/119`
+- **逐个实测（清空所有 `*_ENGINE` env 后调工厂）→ 6/6 返回 strands 实现**：
+  ```
+  NLQUERY_ENGINE       -> StrandsNLQueryEngine
+  HYPOTHESIS_ENGINE    -> StrandsHypothesisAgent
+  LEARNING_ENGINE      -> StrandsLearningAgent
+  LAYER2_ENGINE        -> StrandsLayer2Prober
+  CHAOS_RUNNER_ENGINE  -> StrandsRunner
+  POLICY_GUARD_ENGINE  -> StrandsPolicyGuard
+  ```
+- 切换后全量 **443 passed / 0 failed**，零回归（没有测试假定 direct 是默认）
+- 顺带修掉三处过期 docstring（`rca/engines/factory.py:4/57/87` 还写着「默认 direct」）
 
-### T-207 回退 direct 必须显式告警 + 能力对账测试 · `todo`
-- 13 处回退分支保留（应急需要），但**不能静默** ——
-  静默回退会让"约束已满足"和"依赖没装"看起来一样（同不变量 7 的错误模式）
-- 加一条对账测试：**LLM 新能力不得只存在于 direct 侧**（direct 与 strands 能力集比对，
-  strands 缺失即失败）。这条测试是防止约束随时间腐蚀的唯一机制
-- 验收：回退时日志有 WARNING 且带原因；对账测试存在并通过
-- 依赖：T-206
+### T-207 回退 direct 显式告警 + 能力对账测试 · `doing`（前半已满足）
+- ✅ **告警已存在**，六处回退全部 `logger.warning`（`rca/engines/factory.py:34/40/66/70/...`、
+  `chaos/code/runner/factory.py:31/33`、`chaos/code/policy/factory.py:20/22`）——
+  这一半不需要改，初版假设它缺失是错的
+- ⬜ 仍待做：**能力对账测试** —— direct 与 strands 的能力集比对，strands 缺失即失败。
+  这是防止约束随时间腐蚀的唯一机制
+- 依赖：T-206 ✅
+
+### T-209 strands 1.54 的 cache_prompt 弃用 · `todo`（cycle-1 新增）
+- 现象：`UserWarning: cache_prompt is deprecated. Use SystemContentBlock with cachePoint instead.`
+- 位置：`rca/engines/strands_common.py` 的 `build_bedrock_model`（传了 `cache_prompt`）
+- 影响：目前仅告警、功能正常；但 prompt 缓存是成本项，弃用参数可能已不生效 ——
+  需实测缓存命中率确认是否真的失效（`test_hypothesis_shadow` 会打印 cache read/write）
+- 依赖：无
 
 ---
 
@@ -426,6 +449,30 @@
 ## Cycle 日志
 
 > 每轮追加一行：`## Cycle-N (UTC 时间) — 做了哪张卡 / 结果 / 下一张`
+
+### Cycle-2 (2026-08-30 17:31Z) — T-205 + T-206 完成，Strands 成为实际运行路径
+- **T-205 done**：装 strands-agents 1.54.0 / strands-agents-tools 0.8.7，
+  `requirements-dev.txt` 从可选段上移为必装、下界改 `>=1.36`。
+  五个 import 路径全通；最小端到端调用 **1.2s** 成功。
+- **T-206 done**：六处默认值 `direct` → `strands`，
+  **逐个实测 6/6 返回 Strands 实现**（清空所有 `*_ENGINE` env 后调工厂）。切换后零回归。
+- **T-207 前半已满足**：六处回退**本来就有** `logger.warning` —— 初版假设它缺失是错的。
+  剩能力对账测试。
+- 测试水位 442 → **443 passed / 0 failed**（装 strands 净解锁 1 个）。
+  `verify_dod.sh`：PASS 3 → **6**，DoD-9 前三项全绿。
+- 四处实测更正 / 新发现：
+  1. **真实 env 名是 `CHAOS_RUNNER_ENGINE` / `POLICY_GUARD_ENGINE`**，
+     我在 cycle-0/1 写成 `RUNNER_ENGINE` / `GUARD_ENGINE` —— 已同步修 north_star
+  2. strands 测试**不是被 strands 缺失挡住的**，而是 12 个 golden/shadow 文件全挂在
+     `RUNN_GOLDEN=1` 之后 —— 这解释了为什么装上只解锁 1 个测试
+  3. `test_hypothesis_shadow` 20 分钟超时**不是挂死**：单次 generate 实测
+     strands 36.5s vs direct 20.1s，20 场景 x 2 引擎 ≈ 19 分钟。下次给它 ≥30 分钟
+  4. 新卡 **T-209**：strands 1.54 报 `cache_prompt is deprecated`，
+     影响 `strands_common.build_bedrock_model`，需实测缓存是否真失效
+- 一个环境事实（不是本项目缺陷）：`kubectl` 不在 PATH，
+  假设生成会为 ~10 个服务各 spawn 两次失败的 subprocess（实测 40 次失败），拖慢但不致错
+- 下一张：**T-207 后半**（能力对账测试）或 **T-208**（接 AgentCore Gateway）。
+  优先 T-208 —— 它关 DoD-9 最后一项，且 Gateway 直接补上"agent 可调用性"的扣分点
 
 ### Cycle-1 (2026-08-30 17:10Z) — 补入两条用户追加的硬约束，并纠正一处方向性错误
 - **新增 DoD-9（Strands/AgentCore 强制）**。用户明确「Strands 一定要用，LLM 开发尽量用

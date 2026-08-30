@@ -44,16 +44,27 @@ streamlit>=1.28
 # 缺它会让 test_22 产生 8 个 error。
 pyvis>=0.3
 
+# ── LLM / agent 依赖（必装，非可选）──
+# north_star §1.5 的硬约束：LLM / agent 开发一律走 Strands Agents，
+# 尽量用 Amazon Bedrock AgentCore。所以 strands 从"可选依赖"升为必装 ——
+# 六个引擎开关（HYPOTHESIS/LEARNING/NLQUERY/LAYER2/GUARD/RUNNER_ENGINE）
+# 默认值是 strands，缺它会让全部六条路径静默回退 direct，
+# 而"约束已满足"和"依赖没装"在日志上会长得一样。
+#
+# 下界 1.36 与 rca/engines/factory.py:36 的提示一致（原先写 >=0.1 是错的，
+# 那个版本的 API 与代码里用的 strands.models.CacheConfig /
+# strands.telemetry.StrandsTelemetry / SlidingWindowConversationManager 不对应）。
+# 2026-08-30 实测：1.54.0 / 0.8.7 下五个 import 路径全部可用，
+# 单次 generate_with_meta 耗时 strands 36.5s vs direct 20.1s，各产出 3 个假设。
+strands-agents>=1.36
+strands-agents-tools>=0.5
+
 # ── 可选依赖(缺失时相关测试 skip,不会 fail) ──
 # 这些**故意不放在必装列表**里:体量大、且只影响个别测试。
 # 相关测试已改为缺失即 skip —— 恒红项的危害不是它本身,而是它训练所有人
 # 忽略红色,真缺陷会跟着被忽略。
 #
-# strands-agents: rca 的 Layer2/NLQuery 有 strands 实现(engines/factory.py
-#   按 LAYER2_ENGINE / NLQUERY_ENGINE 环境变量切换,不可用时 warning + 回退 direct)。
-#   缺它则 tests/test_layer2_memory.py 与 tests/test_layer2_golden.py 的
-#   strands 分支 skip。取消下面这行注释即可启用:
-# strands-agents>=0.1
+# （strands 曾列在这里，2026-08-30 按 north_star §1.5 上移为必装。）
 #
 # ── 外部工具(非 pip 包) ──
 # aws-cdk CLI —— tests/test_11_schema_consistency.py::test_s0_06_cdk_synth 需要。

@@ -39,7 +39,7 @@
 | 事实 | 数字 |
 |---|---|
 | 涉及 strands 的第一方文件 | **19 个 / 4583 行** |
-| 引擎开关 env | **6 个**：`HYPOTHESIS_ENGINE`、`LEARNING_ENGINE`、`NLQUERY_ENGINE`、`LAYER2_ENGINE`、`GUARD_ENGINE`、`RUNNER_ENGINE` |
+| 引擎开关 env | **6 个**：`HYPOTHESIS_ENGINE`、`LEARNING_ENGINE`、`NLQUERY_ENGINE`、`LAYER2_ENGINE`、`POLICY_GUARD_ENGINE`、`CHAOS_RUNNER_ENGINE`（**注意后两个的全名**——初版写成 `GUARD_ENGINE`/`RUNNER_ENGINE` 是错的） |
 | 「回退 direct」分支 | **13 处** |
 | 目标版本 | `rca/engines/factory.py:36` 写明 `strands-agents>=1.36` + `strands-agents-tools>=0.5` |
 | PyPI 现值 | `strands-agents 1.54.0`、`strands-agents-tools 0.8.7`（同主版本线，移植风险低） |
@@ -84,7 +84,7 @@ DoD-3/DoD-4 只到"得到判定"。这一条要求**判定必须回流成修正�
 - `strands-agents>=1.36` 与 `strands-agents-tools>=0.5` **已安装**，
   `requirements-dev.txt:56` 那行取消注释并写明版本下界
 - 六个引擎开关（`HYPOTHESIS_ENGINE`、`LEARNING_ENGINE`、`NLQUERY_ENGINE`、`LAYER2_ENGINE`、
-  `GUARD_ENGINE`、`RUNNER_ENGINE`）**默认值为 `strands`**，且各自实测跑通一次
+  `POLICY_GUARD_ENGINE`、`CHAOS_RUNNER_ENGINE`）**默认值为 `strands`**，且各自实测跑通一次
 - 13 处「回退 direct」分支保留但必须**显式告警**（回退是应急，不能静默变成常态）
 - 存在一条测试断言：**LLM 相关新能力不得只存在于 direct 侧**
   （direct 与 strands 的能力集对账，strands 缺失即失败）

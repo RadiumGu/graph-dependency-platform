@@ -126,8 +126,8 @@ fi
 echo
 echo "===== DoD-9 Strands / AgentCore 成为实际运行路径 ====="
 if $PY -c "from strands import Agent, tool" >/dev/null 2>&1; then
-  SV=$($PY -c "import strands;print(getattr(strands,'__version__','?'))" 2>/dev/null)
-  ok 9.1 "strands 可导入（$SV）"
+  SV=$($PY -c "from importlib.metadata import version; print(version('strands-agents'))" 2>/dev/null)
+  ok 9.1 "strands 可导入（strands-agents $SV）"
 else
   no 9.1 "strands 未安装（T-205）—— 六个引擎全在静默回退 direct"
 fi
