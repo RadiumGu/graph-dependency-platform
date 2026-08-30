@@ -11,7 +11,9 @@
 
 | Stage | 卡数 | done | doing | blocked | todo |
 |---|--:|--:|--:|--:|--:|
-| 0 卫生与基线 | 5 | 0 | 0 | 0 | 5 |
+| 0 卫生与基线 | 4 | 0 | 0 | 0 | 4 |
+| **0.5 把 Strands 跑起来** ★ | 3 | 0 | 0 | 0 | 3 |
+| **0.6 接入 AgentCore** | 1 | 0 | 0 | 0 | 1 |
 | 1 边验证接入 runner ★ | 5 | 2 | 0 | 0 | 3 |
 | 2 判定分辨力 | 4 | 0 | 0 | 0 | 4 |
 | 3 AWS 侧单边隔离 + 选边 | 4 | 0 | 0 | 0 | 4 |
@@ -19,11 +21,13 @@
 | 5 定期演练 | 4 | 0 | 0 | 0 | 4 |
 | 6 契约剩余项 | 4 | 0 | 0 | 0 | 4 |
 | 7 部署与清理 | 3 | 0 | 0 | 3 | 0 |
-| **合计** | **34** | **2** | **0** | **3** | **29** |
+| **8 闭环校正** ★ 终点 | 4 | 0 | 0 | 0 | 4 |
+| （T-202 方向写反，作废） | 1 | — | — | — | wontfix |
+| **合计** | **42** | **2** | **0** | **3** | **36** |
 
 基线：提交 `3477896`，`python3.11 -m pytest` **442 passed / 145 skipped / 0 failed**（已实跑复验）。
 活图谱基线：1731 边、94 条依赖边、`verify_status=untested` 94 条（已验证占比 **0.0**）。
-`verify_dod.sh --local-only` 首跑：**PASS=3 FAIL=5 SKIP=4**。
+`verify_dod.sh --local-only` 首跑：**PASS=3 FAIL=5 SKIP=4**（DoD-9/10 的检查项待补进脚本）。
 
 ---
 
@@ -41,13 +45,63 @@
 - 验收：文件内无已过期的 `delete_date`
 - 依赖：无
 
-### T-202 Strands 死代码定性 · `todo`
-- 位置：`hypothesis_strands.py`、`learning_strands.py`、`hypothesis_tools.py`、`learning_tools.py`、
-  `policy/guard_strands.py`、`runner/runner_strands.py`
-- 事实：`strands` 包未安装、`requirements-dev.txt` 里被注释、无启用开关，工厂只能回退 direct
-- 做法：删除，或保留但在模块顶部明确标注「未启用实现，启用条件为 X」——不要留薛定谔状态
-- 验收：`grep -rn "strands" chaos/code/` 的结果全部有明确定性
-- 依赖：无（但要先做，T-210 系列会改 direct 实现）
+### T-202 ~~Strands 死代码定性~~ → **作废，方向写反** · `wontfix`
+- 初版写的是「删除，或保留但标注未启用」。按 north_star §1.5（用户明确的硬约束：
+  LLM 开发一律走 Strands + 尽量用 AgentCore），**这个方向是错的**。
+- 实测事实推翻了「死代码」这个判断：**19 个文件 / 4583 行** strands 实现、
+  **6 个**引擎开关、**13 处**回退分支，目标版本 `rca/engines/factory.py:36` 写明
+  `strands-agents>=1.36`（不是 0.x —— 我一度也说错了这一点）。这是一等架构，不是残渣。
+- 替代卡：**T-205 / T-206 / T-207**（Stage 0.5）与 **T-208**（Stage 0.6）。
+
+---
+
+## Stage 0.5 —— 把 Strands 跑起来（所有 LLM 工作的硬前置）★
+
+### T-205 安装 strands 依赖并解注释 · `todo` ★
+- 安装 `strands-agents>=1.36`、`strands-agents-tools>=0.5`
+  （PyPI 现值 **1.54.0 / 0.8.7**，同主版本线，移植风险低）
+- 取消 `requirements-dev.txt:56` 的 `# strands-agents>=0.1` 注释，
+  **并把下界改成 `>=1.36`** —— `>=0.1` 与 `factory.py:36` 的实际要求不一致
+- 验收：`python3.11 -c "import strands; print(strands.__version__)"` 成功；
+  `python3.11 -c "from strands import Agent, tool"` 成功
+- 依赖：无。**这张卡不做，Stage 4 的一切都是加在没人跑的代码上**
+
+### T-206 六个引擎开关默认切到 strands · `todo` ★
+- 开关：`HYPOTHESIS_ENGINE`、`LEARNING_ENGINE`、`NLQUERY_ENGINE`、`LAYER2_ENGINE`、
+  `GUARD_ENGINE`、`RUNNER_ENGINE`（位置：`chaos/code/runner/factory.py:26`、
+  `chaos/code/policy/factory.py`、`rca/engines/factory.py:29/61/85`）
+- 做法：默认值 `direct` → `strands`；逐个实测跑通一次，记录每个开关的实测结果
+- 保持 Bedrock inference profile（`global.*`）形态、显式 `ap-northeast-1`（现存代码已如此，别退回裸 model id）
+- 验收：六个开关不设 env 时走 strands；六次实测各留一条日志证据
+- 依赖：T-205
+
+### T-207 回退 direct 必须显式告警 + 能力对账测试 · `todo`
+- 13 处回退分支保留（应急需要），但**不能静默** ——
+  静默回退会让"约束已满足"和"依赖没装"看起来一样（同不变量 7 的错误模式）
+- 加一条对账测试：**LLM 新能力不得只存在于 direct 侧**（direct 与 strands 能力集比对，
+  strands 缺失即失败）。这条测试是防止约束随时间腐蚀的唯一机制
+- 验收：回退时日志有 WARNING 且带原因；对账测试存在并通过
+- 依赖：T-206
+
+---
+
+## Stage 0.6 —— 接入 AgentCore
+
+### T-208 至少接入一项 AgentCore 能力 · `todo`
+- 东京区**四项全可用**（已核实）：Runtime microVM ✓ / Runtime Instances ✓ / Memory ✓ / Gateway ✓。
+  SDK：`bedrock-agentcore 1.22.0`、`bedrock-agentcore-starter-toolkit 0.3.12`
+- 按对本项目的价值排序：
+  1. **Gateway** —— 把图查询（`candidate_edges`、爆炸半径、SPOF）与注入能力暴露为 MCP 工具。
+     收益最直接：这些能力现在锁在 Python 进程和 VPC 里、对外零契约
+     （审计给"agent 可调用性 ~55%"的扣分点正是这个）
+  2. **Memory** —— 跨轮记忆，是 T-251「上一轮结果影响下一轮候选」的托管等价物，省自建
+  3. **Observability** —— agent 轨迹，直接作为 T-243 幻觉率统计的数据源
+  4. **Runtime** —— 托管执行；EventBridge + Lambda 已够用，优先级最低
+- **不接的项必须在本卡下写明技术理由**，不能默认跳过（"区域不支持"已被证伪，不可用作理由）
+- 验收：至少一项实际调用成功并留下证据；未接的项各有一行理由
+- 依赖：T-206
+
+---
 
 ### T-203 补 datastore-flow 链路守门测试 · `todo`
 - 位置：`infra/lambda/etl_deepflow/neptune_etl_deepflow.py`
@@ -177,14 +231,21 @@
 
 ## Stage 4 —— LLM 约束与可量化评测
 
-### T-240 hypothesis 输出 schema 校验 · `todo`
-- 位置：`chaos/code/agents/hypothesis_direct.py`（`_extract_json` + 逐字段 `.get(默认值)`）
-- 三处静默兜底必须去掉：
-  1. `:719` `FAULT_DEFAULTS.get(fault_type, FAULT_DEFAULTS["pod_kill"])` —— 匹配不到静默填 `pod_kill`
+### T-240 假设输出约束 —— **落在 Strands 侧** · `todo`
+- ⚠️ 初版这张卡写的是「给 `hypothesis_direct` 加 schema 校验」——按 north_star §1.5 调整方向：
+  **约束加在 strands 侧**，direct 只做最低限度同步修补，不在那边建新能力
+- **主路径（strands）**：`chaos/code/agents/hypothesis_tools.py`（4 个 `@tool`）+
+  `hypothesis_strands.py:249` 的 `Agent(...)`
+  - 用 `@tool` 的类型签名 + 结构化输出承担校验
+  - `target_services` / `fault_type` 做成**工具入参校验**，非法输入在工具边界即被拒 ——
+    这比生成后再校验更强：模型根本拿不到非法选项
+- **兜底路径（direct）**：仅去掉三处静默兜底，不加新功能
+  1. `hypothesis_direct.py:719` `FAULT_DEFAULTS.get(fault_type, FAULT_DEFAULTS["pod_kill"])` —— 匹配不到静默填 `pod_kill`
   2. 排序分数缺失静默填 5 分
   3. `target_services` 不与拓扑对账
-- 验收：非法 `fault_type` / 拓扑外服务 → 抛出或标记为 rejected，不产生实验
-- 依赖：T-202
+- 验收：非法 `fault_type` / 拓扑外服务在两条路径上都不产生实验；
+  strands 路径的拒绝发生在工具边界（有测试证明）
+- 依赖：**T-206**（strands 必须先是运行路径）
 
 ### T-241 LLM 可见故障 9 → 60 · `todo`
 - 现状（已程序化核实）：`VALID_FAULT_TYPES = list(FAULT_DEFAULTS.keys())` 只有 **9** 种
@@ -303,9 +364,84 @@
 
 ---
 
+## Stage 8 —— 闭环：用 chaos 实际校正这张图 ★ 终点
+
+### T-280 成批验证 94 条依赖边 · `todo`（需批准）
+- 按 T-231 的排队规则（爆炸半径 / SPOF / `untested` / `declared_not_observed` 优先）跑批
+- 验收：`coverage()` 报出的 `untested` 数持续下降，每轮留快照
+- 依赖：T-214、T-230、T-233
+
+### T-281 refuted 边强制归因 · `todo` ★
+- 每条 `verify_status='refuted'` 的边必须归为三类之一，**不允许悬空**：
+
+  | 归因 | 含义 | 修正动作 |
+  |---|---|---|
+  | 幽灵边 | 源头 ETL 造出的假边 | 置 `active=false` **且**修掉造它的 ETL 代码路径 |
+  | 观测盲区 | 边真实存在但采集看不见（如 DeepFlow 未解 DB 协议） | 边保留，改采集侧或 `drift_status` 语义 |
+  | 弱依赖 | 边存在但非 load-bearing | 保留，标注影响强度，**不删** |
+
+- **删边门槛**：观测方基线请求量达标 + 注入时长穿透熔断/重试 + `verify_refute_count >= 2`。
+  一次 refuted 不足以删边（不变量 7）
+- 验收：`refuted` 边数 == 已归因边数；有一条测试拒绝"单次 refuted 即删边"
+- 依赖：T-280
+
+### T-282 走完一条边的完整闭环并留前后对比 · `todo` ★
+- 流程：注入 → `refuted` → 归因 → 改代码或改图 → **复跑验证** → 转 `confirmed` 或确认为幽灵边
+- 双向留痕：图上 `verify_reason`，代码提交信息带边的三元组，两者能相互指认
+- 高价值靶子：22 条 P0（`declared_not_observed`）必然落进"幽灵边"或"观测盲区"，
+  **两种都是真问题**，分清即有价值
+- 验收：至少 1 条边有完整前后对比记录
+- 依赖：T-281
+
+### T-283 归因分布进交接文档 · `todo`
+- 内容：多少条幽灵边 / 多少条观测盲区 / 多少条弱依赖
+- **这个分布就是"这张图有多准"的量化答案**，也是 DoD-4 覆盖率数字的意义所在
+- 依赖：T-281
+
+---
+
+## 上一轮已完成（2026-08-30，commits `c48d63c` / `2988c75` / `186d99f` / `3477896`）
+
+用户 2026-08-30 17:04 问这四项是否在任务里 —— **它们已经做完了，不是待办**，
+本节保留为已完成记录，避免被当成开放任务重做。全部经活环境复核（不是凭记忆）：
+
+| 动作 | 实测状态 |
+|---|---|
+| `migrate_identity_keys.py --apply` 合并 VPC 重复实体 | ✅ `VPC` 3→2 节点，`vpc_id` 撞车 **0** 组（活图谱查询复核：`vpc-010ab37a3f9f74725`/`ServicesEks2/PetSiteVPC`、`vpc-06731f30388b57818`/`agent-vpc-v2`，各 1 个） |
+| 打包发布新层 + 四个函数指到新版本 | ✅ 层 `:6`，四个函数**全部** `layer=6`（顺带修掉 xray 在 `:5`、其余 `:2` 的既存漂移） |
+| `petsite.yaml` 的 `WritesTo` 三个错端点名 | ✅ `:377` 现为 `(:Microservice)-[:WritesTo]->(:SQSQueue|:SNSTopic|:S3Bucket)` |
+| 端点约束 warn → enforce | ✅ `graph_contract.py:66` 默认 `MODE_ENFORCE`，四个函数均**未**设 `GRAPH_CONTRACT_MODE` 覆盖 |
+
+顺带在那一轮查出并修掉的真缺陷（也已完成）：
+- `find_vertex_by_name` 两层都不带标签 → `label` 改为必需参数，四处调用点全传 `Microservice`
+- `:558` 遗漏的 `_K8S_SVC_ALIAS` 映射（`:592` 一直有）→ 108 条边可转为正确边
+- 端点白名单从平铺 `src`/`dst`（笛卡尔积）升级为 `pairs` 配对校验
+- 迁移脚本改挂边时不去重造出 13 条平行重复 `LocatedIn` → 已清理并补 `dedupe_parallel_edges`
+
+**这批唯一的残留就是 Stage 7 的三张卡**（T-270/271/272）—— 函数**代码**还没部署，
+所以 183 条错源边现在清等于白删（旧代码下一轮 ETL 会原样重建）。
+
+---
+
 ## Cycle 日志
 
 > 每轮追加一行：`## Cycle-N (UTC 时间) — 做了哪张卡 / 结果 / 下一张`
+
+### Cycle-1 (2026-08-30 17:10Z) — 补入两条用户追加的硬约束，并纠正一处方向性错误
+- **新增 DoD-9（Strands/AgentCore 强制）**。用户明确「Strands 一定要用，LLM 开发尽量用
+  Strands 和 AgentCore」。这条约束初版**完全没有**，而且 `T-202` 写的是「删除 strands 死代码」
+  ——**方向正好相反**，已置 `wontfix` 并替换为 T-205/206/207/208
+- **新增 DoD-10（闭环校正）**。用户追加「chaos 建成后要用它验证依赖关系，不符合就去改」。
+  初版只到"得到判定"，现在要求判定回流成修正动作，refuted 边强制三类归因，
+  且删边门槛设为 `verify_refute_count >= 2`（一次 refuted 不足以删边）
+- **新增 Stage 0.5 / 0.6 / 8**，Stage 4 从「给 direct 打补丁」改向「约束落在 strands 工具边界」
+- `verify_dod.sh` 补 DoD-9 四项检查，复跑：**PASS=3 FAIL=9 SKIP=5**（9.3 精确数出 6 处默认 direct）
+- 三处实测更正：
+  1. strands **不是死代码** —— 19 文件 / 4583 行、6 个引擎开关、13 处回退分支
+  2. 目标版本是 `>=1.36`（`rca/engines/factory.py:36`），**不是 0.x** —— 我一度也说错
+  3. AgentCore 东京区**四项全可用**，"区域不支持"不能作为不接的理由
+- 复核用户问的四项运维动作：**全部已完成**（见「上一轮已完成」节，逐项活环境验证）
+- 下一张：**T-205**（装 strands，Stage 4 的硬前置）→ **T-206** → 然后 T-200/203/204 建干净基线
 
 ### Cycle-0 (2026-08-30 16:50Z) — 工作定义建立
 - 建 `north_star.md`（8 条 DoD、12 条运行不变量、5 条停止条件、4 项需批准动作）、

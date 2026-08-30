@@ -124,6 +124,35 @@ else
 fi
 
 echo
+echo "===== DoD-9 Strands / AgentCore 成为实际运行路径 ====="
+if $PY -c "from strands import Agent, tool" >/dev/null 2>&1; then
+  SV=$($PY -c "import strands;print(getattr(strands,'__version__','?'))" 2>/dev/null)
+  ok 9.1 "strands 可导入（$SV）"
+else
+  no 9.1 "strands 未安装（T-205）—— 六个引擎全在静默回退 direct"
+fi
+if grep -qE '^\s*strands-agents>=1\.' requirements-dev.txt 2>/dev/null; then
+  ok 9.2 "requirements-dev.txt 已解注释且下界 >=1.x"
+else
+  no 9.2 "requirements-dev.txt 仍注释掉 strands 或下界是 >=0.1（T-205）"
+fi
+# 六个引擎开关的默认值必须是 strands
+BAD=$(grep -rhoE "(HYPOTHESIS|LEARNING|NLQUERY|LAYER2|GUARD|RUNNER)_ENGINE[^)]*\)\s*or\s*['\"]direct['\"]|getenv\(\s*['\"](HYPOTHESIS|LEARNING|NLQUERY|LAYER2|GUARD|RUNNER)_ENGINE['\"]\s*,\s*['\"]direct['\"]" \
+      chaos/ rca/ --include="*.py" 2>/dev/null | wc -l)
+if [[ "${BAD:-1}" -eq 0 ]]; then ok 9.3 "六个引擎开关默认非 direct"
+else no 9.3 "仍有 $BAD 处引擎开关默认 direct（T-206）"; fi
+if $PY -c "import bedrock_agentcore" >/dev/null 2>&1; then
+  ok 9.4 "bedrock_agentcore 可导入"
+else
+  no 9.4 "AgentCore SDK 未安装（T-208）—— 东京区四项能力均可用，不可用不能作为理由"
+fi
+
+echo
+echo "===== DoD-10 闭环校正（需活图谱） ====="
+if [[ $LOCAL_ONLY -eq 1 ]]; then skip 10.1 "--local-only"
+else skip 10.1 "需查活图谱：refuted 边数 == 已归因边数（T-281）"; fi
+
+echo
 echo "===== DoD-8 测试与卫生 ====="
 [[ -e "chaos/=23.0.0" ]] && no 8.1 "异常文件 chaos/=23.0.0 仍在（T-200）" || ok 8.1 "异常文件已删"
 

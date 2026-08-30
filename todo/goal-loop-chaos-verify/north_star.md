@@ -24,7 +24,75 @@
 
 ---
 
+## 1.5 技术约束（用户 2026-08-30 明确指定，不可协商）
+
+> **LLM / agent 开发一律走 Strands Agents，并尽量用 Amazon Bedrock AgentCore。**
+
+这不是偏好，是硬约束。它推翻了本文件初版的两处判断，已修正：
+
+- 初版把 `*_strands.py` 当「死代码」，给出的选项是「删除或标注为未启用」——**方向完全相反**。
+- 初版把 Stage 4 的 LLM 约束工作定位为「给 `hypothesis_direct` 打补丁」——
+  那是在错误的实现上加固。正确做法是让 **strands 路径成为默认且唯一新增能力的落点**。
+
+实测事实（2026-08-30，程序化统计，不是印象）：
+
+| 事实 | 数字 |
+|---|---|
+| 涉及 strands 的第一方文件 | **19 个 / 4583 行** |
+| 引擎开关 env | **6 个**：`HYPOTHESIS_ENGINE`、`LEARNING_ENGINE`、`NLQUERY_ENGINE`、`LAYER2_ENGINE`、`GUARD_ENGINE`、`RUNNER_ENGINE` |
+| 「回退 direct」分支 | **13 处** |
+| 目标版本 | `rca/engines/factory.py:36` 写明 `strands-agents>=1.36` + `strands-agents-tools>=0.5` |
+| PyPI 现值 | `strands-agents 1.54.0`、`strands-agents-tools 0.8.7`（同主版本线，移植风险低） |
+| AgentCore SDK | `bedrock-agentcore 1.22.0`、`bedrock-agentcore-starter-toolkit 0.3.12` |
+| AgentCore 东京可用性 | Runtime microVM ✓ / Runtime Instances ✓ / Memory ✓ / Gateway ✓ —— **无区域阻塞** |
+
+所以现状**不是**"实现缺失"，而是**依赖未安装 + 开关未切**：`strands` 包不在环境里，
+`requirements-dev.txt:56` 那行被注释，六个工厂全部静默回退 direct。
+
+**推论**：`direct` 实现的定位从"主实现"降为"**依赖不可用时的应急回退**"。
+新增的 LLM 能力**只允许**加在 strands 侧；direct 侧只接受 bug 修复，不接受新功能。
+
+---
+
 ## 2. Definition of Done（全部 shell 可核验，跑 `./verify_dod.sh`）
+
+> 阅读顺序：**DoD-9 / DoD-10 列在最前**，因为它们是 2026-08-30 用户追加的硬约束
+> （Strands/AgentCore 强制、以及"验证完要真的去改图"），后加但优先级最高。
+> DoD-1..DoD-8 是初版的八条，编号不变以免引用失效。
+
+### DoD-10 用 chaos 模块实际校正这张图（闭环，用户 2026-08-30 追加要求）
+
+DoD-3/DoD-4 只到"得到判定"。这一条要求**判定必须回流成修正动作** ——
+验证出来不符合的依赖关系要去改，否则验证只是产出报告。
+
+- 每条 `verify_status = refuted` 的边都有一个**归因结论**，归为下列之一，不允许悬空：
+  1. **幽灵边** —— 源头 ETL 造出的假边 → 置 `active=false` **并**修掉造它的 ETL 代码路径
+  2. **观测盲区** —— 边真实存在但采集看不见（例：DeepFlow 未解 DB 协议）
+     → 边保留，改的是采集侧或 `drift_status` 语义
+  3. **弱依赖** —— 边存在但非 load-bearing → 保留，标注影响强度，**不删**
+- **禁止仅凭一次 refuted 就删边。** 必须满足：观测方基线请求量达标、注入时长穿透
+  熔断+重试预算（DoD-7）、且 `verify_refute_count >= 2`。
+  理由见 §4 不变量 7 —— 把真实边判成不存在比不验证更有害。
+- 修正动作必须**双向留痕**：图上有 `verify_reason`，代码侧有对应提交，
+  两者能相互指认（提交信息带边的三元组，边属性带 experiment id）
+- 至少 **1 条**边完整走完「注入 → refuted → 归因 → 改代码或改图 → 复跑验证转为
+  confirmed 或确认为幽灵边」的全流程，并留下前后对比
+- 归因分布写进交接文档：多少条是幽灵边、多少条是观测盲区、多少条是弱依赖 ——
+  这个分布本身就是"这张图有多准"的量化答案，也是 DoD-4 覆盖率数字的意义所在
+
+### DoD-9 Strands / AgentCore 成为实际运行路径（§1.5 硬约束的验收）
+- `strands-agents>=1.36` 与 `strands-agents-tools>=0.5` **已安装**，
+  `requirements-dev.txt:56` 那行取消注释并写明版本下界
+- 六个引擎开关（`HYPOTHESIS_ENGINE`、`LEARNING_ENGINE`、`NLQUERY_ENGINE`、`LAYER2_ENGINE`、
+  `GUARD_ENGINE`、`RUNNER_ENGINE`）**默认值为 `strands`**，且各自实测跑通一次
+- 13 处「回退 direct」分支保留但必须**显式告警**（回退是应急，不能静默变成常态）
+- 存在一条测试断言：**LLM 相关新能力不得只存在于 direct 侧**
+  （direct 与 strands 的能力集对账，strands 缺失即失败）
+- **AgentCore 至少接入一项并说明取舍**：Runtime（托管 agent 执行）/ Memory（跨轮记忆）/
+  Gateway（把图查询与注入能力暴露为 MCP 工具）/ Observability（agent 轨迹）。
+  东京区四项均可用，所以"不可用"不能作为不接的理由——不接必须给出技术理由并记在 tasks.md
+- Bedrock 模型调用保持 inference profile（`global.*`）形态，显式 `ap-northeast-1`
+  （现存 strands 代码已是这个形态，不要退回裸 model id）
 
 ### DoD-1 契约门禁全线生效（线上）
 - 四个写入 Lambda（`neptune-etl-from-{aws,deepflow,xray,cfn}`）层版本 **≥ 6** 且四者一致
@@ -80,6 +148,10 @@
 
 ## 3. 明确的非目标
 
+- **不删除、不停用任何 `*_strands.py`。** 见 §1.5：它们是既定实现路径，只是依赖没装。
+  本文件初版曾把它们列为可删的死代码，那是错的判断，已作废。
+- **不在 `direct` 实现上加新能力。** direct 只修 bug。新功能一律加在 strands 侧，
+  否则会把架构重心永久钉在应急回退路径上。
 - **不重写 ETL**。`run_etl` 1234 行 / CC≈325 的重构登记在 stage 6，但**不是** DoD —— 它不改变正确性。
 - **不接新数据源**。本项目至今 12 个缺陷全部落在粒度错配 / 写了没人读 / 身份不唯一三类，
   没有一个是"少采了数据"。瓶颈在数据契约，不在采集覆盖面。
@@ -113,6 +185,11 @@
     正则漏数字导致 26 边只解析出 23；fault catalog 我报过 52，实际 **60**。
 11. **不用 `grep -c` 数装饰器/注解**，注释里的匹配会虚高。
 12. **混沌注入 IAM 最小权限**。参考仓库的 quick-start 给的是宽权限，它自己也旁注了生产要收紧。
+13. **任何 LLM / agent 逻辑的改动只落在 Strands 侧**（`@tool` 定义 + Agent 编排），
+    优先用 AgentCore 的托管能力而不是自建等价物。`direct` 侧只接受 bug 修复。
+    每次动 LLM 代码前先自问：这个能力在 strands 路径上存在吗？不存在就先在那边建。
+14. **回退到 direct 必须留下告警**。静默回退会让"约束已满足"和"依赖没装"看起来一样 ——
+    这与不变量 7（零流量和健康长得一样）是同一类错误。
 
 ---
 
