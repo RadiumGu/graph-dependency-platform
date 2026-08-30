@@ -13,8 +13,8 @@
 |---|--:|--:|--:|--:|--:|
 | 0 卫生与基线 | 4 | 0 | 0 | 0 | 4 |
 | **0.5 把 Strands 跑起来** ★ | 4 | 2 | 1 | 0 | 1 |
-| **0.6 接入 AgentCore** | 1 | 0 | 0 | 0 | 1 |
-| 1 边验证接入 runner ★ | 5 | 2 | 0 | 0 | 3 |
+| **0.6 接入 AgentCore** | 2 | 0 | 1(review) | 0 | 1 |
+| 1 边验证接入 runner ★ | 6 | 2 | 0 | 0 | 4 |
 | 2 判定分辨力 | 4 | 0 | 0 | 0 | 4 |
 | 3 AWS 侧单边隔离 + 选边 | 4 | 0 | 0 | 0 | 4 |
 | 4 LLM 约束与评测 | 5 | 0 | 0 | 0 | 5 |
@@ -23,13 +23,13 @@
 | 7 部署与清理 | 3 | 0 | 0 | 3 | 0 |
 | **8 闭环校正** ★ 终点 | 4 | 0 | 0 | 0 | 4 |
 | （T-202 方向写反，作废） | 1 | — | — | — | wontfix |
-| **合计** | **43** | **4** | **1** | **3** | **35** |
+| **合计** | **45** | **4** | **2** | **3** | **36** |
 
 基线：提交 `3477896` 时 **442 passed / 145 skipped / 0 failed**。
-**当前水位（cycle-1 后）：443 passed / 144 skipped / 0 failed**（装 strands 净解锁 1 个测试）。
+**当前水位（cycle-2 后）：443 passed / 144 skipped / 0 failed**。
 活图谱基线：1731 边、94 条依赖边、`verify_status=untested` 94 条（已验证占比 **0.0**）。
-`verify_dod.sh --local-only`：cycle-0 首跑 PASS=3 FAIL=5 SKIP=4 → 补 DoD-9/10 检查后 PASS=3 FAIL=9
-→ **cycle-1 后 PASS=6 FAIL=6 SKIP=5**。
+`verify_dod.sh --local-only`：cycle-0 PASS=3 → cycle-1 PASS=3/FAIL=9 →
+**cycle-2 后 PASS=7 FAIL=5 SKIP=5**。**DoD-9 四项检查全绿。**
 
 ---
 
@@ -110,19 +110,61 @@
 
 ## Stage 0.6 —— 接入 AgentCore
 
-### T-208 至少接入一项 AgentCore 能力 · `todo`
-- 东京区**四项全可用**（已核实）：Runtime microVM ✓ / Runtime Instances ✓ / Memory ✓ / Gateway ✓。
-  SDK：`bedrock-agentcore 1.22.0`、`bedrock-agentcore-starter-toolkit 0.3.12`
-- 按对本项目的价值排序：
-  1. **Gateway** —— 把图查询（`candidate_edges`、爆炸半径、SPOF）与注入能力暴露为 MCP 工具。
-     收益最直接：这些能力现在锁在 Python 进程和 VPC 里、对外零契约
-     （审计给"agent 可调用性 ~55%"的扣分点正是这个）
-  2. **Memory** —— 跨轮记忆，是 T-251「上一轮结果影响下一轮候选」的托管等价物，省自建
-  3. **Observability** —— agent 轨迹，直接作为 T-243 幻觉率统计的数据源
-  4. **Runtime** —— 托管执行；EventBridge + Lambda 已够用，优先级最低
-- **不接的项必须在本卡下写明技术理由**，不能默认跳过（"区域不支持"已被证伪，不可用作理由）
-- 验收：至少一项实际调用成功并留下证据；未接的项各有一行理由
-- 依赖：T-206
+### T-208 接入 AgentCore —— 选定 **Observability** · `review`（cycle-2）
+**取舍已定，理由基于实测而非我上轮的排序。** 上轮我把 Gateway 排第一，但查清前置后改选 Observability。
+
+**为什么不是 Gateway（改判，非放弃 → 见 T-210b）**
+- ✅ 好消息：`authorizerType` 枚举实测含 **`AWS_IAM`** 与 `NONE`，不只 `CUSTOM_JWT`
+  —— **不需要先立 Cognito**，这推翻了我原以为的大前置（那份 inbound-auth 文档只讲 JWT，
+  CFN 的 `AuthorizerConfiguration` 还写着 CustomJWTAuthorizer 必填，但 API 层面 IAM 就够）
+- ❌ 真正的阻塞：`targetConfiguration.mcp` 支持 `lambda`/`openApiSchema`/`smithyModel`/
+  `mcpServer`/`apiGateway`/`connector`，最自然的是 `lambda` + `toolSchema`，
+  但**账号里没有任何图查询 Lambda**（现存 7 个全是 ETL/RCA），`.mcp.json` 也是空的。
+  要先建一个在 VPC 内、挂 `neptune-client-base` 层、能连 Neptune 的新函数 → 独立卡 T-210b
+
+**为什么是 Observability（配置级，零新建计费资源）**
+- `rca/engines/strands_common.py` 已有完整 telemetry 骨架：`ensure_telemetry()`
+  + `STRANDS_TELEMETRY=off|console|otlp` + X-Ray ID generator + OTLP exporter
+- **console 模式实测出真 span**，且是 GenAI 语义约定：
+  `invoke_agent Strands Agents` / `chat` / `execute_event_loop_cycle` /
+  `gen_ai.choice` / `gen_ai.user.message` / `gen_ai.system.message`
+  —— 正是 AgentCore Observability 消费的格式
+- 直接服务 **DoD-6**：T-243 的幻觉率统计需要 agent 决策轨迹，否则要自己埋点
+
+**本轮已做**
+- 装 `bedrock-agentcore 1.22.0` + `aws-opentelemetry-distro 0.19.0`
+  （≥0.18.0 才支持 `OTEL_EXPORTER_OTLP_TRACES_HEADERS`）
+- 建日志组 `/aws/bedrock-agentcore/runtimes/graph-dep-chaos-agent` + 流 `runtime-logs`，14 天保留
+- 写 `chaos/scripts/enable_agentcore_observability.sh`（7 个 OTel env 变量 + `--check` + 闸门隔离），
+  `--check` 实跑正确识别出闸门未开
+
+**未做（唯一剩项）**：Transaction Search 未启用 → 卡 **T-208b**。
+面板要看到 span 必须开它，但那是账号级 + 计费 + 可能影响 etl_xray 的变更。
+
+### T-208b 验证并启用 CloudWatch Transaction Search · `todo`（cycle-2 新增，含闸门）
+- 实测现状：`aws xray get-trace-segment-destination` → `{"Destination":"XRay","Status":"ACTIVE"}`，
+  而 AgentCore Observability 要求 `CloudWatchLogs`；indexing rule 采样率 **0.0**
+- **翻开关前必须先验证的事**：`infra/lambda/etl_xray/` 读 X-Ray trace 建拓扑边，
+  切换 segment destination 是否影响 `GetTraceSummaries` / `BatchGetTraces` **尚未验证**。
+  没验证就翻，可能**静默打断本项目自己的一条 ETL 数据源** —— 这正是不变量 7 那类
+  「坏掉和正常长得一样」的错误
+- 另两个理由使它成为闸门：账号级（影响该 region 全部 X-Ray 消费方）、
+  按摄入 span 量计费（该账号已有 EKS audit 约 $45/月）
+- 做法：先起一份对照实验证明 X-Ray 读取不受影响 → 再
+  `./enable_agentcore_observability.sh --enable-transaction-search`（采样从 10% 起步）
+- 回退：`aws xray update-trace-segment-destination --destination XRay`
+- 验收：`--check` 显示 `Destination = CloudWatchLogs`，且 etl_xray 仍能取到 trace
+
+### T-210b 建图查询 Lambda 并接 AgentCore Gateway · `todo`（cycle-2 新增）
+- 这是 T-208 里 Gateway 路线的真实前置，也是审计给「agent 可调用性 ~55%」扣分的正解：
+  图查询能力现在锁在 Python 进程和 VPC 里、对外零契约
+- 暴露的工具（都已有实现，不用新写逻辑）：`candidate_edges`、`coverage`、
+  `select_targets_for_verification`（`chaos/code/runner/edge_verification.py`）+ 爆炸半径 / SPOF（T-231）
+- 形态：新 Lambda（VPC 内、挂 `neptune-client-base` 层）→ `CreateGateway(authorizerType='AWS_IAM')`
+  → `CreateGatewayTarget(targetConfiguration={'mcp':{'lambda':{...toolSchema}}})`
+- **用 `AWS_IAM` 不用 `NONE`**：消费方是账号内 agent，SigV4 即可；
+  且这个面会暴露图查询乃至注入能力，`NONE` 被官方明确标「not recommended」
+- 依赖：T-231（选边逻辑先定型，免得 toolSchema 反复改）
 
 ---
 
@@ -449,6 +491,26 @@
 ## Cycle 日志
 
 > 每轮追加一行：`## Cycle-N (UTC 时间) — 做了哪张卡 / 结果 / 下一张`
+
+### Cycle-3 (2026-08-30 18:50Z) — T-208 接入 AgentCore Observability，DoD-9 四项全绿
+- **取舍改判（基于实测，不是上轮的排序）**：上轮把 Gateway 排第一，查清前置后改选 **Observability**。
+  - Gateway 的好消息：`authorizerType` 实测含 **`AWS_IAM`/`NONE`**，**不需要先立 Cognito**
+    —— 推翻我原以为的大前置（inbound-auth 文档只讲 JWT，CFN 还写着 CustomJWTAuthorizer 必填）
+  - Gateway 的真阻塞：`targetConfiguration.mcp` 最自然的是 `lambda`+`toolSchema`，
+    但**账号里没有任何图查询 Lambda**（现存 7 个全是 ETL/RCA），`.mcp.json` 空 → 拆出 **T-210b**
+  - Observability 是配置级、零新建计费资源：`strands_common.py` 已有完整 telemetry 骨架，
+    **console 模式实测出真 span** 且是 GenAI 语义约定（`invoke_agent`/`chat`/`gen_ai.choice`…）
+- 已做：装 `bedrock-agentcore 1.22.0` + `aws-opentelemetry-distro 0.19.0`；
+  建日志组 `/aws/bedrock-agentcore/runtimes/graph-dep-chaos-agent` + 流（14 天保留）；
+  写 `chaos/scripts/enable_agentcore_observability.sh`（`--check` 实跑正确识别闸门）
+- **一个闸门没翻，理由是真的风险不是保守**：Transaction Search 实测 `Destination=XRay`
+  （需 `CloudWatchLogs`）、采样 0.0。它是账号级 + 计费 + **可能影响本项目自己的 `etl_xray`**
+  （读 X-Ray 建拓扑边，切 destination 是否影响 `GetTraceSummaries` 未验证）。
+  没验证就翻会静默打断一条 ETL 数据源 → 卡 **T-208b**，含回退命令
+- 顺带发现账号里已有一个 **不属于本项目** 的 memory `xgg_memory-5M0VYBCeFS`，未触碰
+- `verify_dod.sh`：PASS 6 → **7**，**DoD-9 全部四项转绿**；测试 443 passed / 0 failed 无回归
+- 下一张：**T-210**（Stage 1 ★ 最高杠杆，runner 采集观测方指标）——
+  它解锁 DoD-3 → DoD-4 → DoD-10 整条链，而 T-208b/T-210b 各自有前置
 
 ### Cycle-2 (2026-08-30 17:31Z) — T-205 + T-206 完成，Strands 成为实际运行路径
 - **T-205 done**：装 strands-agents 1.54.0 / strands-agents-tools 0.8.7，

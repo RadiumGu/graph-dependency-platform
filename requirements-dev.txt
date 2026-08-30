@@ -59,6 +59,18 @@ pyvis>=0.3
 strands-agents>=1.36
 strands-agents-tools>=0.5
 
+# AgentCore（north_star §1.5：LLM 开发尽量用 Amazon Bedrock AgentCore）。
+# 东京区实测四项能力全可用（Runtime microVM / Runtime Instances / Memory / Gateway）。
+# bedrock-agentcore: control plane 165 ops / data plane 66 ops 经 boto3 直接可用，
+#   这个 SDK 提供更高层的封装。
+# aws-opentelemetry-distro: AgentCore Observability 要求的 ADOT 管道
+#   （OTEL_PYTHON_DISTRO=aws_distro / OTEL_PYTHON_CONFIGURATOR=aws_configurator）。
+#   必须 >=0.18 才支持 OTEL_EXPORTER_OTLP_TRACES_HEADERS；本机实测 0.19.0。
+#   启用方式见 chaos/scripts/enable_agentcore_observability.sh
+#   —— 注意面板要显示 span 还需开 CloudWatch Transaction Search，那是账号级+计费变更（卡 T-208b）。
+bedrock-agentcore>=1.22
+aws-opentelemetry-distro>=0.18
+
 # ── 可选依赖(缺失时相关测试 skip,不会 fail) ──
 # 这些**故意不放在必装列表**里:体量大、且只影响个别测试。
 # 相关测试已改为缺失即 skip —— 恒红项的危害不是它本身,而是它训练所有人
