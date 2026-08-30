@@ -44,6 +44,13 @@ class ExperimentResult:
     # Phase5 稳态验证结果
     steady_state_after_checks: list = field(default_factory=list)
 
+    # ─── 观测方数据（T-210）：key = 观测方 service 名 ───────────────────────
+    # 验证边 A -[X]-> B 必须在 B 注入、观测 A。注入目标自己的指标回答的是
+    # 「打断 B 之后 B 是否退化」，近乎恒真，不构成任何边的证据。
+    observer_steady_before: dict = field(default_factory=dict)     # svc -> MetricsSnapshot
+    observer_snapshots: dict = field(default_factory=dict)         # svc -> [MetricsSnapshot]
+    observer_min_success_rate: dict = field(default_factory=dict)  # svc -> float
+
     # 输出
     report_path: str = ""
     chaos_experiment_name: str = ""   # Chaos Mesh 实验名 或 FIS experiment ID
@@ -99,6 +106,69 @@ class ExperimentResult:
         if snap is None:
             return False
         return snap.total_requests > 0
+
+    # ─── 观测方（T-210）——验证一条边必须看调用侧，不是注入目标自己 ─────────────
+
+    def record_observer_baseline(self, service: str, snapshot: "MetricsSnapshot"):
+        """记录某观测方的基线快照。"""
+        self.observer_steady_before[service] = snapshot
+
+    def record_observer_snapshot(self, service: str, snapshot: "MetricsSnapshot"):
+        """记录某观测方在注入期的一个采样点，并维护其最低成功率。"""
+        self.observer_snapshots.setdefault(service, []).append(snapshot)
+        cur = self.observer_min_success_rate.get(service, 100.0)
+        if snapshot.success_rate is not None and snapshot.success_rate < cur:
+            self.observer_min_success_rate[service] = snapshot.success_rate
+
+    def observer_degradation_rate(self, service: str) -> Optional[float]:
+        """
+        观测方的退化幅度（百分点）。这才是一条边的证据 ——
+        「在 B 注入后，调用方 A 是否退化」。
+
+        返回 None 表示**无法判定**（缺基线或缺注入期采样），
+        调用方必须据此判 inconclusive，绝不可当成 0（那等于判「边不存在」）。
+        """
+        base = self.observer_steady_before.get(service)
+        if base is None or base.success_rate is None:
+            return None
+        if service not in self.observer_min_success_rate:
+            return None
+        return max(0.0, round(base.success_rate - self.observer_min_success_rate[service], 2))
+
+    def observer_has_real_traffic(self, service: str, min_requests: int = 10) -> bool:
+        """
+        观测方在基线期是否有足够流量。
+
+        这是假阴性防线：`metrics.collect()` 无数据时 fallback
+        `success_rate=100.0 / total_requests=0` —— **零流量和健康在指标上完全一样**。
+        不设下限，一条没流量的边会被判成「不存在」。
+        """
+        base = self.observer_steady_before.get(service)
+        if base is None:
+            return False
+        return (base.total_requests or 0) >= min_requests
+
+    def observer_evidence(self) -> dict:
+        """
+        汇总每个观测方的证据，供 edge_verification 判定。
+        `usable=False` 的条目只能得到 inconclusive。
+        """
+        out = {}
+        for svc, base in self.observer_steady_before.items():
+            deg = self.observer_degradation_rate(svc)
+            out[svc] = {
+                "baseline_success_rate": base.success_rate,
+                "baseline_total_requests": base.total_requests,
+                "min_success_rate": self.observer_min_success_rate.get(svc),
+                "degradation_rate": deg,
+                "samples": len(self.observer_snapshots.get(svc, [])),
+                "usable": bool(
+                    self.observer_has_real_traffic(svc)
+                    and deg is not None
+                    and len(self.observer_snapshots.get(svc, [])) > 0
+                ),
+            }
+        return out
 
     def is_conclusive(self) -> bool:
         """

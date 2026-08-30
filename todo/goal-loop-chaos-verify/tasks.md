@@ -14,7 +14,7 @@
 | 0 卫生与基线 | 4 | 0 | 0 | 0 | 4 |
 | **0.5 把 Strands 跑起来** ★ | 4 | 2 | 1 | 0 | 1 |
 | **0.6 接入 AgentCore** | 2 | 0 | 1(review) | 0 | 1 |
-| 1 边验证接入 runner ★ | 6 | 2 | 0 | 0 | 4 |
+| 1 边验证接入 runner ★ | 6 | 4 | 0 | 0 | 2 |
 | 2 判定分辨力 | 4 | 0 | 0 | 0 | 4 |
 | 3 AWS 侧单边隔离 + 选边 | 4 | 0 | 0 | 0 | 4 |
 | 4 LLM 约束与评测 | 5 | 0 | 0 | 0 | 5 |
@@ -23,13 +23,13 @@
 | 7 部署与清理 | 3 | 0 | 0 | 3 | 0 |
 | **8 闭环校正** ★ 终点 | 4 | 0 | 0 | 0 | 4 |
 | （T-202 方向写反，作废） | 1 | — | — | — | wontfix |
-| **合计** | **45** | **4** | **2** | **3** | **36** |
+| **合计** | **45** | **6** | **2** | **3** | **34** |
 
 基线：提交 `3477896` 时 **442 passed / 145 skipped / 0 failed**。
-**当前水位（cycle-2 后）：443 passed / 144 skipped / 0 failed**。
+**当前水位（cycle-4 后）：455 passed / 144 skipped / 0 failed**。
 活图谱基线：1731 边、94 条依赖边、`verify_status=untested` 94 条（已验证占比 **0.0**）。
-`verify_dod.sh --local-only`：cycle-0 PASS=3 → cycle-1 PASS=3/FAIL=9 →
-**cycle-2 后 PASS=7 FAIL=5 SKIP=5**。**DoD-9 四项检查全绿。**
+`verify_dod.sh --local-only`：cycle-0 PASS=3 → cycle-1 FAIL=9 → cycle-2 PASS=7 →
+**cycle-4 后 PASS=8 FAIL=4 SKIP=5**。**DoD-9 四项全绿，DoD-3 的 3.1/3.2 转绿**。
 
 ---
 
@@ -187,15 +187,39 @@
 
 ## Stage 1 —— 边验证闭环接进 runner ★ 最高杠杆
 
-### T-210 runner 采集观测方指标 · `todo` ★
-- 位置：`chaos/code/runner/runner.py` `_phase1_steady_state_before`（:261）、`_phase3_observe`（:343）
-- 现状：只采注入目标自己的指标。`degradation_rate()` 回答的是「打断 B 之后 B 是否退化」，
-  **近乎恒真，没有检验任何边**
-- 已就绪：`chaos/code/runner/metrics.py` 的 `collect(service, ...)` 可对**任意**服务名采集
-- 做法：实验规格带 Observation Target 列表；phase1/phase3 对每个观测方各采一次
-- 验收：`grep -n edge_verification chaos/code/runner/runner.py` 非空；
-  实验结果对象里出现观测方的 before/after SLI
-- 依赖：T-203/T-204（先有干净基线）
+### T-210 runner 采集观测方指标 · `done`（cycle-4）★
+- **三角色标注落地**：新增 `ObservationTarget`（`chaos/code/runner/experiment.py`），
+  接受 `'svc'` / `'ns/svc'` / dict 三种写法，带 `edge_label` 与 `min_baseline_requests`。
+  YAML 里写 `target.observers:` 或顶层 `observation_targets:` 均可，
+  默认边类型取 `graph_feedback.edges` 第一项（与写回边类型保持一致，避免两处漂移）
+- **Phase1** `_collect_observer_baselines`：为每个观测方采基线。
+  **刻意不因观测方无流量而让实验失败** —— 那是数据质量问题，应由判定层判 inconclusive；
+  判 refuted 才有害（会删真实边）
+- **Phase3** `_collect_observer_snapshots`：注入期逐点采样；单个观测方失败不中断实验
+- **Phase3 结束** `_log_observer_evidence`：打印逐条边的证据（退化/基线请求/采样/usable），
+  只呈现不判定 —— 阈值全在契约的 `edge_verification`，单一声明
+- **收尾** `_verify_edges`：按 `candidate_edges(injection_target)` 的 `observer` 字段
+  与观测方一一对应，逐条 `verify_edge` + `write_verdict`。
+  注入期请求量取各窗口**最大值**而非求和：每个快照本身是 60s 窗口计数，
+  求和会因窗口重叠虚高；取 max 与基线同量纲，且真零流量时仍为 0 ——
+  偏向「判不了」而非「判边不存在」，与不变量 7 同向
+- **零条写回成功时显式报 error**：这正是历史上被静默吞掉 21 次的症状，不能当「没边可写」放过
+- 结果模型（`result.py`）新增 `observer_steady_before` / `observer_snapshots` /
+  `observer_min_success_rate` + `observer_degradation_rate()` / `observer_has_real_traffic()` /
+  `observer_evidence()`。**缺基线或缺注入期采样时返回 `None` 而不是 `0.0`** ——
+  0.0 会被下游读成「完全没退化」从而判 refuted
+- 测试 `tests/test_37_observer_metrics.py` **12 条全绿**，其中 o06 是最关键的一条：
+  零流量必须判 `inconclusive`、绝不能是 `refuted`
+- 示例实验 `chaos/code/experiments/tier1/verify-edges-into-search-service.yaml`：
+  在 `search-service` 注入 `http_chaos abort`（不用 delay，见 T-223 理由），
+  观测 `petsite` + `list-adoptions` —— 这两条边 2026-08-29 实测确有真实流量
+  （12,236 / 2,028+1,014 请求），含爆炸半径说明。解析实测正确识别 2 个观测方
+
+### T-213 观测方基线请求量下限 · `done`（随 T-210 一并落地）
+- `ObservationTarget.min_baseline_requests`（默认 10）+ `observer_has_real_traffic()`
+- 判定侧 `classify_intervention` 的 `min_observation_requests` 门在基线**与**注入期两侧都查
+- 陷阱已固定为测试：`metrics.collect()` 无数据时 fallback
+  `success_rate=100.0 / total_requests=0` —— **零流量和健康在指标上完全一样**
 
 ### T-211 写回只更新被检验的边 · `done`（提交 `3477896`）
 - 位置：`chaos/code/runner/graph_feedback.py:72` `_update_calls_edges`
@@ -216,18 +240,14 @@
 - 核验：`verify_dod.sh` 的 3.2 已 PASS（只扫 `g.E()` 上下文里的 `property(single`，
   不误伤顶点写入，也不误伤文档字符串）
 
-### T-213 观测方基线请求量下限 · `todo`
-- 位置：`chaos/code/runner/edge_verification.py`
-- 陷阱：`metrics.collect()` 无数据时 fallback `success_rate=100.0 / total_requests=0` ——
-  **零流量和健康在指标上完全一样**，不设下限会把真实边判成"不存在"
-- 验收：零流量输入 → `inconclusive`（已有单测，接入 runner 后需端到端复验）
-- 依赖：T-210
-
-### T-214 跑通第一条边的真实验证 · `todo`（需批准，见 north_star §6）
-- 目标：任选 1 条 `Calls` 边（`candidate_edges('petsite')` 返回 trafficgenerator / gateway-service /
-  order-service → petsite 三条入边，方向已验证正确）
-- 验收：活图谱可查 `verify_status ∈ {confirmed, refuted}`、`verified_by='chaos-runner'`、`verified_at` 非空
-- 依赖：T-210..T-213 全绿
+### T-214 跑通第一条边的真实验证 · `todo` ★ 下一步（入口已就绪）
+- 入口：`chaos/code/experiments/tier1/verify-edges-into-search-service.yaml`
+  （在 `search-service` 注入 `http_chaos abort` 3m，观测 `petsite` + `list-adoptions`）
+- 先 `--dry-run` 走通相位与规格校验，再真实注入（向非生产 EKS 的注入已获概括授权）
+- 验收：活图谱可查 `verify_status ∈ {confirmed, refuted}`、`verify_by='chaos-runner'`、
+  `verify_last` 非空（属性名以 `write_verdict()` 实际写入的为准，不是 `verified_*`）
+- 依赖：T-210 ✅、T-213 ✅。**注意 `kubectl` 不在 PATH**（cycle-2 实测），
+  真实注入前要先解决这个环境问题
 
 ---
 
@@ -491,6 +511,25 @@
 ## Cycle 日志
 
 > 每轮追加一行：`## Cycle-N (UTC 时间) — 做了哪张卡 / 结果 / 下一张`
+
+### Cycle-4 (2026-08-30 19:18Z) — T-210 完成：目标 A 的最后一寸接上了
+- **runner 现在真的在检验边，而不是检验注入目标自己。** 三角色标注落地
+  （`ObservationTarget`），Phase1 采观测方基线、Phase3 逐点采样、
+  收尾 `_verify_edges` 按 `candidate_edges` 的 `observer` 一一对应写回
+- 两个设计选择都记了理由：注入期请求量取窗口**最大值**而非求和（窗口重叠会虚高，
+  取 max 与基线同量纲、真零流量仍为 0，偏向「判不了」而非「判边不存在」）；
+  缺基线或缺采样时退化率返回 **None 而非 0.0**（0.0 会被读成「没退化」→ refuted）
+- **零条写回成功时显式报 error** —— 那正是历史上被静默吞掉 21 次的症状
+- 新测试 `tests/test_37_observer_metrics.py` **12 条全绿**，o06 是核心：
+  零流量必须 `inconclusive`、绝不 `refuted`
+- 示例实验 `chaos/code/experiments/tier1/verify-edges-into-search-service.yaml`：
+  用 **2026-08-29 实测确有流量**的两条边（list-adoptions 12,236 / petsite 2,028+1,014 请求），
+  `http_chaos abort` 而非 delay，含爆炸半径。解析实测正确识别 2 个观测方
+- 顺带查明 **T-221 的数据完整性门在注入目标侧已存在**（`result.py` 的 `has_real_metrics` /
+  `is_conclusive` / `data_quality`）—— 那张卡是**扩展到观测方**，不是从零建
+- 测试 443 → **455 passed / 0 failed**；`verify_dod.sh` PASS 7 → **8**，DoD-3 的 3.1/3.2 转绿
+- 下一张：**T-214**（跑通第一条边的真实验证）—— 入口 YAML 已就绪。
+  **但 `kubectl` 不在 PATH**（cycle-2 实测），真实注入前必须先解决这个环境问题
 
 ### Cycle-3 (2026-08-30 18:50Z) — T-208 接入 AgentCore Observability，DoD-9 四项全绿
 - **取舍改判（基于实测，不是上轮的排序）**：上轮把 Gateway 排第一，查清前置后改选 **Observability**。

@@ -280,6 +280,56 @@ class ExperimentRunner:
                 )
             logger.info(f"✅ 稳态检查通过: {check.describe(snap)}")
 
+        # ── 观测方基线（T-210）─────────────────────────────────────────────
+        # 验证边 A -[X]-> B 必须在 B 注入、观测 A。上面采的是注入目标自己，
+        # 「打断 B 之后 B 是否退化」近乎恒真，不构成任何边的证据。
+        self._collect_observer_baselines(exp, result)
+
+    def _collect_observer_baselines(self, exp: Experiment, result: ExperimentResult):
+        """
+        为每个观测方采一份基线。
+
+        刻意**不**因观测方无流量而让实验失败：那是数据质量问题，
+        应由 edge_verification 判成 inconclusive，而不是把实验判死。
+        判 refuted 才是有害的（会删掉真实边），判 inconclusive 只是没结论。
+        """
+        observers = getattr(exp, "observation_targets", None) or []
+        if not observers:
+            logger.info("ℹ️  未声明观测方（observation_targets 为空）—— "
+                        "本实验不能用于边验证，只能做稳态回归")
+            return
+
+        for obs in observers:
+            ns = obs.namespace or exp.target_namespace
+            try:
+                osnap = self.metrics.collect_steady(
+                    service=obs.service,
+                    namespace=ns,
+                    window_seconds=60,
+                    samples=self.STEADY_SAMPLES,
+                    interval=10,
+                )
+            except Exception as e:
+                logger.warning(f"⚠️  观测方 {obs.service} 基线采集失败: {e!r} —— 该边只能判 inconclusive")
+                continue
+
+            result.record_observer_baseline(obs.service, osnap)
+            enough = (osnap.total_requests or 0) >= obs.min_baseline_requests
+            icon = "✅" if enough else "⚠️"
+            logger.info(
+                f"{icon} 观测方基线 {obs.service} ({obs.edge_label}): "
+                f"success={osnap.success_rate:.1f}% total={osnap.total_requests} "
+                f"(下限 {obs.min_baseline_requests})"
+            )
+            if not enough:
+                # 这一条是假阴性防线：metrics.collect() 无数据时 fallback
+                # success_rate=100.0 / total_requests=0 —— 零流量和健康完全一样。
+                logger.warning(
+                    f"   观测方 {obs.service} 基线流量不足 —— "
+                    f"边 {obs.service} -[{obs.edge_label}]-> {exp.target_service} "
+                    f"只能判 inconclusive，**不得**判 refuted"
+                )
+
     # ─── Phase 2：Fault Injection ─────────────────────────────────────────────
 
     def _phase2_inject(self, exp: Experiment, result: ExperimentResult):
@@ -359,6 +409,9 @@ class ExperimentRunner:
             )
             result.record_snapshot(snap)
 
+            # ── 观测方采样（T-210）——这才是边的证据 ────────────────────────
+            self._collect_observer_snapshots(exp, result)
+
             elapsed = round(time.time() - result.inject_time.timestamp(), 0)
             logger.info(
                 f"  T+{elapsed:.0f}s | success={snap.success_rate:.1f}% "
@@ -392,6 +445,44 @@ class ExperimentRunner:
             time.sleep(self.OBSERVE_INTERVAL)
 
         logger.info(f"✅ Phase 3 结束，Chaos Mesh 实验到期自动恢复")
+        self._log_observer_evidence(exp, result)
+
+    def _collect_observer_snapshots(self, exp: Experiment, result: ExperimentResult):
+        """注入期为每个观测方采一个点。单个观测方失败不影响其余，也不中断实验。"""
+        for obs in (getattr(exp, "observation_targets", None) or []):
+            ns = obs.namespace or exp.target_namespace
+            try:
+                osnap = self.metrics.collect(
+                    service=obs.service, namespace=ns, window_seconds=60,
+                )
+            except Exception as e:
+                logger.warning(f"⚠️  观测方 {obs.service} 采样失败: {e!r}")
+                continue
+            result.record_observer_snapshot(obs.service, osnap)
+
+    def _log_observer_evidence(self, exp: Experiment, result: ExperimentResult):
+        """
+        打印逐条边的证据。这是把「实验跑完了」变成「某条边被检验了」的地方。
+
+        注意这里只**呈现**证据，不做判定 —— 阈值与 confirmed/refuted/inconclusive
+        的划分全部在 graph_contract 的 edge_verification 里（单一声明，避免漂移）。
+        """
+        ev = result.observer_evidence()
+        if not ev:
+            return
+        logger.info("🔎 观测方证据（边验证输入）：")
+        for obs in (getattr(exp, "observation_targets", None) or []):
+            e = ev.get(obs.service)
+            if not e:
+                logger.info(f"   {obs.service} -[{obs.edge_label}]-> {exp.target_service}: 无数据 → inconclusive")
+                continue
+            deg = e["degradation_rate"]
+            deg_s = "n/a" if deg is None else f"{deg:.2f}pp"
+            logger.info(
+                f"   {obs.service} -[{obs.edge_label}]-> {exp.target_service}: "
+                f"退化={deg_s} 基线请求={e['baseline_total_requests']} "
+                f"采样={e['samples']} usable={e['usable']}"
+            )
 
     def _trigger_rca(self, exp: Experiment, result: ExperimentResult):
         logger.info(f"🧠 触发 RCA 分析: {exp.target_service}")
@@ -416,6 +507,88 @@ class ExperimentRunner:
                     f"confidence={rca_result.confidence:.0%} "
                     f"(无期望根因，跳过匹配)"
                 )
+
+    def _verify_edges(self, exp: Experiment, result: ExperimentResult):
+        """
+        用本次注入的**观测方**证据，对指向注入目标的依赖边逐条判定并写回图谱。
+
+        为什么必须在这里而不是在 graph_feedback 里：
+        `graph_feedback._update_calls_edges` 写的是注入目标的聚合评分，
+        而边验证需要「哪个观测方对应哪条边」的一一对应。原实现把同一个判定
+        写给注入目标的所有出入边，等于伪造验证证据。
+
+        判定阈值全部在 profiles/graph_contract.yaml 的 `edge_verification`
+        （与 ETL 写入门禁共用一份声明），这里只喂数据、不定阈值。
+        """
+        observers = getattr(exp, "observation_targets", None) or []
+        if not observers:
+            return
+        if self.dry_run:
+            logger.info("⚡ [dry-run] 跳过边验证写回")
+            return
+
+        try:
+            from .edge_verification import candidate_edges, verify_edge, write_verdict
+        except Exception as e:
+            logger.warning(f"边验证模块不可用（非致命）: {e!r}")
+            return
+
+        try:
+            cands = candidate_edges(exp.target_service)
+        except Exception as e:
+            logger.warning(f"候选边查询失败（非致命）: {e!r}")
+            return
+
+        ev = result.observer_evidence()
+        by_observer = {c.get('observer'): c for c in cands if c.get('observer')}
+        written = 0
+
+        for obs in observers:
+            cand = by_observer.get(obs.service)
+            if cand is None:
+                logger.info(f"   图谱中无 {obs.service} -> {exp.target_service} 的候选边，跳过")
+                continue
+
+            e = ev.get(obs.service) or {}
+            base_req = e.get('baseline_total_requests') or 0
+            deg = e.get('degradation_rate')
+            # 注入期请求量取各采样窗口的**最大值**而非求和：每个快照本身是一个
+            # 60s 窗口计数，求和会因窗口重叠而虚高。取 max 得到与基线同量纲的
+            # 代表性窗口量，且在真的零流量时仍然是 0 —— 偏向「判不了」而不是
+            # 「判边不存在」，与不变量 7 同向。
+            snaps = result.observer_snapshots.get(obs.service, [])
+            inj_req = max((s.total_requests or 0) for s in snaps) if snaps else 0
+
+            try:
+                verdict = verify_edge(
+                    edge=cand,
+                    observer_baseline_requests=int(base_req),
+                    observer_injected_requests=int(inj_req),
+                    observer_degradation_pct=float(deg if deg is not None else 0.0),
+                    experiment_id=result.experiment_id,
+                )
+            except Exception as ex:
+                logger.warning(f"边判定失败 {obs.service}: {ex!r}")
+                continue
+
+            logger.info(
+                f"🧪 {obs.service} -[{verdict.get('label')}]-> {exp.target_service}: "
+                f"{verdict['status']} (置信度 {verdict['confidence']:.3f}) — {verdict['reason']}"
+            )
+            try:
+                if write_verdict(verdict):
+                    written += 1
+            except Exception as ex:
+                # 这条路径历史上 100% 静默失败过（property(single,...) 在边属性上非法，
+                # 异常被 except 吞成 logger.error）。所以失败必须计数并显式呈现。
+                logger.error(f"❌ 边判定写回失败 {obs.service}: {ex!r}")
+
+        logger.info(f"🧪 边验证写回：{written}/{len(observers)} 条成功")
+        if written == 0 and observers:
+            logger.error(
+                "❌ 声明了观测方但零条写回成功 —— 这正是历史上被静默吞掉 21 次的症状，"
+                "不要当成「没有边可写」放过"
+            )
 
     # ─── Phase 4：Fault Recovery ─────────────────────────────────────────────
 
@@ -566,6 +739,9 @@ class ExperimentRunner:
                 GraphFeedback().write_back(result)
             except Exception as e:
                 logger.warning(f"Neptune 图谱反馈失败（非致命）: {e}")
+
+        # 逐条依赖边验证（T-210 / DoD-3）：把观测方证据落回图谱
+        self._verify_edges(exp, result)
 
         # Phase A2: 同步实验记录到 Neptune ChaosExperiment 节点
         try:

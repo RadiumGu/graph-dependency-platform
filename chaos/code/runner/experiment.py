@@ -163,6 +163,47 @@ class Schedule:
 
 
 @dataclass
+class ObservationTarget:
+    """
+    观测方 —— 一条依赖边的**调用侧**。
+
+    为什么需要这个字段（T-210，north_star DoD-3）：
+    验证边 `A -[X]-> B` 必须在 **B** 注入、观测 **A**。而 runner 原先只采集
+    `exp.target_service`（注入目标）自己的指标 —— 「打断 B 之后 B 是否退化」
+    近乎恒真，**根本没有检验任何边**。这也解释了历史上 72 个实验全部 `passed`、
+    零失败：判定门槛没有分辨力。
+
+    命名沿用参考仓库 chaos-engineering-on-aws 的 assessment-output-spec.md §2.5
+    三角色标注：Injection Target（= exp.target_service）/ Observation Target（本类）/
+    Impact Target。这个三元组本质就是一条边的断言「在 X 注入，预期在 Y 观测到影响」。
+    """
+    service: str
+    namespace: Optional[str] = None      # 省略则继承 exp.target_namespace
+    edge_label: str = "Calls"            # 这条断言对应的边类型
+    # 观测方在基线期必须达到的最小请求量。低于此值只能判 inconclusive，
+    # 绝不能判 refuted —— metrics.collect() 无数据时 fallback
+    # success_rate=100.0 / total_requests=0，**零流量和健康完全一样**
+    # （north_star §4 不变量 7）。
+    min_baseline_requests: int = 10
+
+    @classmethod
+    def parse(cls, item, default_edge: str = "Calls") -> "ObservationTarget":
+        """接受 'svc'、'ns/svc' 或 dict 三种写法。"""
+        if isinstance(item, dict):
+            return cls(
+                service=item.get('service', ''),
+                namespace=item.get('namespace'),
+                edge_label=item.get('edge_label', default_edge),
+                min_baseline_requests=int(item.get('min_baseline_requests', 10)),
+            )
+        s = str(item)
+        if '/' in s:
+            ns, svc = s.split('/', 1)
+            return cls(service=svc, namespace=ns, edge_label=default_edge)
+        return cls(service=s, edge_label=default_edge)
+
+
+@dataclass
 class Experiment:
     name: str
     description: str
@@ -180,6 +221,9 @@ class Experiment:
     max_duration: str = "10m"
     save_to_bedrock_kb: bool = False
     yaml_source: str = ""
+    # 观测方列表（T-210）。空列表 = 退化为旧行为（只采注入目标自己），
+    # 此时该实验**不能**用于边验证 —— edge_verification 会因缺观测方数据判 inconclusive。
+    observation_targets: list[ObservationTarget] = field(default_factory=list)
 
 
 @dataclass
@@ -250,6 +294,15 @@ def load_experiment(path: str, duration_override: Optional[str] = None) -> "Expe
     gf_d = d.get('graph_feedback', {})
     opts = d.get('options', {})
 
+    # 观测方（T-210）：两种写法都接受
+    #   target.observers: [petsite, "petadoptions/gateway-service"]
+    #   observation_targets: [{service: petsite, edge_label: Calls, min_baseline_requests: 20}]
+    # 默认边类型取 graph_feedback.edges 的第一项，与写回的边类型保持一致。
+    _default_edge = (gf_d.get('edges') or ['Calls'])[0]
+    _obs_raw = d.get('observation_targets') or target.get('observers') or []
+    observation_targets = [ObservationTarget.parse(o, _default_edge) for o in _obs_raw]
+    observation_targets = [o for o in observation_targets if o.service]
+
     # CLI --duration 覆盖 YAML 中的 fault.duration
     fault_duration = duration_override or fault_d.get('duration', '2m')
 
@@ -299,6 +352,7 @@ def load_experiment(path: str, duration_override: Optional[str] = None) -> "Expe
         max_duration=opts.get('max_duration', '10m'),
         save_to_bedrock_kb=opts.get('save_to_bedrock_kb', False),
         yaml_source=path,
+        observation_targets=observation_targets,
     )
 
     # FIS 实验：运行时解析 ARN（service_name + resource_type → 真实 ARN）

@@ -1,0 +1,95 @@
+# 边验证实验：证伪 `* -[Calls]-> search-service` 这两条边
+#
+# 这是 T-210 落地后的第一个可执行入口，也是 DoD-3 的取数路径。
+#
+# 为什么选这两条边：2026-08-29 实测它们**确有真实流量**（DeepFlow L7，10 分钟窗口）：
+#   list-adoptions -> search-service   12,236 请求
+#   petsite        -> search-service    2,028 请求（petsite/1a）+ 1,014（petsite/1c）
+# 观测方没有流量的边只能判 inconclusive（零流量与健康在指标上完全一样），
+# 所以第一个实验必须挑有流量的边，否则拿不到任何结论。
+#
+# 三角色标注（参考 chaos-engineering-on-aws 的 assessment-output-spec.md §2.5）：
+#   Injection Target  = search-service   ← 在这里注入
+#   Observation Target = petsite / list-adoptions  ← 在这里观测
+#   Impact Target      = 同观测方（本实验中重合）
+# 这个三元组本质就是一条边的断言「在 X 注入，预期在 Y 观测到影响」。
+#
+# 用法：
+#   dry-run（不注入，只走相位与规格校验）：
+#     python3.11 chaos/code/run_experiment.py --file <本文件> --dry-run
+#   真实注入（需先确认爆炸半径，见文件末尾）：
+#     python3.11 chaos/code/run_experiment.py --file <本文件>
+
+name: verify-edges-into-search-service
+description: "在 search-service 注入 HTTP abort，观测 petsite 与 list-adoptions 是否退化，以证伪两条 Calls 边"
+backend: chaosmesh
+
+target:
+  service: search-service
+  namespace: petadoptions
+  tier: Tier1
+
+  # 观测方 —— T-210 新增。没有这一段，实验采集的只是注入目标自己的指标，
+  # 「打断 B 之后 B 是否退化」近乎恒真，不构成任何边的证据。
+  observers:
+    - service: petsite
+      namespace: petadoptions
+      edge_label: Calls
+      # 基线请求量下限。petsite 实测约 1000+/10min，20 是宽松下限；
+      # 低于它只能判 inconclusive，**不得**判 refuted。
+      min_baseline_requests: 20
+    - service: list-adoptions
+      namespace: petadoptions
+      edge_label: Calls
+      min_baseline_requests: 20
+
+fault:
+  # 刻意用 abort 而不是 delay：abort 直接短路连接，可绕过部分缓存掩盖；
+  # delay 会被缓存与连接池吸收，容易把真实依赖判成不存在（假阴性）。
+  type: http_chaos
+  mode: all
+  value: ""
+  duration: "3m"          # 需超过熔断打开窗口 + 重试预算耗尽才能穿透 fallback
+  action: abort
+  port: 80                # search-service 的 targetPort 实测是 80，不是 8080
+
+steady_state:
+  before:
+    # 注意这些检查针对**注入目标**。观测方的基线由 runner 单独采集，
+    # 不足时只记警告、不让实验失败 —— 那是数据质量问题，不是实验失败。
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "3m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 40%"
+    window: "60s"
+    action: abort
+
+rca:
+  enabled: false           # 首个边验证实验只取边的证据，不叠加 RCA 变量
+
+graph_feedback:
+  enabled: true
+  edges:
+    - Calls
+
+options:
+  max_duration: "8m"
+
+# ── 爆炸半径（真实注入前必读）─────────────────────────────────────────────
+# 影响面：search-service 2 副本（跨 AZ），petsite 首页每次渲染会为 26 个宠物卡片
+# 各发一次 /api/search?petid=<N>，所以 abort 会让首页搜索结果为空，
+# 但 petsite 本身不会挂（它对 search 失败有降级）。
+# 这正是本实验要测的：**这个降级是否让依赖在指标上不可见** ——
+# 若 petsite 成功率几乎不动，该边应判 refuted 还是「弱依赖」，需结合
+# list-adoptions 的结果一起看（它对 search 的依赖更硬）。
+#
+# 不影响：Aurora / DynamoDB / SQS 均无 search-service 参与的写路径。
+# 集群为**非生产**（PetSite demo），流量来自 EC2 负载机 i-05f0b897988a48d17。
+# 恢复：Chaos Mesh 实验到期自动恢复；stop condition 触发时 runner 立刻删除 CRD。
