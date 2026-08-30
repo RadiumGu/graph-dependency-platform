@@ -68,9 +68,28 @@ def _mode() -> str:
 
 
 def _endpoints_mode() -> str:
-    """端点约束单独控制，默认 warn（声明本身不完整，见模块 docstring）。"""
-    m = (os.environ.get('GRAPH_CONTRACT_ENDPOINTS') or MODE_WARN).strip().lower()
-    return m if m in _VALID_MODES else MODE_WARN
+    """端点约束的模式，默认 **enforce**（2026-08-30 从 warn 升级）。
+
+    升级依据是对活图谱做的**全图三元组普查**，而不是「跑一轮 ETL 看日志」——
+    普查覆盖全部 1731 条边 / 85 种 (srcLabel, edgeLabel, dstLabel) 形态，
+    比单轮 ETL 的日志完整（一轮 ETL 只会碰到它自己那部分形态）。
+
+    普查结果与处置：
+      - 违约 204 条 → 其中 5 种形态（21 条）经逐条核对确认**语义正确、
+        只是 schema 漏声明**，补进 PAIR_ADDITIONS；
+      - 剩余 183 条全部是 find_vertex_by_name 不带标签造成的**错源边**，
+        改代码修根因 + infra/fix_wrong_source_edges.py 清存量；
+      - 收紧成配对校验后又浮出 LambdaFunction->S3Bucket（平铺白名单下被
+        笛卡尔积掩盖的合法组合），一并补进声明。
+    也就是说：升级 enforce 时，声明侧已无已知缺口。
+
+    仍保留独立开关的理由：普查只能看到**当下图里存在**的形态。低频 ETL
+    路径（例如周期很长的 Lambda）写的形态可能当时不在图里，一旦 enforce
+    拒写会中断该步骤。真出现这种情况时设 GRAPH_CONTRACT_ENDPOINTS=warn
+    先放行并收集，补进声明后再切回，不必回滚代码。
+    """
+    m = (os.environ.get('GRAPH_CONTRACT_ENDPOINTS') or MODE_ENFORCE).strip().lower()
+    return m if m in _VALID_MODES else MODE_ENFORCE
 
 
 def _violate(mode: str, msg: str) -> None:
