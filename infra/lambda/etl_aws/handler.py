@@ -1262,6 +1262,31 @@ def run_etl():
     except Exception as e:
         logger.warning(f"T04 Serves edge cleanup failed (non-fatal): {e}")
 
+    # ── Step 17b: 契约驱动的边过期收敛 ────────────────────────────────────────
+    # 按 profiles/graph_contract.yaml 里每类边声明的 expires_seconds，把超期未刷新的
+    # **dynamic** 边置 active=false。引入之前 AccessesData / DependsOn 写了 active
+    # 却没有任何路径把它翻回 false —— 观测停止后永久留在图里变成 ghost 边。
+    #
+    # 放在 etl_aws 而不是各 ETL 各做一遍：它是跨源的收敛动作，需要一个单一执行者，
+    # 否则每个源只会清理自己写的边（现状就是这样：deepflow 只管 Calls、
+    # xray 只管 source='xray'）。
+    #
+    # 默认 **dry-run**（只统计并 log），要 GRAPH_EDGE_EXPIRY_ENABLED=true 才真正改写 ——
+    # 与 deepflow 的 DROP_ENABLED 默认 false 同一姿态：部署代码不等于立刻改图。
+    # 只作用于 dependency_kind='dynamic'：static 边是架构声明，不该因为没被观测到
+    # 就置 false（那是 drift_status 的 declared_not_observed 要表达的信息）。
+    try:
+        from graph_cleanup import deactivate_stale_dynamic_edges
+        _exp = deactivate_stale_dynamic_edges(neptune_query, round_ts=int(time.time()))
+        _stale = sum(v['stale'] for v in _exp['per_label'].values())
+        _done = sum(v['deactivated'] for v in _exp['per_label'].values())
+        stats['edge_expiry_stale'] = _stale
+        stats['edge_expiry_deactivated'] = _done
+        logger.info("edge-expiry: enabled=%s stale=%d deactivated=%d",
+                    _exp['enabled'], _stale, _done)
+    except Exception as e:
+        logger.warning(f"edge expiry failed (non-fatal): {e}")
+
     try:
         neptune_query(
             "g.V().hasLabel('Microservice').has('name', within('xray-daemon','xray-service'))"
