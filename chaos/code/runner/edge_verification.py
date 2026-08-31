@@ -233,6 +233,7 @@ def verify_edge(
     experiment_id: str,
     now_epoch: int | None = None,
     evidence_channel: str = 'both',
+    injection_confirmed: bool | None = None,
 ) -> dict:
     """对一条候选边做判定并算出新置信度。**纯计算，不写图。**
 
@@ -241,7 +242,8 @@ def verify_edge(
     now = now_epoch or int(time.time())
     status, reason = classify_intervention(
         observer_baseline_requests, observer_injected_requests,
-        observer_degradation_pct, evidence_channel=evidence_channel)
+        observer_degradation_pct, evidence_channel=evidence_channel,
+        injection_confirmed=injection_confirmed)
 
     st, obs, conf_n, ref_n = evidence_from_props(edge.get('props') or {})
     if status == STATUS_CONFIRMED:
@@ -258,6 +260,7 @@ def verify_edge(
         'confidence': confidence(st, obs, conf_n, ref_n),
         'degradation_pct': round(observer_degradation_pct, 2),
         'evidence_channel': evidence_channel,
+        'injection_confirmed': injection_confirmed,
         'confirm_count': conf_n,
         'refute_count': ref_n,
         'verified_at': now,

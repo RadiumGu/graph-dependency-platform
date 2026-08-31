@@ -261,6 +261,15 @@ class Experiment:
     yaml_source: str = ""
     # 观测方列表（T-210）。空列表 = 退化为旧行为（只采注入目标自己），
     # 此时该实验**不能**用于边验证 —— edge_verification 会因缺观测方数据判 inconclusive。
+    # 图谱里被注入方的节点名。**默认等于 target_service**，只在两者必然不同时才写。
+    #
+    # 为什么需要它（2026-08-31 16:56 实测）：Chaos Mesh 路径下 target_service
+    # 兼任两职 —— kubectl 的 label selector（选哪些 Pod 注入）与图谱节点名
+    # （candidate_edges 查谁的入边）。对「在 B 注入、观测 A」这种拓扑两者一致，
+    # 但对「切断 A 到外部服务 X 的路径、观测 A」这种**边切断**拓扑必然不同：
+    # 注入选择器要选 A 的 Pod，而候选边要查 X 的入边。
+    # 实测写 target.service: ssm 会让 preflight 报「服务 ssm 无 Running Pods」。
+    target_graph_node: str = ""
     observation_targets: list[ObservationTarget] = field(default_factory=list)
 
 
@@ -372,6 +381,7 @@ def load_experiment(path: str, duration_override: Optional[str] = None) -> "Expe
         description=d.get('description', ''),
         target_service=target.get('service', ''),
         target_namespace=target.get('namespace', 'default'),
+        target_graph_node=target.get('graph_node', '') or '',
         target_tier=target.get('tier', 'Tier1'),
         fault=fault,
         steady_state_before=_parse_checks(ss.get('before', [])),
@@ -486,6 +496,7 @@ def _load_composite_experiment(
         description=d.get('description', ''),
         target_service=target.get('service', ''),
         target_namespace=target.get('namespace', 'default'),
+        target_graph_node=target.get('graph_node', '') or '',
         target_tier=target.get('tier', 'Tier1'),
         fault=dummy_fault,
         steady_state_before=_parse_checks(ss.get('before', [])),

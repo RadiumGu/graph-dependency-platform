@@ -32,7 +32,11 @@
 | 14 | PolicyGuard R002 白名单对 FIS 目标语义不适用 | 仓库原有 FIS 模板从未跑过 | 已定位，规则待补 |
 | 16 | 吞吐塌陷取 min 比单点基线，抖动伪造塌陷 | **一条边被误判 confirmed** | ✅ 已修 |
 | 17 | 吞吐通道无法归因（失败 vs 不被调用 vs 测量断） | 弱证据被当强证据 | ✅ 已修 |
-| 18 | `fis_vpc_endpoint_disrupt` 目录声明的目标类型是错的 | 该故障类型从未能执行 | 已定位 |
+| 18 | `fis_vpc_endpoint_disrupt` 目录声明的目标类型是错的 | 该故障类型从未能执行 | ✅ 已修 |
+| 20 | 无法识别「注入没生效」，据此判 refuted | **凭空证伪一条真实依赖** | ✅ 已修 |
+| 21 | FIS 目录 37 条里 5 条从来不可执行（14%） | 声明存在但一次没跑过 | ✅ 已修 |
+| 22 | `target_service` 兼任 kubectl 选择器与图谱节点名 | 边切断拓扑无法表达 | ✅ 已修 |
+| 23 | 「PetSite 只在启动时读一次 SSM」这条既有认知是错的 | 依赖强度判断全错 | ✅ 已更正 |
 
 其中 **#7 / #8 / #10 是 08:30–09:00 为了拿到第一条边的判定而查出的**，
 **#11 – #14 是 10:10–11:12 扩大验证覆盖面时查出的**，都不在最初报给用户的 6 条里。
@@ -584,6 +588,127 @@ validation-results 记录的，都应假定「未验证」而不是「可用」�
 
 ---
 
+---
+
+## 20. 无法识别「注入没生效」，据此判 refuted（16:30 查出，本轮最严重）
+
+**症状**：`petsearch -[AccessesData]-> s3` 被判 **refuted**（退化 1.21%）。
+
+**判别性检验推翻了它**。拿 X-Ray **严格按 FIS 的故障窗口**复核：
+
+| 故障窗口（FIS 实测起止） | PetSearch → S3 |
+|---|---|
+| 16:03:25 – 16:06:27 | ok=**10** err=0 fault=0 |
+| 15:53:43 – 15:56:44 | ok=**13** err=0 fault=0 |
+
+注入期间 S3 调用**全部成功**。`disrupt-connectivity scope=s3` 的 NACL
+根本没有切断这条路径。
+
+而这条边的证据是**两个独立源的硬数据**：
+`xray_call_count=17190`（24h，0 error 0 fault）、
+`nfm_flow_count=50` / `nfm_bytes=1,897,669` / `nfm_categories=AMAZON_S3`。
+
+**根因**：判据只问「观测方退化了吗」，没问「我真的打断了吗」。观测方没退化有两种
+完全不同的成因，而原实现把它们都判成 refuted：
+  ① 注入生效了，但影响没传导到调用方 → 这条边可疑（**真** refuted）
+  ② **注入根本没生效** → 什么都没验证（**凭空证伪**）
+
+**为什么这条最严重**：前面的缺陷（#16/#17）产出的是错误的 confirmed —— 多一条
+不存在的依赖，代价是影响面分析偏保守。这一条产出错误的 **refuted** ——
+按 DoD-10 累计两次 refuted 就会**删掉一条真实的依赖边**，代价是影响面分析
+出现盲区，而盲区比冗余危险得多。
+
+**修法**：`classify_intervention` 加 `injection_confirmed`，只有 `True` 才允许
+判 refuted，`None`（未知）与 `False` 都判 inconclusive。runner 侧
+`_injection_took_effect()` 从**注入目标自身**的 SLI 推导，门槛刻意低到 5% ——
+这里回答的是「有没有作用到目标」这个是非问题，不是「影响有多大」。
+用 confirm 那条 20% 的线会把「生效但影响小」误判成「没生效」，
+反而放宽了 refuted 的条件，方向错了。
+
+**刻意不做的事**：不用「observer 有退化」反推注入生效 —— 那是用结论证明前提。
+
+**一句话原则**：
+> **证伪比确证需要更强的前提。** 确证只需看到影响传导；
+> 证伪需要先证明「我真的打断了它」。
+
+这是「宁可判不了，不可判错」在 refuted 一侧的落地 ——
+此前该原则只覆盖了零流量那一种情形。
+
+---
+
+## 21. FIS 目录 37 条里 5 条从来不可执行（16:20 查出）
+
+新增的对账测试（`tests/test_41_fis_catalog_reconcile.py`）一次查出 5 条
+**声明存在但从来跑不起来**的故障类型，占 FIS 目录的 **14%**：
+
+| 故障类型 | 问题 | 处置 |
+|---|---|---|
+| `fis_ec2_network_disrupt` | action id 不存在；且 description 声称的「实例级网络隔离」这个能力**本身不存在**（真 action 目标是子网）；改对后与 `fis_network_disrupt` 完全重复 | **整条删除** |
+| `fis_elasticache_az_power` | `interrupt-cluster-az-power` 不存在，真名 `replicationgroup-interrupt-az-power` | 改名 |
+| `fis_vpc_endpoint_disrupt` | 构建 `aws:ec2:subnet`，action 要 `aws:ec2:vpc-endpoint` | 修 builder + requires |
+| `fis_ec2_spot_interruption` | 正确分支被更早的 `startswith("fis_ec2")` 宽分支截住、**永远走不到** | 提前该分支，删 3 条不可达重复分支 |
+| `fis_eks_inject_k8s_custom` | fis_backend **没有任何分支**处理它（只有 `fis_eks_pod` 前缀），调用即抛 ValueError | 补 `aws:eks:cluster` 目标 |
+
+**测试的设计要点**：比「fis_backend **实际构建**的目标类型」而不是目录的
+`requires`。后者是输入契约，与 AWS 目标类型本来就可以不同 ——
+`fis_rds_reboot` 的 `requires` 是 `cluster_arn`，而 backend 内部转成 writer
+实例 ARN 建 `aws:rds:db`，AWS 接受且实跑成功。拿 `requires` 去比会产生假警报，
+第一版就是这么误报的。
+
+**推广判据**：目录里 60 条故障声明，凡是没有对应 validation-results 记录的，
+都应假定「未验证」而不是「可用」。
+
+---
+
+## 22. `target_service` 兼任两职，边切断拓扑无法表达（16:56 查出）
+
+**症状**：验证 `petsite -> ssm` 时把 `target.service` 写成 `ssm`（图谱节点名），
+preflight 直接报「服务 ssm 无 Running Pods（检查 label app=ssm）」。
+
+**根因**：Chaos Mesh 路径下 `target_service` 同时承担两个不相干的职责：
+  · kubectl 的 label selector —— 选**哪些 Pod** 注入
+  · 图谱节点名 —— `candidate_edges` 查**谁的**入边
+
+前两种注入拓扑下两者一致，所以一直没暴露：
+
+| 拓扑 | 注入在哪 | 观测谁 | 两个名字 |
+|---|---|---|---|
+| 在 B 注入、观测 A | 被依赖方 B | 调用方 A | 一致 |
+| AWS 资源级中断 | 托管资源 | 调用方 | FIS 路径本来就解耦 |
+| **边切断（新）** | **调用方 A 的出向** | **调用方 A** | **必然不同** |
+
+**修法**：`Experiment` 加 `target_graph_node`（默认等于 `target_service`），
+只在两者必然不同时才写。顺带修掉一个日志缺陷：判定日志用 `target_service`
+拼被依赖方，边切断拓扑下会打出 `petsite -[AccessesData]-> petsite` 这种
+**自环假象** —— 判定其实正确落在 `petsite -> ssm` 上，但读日志的人会以为写错了边。
+
+---
+
+## 23. 「PetSite 只在启动时读一次 SSM」这条既有认知是错的（17:04 更正）
+
+跨会话记忆里一直记着「SSM 只在启动时读一次，所以 v5–v10 那 6 次参数翻转无法自愈」。
+据此我在 `verify-edges-into-ssm.yaml` 的文件头**预判本实验会判 inconclusive**。
+
+**实测推翻了它**。X-Ray 正常窗口（16:40–16:55，无注入）：
+
+```
+PetSite -> SSM        total=854  ok=854     (15 分钟)
+PetSite 自身请求      total=854              (15 分钟)
+```
+
+**1:1 —— 每个请求都调一次 SSM。**
+
+这既解释了切断 SSM 后 petsite 吞吐 435 → 0 的完全中断（判定 confirmed 成立），
+也是一个此前没人注意到的**真实架构问题**：站点把 SSM Parameter Store
+变成了每请求的硬依赖，有限流风险（GetParameter 有 TPS 上限）、
+有延迟成本、且让 SSM 成为站点可用性的单点。
+
+**方法论意义**：这是本轮第二次「先验机制再信结论」救回一个判断 ——
+第一次（#16）救回的是一个错误的 confirmed，这次验证的是一个**正确**的 confirmed。
+两次的动作完全一样：**拿一个独立数据源，严格按注入窗口对齐，去查机制是否真的发生。**
+
+---
+
 ## 收敛成四条方法论
 
 ### 一、缺陷类别高度集中，且都不是「数据采少了」
@@ -596,7 +721,9 @@ validation-results 记录的，都应假定「未验证」而不是「可用」�
 | **写了但没人读** | #6 CRD 不删、#9 词表无门禁、#9 调用方 source 被丢、#10 层缺依赖、#14 R002 对 FIS 空转 |
 | **身份不唯一 / 名字空间错配** | #7 K8s 名 vs 规范名、#12 Pod 标签 vs Deployment 名（**四套命名空间**，与 183 条错源边同源） |
 | **判据覆盖面不足** | #11 Phase 5 只问「服务还好吗」不问「我干了什么」 |
-| **统计量不同量纲 / 证据强度不分级**（新增第五类） | #16 min 比单点基线、#17 吞吐通道当成功率通道用 |
+| **统计量不同量纲 / 证据强度不分级** | #16 min 比单点基线、#17 吞吐通道当成功率通道用 |
+| **前提未经证明就下结论**（新增第六类） | #20 没证明注入生效就判 refuted、#23 沿用未复核的既有认知 |
+| **一个字段承担两个职责** | #22 target_service 兼任选择器与图谱节点名、#12 Pod 标签 vs Deployment 名 |
 
 > **所以瓶颈在数据契约，不在采集覆盖面。**
 > 规划重心应该是把这三类变成守门测试，而不是继续接新数据源。
@@ -640,15 +767,15 @@ validation-results 记录的，都应假定「未验证」而不是「可用」�
 | 指标 | 值 |
 |---|---|
 | 图谱 | 1073 节点 / 1640 边 |
-| 依赖边验证状态 | **confirmed 10 / refuted 1 / inconclusive 2 / untested 81**（已判定 13.83%） |
+| 依赖边验证状态 | **confirmed 11 / inconclusive 3 / untested 80**（已判定 14.89%） |
 | 已验证边的分布 | 边类型 `Calls` 6 + `AccessesData` 7；后端 Chaos Mesh 6 + FIS 7 |
-| 第一条被证伪的边 | `petsearch -[AccessesData]-> s3`（仅 X-Ray 单源，断开 S3 后零反应） |
+| refuted 边 | **0 条**。唯一那条经归因判定为「注入未生效」已修正回 inconclusive（#20） |
 | 边过期收敛 | 已开启（`GRAPH_EDGE_EXPIRY_ENABLED=true`），当前 0 条待翻转 |
 | 端点组合违约 | **0**（清 211 条后完整跑一轮 ETL 复核） |
 | 未声明的 source 取值 | **0**（节点 3 种 / 边 11 种，全部在契约词表内） |
 | 四个 ETL 函数 | 全部 200 OK，层 `:8`，门禁违约 0 条 |
 | `Microservice-[RunsOn]->Pod` | 36 → **42** |
-| 测试 | 461 → **487 passed / 0 failed**（新增 26 个守门用例） |
+| 测试 | 461 → **497 passed / 0 failed**（新增 36 个守门用例） |
 
 ### 仍然未解的
 

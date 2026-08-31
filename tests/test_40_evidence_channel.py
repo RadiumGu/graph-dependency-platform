@@ -171,8 +171,13 @@ def test_e14_channel_does_not_affect_refute_or_low_traffic_gates():
     # 流量不足 —— 无论哪个通道都判 inconclusive
     status, _ = classify_intervention(5, 5, 90.0, evidence_channel='both')
     assert status == STATUS_INCONCLUSIVE
-    # 退化极小 —— 仍判 refuted
-    status, _ = classify_intervention(100, 100, 1.0, evidence_channel='success_rate')
+    # 退化极小 —— 仍走 refuted 分支。
+    # 注意必须带 injection_confirmed=True：2026-08-31 16:30 新增了**注入生效门禁**
+    # （见 test_e20），未确认注入生效时该分支返回 inconclusive。
+    # 本用例守的是「通道分级」不影响 refuted 判据，所以这里显式确认生效，
+    # 把生效门禁这个变量固定住 —— 否则两条护栏混在一个用例里，失败时分不清是谁的锅。
+    status, _ = classify_intervention(100, 100, 1.0, evidence_channel='success_rate',
+                                     injection_confirmed=True)
     assert status == STATUS_REFUTED
 
 
@@ -180,3 +185,92 @@ def test_e15_default_channel_keeps_backward_compat():
     """不传 evidence_channel 时行为与改动前一致（默认 both）。"""
     status, _ = classify_intervention(100, 100, 25.0)
     assert status == STATUS_CONFIRMED
+
+
+# ── 注入生效门禁（T-297）────────────────────────────────────────────────────
+
+def test_e20_refuted_requires_confirmed_injection():
+    """观测方没退化 + 注入生效性未知 → 判 inconclusive，**不得**判 refuted。
+
+    实测背景：`petsearch -[AccessesData]-> s3` 被 FIS
+    `disrupt-connectivity scope=s3` 判 refuted（退化 1.21%）。
+    但拿 X-Ray 严格按故障窗口复核，PetSearch 在两次窗口内各做了 10 次与 13 次
+    **成功**的 S3 调用、0 错误 —— NACL 没切断这条路径。
+    而这条边有两个独立源的硬证据（X-Ray 24h 17,190 次调用、NFM 50 条流 1.9MB），
+    判 refuted 等于凭空证伪一条真实依赖。
+    """
+    # 默认 None（未知）
+    status, reason = classify_intervention(100, 100, 1.2)
+    assert status == STATUS_INCONCLUSIVE
+    assert '注入生效性未知' in reason
+    # 明确「注入未生效」也不判 refuted
+    status, reason = classify_intervention(100, 100, 1.2, injection_confirmed=False)
+    assert status == STATUS_INCONCLUSIVE
+    assert '已确认注入未生效' in reason
+
+
+def test_e21_refuted_allowed_when_injection_confirmed():
+    """确认注入生效后，观测方仍无退化 → 这才是真 refuted。"""
+    status, reason = classify_intervention(100, 100, 1.2, injection_confirmed=True)
+    assert status == STATUS_REFUTED
+    assert '已确认注入生效' in reason
+
+
+def test_e22_gate_does_not_affect_confirmed_or_inconclusive_bands():
+    """生效门禁只作用在 refuted 分支，不得影响 confirmed 与中间带。"""
+    # confirmed 不需要 injection_confirmed —— 影响传导本身就是注入生效的证据
+    status, _ = classify_intervention(100, 100, 30.0)
+    assert status == STATUS_CONFIRMED
+    # 中间带仍是 inconclusive，理由应是中间带而不是生效门禁
+    status, reason = classify_intervention(100, 100, 12.0)
+    assert status == STATUS_INCONCLUSIVE
+    assert '中间带' in reason
+
+
+def test_e23_runner_effect_detection_returns_none_without_target_traffic():
+    """注入目标没有可用流量基线时（AWS 托管资源目标）必须返回 None 而非 False。
+
+    返回 False 会被判定层当成「已确认未生效」，语义上更强；
+    而真实情况是「测不了」。两者都阻止 refuted，但理由必须准确。
+    """
+    from runner.runner import ExperimentRunner
+    from runner.result import ExperimentResult
+    from runner.experiment import Experiment, FaultSpec
+
+    exp = Experiment(
+        name="s", description="", target_service="dynamodb", target_namespace="petadoptions",
+        target_tier="Tier0",
+        fault=FaultSpec(type="fis_network_disrupt", mode="all", value="", duration="3m"),
+        steady_state_before=[], steady_state_after=[], stop_conditions=[],
+        observation_targets=[])
+    r = ExperimentResult(experiment=exp)
+    # 基线 total_requests=0 —— AWS 托管资源目标在 DeepFlow 里查不到
+    r.steady_state_before = MetricsSnapshot(
+        timestamp=0, success_rate=100.0, latency_p99_ms=0.0, total_requests=0)
+    r.snapshots = [MetricsSnapshot(timestamp=1, success_rate=100.0,
+                                   latency_p99_ms=0.0, total_requests=0)]
+    runner = ExperimentRunner.__new__(ExperimentRunner)
+    assert runner._injection_took_effect(exp, r) is None
+
+
+def test_e24_runner_effect_detection_confirms_on_target_degradation():
+    """注入目标自己退化了 → 确认生效。门槛刻意低（5%），回答是非问题。"""
+    from runner.runner import ExperimentRunner
+    from runner.result import ExperimentResult
+    from runner.experiment import Experiment, FaultSpec
+
+    exp = Experiment(
+        name="s", description="", target_service="search-service",
+        target_namespace="petadoptions", target_tier="Tier1",
+        fault=FaultSpec(type="http_chaos", mode="all", value="", duration="3m"),
+        steady_state_before=[], steady_state_after=[], stop_conditions=[],
+        observation_targets=[])
+    r = ExperimentResult(experiment=exp)
+    r.steady_state_before = MetricsSnapshot(
+        timestamp=0, success_rate=100.0, latency_p99_ms=1.0, total_requests=1000)
+    # 吞吐掉到 100（-90%），成功率不动 —— abort 类的典型形态
+    r.snapshots = [MetricsSnapshot(timestamp=i, success_rate=100.0,
+                                   latency_p99_ms=1.0, total_requests=100)
+                   for i in range(1, 6)]
+    runner = ExperimentRunner.__new__(ExperimentRunner)
+    assert runner._injection_took_effect(exp, r) is True

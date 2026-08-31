@@ -21,17 +21,20 @@
 | 5 定期演练 | 4 | 0 | 0 | 0 | 4 |
 | 6 契约剩余项 | 8 | 3 | 0 | 0 | 5 |
 | 7 部署与清理 | 3 | 3 | 0 | 0 | 0 |
-| **9 FIS 打开托管资源边** ★ | 7 | 2 | 1 | 0 | 4 |
+| **9 打开托管资源边（FIS + Chaos Mesh）** ★ | 10 | 5 | 1 | 0 | 4 |
 | **8 闭环校正** ★ 终点 | 4 | 0 | 0 | 0 | 4 |
 | （T-202 方向写反，作废） | 1 | — | — | — | wontfix |
-| **合计** | **61** | **22** | **3** | **0** | **36** |
+| **合计** | **64** | **25** | **3** | **0** | **36** |
 
 基线：提交 `3477896` 时 **442 passed / 145 skipped / 0 failed**。
-**当前水位：487 passed / 144 skipped / 0 failed**（python3.11）。
-活图谱（2026-08-31 16:13Z 实测）：94 条依赖边，
-**confirmed 10 / refuted 1 / inconclusive 2 / untested 81 —— 已判定覆盖率 13.83%**
-（今晨开始 0.0%）。横跨 `Calls` / `AccessesData` 两种边类型，
-Chaos Mesh / FIS 两种后端，且出现**第一条被证伪的边**（`petsearch -> s3`）。
+**当前水位：497 passed / 144 skipped / 0 failed**（python3.11）。
+活图谱（2026-08-31 17:05Z 实测）：94 条依赖边，
+**confirmed 11 / inconclusive 3 / untested 80 —— 已判定覆盖率 14.89%**（今晨 0.0%）。
+横跨 `Calls` / `AccessesData` 两种边类型，三种注入拓扑
+（在 B 注入观测 A / AWS 资源级中断 / **边切断**），
+两种后端（Chaos Mesh、FIS）。
+**refuted 归零**：唯一那条（`petsearch -> s3`）经归因判定为「注入未生效」，
+已按 DoD-10 修正回 inconclusive —— 见 T-297。
 端点组合违约 **0**（清 211 条后完整跑一轮 ETL 复核）；未声明 source 取值 **0**。
 `verify_dod.sh --local-only`：cycle-0 PASS=3 → cycle-1 FAIL=9 → cycle-2 PASS=7 →
 **cycle-4 后 PASS=8 FAIL=4 SKIP=5**。**DoD-9 四项全绿，DoD-3 的 3.1/3.2 转绿**。
@@ -630,6 +633,70 @@ Chaos Mesh / FIS 两种后端，且出现**第一条被证伪的边**（`petsear
      （NAT/公网 → PrivateLink），验证对象就不是原来那条边了。不推荐
 - 推荐 1。**刻意不选 3**：为了让某个工具用得上而改变被测系统，是本末倒置
 - 依赖：无
+
+### T-297 注入生效门禁 —— 证伪需先证明打断确实发生 · `done`（2026-08-31 16:40Z）★
+- **起因是给 `petsearch -> s3` 那条 refuted 做归因**（用户要求判断该不该删边）
+- 三类归因结论：**class 2「注入未生效」**，不是图谱错也不是弱依赖
+  - X-Ray 严格按故障窗口复核：PetSearch 在 16:03:25–16:06:27 与
+    15:53:43–15:56:44 两次窗口内各做了 **10 次与 13 次成功的 S3 调用、0 错误 0 故障**
+    —— FIS `disrupt-connectivity scope=s3` 没有切断这条路径
+  - 该边有**两个独立源的硬证据**：X-Ray 24h 内 17,190 次调用、
+    NFM 50 条流 1.9 MB（category=AMAZON_S3）
+  - **不得删除**。已按 DoD-10 把 refuted 修正为 inconclusive、
+    `verify_refute_count` 归零、`verify_attribution=injection-not-effective`
+- **系统性缺陷**：runner 无法识别「注入没生效」，看到观测方没退化就判 refuted
+- 修法：`classify_intervention` 加 `injection_confirmed` 参数，
+  只有 `True` 才允许判 refuted；`None`（未知）与 `False` 都判 inconclusive。
+  runner 侧 `_injection_took_effect()` 从**注入目标自身**的 SLI 推导
+  （门槛刻意低到 5%，回答的是「有没有作用到目标」这个是非问题）
+- 刻意**不**用「observer 有退化」反推注入生效 —— 那是用结论证明前提
+- 一句话原则：**证伪比确证需要更强的前提**。确证只需看到影响传导，
+  证伪需要先证明「我真的打断了它」
+- 验收：`test_e20`–`e24` 5 个用例；两处旧断言按新门禁更新并注明原因
+
+### T-298 Chaos Mesh externalTargets 打开 ssm/sts/xray 那 7 条边 · `doing`（2026-08-31 17:04Z）★
+- FIS 两条路都不通（见 T-294），改用 Chaos Mesh NetworkChaos `externalTargets`
+  按**域名**做 L3/L4 分区。实测集群 Chaos Mesh **v2.8.1** 支持该字段，
+  目录里 `network_partition` 早已声明 `external_targets`、chaos_mcp 会写进 CRD
+- **新增第三种注入拓扑：边切断（edge-cut）**。前两种是「在 B 注入、观测 A」，
+  这种是「切断 A 到 X 的路径、观测 A」—— 注入方与观测方重合。
+  为此给 Experiment 加 `target_graph_node`：Chaos Mesh 路径下 `target_service`
+  兼任 kubectl 选择器与图谱节点名两职，边切断拓扑下两者必然不同
+  （实测写 `service: ssm` 会报「服务 ssm 无 Running Pods」）
+- **首条结果**：`petsite -[AccessesData]-> ssm` **confirmed**（0.989，仅吞吐通道，
+  退化 100%，注入生效性已确认）
+- **机制已独立验证，并推翻一条既有认知**：记忆里「PetSite 只在启动时读一次 SSM」
+  是**错的**。X-Ray 正常窗口实测 `PetSite -> SSM` **854 次 / 15 分钟**，
+  而 PetSite 自身总请求也是 **854** —— **1:1，每个请求都调一次 SSM**。
+  这既解释了切断后的完全中断，也是一个真实架构问题（站点把 SSM Parameter Store
+  变成了每请求的硬依赖，有限流与可用性风险）
+- 剩余 6 条：`petsearch -> ssm`、`payforadoption -> ssm`（把 `target.service`
+  换成 search-service / pay-for-adoption 即可，规格已就绪）、`sts` 2 条、`xray` 1 条。
+  **刻意不放宽选择器一次覆盖三条** —— 那会让三条边共享同一份证据、无法归因
+- 注意 `payforadoption -> SSM` 实测 84 次/15 分钟，远低于自身请求量，
+  属**部分依赖**，退化率可能落进中间带
+
+### T-299 fault_catalog 与 AWS FIS 对账 —— 37 条里 5 条从来不可执行 · `done`（2026-08-31 16:20Z）★
+- 新增 `tests/test_41_fis_catalog_reconcile.py`（5 个用例）。设计要点：
+  **比「fis_backend 实际构建的目标类型」而不是目录的 `requires`** ——
+  后者是输入契约，与 AWS 目标类型本来就可以不同（`fis_rds_reboot` 输入
+  cluster_arn，内部转成 writer 实例建 `aws:rds:db`，实跑成功），拿它去比会假警报
+- 查出并修掉 5 条**从来不可能执行**的故障类型（占 FIS 目录 14%）：
+  1. `fis_ec2_network_disrupt` —— action id `aws:ec2:disrupt-network-connectivity`
+     在 AWS 侧不存在；且 description 说「实例级网络隔离」，而唯一对应的真 action
+     目标是**子网**，FIS 做不到实例级隔离；改成真 action 后又与
+     `fis_network_disrupt` 完全重复 → **整条删除**
+  2. `fis_elasticache_az_power` —— `interrupt-cluster-az-power` 不存在，
+     真名 `replicationgroup-interrupt-az-power`
+  3. `fis_vpc_endpoint_disrupt` —— 构建 `aws:ec2:subnet`，而 action 要
+     `aws:ec2:vpc-endpoint` → 修 builder + requires
+  4. `fis_ec2_spot_interruption` —— 正确分支被更早的 `startswith("fis_ec2")`
+     宽分支截住、**永远走不到**，实际建成 `aws:ec2:instance` → 提前该分支，
+     并删掉三条同样不可达的重复分支
+  5. `fis_eks_inject_k8s_custom` —— fis_backend **没有任何分支**处理它
+     （只有 `fis_eks_pod` 前缀），调用即抛 ValueError → 补 `aws:eks:cluster` 目标
+- 推广判据：目录里 60 条故障声明，凡没有对应 validation-results 记录的
+  都应假定「未验证」而非「可用」
 
 ### T-260 属性权威表补全 · `todo`
 - 已做：`source` 写一次（`coalesce(values(k), constant(v))`），etl_aws + etl_cfn 两处

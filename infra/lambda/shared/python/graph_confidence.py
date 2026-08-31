@@ -68,6 +68,7 @@ def classify_intervention(
     observer_degradation_pct: float,
     evidence_channel: str = 'both',
     throughput_only_confirm_pct: float = 60.0,
+    injection_confirmed: bool | None = None,
 ) -> tuple[str, str]:
     """把一次注入的观测结果判成 confirmed / refuted / inconclusive。
 
@@ -78,6 +79,9 @@ def classify_intervention(
         evidence_channel:           'success_rate' / 'throughput_only' / 'both' / 'none'
                                     —— 证据来自哪条通道，决定证据强度
         throughput_only_confirm_pct: 纯吞吐证据要判 confirmed 需达到的退化率
+        injection_confirmed: 是否**独立确认**注入真的生效了。
+                             None = 未知（默认）。只有 True 才允许判 refuted ——
+                             见下方「注入生效门禁」。
 
     Returns:
         (status, reason) —— reason 会写进图谱与报告，便于事后追溯为何如此判定。
@@ -122,9 +126,32 @@ def classify_intervention(
                 f">= {_T['confirm_degradation_pct']}%（{chan}），依赖成立")
 
     if observer_degradation_pct <= _T['refute_degradation_pct']:
+        # ── 注入生效门禁（2026-08-31 16:30 实测补入）────────────────────────
+        # 观测方没退化有两种可能，判 refuted 之前必须排除第二种：
+        #   ① 注入生效了，但影响没传导到调用方 → 这条边可疑（真 refuted）
+        #   ② **注入根本没生效** → 什么都没验证，判 refuted 是凭空证伪
+        #
+        # 实测踩到 ②：`petsearch -[AccessesData]-> s3` 被 FIS
+        # `disrupt-connectivity scope=s3` 判 refuted（退化 1.21%）。
+        # 但拿 X-Ray 严格按故障窗口复核，PetSearch 在窗口内做了 10 次与 13 次
+        # **成功**的 S3 调用、0 错误 0 故障 —— NACL 没有切断这条路径。
+        # 而这条边有两个独立源的硬证据：X-Ray 24h 内 17,190 次调用、
+        # NFM 50 条流 1.9 MB（category=AMAZON_S3）。删它就是删掉真实依赖。
+        #
+        # 与「零流量不判 refuted」是同一条原则的另一面：
+        # **证伪比确证需要更强的前提** —— 确证只需看到影响传导，
+        # 证伪需要先证明「我真的打断了它」。
+        if injection_confirmed is not True:
+            hint = ('注入生效性未知（未提供 injection_confirmed）'
+                    if injection_confirmed is None else '已确认注入未生效')
+            return (STATUS_INCONCLUSIVE,
+                    f"观测方退化仅 {observer_degradation_pct:.1f}%，但{hint} —— "
+                    f"无法区分「注入生效而未传导」（真 refuted）与「注入根本没生效」"
+                    f"（什么都没验证）。证伪需要先证明打断确实发生，故不下结论")
         return (STATUS_REFUTED,
                 f"观测方退化仅 {observer_degradation_pct:.1f}% "
-                f"<= {_T['refute_degradation_pct']}%，注入未传导到调用方")
+                f"<= {_T['refute_degradation_pct']}%，且已确认注入生效，"
+                f"注入未传导到调用方")
 
     return (STATUS_INCONCLUSIVE,
             f"观测方退化 {observer_degradation_pct:.1f}% 落在中间带 "

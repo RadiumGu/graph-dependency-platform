@@ -585,17 +585,16 @@ fis:
     tier: [Tier0, Tier1]
     recommended_for: [ec2-based, eks-microservices]
 
-  - type: fis_ec2_network_disrupt
-    backend: fis
-    category: network
-    description: 通过 NACL 修改中断 EC2 网络连通性，模拟实例级网络隔离
-    fis_action_id: "aws:ec2:disrupt-network-connectivity"
-    default_params:
-      duration: "5m"
-      scope: all
-    requires: []
-    tier: [Tier0, Tier1]
-    recommended_for: [ec2-based]
+  # 2026-08-31 删除 fis_ec2_network_disrupt。三重问题，无法修成一个有意义的条目：
+  #   ① fis_action_id 写的 aws:ec2:disrupt-network-connectivity 在 AWS 侧不存在
+  #      （list-actions 50 个里没有），所以它从未能执行
+  #   ② description 说「模拟**实例级**网络隔离」，而唯一对应的真 action
+  #      aws:network:disrupt-connectivity 的目标是**子网**——
+  #      FIS 做不到实例级网络隔离，这个能力本身不存在
+  #   ③ 改成真 action 后与 fis_network_disrupt 完全重复（同一个 action，
+  #      只差默认 scope）
+  # 需要 scope=all 的整子网中断，直接用 fis_network_disrupt 并传
+  # extra_params.scope: all。要做实例级隔离得换手段（SSM 改 SG / iptables）。
 
   # ── EC2 SSM（通过 Systems Manager 执行压力测试）──────────────────────────────
 
@@ -697,11 +696,16 @@ fis:
   - type: fis_vpc_endpoint_disrupt
     backend: fis
     category: network
-    description: 中断 VPC Endpoint 连接，模拟 AWS 服务访问中断
+    # 2026-08-31 修：原写 requires: [subnet_arn]，而该 action 的目标是
+    # aws:ec2:vpc-endpoint（`aws fis get-action` 实测），声明与 AWS 侧不一致，
+    # 该故障类型从未能执行。同时注意**它只对 interface 端点（PrivateLink）有效**：
+    # PetSite VPC 里只有 guardduty-data 一个端点，ssm/sts/xray/s3/dynamodb
+    # 都没有端点，所以验证那批边要用 fis_network_disrupt 的 scope=s3|dynamodb。
+    description: 中断 VPC Interface Endpoint（PrivateLink）连接
     fis_action_id: "aws:network:disrupt-vpc-endpoint"
     default_params:
       duration: "2m"
-    requires: [subnet_arn]
+    requires: [vpc_endpoint_arn]
     tier: [Tier0, Tier1]
     recommended_for: [multi-az, all]
 
@@ -759,7 +763,9 @@ fis:
     backend: fis
     category: data
     description: 模拟 ElastiCache 集群 AZ 断电，验证缓存层故障后的应用降级
-    fis_action_id: "aws:elasticache:interrupt-cluster-az-power"
+    # 2026-08-31 修：原名 aws:elasticache:interrupt-cluster-az-power 在 AWS 侧不存在，
+    # 真名是 replicationgroup-interrupt-az-power（目标是复制组而非 cluster）
+    fis_action_id: "aws:elasticache:replicationgroup-interrupt-az-power"
     default_params:
       duration: "5m"
     requires: [cluster_arn, availability_zone]
@@ -810,7 +816,7 @@ fis_scenarios:
       - aws:ec2:stop-instances
       - aws:rds:failover-db-cluster
       - aws:ebs:pause-volume-io
-      - aws:elasticache:interrupt-cluster-az-power
+      - aws:elasticache:replicationgroup-interrupt-az-power
     required_tags:
       AzImpairmentPower: "IceQualified"
     template_source: docs
@@ -829,7 +835,7 @@ fis_scenarios:
     scenario_id: "az-application-slowdown-scenario"
     description: AZ 应用减速场景 — 在指定 AZ 内注入多层应用延迟，模拟 AZ 级灰色故障
     sub_actions:
-      - aws:ec2:disrupt-network-connectivity
+      - aws:network:disrupt-connectivity
       - aws:lambda:invocation-add-delay
     required_tags:
       AzImpairmentPower: "IceQualified"

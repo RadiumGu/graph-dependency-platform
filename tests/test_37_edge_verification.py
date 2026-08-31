@@ -84,7 +84,11 @@ def test_v03_insufficient_traffic_never_refutes(gcf, base, inj):
 def test_v04_middle_band_is_inconclusive(gcf):
     """5%~20% 的中间带判 inconclusive，不判 refuted。"""
     assert gcf.classify_intervention(100, 100, 12.0)[0] == gcf.STATUS_INCONCLUSIVE
-    assert gcf.classify_intervention(100, 100, 1.0)[0] == gcf.STATUS_REFUTED
+    # refuted 分支自 2026-08-31 起需要 injection_confirmed=True（注入生效门禁，
+    # 见 tests/test_40_evidence_channel.py::test_e20）。本用例守的是「中间带」判据，
+    # 所以显式确认生效，把生效门禁这个变量固定住。
+    assert gcf.classify_intervention(
+        100, 100, 1.0, injection_confirmed=True)[0] == gcf.STATUS_REFUTED
     assert gcf.classify_intervention(100, 100, 35.0)[0] == gcf.STATUS_CONFIRMED
     # 中间带的理由必须说明为什么不下结论
     _, why = gcf.classify_intervention(100, 100, 12.0)

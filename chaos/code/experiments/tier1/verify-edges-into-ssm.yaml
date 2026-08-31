@@ -1,0 +1,135 @@
+# 边验证实验：用 Chaos Mesh NetworkChaos externalTargets 证伪打进 `ssm` 端点的边
+#
+# 生成 2026-08-31。这是第三种边验证后端（前两种：Chaos Mesh http_chaos、AWS FIS）。
+#
+# ── 为什么这 7 条边只能走这条路 ──────────────────────────────────────────────
+# `ssm`(4) / `sts`(2) / `xray`(1) 这 7 条 AWSServiceEndpoint 边，**两条 FIS 路都不通**：
+#   · `aws:network:disrupt-vpc-endpoint` —— PetSite VPC 里没有这些服务的端点
+#     （只有 guardduty-data 一个），没有 PrivateLink 可断
+#   · `aws:network:disrupt-connectivity` —— scope 只支持 s3 / s3express / dynamodb /
+#     prefix-list / availability-zone / vpc / all。AWS **不为 ssm/sts/xray 发布
+#     托管前缀列表**（只有 S3 / DynamoDB / CloudFront / Ground Station /
+#     VPC Lattice 有），所以 prefix-list 那条路也没有可用的列表
+#
+# Chaos Mesh NetworkChaos 的 `externalTargets` 支持按**域名**做 L3/L4 分区，
+# 正好补上这个空缺：单服务粒度、不需新建基础设施、且不依赖 DNS 缓存行为
+# （它在注入时解析域名并对解析出的 IP 下 iptables 规则，直接丢包）。
+# 实测集群 Chaos Mesh v2.8.1，NetworkChaos CRD 有 externalTargets 字段，
+# 目录里的 network_partition 也早已声明该参数、chaos_mcp 会写进 CRD spec。
+#
+# ── 一个必须先说的预判 ──────────────────────────────────────────────────────
+# **这个实验很可能判 inconclusive，而那是正确结果。**
+# 已知事实（见 memory: 「SSM 配置提供程序运行时静默返回空」那次排查）：
+# PetSite 的服务**只在启动时读一次 SSM 参数**（petsiteurl / searchapiurl），
+# 之后不再访问。所以运行期切断 SSM 不会让任何请求失败。
+#
+# 按 2026-08-31 16:30 新增的**注入生效门禁**，这种情况下判据会返回 inconclusive
+# 而不是 refuted —— 因为「观测方没退化」分不清「注入生效但没传导」与
+# 「注入根本没生效」。这正是门禁要防的：`petsearch -> s3` 就是被这个坑判错过一次。
+#
+# 所以本实验的价值在于**产出归因数据**而不是拿到 confirmed：
+#   · 若观测方退化 → 依赖在请求路径上（意外，但说明启动时读一次的结论要修正）
+#   · 若观测方不退化且注入确认生效 → 归因为「依赖真实但不在请求路径上」（class 3）
+#   · 若无法确认注入生效 → inconclusive，需要独立探针（见文件末尾）
+#
+# ── 这一次能覆盖几条边 ──────────────────────────────────────────────────────
+#   petsite          -> ssm   src=xray   有 HTTP 流量 ✅  ← 本实验验这一条
+#   petsearch        -> ssm   src=xray   有 HTTP 流量 ✅  ← 换 service 再跑一次
+#   payforadoption   -> ssm   src=xray   有 HTTP 流量 ✅  ← 换 service 再跑一次
+#   ServicesEks8-StepFnlambdastepread... -> ssm   src=xray
+#       —— Lambda 非持续调用且不在本集群，DeepFlow 无 HTTP SLI，刻意不列为观测方
+#
+# 注意注入目标与观测方在这里**重合**：切断的是「集群到 SSM」这条外部路径，
+# 而三个观测方各自都是调用方。所以 target.service 用图谱里的端点节点名 `ssm`
+# 让 candidate_edges 能查到三条入边，而 Chaos Mesh 的 Pod 选择器由
+# extra_params 显式给出（否则 target_resolver 会拿 `ssm` 去找 Pod 而找不到）。
+#
+# 用法：
+#   cd chaos/code && python3.11 main.py run --file experiments/tier1/verify-edges-into-ssm.yaml
+
+name: verify-edges-into-ssm
+description: "Chaos Mesh 按域名切断 petsite 到 SSM 的出向路径，观测 petsite 是否退化"
+backend: chaosmesh
+
+target:
+  # ⚠️ 这是**边切断**拓扑，不是「在 B 注入、观测 A」，所以两个名字必须分开：
+  #   service    = 注入选择器 —— 切断**谁的**出向路径（Chaos Mesh 按 app label 选 Pod）
+  #   graph_node = 图谱节点名 —— candidate_edges 查**谁的**入边
+  # 实测（2026-08-31 16:56）：把 service 写成 ssm 会让 preflight 报
+  # 「服务 ssm 无 Running Pods」—— target_service 在 Chaos Mesh 路径下兼任两职。
+  service: petsite
+  graph_node: ssm
+  namespace: petadoptions
+  tier: Tier0
+
+  observers:
+    # 只有 petsite 一个：Chaos Mesh 的 _selector_spec 只支持单个 app label，
+    # 一次注入只能切一个调用方的出向路径。petsearch 与 payforadoption 那两条边
+    # 需要各跑一次（把 service 换成 search-service / pay-for-adoption 即可）。
+    # 刻意不为了「一次覆盖三条」去放宽选择器 —— 那会让三条边共享同一份证据，
+    # 无法归因到具体哪个调用方，正是 #17 那类粒度错配。
+    - service: petsite
+      namespace: petadoptions
+      edge_label: AccessesData
+      min_baseline_requests: 20
+
+fault:
+  type: network_partition
+  mode: all
+  value: ""
+  duration: "3m"
+  extra_params:
+    direction: to
+    # 按域名分区。Chaos Mesh 在注入时解析这些域名并对解析出的 IP 下规则，
+    # 所以不受 SDK 端 DNS 缓存影响（这是选 NetworkChaos 而非 DNSChaos 的理由）。
+    external_targets:
+      - "ssm.ap-northeast-1.amazonaws.com"
+      - "ssmmessages.ap-northeast-1.amazonaws.com"
+    # Pod 选择器由 target.service（= petsite）驱动，见 chaos_mcp._selector_spec。
+
+steady_state:
+  before:
+    # ⚠️ 与 FIS 那两个实验同理：注入目标是端点节点名 `ssm`，
+    # DeepFlow 里查不到它，必然 0 请求 → fallback 100% → 恒过。
+    # 真正的前置条件是观测方基线。**同时这也意味着注入生效性无法从目标侧判断**，
+    # 判据会返回 inconclusive 而不是 refuted —— 见文件头的预判。
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "3m"
+
+stop_conditions:
+  # 观测方护栏。这里可以保留（不同于 DynamoDB 那次）：SSM 预期**不在请求路径上**，
+  # 所以观测方不该归零；真跌破 30% 说明影响超出了「验证一条边」的范围。
+  - metric: success_rate
+    threshold: "< 30%"
+    window: "60s"
+    action: abort
+    target: any_observer
+
+rca:
+  enabled: false
+
+graph_feedback:
+  enabled: true
+  edges:
+    - AccessesData
+
+options:
+  max_duration: "8m"
+
+# ── 爆炸半径 ────────────────────────────────────────────────────────────────
+# 只对 petsite 的 Pod 下 iptables 规则（app=petsite），丢弃到两个 SSM 域名解析 IP 的出向包。
+# 非生产 demo，3 分钟到期自动恢复。
+# 已知固有代价：NetworkChaos 与 http_chaos 同样经 tproxy/iptables 改 Pod netns，
+# 实验后可能需要删 Pod 重建 —— T-214h 的 Pod readiness + 重启差值判据会把它
+# 判成 FAILED 并给出处置命令，不再报假 PASSED。
+#
+# ── 若判 inconclusive，下一步需要什么 ────────────────────────────────────────
+# 需要一个**独立的注入生效探针**：在注入期间从被注入 Pod 里主动访问一次
+# SSM（例如 `kubectl exec ... curl -m 3 https://ssm.ap-northeast-1.amazonaws.com`），
+# 失败即证明注入生效。有了它就能把 inconclusive 收敛成
+# 「依赖真实但不在请求路径上」这个明确归因（class 3）。见 T-298。

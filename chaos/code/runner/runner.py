@@ -331,7 +331,7 @@ class ExperimentRunner:
                 # success_rate=100.0 / total_requests=0 —— 零流量和健康完全一样。
                 logger.warning(
                     f"   观测方 {obs.service} 基线流量不足 —— "
-                    f"边 {obs.service} -[{obs.edge_label}]-> {exp.target_service} "
+                    f"边 {obs.service} -[{obs.edge_label}]-> {self._graph_node(exp)} "
                     f"只能判 inconclusive，**不得**判 refuted"
                 )
 
@@ -523,14 +523,14 @@ class ExperimentRunner:
         for obs in (getattr(exp, "observation_targets", None) or []):
             e = ev.get(obs.service)
             if not e:
-                logger.info(f"   {obs.service} -[{obs.edge_label}]-> {exp.target_service}: 无数据 → inconclusive")
+                logger.info(f"   {obs.service} -[{obs.edge_label}]-> {self._graph_node(exp)}: 无数据 → inconclusive")
                 continue
             deg = e["degradation_rate"]
             thr = e.get("throughput_drop_pct")
             eff = e.get("effective_degradation")
             fmt = lambda v: "n/a" if v is None else f"{v:.2f}"
             logger.info(
-                f"   {obs.service} -[{obs.edge_label}]-> {exp.target_service}: "
+                f"   {obs.service} -[{obs.edge_label}]-> {self._graph_node(exp)}: "
                 f"成功率退化={fmt(deg)}pp 吞吐塌陷={fmt(thr)}% 合成={fmt(eff)} "
                 f"基线请求={e['baseline_total_requests']} 谷值请求={e.get('min_requests')} "
                 f"采样={e['samples']} usable={e['usable']}"
@@ -560,6 +560,55 @@ class ExperimentRunner:
                     f"(无期望根因，跳过匹配)"
                 )
 
+    def _graph_node(self, exp: Experiment) -> str:
+        """图谱里被依赖方的节点名。日志与候选边查询都必须用它而不是 target_service。
+
+        2026-08-31 实测：边切断拓扑下（切断 A 到外部服务 X 的路径），
+        target_service 是注入选择器（petsite），graph_node 才是被依赖方（ssm）。
+        日志里混用会打出 `petsite -[AccessesData]-> petsite` 这种自环假象 ——
+        判定其实正确落在 petsite->ssm 上，但读日志的人会以为写错了边。
+        """
+        return getattr(exp, 'target_graph_node', '') or exp.target_service
+
+    def _injection_took_effect(self, exp: Experiment, result: ExperimentResult):
+        """注入是否**真的生效**了。返回 True / False / None（无法判断）。
+
+        为什么必须有这个信号（T-297，2026-08-31 16:30 实测）：
+        观测方没退化有两种可能 —— 注入生效但没传导（真 refuted），
+        或者**注入根本没生效**（什么都没验证）。判据分不开这两种时，
+        判 refuted 就是凭空证伪。
+
+        实测踩到后者：`petsearch -> s3` 被 FIS `disrupt-connectivity scope=s3`
+        判 refuted（退化 1.21%），而 X-Ray 严格按故障窗口复核显示 PetSearch
+        在窗口内做了 10 次与 13 次**成功**的 S3 调用、0 错误 —— NACL 没切断它。
+
+        当前只在**注入目标自身有可用 SLI**时能判断（Chaos Mesh 路径通常有）。
+        AWS 托管资源目标（RDS/DynamoDB/S3 端点）没有 DeepFlow SLI，
+        返回 None 表示「不知道」，判定层据此拒绝判 refuted。
+
+        刻意**不**用「observer 有退化」反推注入生效 —— 那是循环论证：
+        用结论去证明前提。
+        """
+        before = result.steady_state_before
+        snaps = [s for s in result.snapshots if getattr(s, 'ok', True)]
+        if before is None or not getattr(before, 'ok', True) or not snaps:
+            return None
+        # 注入目标没有可用流量基线（AWS 托管资源目标的典型情况）→ 判不了
+        if not (before.total_requests or 0):
+            return None
+        worst_sr = min(s.success_rate for s in snaps)
+        vals = sorted(s.total_requests or 0 for s in snaps)
+        n = len(vals)
+        median_req = vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2
+        sr_drop = max(0.0, before.success_rate - worst_sr)
+        tp_drop = max(0.0, (before.total_requests - median_req) / before.total_requests * 100)
+        # 门槛刻意低（5%）：这里回答的是「注入有没有作用到目标」这个是非问题，
+        # 不是「影响有多大」。用 confirm 那条 20% 的线会把生效但影响小的注入
+        # 误判成「没生效」，反而放宽了 refuted 的条件 —— 方向错了。
+        if sr_drop >= 5.0 or tp_drop >= 5.0:
+            return True
+        return False
+
     def _verify_edges(self, exp: Experiment, result: ExperimentResult):
         """
         用本次注入的**观测方**证据，对指向注入目标的依赖边逐条判定并写回图谱。
@@ -588,7 +637,9 @@ class ExperimentRunner:
             return
 
         try:
-            cands = candidate_edges(exp.target_service)
+            # 图谱节点名可与注入选择器不同（边切断拓扑），见 Experiment.target_graph_node
+            cands = candidate_edges(
+                getattr(exp, 'target_graph_node', '') or exp.target_service)
         except Exception as e:
             logger.warning(f"候选边查询失败（非致命）: {e!r}")
             return
@@ -596,6 +647,13 @@ class ExperimentRunner:
         ev = result.observer_evidence()
         by_observer = {c.get('observer'): c for c in cands if c.get('observer')}
         written = 0
+
+        took_effect = self._injection_took_effect(exp, result)
+        logger.info(
+            "🔬 注入生效性判定: %s%s",
+            {True: '已确认生效', False: '未观测到生效', None: '无法判断'}[took_effect],
+            '' if took_effect is True else
+            ' —— 本轮不会产生 refuted 判定（证伪需先证明打断确实发生）')
 
         for obs in observers:
             # 观测方也必须解析成图谱规范名：实验里写的是 K8s 服务名
@@ -605,7 +663,7 @@ class ExperimentRunner:
             cand = by_observer.get(obs_graph_name)
             if cand is None:
                 logger.warning(
-                    f"   图谱中无 {obs_graph_name} -> {exp.target_service} 的候选边，跳过"
+                    f"   图谱中无 {obs_graph_name} -> {self._graph_node(exp)} 的候选边，跳过"
                     f"（观测方 K8s 名 {obs.service}，候选边源端点有："
                     f"{sorted(by_observer)}）")
                 continue
@@ -636,13 +694,15 @@ class ExperimentRunner:
                     # 证据通道：纯吞吐证据不足以单独判 confirmed，见
                     # graph_confidence.classify_intervention 的 docstring
                     evidence_channel=result.observer_evidence_channel(obs.service),
+                    # 注入生效门禁：无法确认注入生效时不得判 refuted（T-297）
+                    injection_confirmed=took_effect,
                 )
             except Exception as ex:
                 logger.warning(f"边判定失败 {obs.service}: {ex!r}")
                 continue
 
             logger.info(
-                f"🧪 {obs.service} -[{verdict.get('label')}]-> {exp.target_service}: "
+                f"🧪 {obs.service} -[{verdict.get('label')}]-> {self._graph_node(exp)}: "
                 f"{verdict['status']} (置信度 {verdict['confidence']:.3f}) — {verdict['reason']}"
             )
             try:
