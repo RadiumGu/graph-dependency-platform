@@ -14,11 +14,14 @@
 #   Impact Target      = 同观测方（本实验中重合）
 # 这个三元组本质就是一条边的断言「在 X 注入，预期在 Y 观测到影响」。
 #
-# 用法：
+# 用法（入口是 chaos/code/main.py 的 run 子命令）：
 #   dry-run（不注入，只走相位与规格校验）：
-#     python3.11 chaos/code/run_experiment.py --file <本文件> --dry-run
+#     cd chaos/code && python3.11 main.py run --file experiments/tier1/verify-edges-into-search-service.yaml --dry-run
 #   真实注入（需先确认爆炸半径，见文件末尾）：
-#     python3.11 chaos/code/run_experiment.py --file <本文件>
+#     cd chaos/code && python3.11 main.py run --file experiments/tier1/verify-edges-into-search-service.yaml
+#
+# 前置：kubectl 必须在 PATH（runner 硬依赖 kubectl 子进程，四个模块都 shell 调它），
+#       且 KUBECONFIG 指向 PetSite 集群。
 
 name: verify-edges-into-search-service
 description: "在 search-service 注入 HTTP abort，观测 petsite 与 list-adoptions 是否退化，以证伪两条 Calls 边"
@@ -66,10 +69,27 @@ steady_state:
       window: "3m"
 
 stop_conditions:
+  # ⚠️ 护栏对象很关键（T-214b，2026-08-31 两次真实注入的教训）。
+  #
+  # 第一次：护栏挂在注入目标、阈值 <40%，T+71s 掉到 27.4% 就熔断，零判定。
+  # 第二次：把地板降到 <2%，仍在 T+92s 掉到 **0.0%** 时触发 —— 因为
+  #         `http_chaos action: abort` 是**全量丢弃**，注入目标必然归零，
+  #         任何高于 0 的地板都会被触发。
+  #
+  # 结论：对全量 abort 实验，**注入目标的成功率不是护栏信号，它就是处理本身**。
+  # 去掉它不是削弱护栏 —— 真正的护栏是下面三层：
+  #   1. 观测方护栏（附带损害，这才是要防的）
+  #   2. fault.duration 3m + Chaos Mesh CRD 到期自动恢复
+  #   3. options.max_duration 8m + runner 的 emergency_cleanup
+  #
+  # 观测方护栏：调用方跌破 30% 说明影响已超出「验证一条边」的范围，立刻收手。
+  # 阈值刻意**低于** confirm 判定线 —— 目标是让边被判 confirmed，
+  # 而不是一有退化就熔断（那只会得到 inconclusive）。
   - metric: success_rate
-    threshold: "< 40%"
+    threshold: "< 30%"
     window: "60s"
     action: abort
+    target: any_observer
 
 rca:
   enabled: false           # 首个边验证实验只取边的证据，不叠加 RCA 变量

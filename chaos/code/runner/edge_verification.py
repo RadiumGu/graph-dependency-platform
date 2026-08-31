@@ -80,6 +80,73 @@ _OBSERVER_MARKERS = {
 _STATIC_SOURCES = ('aws-etl', 'cfn-etl')
 
 
+# ── K8s 服务名 → 图谱规范名 ──────────────────────────────────────────────────
+# 2026-08-31 首次拿到判定的那次注入实测缺陷：`candidate_edges` 直接拿实验里的
+# **K8s 服务名**去匹配图谱节点名，而图谱里 Microservice 用的是**规范名**：
+#
+#     实验说 search-service   图谱里叫 petsearch
+#     实验说 list-adoptions   图谱里叫 petlistadoptions
+#     实验说 petsite          图谱里也叫 petsite（只有这个碰巧一致）
+#
+# 后果：`g.V().has('name','search-service')` 匹到的是**同名的 Deployment 与
+# K8sService 节点**（本图 12 组名字跨标签重复，这是其中一组），它们没有 Calls
+# 入边，于是候选边为空、日志只说「图谱中无候选边」、写回 0/2 —— 而
+# `petsite -[Calls]-> petsearch` 与 `petlistadoptions -[Calls]-> petsearch`
+# 两条边**明明都在图里**。
+#
+# 这与 183 条错源边是**同一个根因家族**：按名字匹配、不带标签、而名字跨标签重复。
+# 解析表的唯一来源是 profiles/petsite.yaml 的 services 段（k8s_deployment /
+# k8s_label / neptune_name），与 ETL 用的 service_mappings.json 同源，
+# 不在此另立一份硬编码映射。
+_NAME_RESOLVER = None
+# 已打过日志的名字。Phase 3 每 10s 采样一次都会走 _target_metrics_name，
+# 不去重的话一次 3 分钟实验会刷 18 行同样的解析日志，把真正的信号淹掉。
+_LOGGED_RESOLUTIONS: set[str] = set()
+
+
+def _resolve_graph_name(name: str) -> str:
+    """把 K8s 服务名/别名解析成图谱里的规范名；解析不出就原样返回。
+
+    刻意**不**在解析失败时抛错：一个不在 profile 里的服务仍然应该能跑实验，
+    只是候选边查询会按原名去找（退回旧行为），比整个实验失败好。
+    """
+    global _NAME_RESOLVER
+    if _NAME_RESOLVER is None:
+        try:
+            import sys as _sys
+            _repo = os.path.abspath(os.path.join(_HERE, '..', '..', '..'))
+            if _repo not in _sys.path:
+                _sys.path.insert(0, _repo)
+            from profiles.profile_loader import EnvironmentProfile
+            # 注意类名是 ServiceRegistry。dr-plan-generator 里另有一个同名不同物的
+            # ServiceTypeRegistry（管服务**类型**，不管名字解析），别弄混。
+            from shared.service_registry import ServiceRegistry
+            services = EnvironmentProfile().get('services', {}) or {}
+            _NAME_RESOLVER = ServiceRegistry(services)
+            logger.info("服务名解析表已加载：%d 个服务", len(services))
+        except Exception as e:
+            logger.warning(
+                "服务名解析表加载失败（%r）——候选边查询将按原名匹配，"
+                "K8s 名与图谱规范名不一致的服务会查不到候选边", e)
+            _NAME_RESOLVER = False   # 用 False 标记「试过且失败」，不重复尝试
+    if not _NAME_RESOLVER:
+        return name
+    try:
+        resolved = _NAME_RESOLVER.resolve(name)
+    except Exception:
+        return name
+    if resolved != name:
+        if name not in _LOGGED_RESOLUTIONS:
+            _LOGGED_RESOLUTIONS.add(name)
+            logger.info("服务名解析：%s → %s（图谱规范名）", name, resolved)
+    return resolved
+
+
+def resolve_graph_name(name: str) -> str:
+    """公开入口 —— runner 解析观测方名字时用同一张表，避免两侧各自实现。"""
+    return _resolve_graph_name(name)
+
+
 def _label_list() -> str:
     return ','.join("'%s'" % x for x in DEPENDENCY_LABELS)
 
@@ -115,7 +182,15 @@ def candidate_edges(injection_target: str) -> list[dict]:
     """列出「在 injection_target 注入」能够检验的边 —— 即它的**入边**。
 
     出边刻意不返回：在 B 注入不会告诉你 B 依赖谁。
+
+    `injection_target` 传进来的是**实验里的 K8s 服务名**，这里先解析成图谱规范名
+    （见 `_resolve_graph_name` 的注释：不解析会匹到同名的 Deployment/K8sService
+    节点，候选边恒为空，而边其实就在图里）。
+
+    返回的 `observer` 也是**图谱里的名字**；调用方按观测方的 K8s 名去索引之前
+    必须做同样的解析，否则对不上。
     """
+    graph_name = _resolve_graph_name(injection_target)
     q = (
         "g.V().has('name','%s').inE(%s).as('e')"
         ".project('eid','label','observer','props')"
@@ -123,17 +198,24 @@ def candidate_edges(injection_target: str) -> list[dict]:
         ".by(__.select('e').label())"
         ".by(__.select('e').outV().values('name'))"
         ".by(__.select('e').valueMap())"
-        ".fold()" % (injection_target, _label_list())
+        ".fold()" % (graph_name, _label_list())
     )
     try:
         rows = query_gremlin_parsed(q)
     except Exception as e:
-        logger.error("查询 %s 的候选边失败: %s", injection_target, e)
+        logger.error("查询 %s 的候选边失败: %s", graph_name, e)
         return []
     out = []
     for r in _flatten(rows):
         if isinstance(r, dict) and r.get('eid'):
             out.append(r)
+    if not out:
+        # 空结果必须响：它可能是「真没有边」，也可能是名字对不上（历史上就是后者），
+        # 而两者在日志里长得一样时，后者会被当成前者放过。
+        logger.warning(
+            "%s（图谱名 %s）没有任何依赖入边。若确信图里有边，先核对名字："
+            "图谱 Microservice 用规范名，实验里用的是 K8s 服务名。",
+            injection_target, graph_name)
     return out
 
 
@@ -150,6 +232,7 @@ def verify_edge(
     observer_degradation_pct: float,
     experiment_id: str,
     now_epoch: int | None = None,
+    evidence_channel: str = 'both',
 ) -> dict:
     """对一条候选边做判定并算出新置信度。**纯计算，不写图。**
 
@@ -158,7 +241,7 @@ def verify_edge(
     now = now_epoch or int(time.time())
     status, reason = classify_intervention(
         observer_baseline_requests, observer_injected_requests,
-        observer_degradation_pct)
+        observer_degradation_pct, evidence_channel=evidence_channel)
 
     st, obs, conf_n, ref_n = evidence_from_props(edge.get('props') or {})
     if status == STATUS_CONFIRMED:
@@ -174,6 +257,7 @@ def verify_edge(
         'reason': reason,
         'confidence': confidence(st, obs, conf_n, ref_n),
         'degradation_pct': round(observer_degradation_pct, 2),
+        'evidence_channel': evidence_channel,
         'confirm_count': conf_n,
         'refute_count': ref_n,
         'verified_at': now,
@@ -200,9 +284,11 @@ def write_verdict(v: dict) -> bool:
         ".property('verify_reason', '%s')"
         ".property('verify_confirm_count', %d)"
         ".property('verify_refute_count', %d)"
+        ".property('verify_evidence_channel', '%s')"
         % (v['edge_id'], v['status'], v['confidence'], v['verified_at'],
            VERIFIER, v['experiment_id'], v['degradation_pct'], esc,
-           v['confirm_count'], v['refute_count'])
+           v['confirm_count'], v['refute_count'],
+           v.get('evidence_channel', 'unknown'))
     )
     try:
         query_gremlin_parsed(q)

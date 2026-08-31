@@ -206,6 +206,11 @@ class ExperimentRunner:
             raise PrefightFailure(f"服务 {exp.target_service} 有 Pod 未就绪: {not_ok}")
 
         logger.info(f"✅ Pre-flight 通过: {pods['total']} pods ready")
+        # T-214h：存下基线，Phase 5 用 restarts 差值判断注入是否打伤了 Pod。
+        # 必须在这里存 —— Phase 0 是唯一确定「注入还没发生」的时点。
+        result.target_pods_before = pods
+        logger.info(f"   Pod 重启基线: restarts={pods.get('restarts')} "
+                    f"({pods.get('per_pod_restarts')})")
         slog.info("phase_completed", phase=0, experiment=exp.name)
 
     # ─── PolicyGuard ─────────────────────────────────────────────────────────
@@ -263,7 +268,7 @@ class ExperimentRunner:
         logger.info("📊 Phase 1: Steady State Before")
 
         snap = self.metrics.collect_steady(
-            service=exp.target_service,
+            service=self._target_metrics_name(exp),
             namespace=exp.target_namespace,
             window_seconds=60,
             samples=self.STEADY_SAMPLES,
@@ -403,7 +408,7 @@ class ExperimentRunner:
 
         while time.time() < end_ts:
             snap = self.metrics.collect(
-                service=exp.target_service,
+                service=self._target_metrics_name(exp),
                 namespace=exp.target_namespace,
                 window_seconds=60,
             )
@@ -418,10 +423,10 @@ class ExperimentRunner:
                 f"p99={snap.latency_p99_ms:.0f}ms total={snap.total_requests}"
             )
 
-            # Stop Conditions 检查
-            for cond in exp.stop_conditions:
-                if cond.is_triggered(snap):
-                    msg = cond.describe(snap)
+            # Stop Conditions 检查（T-214b：按护栏对象分别求值）
+            for cond, subject, subj_snap in self._stop_condition_subjects(exp, result, snap):
+                if cond.is_triggered(subj_snap):
+                    msg = f"{subject}: {cond.describe(subj_snap)}"
                     slog.error("stop_condition_triggered", experiment=exp.name,
                                condition=msg, success_rate=snap.success_rate,
                                latency_p99=snap.latency_p99_ms)
@@ -431,7 +436,19 @@ class ExperimentRunner:
                         self.fis.stop(result.chaos_experiment_name)
                     else:
                         delete_type = self.injector.FAULT_TO_DELETE_TYPE.get(exp.fault.type, exp.fault.type)
-                        self.injector.delete(result.chaos_experiment_name, chaos_type=delete_type, namespace=exp.target_namespace)
+                        # 全部用关键字传参。ChaosMCPClient.delete(chaos_type, name, namespace)
+                        # 的第一个位置参数是 chaos_type 而不是 name —— 原先按位置传实验名、
+                        # 再用关键字传 chaos_type，会撞成
+                        # "got multiple values for argument 'chaos_type'"。
+                        # 2026-08-31 实测后果：stop condition 触发时清理直接抛异常，
+                        # HTTPChaos CRD 留在集群里继续生效，且强删仍在生效的 CRD 会把
+                        # tproxy 拦截残留在目标 Pod 的网络命名空间里 —— 容器重启清不掉，
+                        # 两个被命中的 Pod 进入 CrashLoopBackOff，只能删 Pod 重建。
+                        self.injector.delete(
+                            chaos_type=delete_type,
+                            name=result.chaos_experiment_name,
+                            namespace=exp.target_namespace,
+                        )
                     result.chaos_experiment_name = ""   # 避免 emergency_cleanup 重复删
                     raise AbortException(msg)
 
@@ -446,6 +463,38 @@ class ExperimentRunner:
 
         logger.info(f"✅ Phase 3 结束，Chaos Mesh 实验到期自动恢复")
         self._log_observer_evidence(exp, result)
+
+    def _stop_condition_subjects(self, exp: Experiment, result: ExperimentResult,
+                                 target_snap: MetricsSnapshot):
+        """
+        产出 (条件, 主体名, 该主体的最新快照) 三元组。
+
+        T-214b：边验证实验里注入目标**本来就该失败**，所以护栏必须能挂在观测方上。
+        `target='injection'` 保持既有行为（注入目标侧只留极低地板防注入失控）；
+        `any_observer` / `observer:<svc>` 看调用方，那才是真正要防的附带损害。
+
+        观测方还没有采样点时**跳过**该条件 —— 不能拿缺失当触发，
+        否则实验一开始就会被自己的护栏打断（与不变量 7 同向：缺数据不等于坏了）。
+        """
+        for cond in exp.stop_conditions:
+            if cond.applies_to_injection():
+                yield cond, f"注入目标 {exp.target_service}", target_snap
+                continue
+            scope = cond.observer_scope()
+            if scope is None:
+                # target 写了无法识别的值：按注入目标处理并告警，不静默丢弃条件
+                logger.warning(
+                    f"⚠️ stop_condition target={cond.target!r} 无法识别，"
+                    f"按 injection 处理（合法值：injection / any_observer / observer:<svc>）")
+                yield cond, f"注入目标 {exp.target_service}", target_snap
+                continue
+            names = ([o.service for o in (getattr(exp, "observation_targets", None) or [])]
+                     if scope == "*" else [scope])
+            for svc in names:
+                snaps = result.observer_snapshots.get(svc) or []
+                if not snaps:
+                    continue          # 无采样点：跳过，不当触发
+                yield cond, f"观测方 {svc}", snaps[-1]
 
     def _collect_observer_snapshots(self, exp: Experiment, result: ExperimentResult):
         """注入期为每个观测方采一个点。单个观测方失败不影响其余，也不中断实验。"""
@@ -477,10 +526,13 @@ class ExperimentRunner:
                 logger.info(f"   {obs.service} -[{obs.edge_label}]-> {exp.target_service}: 无数据 → inconclusive")
                 continue
             deg = e["degradation_rate"]
-            deg_s = "n/a" if deg is None else f"{deg:.2f}pp"
+            thr = e.get("throughput_drop_pct")
+            eff = e.get("effective_degradation")
+            fmt = lambda v: "n/a" if v is None else f"{v:.2f}"
             logger.info(
                 f"   {obs.service} -[{obs.edge_label}]-> {exp.target_service}: "
-                f"退化={deg_s} 基线请求={e['baseline_total_requests']} "
+                f"成功率退化={fmt(deg)}pp 吞吐塌陷={fmt(thr)}% 合成={fmt(eff)} "
+                f"基线请求={e['baseline_total_requests']} 谷值请求={e.get('min_requests')} "
                 f"采样={e['samples']} usable={e['usable']}"
             )
 
@@ -528,7 +580,9 @@ class ExperimentRunner:
             return
 
         try:
-            from .edge_verification import candidate_edges, verify_edge, write_verdict
+            from .edge_verification import (
+                candidate_edges, verify_edge, write_verdict, resolve_graph_name,
+            )
         except Exception as e:
             logger.warning(f"边验证模块不可用（非致命）: {e!r}")
             return
@@ -544,19 +598,32 @@ class ExperimentRunner:
         written = 0
 
         for obs in observers:
-            cand = by_observer.get(obs.service)
+            # 观测方也必须解析成图谱规范名：实验里写的是 K8s 服务名
+            # （list-adoptions），图谱里是 petlistadoptions。少了这一步，
+            # by_observer 查不到、日志说「无候选边」，而边其实在图里。
+            obs_graph_name = resolve_graph_name(obs.service)
+            cand = by_observer.get(obs_graph_name)
             if cand is None:
-                logger.info(f"   图谱中无 {obs.service} -> {exp.target_service} 的候选边，跳过")
+                logger.warning(
+                    f"   图谱中无 {obs_graph_name} -> {exp.target_service} 的候选边，跳过"
+                    f"（观测方 K8s 名 {obs.service}，候选边源端点有："
+                    f"{sorted(by_observer)}）")
                 continue
 
             e = ev.get(obs.service) or {}
             base_req = e.get('baseline_total_requests') or 0
-            deg = e.get('degradation_rate')
+            # 用**合成**退化率：成功率下降与吞吐塌陷取 max。
+            # abort 类故障不产生 response 行，成功率对它是盲的（实测注入目标
+            # 成功率全程 100% 而请求量 -97%），只喂成功率会把生效的注入判成没影响。
+            deg = e.get('effective_degradation')
             # 注入期请求量取各采样窗口的**最大值**而非求和：每个快照本身是一个
             # 60s 窗口计数，求和会因窗口重叠而虚高。取 max 得到与基线同量纲的
             # 代表性窗口量，且在真的零流量时仍然是 0 —— 偏向「判不了」而不是
             # 「判边不存在」，与不变量 7 同向。
-            snaps = result.observer_snapshots.get(obs.service, [])
+            # 只取**采集成功**的采样点（ok=True）。失败的采样点是 (100%, 0 requests)
+            # 的 fallback，混进来会污染请求量判据。
+            snaps = [s for s in result.observer_snapshots.get(obs.service, [])
+                     if getattr(s, 'ok', True)]
             inj_req = max((s.total_requests or 0) for s in snaps) if snaps else 0
 
             try:
@@ -566,6 +633,9 @@ class ExperimentRunner:
                     observer_injected_requests=int(inj_req),
                     observer_degradation_pct=float(deg if deg is not None else 0.0),
                     experiment_id=result.experiment_id,
+                    # 证据通道：纯吞吐证据不足以单独判 confirmed，见
+                    # graph_confidence.classify_intervention 的 docstring
+                    evidence_channel=result.observer_evidence_channel(obs.service),
                 )
             except Exception as ex:
                 logger.warning(f"边判定失败 {obs.service}: {ex!r}")
@@ -596,11 +666,19 @@ class ExperimentRunner:
         """
         Phase 4: 等待故障自动恢复，确认 Pods 恢复健康
 
-        Chaos Mesh duration 字段负责到期删除 CR，故障自动消除。
+        ⚠️ 原 docstring 写着「Chaos Mesh duration 字段负责到期删除 CR，故障自动消除」——
+        **这个假设是错的**（2026-08-31 实测）。duration 到期后故障停止生效，
+        但 **CRD 对象仍然存在**，而 runner 只在熔断/异常路径删 CRD，
+        正常完成路径从不删。实测后果：一个 PASSED 的实验结束后 `httpchaos` 仍有 1 条，
+        两个被注入过的 Pod 随后又从 2/2 退回 1/2（tproxy 仍挂在 netns 上），
+        而 Phase 5 在这之前采样、显示 100% 通过 —— 污染被完全掩盖，
+        并且会成为下一次实验的稳态基线污染源。
+
         Phase 4 的职责：
-          1. 等待所有 Pods 回到 Running/Ready 状态
-          2. 记录恢复耗时
-          3. 超时则告警（但不 abort，让 Phase 5 决定是否通过）
+          1. **显式删除 Chaos Mesh CRD**（不依赖「到期自动清理」这个错假设）
+          2. 等待所有 Pods 回到 Running/Ready 状态
+          3. 记录恢复耗时
+          4. 超时则告警（但不 abort，让 Phase 5 决定是否通过）
         """
         logger.info(f"♻️  Phase 4: Fault Recovery — 等待 {exp.target_service} 恢复 (backend={exp.backend})")
 
@@ -610,6 +688,27 @@ class ExperimentRunner:
             return
 
         recover_start = time.time()
+
+        # ── 正常完成路径也必须删 CRD（2026-08-31 实测缺陷）────────────────────
+        if exp.backend == "chaosmesh" and result.chaos_experiment_name:
+            try:
+                delete_type = self.injector.FAULT_TO_DELETE_TYPE.get(
+                    exp.fault.type, exp.fault.type)
+                self.injector.delete(
+                    chaos_type=delete_type,
+                    name=result.chaos_experiment_name,
+                    namespace=exp.target_namespace,
+                )
+                logger.info(f"🧹 已删除 Chaos Mesh CRD: {result.chaos_experiment_name}")
+                result.chaos_experiment_name = ""   # 避免 emergency_cleanup 重复删
+            except Exception as e:
+                # 删不掉必须显式报错：残留会污染下一次实验的稳态基线，
+                # 而 Phase 5 采样在残留生效之前，看不出问题。
+                logger.error(
+                    f"❌ 删除 Chaos Mesh CRD 失败: {e!r} —— "
+                    f"残留 CRD 会让 tproxy 继续挂在 Pod netns 上并污染后续实验，"
+                    f"请手工 kubectl delete 并遍历全部 CRD 类型确认归零"
+                )
 
         # FIS 后端：先等 FIS 实验自然完成
         if exp.backend in ("fis", "fis-scenario") and result.chaos_experiment_name:
@@ -666,6 +765,94 @@ class ExperimentRunner:
 
     # ─── Phase 5：Steady State After ─────────────────────────────────────────
 
+
+    def _target_metrics_name(self, exp: Experiment) -> str:
+        """注入目标在 **DeepFlow SLI 口径**下的名字。
+
+        这里有三套命名空间，都源自 profiles/petsite.yaml 的同一张 services 表，
+        但取值不同，混用会静默出错（2026-08-31 实测）：
+
+            kubectl label selector   app=pethistory-deployment   ← 注入用
+            DeepFlow request_domain  %pethistory%                ← SLI 用
+            图谱 Microservice.name    pethistory                  ← 候选边用
+
+        实测 `metrics.collect('pethistory-deployment')` 返回 **0 请求**，
+        而 `collect('pethistory')` 返回 26 请求。0 请求会走 fallback 返回
+        `success_rate=100.0`，于是稳态门 `>= 95%` 被一个**假的 100%** 通过 ——
+        与「零流量和健康在指标上分不开」是同一个缺陷家族。
+
+        解析用的是 T-214e 引入的同一张别名表，不另立映射。
+        """
+        try:
+            from .edge_verification import resolve_graph_name
+            resolved = resolve_graph_name(exp.target_service)
+        except Exception:
+            return exp.target_service
+        return resolved or exp.target_service
+
+    def _check_target_pod_health(self, exp: Experiment, result: ExperimentResult) -> bool:
+        """T-214h：注入目标的 Pod 是否被这次实验打伤。返回 False 即判 FAILED。
+
+        两条判据，缺一不可：
+
+        1. **readiness** —— 现在还有 Pod 不 Ready，说明损伤仍在持续。
+        2. **restarts 差值** —— Phase 0 基线到现在容器重启数增加了。
+           这一条才是主判据：readiness 有滞后（实测 Phase 4 报 2/2 之后
+           2.5 分钟才退化），而重启就发生在注入期间，此刻已经计入。
+
+        差值判据在基线缺失时**不判 FAILED 而是告警**：`check_pods` 失败会返回
+        `restarts=None`，拿 None 当 0 会让判据静默通过；而拿它当损伤又会把
+        「没测到」误报成「打伤了」。两者都不对，所以显式区分第三种情况。
+        """
+        pods = self.injector.check_pods(exp.target_service, exp.target_namespace)
+        result.target_pods_after = pods
+        before = result.target_pods_before or {}
+        r_before, r_after = before.get("restarts"), pods.get("restarts")
+        ok = True
+
+        # 判据 1：readiness
+        if pods.get("total", 0) == 0:
+            msg = (f"❌ 目标服务 {exp.target_service} 查不到任何 Pod"
+                   f"（label app={exp.target_service}）")
+            result.pod_damage.append(msg)
+            logger.error(f"  {msg}")
+            ok = False
+        elif pods["running"] < pods["total"]:
+            bad = [f"{p['pod']}(phase={p['phase']} ready={p['ready']} restarts={p.get('restarts')})"
+                   for p in pods["not_running"]]
+            msg = (f"❌ 注入后仍有 Pod 未就绪 {pods['running']}/{pods['total']}: {bad}。"
+                   f"处置：kubectl delete pod -n {exp.target_namespace} "
+                   f"-l app={exp.target_service} 让 ReplicaSet 重建 —— "
+                   f"abort 的 tproxy 残留在 Pod netns 里，容器重启清不掉。")
+            result.pod_damage.append(msg)
+            logger.error(f"  {msg}")
+            ok = False
+        else:
+            logger.info(f"  ✅ Pod 检查: {pods['running']}/{pods['total']} ready")
+
+        # 判据 2：重启差值（主判据）
+        if r_before is None or r_after is None:
+            logger.warning(
+                "  ⚠️ Pod 重启基线或现值缺失（before=%s after=%s），跳过重启差值判据。"
+                "这不是通过，是没测到 —— 请人工核对 kubectl get pods 的 RESTARTS 列。",
+                r_before, r_after)
+            result.pod_damage.append(
+                f"⚠️ 重启差值未能判定（before={r_before} after={r_after}），需人工核对")
+        elif r_after > r_before:
+            delta = r_after - r_before
+            msg = (f"❌ 注入导致容器重启 +{delta} 次（{r_before} → {r_after}，"
+                   f"逐 Pod: {pods.get('per_pod_restarts')}）。"
+                   f"这是 abort 打断 liveness 探针的已知代价：kubelet 杀掉容器重启，"
+                   f"而 tproxy 残留在 Pod netns（属 sandbox 不属容器）故重启清不掉。"
+                   f"处置：删 Pod 重建。不修就会把污染带进下一轮实验的基线。")
+            result.pod_damage.append(msg)
+            logger.error(f"  {msg}")
+            ok = False
+        else:
+            logger.info(f"  ✅ Pod 重启数未增加（{r_before} → {r_after}）")
+
+        return ok
+
     def _phase5_steady_state_after(self, exp: Experiment, result: ExperimentResult):
         """
         Phase 5: 验证稳态恢复 + 生成报告
@@ -685,7 +872,7 @@ class ExperimentRunner:
 
         # 稳态验证（窗口 5min，采样 3 次）
         snap = self.metrics.collect_steady(
-            service=exp.target_service,
+            service=self._target_metrics_name(exp),
             namespace=exp.target_namespace,
             window_seconds=300,
             samples=self.STEADY_SAMPLES,
@@ -707,6 +894,15 @@ class ExperimentRunner:
                 "desc":   f"{icon} {desc}",
             })
             logger.info(f"  {icon} 稳态检查: {desc}")
+
+        # ── T-214h：Pod readiness + 重启差值 ────────────────────────────────
+        # 为什么 SLI 全绿也不够：实测 2026-08-31 两轮 abort 注入，SLI 报 100%、
+        # 稳态检查全过、实验判 PASSED，但被注入的两个 Pod 都进了重启循环、
+        # 持续 1/2 Ready，只能人工删 Pod 重建。SLI 之所以看不见，是因为 HPA
+        # 新拉的干净 Pod 在撑着服务 —— **服务健康 ≠ 实验没造成损伤**。
+        # 一个报 PASSED 却留下坏 Pod 的实验，会让下一轮实验的基线带着污染开始。
+        if exp.backend not in ("fis", "fis-scenario"):
+            all_passed = self._check_target_pod_health(exp, result) and all_passed
 
         # 判定最终状态
         result.status = "PASSED" if all_passed else "FAILED"
@@ -808,4 +1004,5 @@ class ExperimentRunner:
                 self.fis.stop(experiment_name)
             else:
                 chaos_type = self.injector.FAULT_TO_DELETE_TYPE.get(fault_type, fault_type)
-                self.injector.delete(experiment_name, chaos_type=chaos_type)
+                # 同 stop-condition 路径：必须关键字传参，见那里的注释
+                self.injector.delete(chaos_type=chaos_type, name=experiment_name)

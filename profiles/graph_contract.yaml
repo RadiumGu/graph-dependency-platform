@@ -17,8 +17,17 @@ timestamp_field: last_seen
 timestamp_legacy_aliases:
 - last_updated
 - last_scanned
+# 合法的 source 取值词表。**由 graph_contract.assert_source() 在写入时强制**
+# （2026-08-31 补：此前本清单只被 re-export、没有任何检查读它，
+#  于是活图谱实测出 4 种未声明取值共 1263 条——声明而不设门禁等于没声明）。
 sources:
 - aws-etl
+# K8s 采集路径写的边（Pod/Deployment/K8sService/Namespace 相关）。与 aws-etl 分开是
+# 刻意的：这批边的真值来源是 Kubernetes API 而非 AWS 控制面 API，失败模式也不同。
+- eks-etl
+# AWS 资源配置里**静态声明**的跨服务依赖（例如 Lambda env 引用），
+# 与运行时观测得到的同类边区分。
+- aws-etl-static
 - cfn-etl
 - deepflow-etl
 - deepflow-l4

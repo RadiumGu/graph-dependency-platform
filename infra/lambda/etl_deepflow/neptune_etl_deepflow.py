@@ -50,6 +50,10 @@ EKS_CLUSTER_ARN = os.environ.get('EKS_CLUSTER_ARN',
 BATCH_SIZE = int(os.environ.get('BATCH_SIZE', '20'))
 ENVIRONMENT = os.environ.get('ENVIRONMENT', 'prod')
 
+# 本 ETL 写入 Neptune 的 source 取值，必须在 profiles/graph_contract.yaml 的
+# sources 词表内（由 tests/test_38_source_vocabulary.py 静态校验）。
+NODE_SOURCE = 'deepflow-etl'
+
 # 只采集这些 namespace 的 pod（从 service_mappings.json 读 + 默认 namespace）
 # deepflow、kube-system 等监控/基础设施 namespace 不纳入图，避免形成孤立分量
 INCLUDED_NAMESPACES = {'default', 'awesomeshop'}
@@ -1119,9 +1123,12 @@ def batch_upsert_nodes(services: list):
             n, ns, ip = safe_str(svc['name']), safe_str(svc['namespace']), safe_str(svc['ip'])
             az = safe_str(svc.get('az', ''))
             priority = MICROSERVICE_RECOVERY_PRIORITY.get(n, 'Tier2')
-            # onCreate 只放身份 + 仅创建时写一次的字段
+            # onCreate 只放身份 + 仅创建时写一次的字段。
+            # source 取契约词表里的 'deepflow-etl'：此前这里写的是 'deepflow'，
+            # 是 deepflow-etl 的同义漂移（活图谱实测 8 个 Microservice 节点），
+            # 而按源分派的逻辑（如 edge_verification._OBSERVER_MARKERS）认的是全名。
             create_props = (
-                f"'source': 'deepflow', 'region': '{REGION}'"
+                f"'source': '{NODE_SOURCE}', 'region': '{REGION}'"
             )
             # 每轮刷新的标量一律 single 基数（含 az，兑现原 NOTE 的承诺）
             refresh = (
@@ -1162,7 +1169,7 @@ def batch_upsert_nodes(services: list):
                     neptune_query(
                         f"g.mergeV([(T.label): 'Microservice', 'name': '{n}'])"
                         f".option(Merge.onCreate, [(T.label): 'Microservice', 'name': '{n}', "
-                        f"'source': 'deepflow', 'region': '{REGION}'])"
+                        f"'source': '{NODE_SOURCE}', 'region': '{REGION}'])"
                         f"{single_props}"
                     )
                 except Exception as e2:
@@ -1787,7 +1794,11 @@ ORDER BY calls DESC LIMIT 100 FORMAT TSV
     try:
         stale_keys = list(K8S_SERVICE_ALIAS.keys())
         dropped = neptune_query(
-            f"g.V().hasLabel('Microservice').has('source','deepflow')"
+            # 兼容新旧两个取值：存量节点是 'deepflow'，新写入是 'deepflow-etl'。
+            # 只改写入侧会让这条清理查询从此匹配不到任何节点 —— 那属于「修一个
+            # 缺陷引入一个静默失效」，本仓库已经犯过一次（F8）。
+            f"g.V().hasLabel('Microservice')"
+            f".has('source', within('deepflow','{NODE_SOURCE}'))"
             f".where(values('name').is(within({','.join(repr(k) for k in stale_keys)})))"
             f".sideEffect(drop()).count()"
         )['result']['data']['@value'][0]

@@ -13,6 +13,7 @@ from graph_contract import (
     TIMESTAMP_FIELD,
     assert_edge_type,
     assert_node_type,
+    assert_source,
     dependency_edge_labels,
     filter_node_props,
     identity_prop_for,
@@ -43,6 +44,10 @@ def get_vertex_id(label: str, name: str):
     _vid_cache[key] = vid
     return vid
 
+
+# 本 ETL 的缺省 source。调用方可以覆盖（K8s 路径用 eks-etl、静态声明用
+# aws-etl-static），取值一律经 assert_source 校验，见 upsert_edge 的 docstring。
+DEFAULT_SOURCE = 'aws-etl'
 
 # 数值属性白名单 — 这些属性在 Neptune 中保持原始 int/float 类型
 NUMERIC_PROPS = {
@@ -113,7 +118,7 @@ def upsert_vertex(label: str, name: str, extra_props: dict, managed_by: str = 'm
     # 契约的 node_attr_authority 是**例外清单**（只登记已实测出冲突的属性），
     # 未登记的一律放行。被拒的属性**明示 log** 而不是静默丢弃 —— 对应
     # ServiceNow IRE 的 maskedAttributes：不明示，「谁赢」永远查不清。
-    all_props, masked = filter_node_props(label, all_props, 'aws-etl')
+    all_props, masked = filter_node_props(label, all_props, DEFAULT_SOURCE)
     if masked:
         logger.warning(
             "upsert_vertex(%s, %s): 属性 %s 的权威来源不是 aws-etl，已拒绝写入。"
@@ -144,8 +149,11 @@ def upsert_vertex(label: str, name: str, extra_props: dict, managed_by: str = 'm
                 "upsert_vertex(%s): 契约声明身份键 %r 但其值为空，回落到以 name 匹配。"
                 "该节点仍可能因 name 变化而产生重复。", label, chosen)
 
-    props_create = f"'name': '{n}', 'managedBy': '{mb}', 'source': 'aws-etl'"
-    props_match = f"'managedBy': '{mb}', 'source': 'aws-etl'"
+    # 节点 source 也过一遍词表门禁：现在只有一个取值，但硬编码字符串是漂移的起点
+    # （eks-etl 当初就是这么进来的），走门禁则改坏了当场就失败。
+    assert_source(DEFAULT_SOURCE, f'upsert_vertex(label={label})')
+    props_create = f"'name': '{n}', 'managedBy': '{mb}', 'source': '{DEFAULT_SOURCE}'"
+    props_match = f"'managedBy': '{mb}', 'source': '{DEFAULT_SOURCE}'"
     # 以 instance_id 为身份时，name 必须进 onMatch —— 否则标签改名后
     # 图谱里仍留着旧名字，等于只是把重复换成了陈旧。
     if id_key != 'name':
@@ -155,7 +163,7 @@ def upsert_vertex(label: str, name: str, extra_props: dict, managed_by: str = 'm
         fv = _format_prop_val(k, v)
         props_create += f", '{ks}': {fv}"
         props_match  += f", '{ks}': {fv}"
-    prop_chain = f".property(single,'managedBy','{mb}').property(single,'source','aws-etl')"
+    prop_chain = f".property(single,'managedBy','{mb}').property(single,'source','{DEFAULT_SOURCE}')"
     if id_key != 'name':
         prop_chain += f".property(single,'name','{n}')"
     for k, v in all_props.items():
@@ -200,6 +208,25 @@ def upsert_edge(src_id, dst_id, label: str, props: dict = None):
 
     改法是 Gremlin 侧的 `coalesce(values(k), constant(v))`：属性已存在则保留原值，
     不存在才写入。新建边走 addE 时必然不存在，所以首写者照常写上。
+
+    ## 调用方声明的 source 必须被采纳（2026-08-31 修）
+
+    上面那版把「写一次」实现成了**丢弃调用方的取值**：
+
+        write_once = {'source': 'aws-etl'}      # 硬编码
+        for k, v in props.items():
+            if ks in write_once: continue      # 调用方的 source 被跳过
+
+    于是 handler.py 里 13 处 `{'source': 'eks-etl'}`、1 处 `'aws-etl-static'`
+    **全部静默失效**，新建的边一律写成 `aws-etl`。实测确认：
+    `upsert_edge(..., {'source': 'eks-etl'})` 生成的 Gremlin 里只有 `'aws-etl'`。
+
+    活图谱之所以还能看到 1228 条 `eks-etl`，是因为 `coalesce` 保护了**存量**边 ——
+    这个 bug 只影响此后新建的边，因此不会立刻暴露，只会让 provenance 缓慢腐坏。
+
+    正确语义是两件事分开：
+      · 写一次 = **已存在的边不覆盖**（由 coalesce 保证）
+      · 取什么值 = **首写者说了算**，也就是调用方传进来的那个
     """
     if src_id is None or dst_id is None:
         return None
@@ -209,8 +236,15 @@ def upsert_edge(src_id, dst_id, label: str, props: dict = None):
     # 故不做端点核对 —— 端点约束由 test_35 的 g06 在契约层面保证。
     assert_edge_type(lb)
 
+    props = dict(props or {})
+    # 调用方可以声明这条边的发现者（K8s 采集路径用 eks-etl、静态声明用 aws-etl-static）。
+    # 缺省才回落到 aws-etl。取值必须在契约词表内 —— 否则就是当初 eks-etl 那类
+    # 「代码在写、契约没声明」的漂移。
+    edge_source = props.pop('source', None) or DEFAULT_SOURCE
+    assert_source(edge_source, f"upsert_edge(label={lb})")
+
     ts = int(time.time())
-    write_once = {'source': 'aws-etl'}
+    write_once = {'source': edge_source}
     if is_dependency_edge(lb):
         # dependency_kind='static'：本 ETL 的边来自 AWS 资源配置「声明」的关系，
         # 而非运行时观测。与 deepflow 的 dynamic 相对，供 q1/q3 按类型过滤。
@@ -227,7 +261,9 @@ def upsert_edge(src_id, dst_id, label: str, props: dict = None):
     if props:
         for k, v in props.items():
             ks = safe_str(k)
-            # 调用方传进来的 source 等写一次属性不得绕过上面的保护
+            # `source` 已在上面 pop 出来并作为首写值采纳，这里挡的是 `dependency_kind`
+            # 与 `first_seen`：这两个由本函数按边类型判定，调用方不得直接指定，
+            # 否则 static/dynamic 的语义会随调用点各说各话。
             if ks in write_once:
                 continue
             vs = safe_str(v)

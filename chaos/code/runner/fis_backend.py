@@ -372,9 +372,23 @@ class FISClient:
                 "selectionMode": "ALL",
             }
         elif fault_type.startswith("fis_network") or fault_type.startswith("fis_vpc"):
+            # subnet_arns: 多子网列表（新）。subnet_arn: 单个（旧格式，保留兼容）。
+            #
+            # 为什么必须支持多个（2026-08-31 实测）：`aws:network:disrupt-connectivity`
+            # 的目标是**子网**，而 EKS 的 Pod 跨两个私有子网分布
+            # （PetSite 实测 11.0.2.0/24 在 1a、11.0.3.0/24 在 1c）。只断一个 AZ
+            # 的子网，观测方只有一半流量受影响，退化率会落进 5%~20% 的
+            # inconclusive 中间带 —— 拿不到判定，而不是拿到"弱依赖"。
+            # 验证一条边需要注入是**总体**的，否则判据的分辨力被自己削掉。
+            if "subnet_arns" in extra:
+                arns = extra["subnet_arns"]
+                if isinstance(arns, str):
+                    arns = [arns]
+            else:
+                arns = [extra["subnet_arn"]]
             return {
                 "resourceType": "aws:ec2:subnet",
-                "resourceArns": [extra["subnet_arn"]],
+                "resourceArns": arns,
                 "selectionMode": "ALL",
             }
         elif fault_type.startswith("fis_eks_pod"):

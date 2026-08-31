@@ -14,20 +14,25 @@
 | 0 卫生与基线 | 4 | 0 | 0 | 0 | 4 |
 | **0.5 把 Strands 跑起来** ★ | 4 | 2 | 1 | 0 | 1 |
 | **0.6 接入 AgentCore** | 2 | 0 | 1(review) | 0 | 1 |
-| 1 边验证接入 runner ★ | 6 | 4 | 0 | 0 | 2 |
+| 1 边验证接入 runner ★ | 11 | 11 | 0 | 0 | 0 |
 | 2 判定分辨力 | 4 | 0 | 0 | 0 | 4 |
 | 3 AWS 侧单边隔离 + 选边 | 4 | 0 | 0 | 0 | 4 |
 | 4 LLM 约束与评测 | 5 | 0 | 0 | 0 | 5 |
 | 5 定期演练 | 4 | 0 | 0 | 0 | 4 |
-| 6 契约剩余项 | 4 | 0 | 0 | 0 | 4 |
-| 7 部署与清理 | 3 | 0 | 0 | 3 | 0 |
+| 6 契约剩余项 | 8 | 3 | 0 | 0 | 5 |
+| 7 部署与清理 | 3 | 3 | 0 | 0 | 0 |
+| **9 FIS 打开托管资源边** ★ | 7 | 2 | 1 | 0 | 4 |
 | **8 闭环校正** ★ 终点 | 4 | 0 | 0 | 0 | 4 |
 | （T-202 方向写反，作废） | 1 | — | — | — | wontfix |
-| **合计** | **45** | **6** | **2** | **3** | **34** |
+| **合计** | **61** | **22** | **3** | **0** | **36** |
 
 基线：提交 `3477896` 时 **442 passed / 145 skipped / 0 failed**。
-**当前水位（cycle-4 后）：455 passed / 144 skipped / 0 failed**。
-活图谱基线：1731 边、94 条依赖边、`verify_status=untested` 94 条（已验证占比 **0.0**）。
+**当前水位：487 passed / 144 skipped / 0 failed**（python3.11）。
+活图谱（2026-08-31 16:13Z 实测）：94 条依赖边，
+**confirmed 10 / refuted 1 / inconclusive 2 / untested 81 —— 已判定覆盖率 13.83%**
+（今晨开始 0.0%）。横跨 `Calls` / `AccessesData` 两种边类型，
+Chaos Mesh / FIS 两种后端，且出现**第一条被证伪的边**（`petsearch -> s3`）。
+端点组合违约 **0**（清 211 条后完整跑一轮 ETL 复核）；未声明 source 取值 **0**。
 `verify_dod.sh --local-only`：cycle-0 PASS=3 → cycle-1 FAIL=9 → cycle-2 PASS=7 →
 **cycle-4 后 PASS=8 FAIL=4 SKIP=5**。**DoD-9 四项全绿，DoD-3 的 3.1/3.2 转绿**。
 
@@ -240,7 +245,15 @@
 - 核验：`verify_dod.sh` 的 3.2 已 PASS（只扫 `g.E()` 上下文里的 `property(single`，
   不误伤顶点写入，也不误伤文档字符串）
 
-### T-214 跑通第一条边的真实验证 · `todo` ★ 下一步（入口已就绪）
+### T-214 跑通第一条边的真实验证 · `done`（2026-08-31 08:47Z）★
+- **实测结果（活图谱可查）**：
+  - `petsite -[Calls]-> petsearch` → **confirmed**，置信度 **0.9959**，退化 74.92%
+  - `petlistadoptions -[Calls]-> petsearch` → **confirmed**，置信度 **0.9933**，退化 71.93%
+  - `verify_by=chaos-runner`、`verify_experiment=exp-search-service-http-chaos-20260831-084223`
+  - **已验证覆盖率 0.0% → 2.13%（2/94）**
+- 判定靠的是**合成退化率**：成功率只掉 3.51pp，吞吐塌陷 74.92%（abort 不产生 response 行，
+  成功率对它是盲的）。只看成功率会把这条真实的边判成 refuted
+- 拿到判定前又修掉三个缺陷，见 T-214e / T-214f / T-214g
 - 入口：`chaos/code/experiments/tier1/verify-edges-into-search-service.yaml`
   （在 `search-service` 注入 `http_chaos abort` 3m，观测 `petsite` + `list-adoptions`）
 - 先 `--dry-run` 走通相位与规格校验，再真实注入（向非生产 EKS 的注入已获概括授权）
@@ -398,6 +411,226 @@
 
 ## Stage 6 —— 契约剩余项
 
+### T-264 `source` 词表门禁 · `done`（2026-08-31）★
+- **缺陷**：`SOURCES` 从引入起就在契约里、也被 `graph_contract.py` re-export，
+  但**没有任何一处检查读它**。活图谱普查实测 4 种未声明取值共 **1240 条**：
+  `eks-etl` 1228（handler.py 13 处在写）、`deepflow` 8 个节点、`aws-etl-static` 3、`manual` 1
+- **对照**：同一份 YAML 里**被** `assert_edge_type` 检查的节点/边类型 **零漂移**。
+  漂移量与「有没有门禁」相关，与「声明得好不好」无关
+- 已做：
+  1. `graph_contract.assert_source()` + `is_declared_source()`，走既有 `GRAPH_CONTRACT_MODE`
+  2. 契约补声明 `eks-etl` / `aws-etl-static`（**刻意的语义区分**，不是拼错：
+     K8s API vs AWS 控制面、静态声明 vs 运行时观测）
+  3. `deepflow` 判为 `deepflow-etl` 的**同义漂移**，收敛写入侧而**不**扩词表 ——
+     否则 `edge_verification._OBSERVER_MARKERS` 这类按源分派的逻辑会漏判
+  4. `upsert_vertex` / `upsert_edge` 两个收口点接门禁
+  5. `test_38` 的 g04 静态扫描兜住没有运行时收口点的 ETL（deepflow/xray/cfn 各自手拼 Gremlin）
+- 验收：`test_38_source_vocabulary.py` 8 个用例全绿；全量 461 → **469 passed / 0 failed**
+- 依赖：无
+
+### T-265 `upsert_edge` 丢弃调用方 `source` · `done`（2026-08-31）★
+- **这是 T-264 查证过程中带出的更严重缺陷**，两者必须一起修：
+  不修它的话门禁形同虚设 —— 所有边都写死 `aws-etl`，自然永远合规
+- **缺陷**：写一次语义被实现成「丢弃调用方取值」——
+  `write_once = {'source': 'aws-etl'}` 硬编码 + `if ks in write_once: continue`。
+  于是 handler.py 里 **13 处 `eks-etl` + 1 处 `aws-etl-static` 全部静默失效**
+- **实测确认**：`upsert_edge(..., {'source':'eks-etl'})` 生成的 Gremlin 里只有 `'aws-etl'`
+- **为什么活图谱看不出来**：`coalesce` 保护了存量边，所以 1228 条 `eks-etl` 还在。
+  这个 bug 只影响**此后新建**的边 —— 不会立刻暴露，只会让 provenance 缓慢腐坏
+- 正确语义是两件事分开：写一次 = **已存在的边不覆盖**（coalesce 保证）；
+  取什么值 = **首写者说了算**（调用方传进来的那个）
+- 顺带保留了上一版**正确**的部分：`dependency_kind` 仍由函数按边类型判定，
+  调用方不得指定（g08 守门），否则 static/dynamic 会随调用点各说各话
+- 验收：g05/g06/g07/g08 四个用例；`dependency_kind` 不被调用方覆盖
+- 依赖：无
+
+### T-266 存量 `source` 取值归一 · `done`（2026-08-31 08:59Z，用户批准）
+- 8 个 `Microservice` 节点 `deepflow` → `deepflow-etl`；1 条边 `manual` → `manual-fix`
+- 复核：**图里出现的每个 source 取值都在契约词表内**（节点 3 种 / 边 11 种，未声明 0）
+- 归一后复跑 deepflow ETL 正常（`within('deepflow','deepflow-etl')` 兼容读生效）
+- 对象：8 个 `Microservice` 节点 `source='deepflow'` → `deepflow-etl`；
+  1 条 `ProtectsAccess` 边 `source='manual'` → `manual-fix`（无代码在写，手工遗留）
+- **必须在 T-270 之后**：旧代码还在线上时，下一轮 deepflow ETL 会把 `deepflow` 原样写回
+- 读取侧已做兼容：`etl_deepflow` 的存量清理查询改为
+  `has('source', within('deepflow','deepflow-etl'))` —— 只改写入侧会让那条查询
+  从此匹配不到任何节点，属于「修一个缺陷引入一个静默失效」，本仓库已经犯过一次（F8）
+- 循环该做到：写出可执行命令 + 影响面。**不执行**
+
+### T-267 无 `source` 的 230 条边 / 209 个节点 · `todo`
+- 现状：边 `TriggeredBy` 126、`TestedBy` 60、`MentionsResource` 16、`Calls` 11、
+  `Involves` 8、`LocatedIn` 6、其余 3；节点 209 个
+- 写入方多为 rca（Incident）与 chaos（ChaosExperiment），它们不走 etl_aws 的收口点
+- **先判定该不该强制**：`source` 对「谁首先发现了这条依赖」有意义，
+  对 Incident/ChaosExperiment 这类**本模块自产实体**未必有意义。
+  草率地强制 required 会逼出一堆无信息量的 `source='rca'`
+- 验收：契约里对每个边类型标明 `source_required: true|false` 并有测试校验
+- 依赖：T-263（`written_by` 对账）—— 两张卡回答的是同一个问题的两面
+
+### T-214e 候选边查询用 K8s 名匹配图谱规范名 · `done`（2026-08-31）★
+- **症状**：实验 PASSED、证据齐全、`usable=True`，但写回 **0/2**，
+  日志只说「图谱中无 `petsite -> search-service` 的候选边」——而两条边**明明在图里**
+- **根因**：`candidate_edges()` 拿 K8s 服务名匹配图谱节点名，而图谱 Microservice 用规范名
+  （`search-service`→`petsearch`、`list-adoptions`→`petlistadoptions`）；
+  且查询**不带标签**，匹到了同名的 Deployment / K8sService 节点，它们没有 Calls 入边
+- **与 183 条错源边同一根因家族**：按名字匹配、不带标签、名字跨标签重复（本图 12 组）
+- 修法：走 `shared/service_registry.ServiceRegistry.resolve()`（解析表唯一来源是
+  `profiles/petsite.yaml`，与 ETL 的 `service_mappings.json` 同源）；观测方名字同样解析；
+  **「无候选边」从 info 升级为 warning** 并打印候选边实际源端点
+- 依赖：无
+
+### T-214f 采集失败伪装成「零流量」污染谷值 · `done`（2026-08-31）★ 最危险
+- **症状**：修完 T-214e 后拿到证据，但 `petsite` 与 `list-adoptions` **同时**
+  「谷值请求=0 / 吞吐塌陷 100%」——而 petsite 被负载机持续打流量，不可能真的归零
+- **根因**：`metrics.collect()` 查询异常时 fallback 成 `(100%, 0 requests)`，
+  `observer_min_requests` 取 min，一次 ClickHouse 抖动就把谷值压成 0
+- **为什么最危险**：它不让实验失败，而是产出**高置信度的错误 confirmed**
+  （100pp 远超 20pp 判定线）。静默产出错误结论的系统比报错的系统坏得多
+- 深层原因：`(success_rate=100, total_requests=0)` 三义组合——「查询失败」「真零流量」
+  「真健康」在数据结构上无法区分。成功率通道当初专门防过，吞吐通道后加、没跟上纪律
+- 修法：`MetricsSnapshot.ok` 显式标志；`ok=False` 只入列表留痕、不参与任何 min；
+  `collect_steady` 只用 ok 采样点算均值；`_verify_edges` 的注入期请求量同样只看 ok
+- 验收：修后同一条边 `petsite` 基线 658 → 谷值 **165**（不再是 0），吞吐塌陷 74.92%；
+  守门用例 `test_o90` / `test_o91`
+- 依赖：无
+
+### T-214g Lambda 层缺 `requests`，`etl_xray` 已死 2 天 · `done`（2026-08-31）★
+- **症状**：`etl_xray` 每次调用 `ModuleNotFoundError: No module named 'requests'`，
+  查日志**自 2026-08-29 08:00 起一直失败**，发现时已 2 天
+- **根因**：`neptune_client_base` 懒加载 `requests`；其余三个函数各自 vendored 了它
+  （包 600KB–1.4MB），**只有 etl_xray 不带**（16KB），靠层提供——而层 `:6` 里从来没有
+- **最值得记的不是 bug 而是它活了 2 天**：一整个观测源静默死亡、无人发现。
+  而本项目的命题正是「你怎么知道边是真的」——数据源能死两天没人知道，
+  那么基于它的所有「未观测到」判定都是假阴性。这是 X-Ray 85% 假阴性教训的**运维版**
+- 修法：共享依赖放进层，发布 `:8` = 5 个 `.py` + requests/urllib3/certifi/idna/charset_normalizer
+- **记一次我自己的失误**：先发的层 `:7` 只打了 5 个 `.py`，凭源码目录推断层内容。
+  教训：替换共享产物前先下载旧产物对比，不要凭目录推断
+- 依赖：无
+
+### T-214h Phase 5 只看 SLI，不看 Pod readiness · `done`（2026-08-31 10:40Z）★
+- **症状**：`abort` 注入必然打伤目标 Pod（liveness 探针失败 → 重启循环，
+  **CRD 已正常删除也一样**，只能删 Pod 重建）。本轮两次注入各处置一次
+- 但实验**报 PASSED**：Phase 5 只查 SLI，而 SLI 由 HPA 新拉的健康 Pod 撑着看起来正常
+- 「abort 打伤 Pod」是固有代价不是缺陷；**「留下坏 Pod 却报 PASSED」是缺陷**
+- **两条判据，主判据是重启差值而非 readiness**：readiness 有滞后（实测 Phase 4 报
+  `2/2 running` 之后**还要 2.5 分钟**才退化），而 `restartCount` 在注入期间就已递增
+- `check_pods` 扩展返回 `restarts` / `per_pod_restarts`；Phase 0 存基线，Phase 5 比差值
+- 缺基线时**不判 FAILED 而是显式留痕**（`restarts=None` 区分「没测到」与「没有重启」）
+- FIS 后端刻意跳过该判据 —— 实测 FIS 路径不产生 tproxy 残留、不打伤 Pod
+- **首次真实生效即抓到 3 次损伤**，其中 pethistory 那轮是决定性验证：
+  `✅ Pod 检查: 2/2 ready` 但 `❌ 重启 +2` → 判 FAILED。**旧代码在这个场景会报 PASSED**
+  （list-adoptions 与 pay-for-adoption 两轮更严重：2/2 → 0/2，重启 0 → 12）
+- 验收：`tests/test_39_pod_damage_gate.py` 7 个用例；报告新增「注入目标 Pod 健康」节
+  与处置命令。全量 471 → **478 passed / 0 failed**
+- 依赖：无
+
+### T-290 用 FIS 打开 78 条「被依赖方是 AWS 托管资源」的边 · `doing`（2026-08-31）★
+- **此前判断这批边阻塞在 T-230（自建 SSM 改安全组），这个判断是错的** ——
+  FIS 原生就有需要的动作，实测账号内可用：
+  | FIS action | 可验证 |
+  |---|---|
+  | `aws:rds:reboot-db-instances` | RDSCluster 14 / RDSInstance 3 ✅ **本轮已用** |
+  | `aws:network:disrupt-vpc-endpoint` | AWSServiceEndpoint 11（ssm/dynamodb/sts/s3/xray） |
+  | `aws:eks:pod-network-blackhole-port` | **T-230 想要的手术刀式单边隔离，FIS 原生有** |
+  | `aws:lambda:invocation-error` | LambdaFunction 8（需 Lambda 扩展层） |
+  | `aws:s3:bucket-pause-replication` | S3Bucket 7（仅复制场景，用途有限） |
+- 本轮已完成 Aurora（见 T-291）。下一步优先 `disrupt-vpc-endpoint`（11 条，
+  且能同时覆盖走端点的 DynamoDB/S3 流量），再评估 Lambda
+- **ECRRepository 12 条判定为不可运行时验证**：镜像拉取只在 Pod 启动时发生，
+  属启动期依赖，注入无从观测 —— 如实记为「不适用」而非「待验证」
+- 依赖：无（T-230 可降级或作废，FIS 已提供同等能力）
+
+### T-291 Aurora 边验证（首个 FIS 边验证实验）· `done`（2026-08-31 11:10Z）★
+- 规格 `chaos/code/experiments/tier1/verify-edges-into-aurora.yaml`
+- **实测结果 4/4 写回**：
+  | 边 | 判定 | 置信度 | 退化 |
+  |---|---|--:|--:|
+  | `list-adoptions -[AccessesData]-> Aurora` | confirmed | 0.998 | 63.91pp |
+  | `pay-for-adoption -[AccessesData]-> Aurora` | confirmed | 0.998 | 59.57pp |
+  | `petsite -[AccessesData]-> Aurora` | **confirmed** | 0.982 | 36.21% |
+  | `pethistory -[AccessesData]-> Aurora` | inconclusive | 0.881 | 基线 12 < 20 下限 |
+- **`petsite -> Aurora` 是本轮最有价值的一条**：它此前只有 `deepflow-dns` 单源证据
+  （「观测到 petsite 解析过 Aurora 域名」）。DNS 解析不等于真的查库 ——
+  判 confirmed 说明这条单源边是真的，DNS 证据在这里没有制造假边
+- 两个实测事实修正了原计划：
+  1. 该集群**只有一个实例、MultiAZ=false**，`failover-db-cluster` 不适用，改用 reboot
+  2. 初版 `namespace: rds` 被 PolicyGuard R002 正确拒绝 —— 见 T-292
+- 实验整体判 **INCONCLUSIVE**（数据完备性门生效）：RDS 目标侧没有可用 SLI，
+  这是如实的降级而不是失败
+- **FIS 路径不打伤 Pod**（无 tproxy 残留、无 CRD 残留），Aurora 自愈回 `available`
+
+### T-292 PolicyGuard R002 命名空间白名单对 FIS 目标语义不适用 · `todo`
+- 现象：FIS 打 AWS 资源，而 R002 校验的是 K8s 命名空间白名单
+  `[petsite-staging, petsite-canary, chaos-sandbox, petadoptions]`
+- 实测：`namespace: rds` 被 DENY。**据此可判断仓库原有的
+  `experiments/fis/rds/fis-aurora-reboot-petlistadoptions.yaml` 从未真正执行过** ——
+  它写的也是 `namespace: rds`
+- 本轮处置：把 namespace 填成**受影响的应用命名空间** `petadoptions`（既在白名单里，
+  也确实是爆炸半径所在），**刻意不放宽白名单** —— 后者才是危险做法
+- 待做：给 AWS 资源类目标定义清楚 namespace 字段的语义并写进规格文档 +
+  R002 增加一条「backend=fis 时校验受影响命名空间」的显式规则，别靠约定
+- 依赖：无
+
+### T-293 观测方流量不足使 4 条边只能判 inconclusive · `todo`
+- `pethistory` 实测仅 12–26 请求/120s，两次实验都因未过 20 下限判 inconclusive
+  （`pethistory -> petlistadoptions`、`pethistory -> Aurora`）
+- 判 inconclusive 是**正确行为**（零流量与健康在指标上分不开，不得判 refuted），
+  但也意味着这些边永远拿不到结论
+- 做法二选一：给负载机加 pethistory 详情页的流量配比；或延长注入与观测窗口
+  让累计请求量过线。**不要降低 `min_observation_requests`** —— 那是拿判据换覆盖率
+- 依赖：无
+
+### T-294 用 FIS 验证 AWSServiceEndpoint 边 —— 4 条可做、7 条做不到 · `done`（2026-08-31 16:13Z）★
+- **用户指定的 `aws:network:disrupt-vpc-endpoint` 对这批边无从施加**（实测）：
+  该动作 `targets: VPCEndpoints -> aws:ec2:vpc-endpoint`，而 PetSite VPC
+  （vpc-010ab37a3f9f74725）里**只有一个**端点 `vpce-0b35b2472df108d50`
+  （guardduty-data）。ssm/sts/xray/s3/dynamodb 一个端点都没有 ——
+  那些端点全在 **agent VPC**（vpc-06731f30388b57818，Kiro Crew 本机所在 VPC），
+  与被观测的工作负载无关。PetSite 的服务经 NAT 走公网访问这些 API
+- **改用 `aws:network:disrupt-connectivity`**（`targets: Subnets`，
+  `scope=dynamodb|s3` 用 AWS 托管前缀列表挂拒绝 NACL，公网路径同样被拦），
+  覆盖 11 条里的 4 条
+- **剩下 7 条（ssm 4 / sts 2 / xray 1）任何 FIS 动作都做不到**：既无端点可断，
+  AWS 也不为这三个服务发布托管前缀列表（只有 S3/DynamoDB/CloudFront/
+  Ground Station/VPC Lattice 有）。替代路径见 T-296
+- 代码改动：`fis_backend` 的网络类目标加 `subnet_arns` 多子网支持 ——
+  EKS 的 Pod 跨两个私有子网（11.0.2.0/24 在 1a、11.0.3.0/24 在 1c），
+  只断一个 AZ 会让退化率落进 inconclusive 中间带，等于自己削掉判据分辨力
+- 顺带查出目录缺陷：`fault_catalog.yaml` 的 `fis_vpc_endpoint_disrupt` 声明
+  `requires: [subnet_arn]`，而该动作实际要求 `aws:ec2:vpc-endpoint` 目标 ——
+  声明与 AWS 侧不一致，**该故障类型从未被真正执行过**
+- **结果**：`petsearch -> dynamodb` confirmed（1.000，成功率+吞吐双通道）、
+  `payforadoption -> dynamodb` confirmed（1.000，仅吞吐通道）、
+  `petsearch -> s3` **refuted**（0.731）—— **本项目第一条被证伪的边**
+- 环境收口：两次注入后 NACL 全部还原、零非默认 NACL 残留、Pod 全 Running
+
+### T-295 护栏第三次对准了处理本身 —— 需要 canary 观测方概念 · `todo` ★
+- 本轮第三次踩到同一个错误。前两次在注入目标侧（T-214b），这次在**观测方侧**：
+  DynamoDB 实验护栏挂 `any_observer` 阈值 `< 20%`，T+~60s 时 `search-service`
+  掉到 **0.0%** 熔断，零判定。根因：**petsearch 的主存储就是 DynamoDB，
+  这条依赖是全量的**，观测方必然归零 —— 而归零正是这条边成立的证据
+- 一句话结论（与 T-214b 同构，只换主体）：
+  > 对全量依赖的边，**观测方的成功率不是护栏信号，它就是处理本身**
+- 本轮处置：该实验 `stop_conditions: []`，靠 FIS duration 自动回滚 +
+  max_duration + 有界影响面三层兜底（实测熔断后 NACL 立刻还原，零残留）
+- 待做：引入 **canary 观测方** —— 声明为「预期不依赖注入目标」、只用于护栏、
+  不参与判定。本实验没有干净 canary（petsite 经 petsearch 会传导退化，
+  list-adoptions 走 Aurora 但列进 observers 会产生一次「无候选边」跳过），
+  所以需要规格层面新增 `canaries:` 段而不是复用 `observers:`
+- 依赖：无
+
+### T-296 ssm / sts / xray 那 7 条边的替代验证路径 · `todo`
+- FIS 两条路都走不通（见 T-294）。可行替代，按侵入性从低到高：
+  1. **Chaos Mesh NetworkChaos + `externalTargets`** —— 从调用方 Pod 按域名做
+     L3/L4 分区（如只拦 `ssm.ap-northeast-1.amazonaws.com`）。单服务粒度、
+     不需新建基础设施、且不依赖 DNS 缓存行为
+  2. **Chaos Mesh DNSChaos + `patterns`** —— 只对特定域名返回错误。更轻，
+     但 SDK 启动时解析一次即复用连接，长连接场景会假阴性
+  3. **新建 interface VPC 端点后再用 `disrupt-vpc-endpoint`** —— 能用用户指定的
+     动作，但要真花钱（每端点每 AZ 约 $10/月）**且改变了被测依赖路径本身**
+     （NAT/公网 → PrivateLink），验证对象就不是原来那条边了。不推荐
+- 推荐 1。**刻意不选 3**：为了让某个工具用得上而改变被测系统，是本末倒置
+- 依赖：无
+
 ### T-260 属性权威表补全 · `todo`
 - 已做：`source` 写一次（`coalesce(values(k), constant(v))`），etl_aws + etl_cfn 两处
 - 未做（ServiceNow IRE 三机制里的后两条）：**被拒写入要明示**（对应 `maskedAttributes`，
@@ -429,20 +662,37 @@
 
 ## Stage 7 —— 部署与清理（全部 blocked 在用户批准）
 
-### T-270 部署四个 ETL 函数代码 · `blocked`（用户批准）
+### T-270 部署四个 ETL 函数代码 · `done`（2026-08-31 08:57Z，用户批准）
+- 层 **`:7` → `:8`**（`:7` 是我的失误产物，见 T-214g）；四个函数代码全部更新
+- 逐个实跑验证：aws 310 节点/462 边、deepflow 5 节点/7 边、cfn 6 deps、xray 35 节点/28 边
+- **门禁违约 0 条** —— 契约 enforce + 新增 source 词表门禁均未拦住任何合法写入
 - 已就绪：层 `:6` 已发布，四个函数**均已指向 `:6`**（顺带修掉了 xray 在 `:5`、其余 `:2` 的既存漂移）
 - 未生效的修复都在函数包里：`find_vertex_by_name` 两参数签名、契约写入门禁
 - 回退：设 `GRAPH_CONTRACT_MODE=warn` 即降为只告警，不必回滚代码
 - 循环该做到：打好包 + 一条可执行命令 + 验证层就绪。**不执行**
 
-### T-271 清 183 条错源边 · `blocked`（依赖 T-270）
+### T-271 清错源边 · `done`（2026-08-31 08:58Z）
+- 实际清了 **211 条**（不是 183 —— 部署前又累积了 28 条），5 种形态：
+  `K8sService->Pod` 79、`Namespace->Pod` 65、`Deployment->Pod` 57、
+  `Deployment->K8sService` 6、`Deployment->Deployment` 4
+- **根因修复已在生产确认有效**：清完后再跑一整轮 aws-etl，违约仍为 **0 条**
+  （这才是验收标准，光删不算 —— 旧代码下一轮就会重建）
+- `Microservice-[RunsOn]->Pod` 从 36 条涨到 **42 条**
 - 命令：`infra/fix_wrong_source_edges.py --apply`
 - **必须在 T-270 之后**：旧代码下一轮 ETL 会原样重建，现在清等于白删
 - 数据：`Microservice -[RunsOn]-> Pod` 正确的只有 36 条，错源 173 条（83% 错）。
   其中 108 条经 `_K8S_SVC_ALIAS` 补全后可转为正确边，剩 65 条
   （`Namespace chaos-mesh/deepflow`）本就不该有边
 
-### T-272 开启边过期收敛 · `blocked`（依赖 T-270）
+### T-272 开启边过期收敛 · `done`（2026-08-31 10:17Z）
+- 已设 `GRAPH_EDGE_EXPIRY_ENABLED=true`（etl_aws，唯一调用执行器的函数）
+- **实测 0 条待翻转，且这是正确结果**：那 14 条超期边**已全是 `active=False`** ——
+  被 etl_deepflow 自己的 `reconcile_calls_edges`（Calls 阈值 1800s）提前处理掉了。
+  执行器的两个查询都带 `.has('active', true)`，所以幂等、不会重写已 false 的边
+- 判据有效性反证（cutoff=now 等价 TTL=0）：`AccessesData` 20 条 / `Calls` 5 条 /
+  `DependsOn` 1 条活跃动态边**都能被匹配到**，超期 0 条是因为它们在被持续刷新
+- **真正价值在覆盖 `AccessesData`/`DependsOn`/`InvokesVia`/`PublishesTo` 四类**——
+  此前无任何源会把它们置 false（deepflow 只管 Calls，xray 只管 source='xray'）
 - 动作：设 `GRAPH_EDGE_EXPIRY_ENABLED=true`
 - 现状：活图谱 dry-run 0 条待失效 —— 存量边只有 `last_updated`/`last_scanned` 而无 `last_seen`，
   查询要求 `has(last_seen, ...)`，**历史边不会被误置 false**（这是刻意的保守方向）

@@ -102,6 +102,54 @@ def _violate(mode: str, msg: str) -> None:
 
 # ── 类型门禁 ──────────────────────────────────────────────────────────────
 
+def assert_source(source: str, context: str = '') -> None:
+    """校验 source 取值在契约声明的词表内。
+
+    ## 为什么补这个门禁
+
+    `SOURCES` 从引入起就存在，且被 graph_contract.py **re-export**，但
+    **没有任何一处检查读它** —— 声明了词表却不设门禁。2026-08-31 对活图谱普查
+    实测后果：
+
+        取值              条数    状态
+        eks-etl           1228    代码在写（handler.py 13 处），未声明
+        aws-etl-static       3    代码在写（handler.py:376），未声明
+        deepflow             8    代码在写（节点，etl_deepflow:1124/1165），
+                                  未声明（契约里叫 deepflow-etl）
+        manual               1    无代码在写，手工遗留，未声明
+                          ----
+                          1240    占全图 1802 条边 + 1063 节点的 43%
+
+    对照同一份 YAML 里**被** `assert_edge_type` 检查的那部分：零漂移。
+    也就是说漂移量与「有没有门禁」完全相关，与「声明得好不好」无关。
+
+    ## 为什么不顺手放宽词表了事
+
+    `eks-etl` / `aws-etl-static` 是**刻意的语义区分**（K8s API 与 AWS 控制面是不同
+    的真值来源、静态声明与运行时观测是不同的证据等级），补进声明是对的。
+    而 `deepflow` 是 `deepflow-etl` 的**同义漂移**，两个名字指同一个源 ——
+    这种要收敛写入侧，不能靠扩词表消化，否则 `edge_verification._OBSERVER_MARKERS`
+    这类按源分派的逻辑会漏判。
+
+    Args:
+        source: 待写入的 source 取值。
+        context: 出错信息里附带的调用位置，便于定位是哪条写入路径违约。
+    """
+    if source in SOURCES:
+        return
+    where = f"（{context}）" if context else ''
+    _violate(_mode(), (
+        f"source={source!r} 未在契约中声明{where}。"
+        f"合法取值见 profiles/graph_contract.yaml 的 sources："
+        f"{sorted(SOURCES)}"
+    ))
+
+
+def is_declared_source(source: str) -> bool:
+    """只判断不抛错 —— 给需要自己决定如何处置的调用方（例如批量清理脚本）。"""
+    return source in SOURCES
+
+
 def assert_node_type(label: str) -> None:
     """节点类型必须已在契约里声明。"""
     mode = _mode()

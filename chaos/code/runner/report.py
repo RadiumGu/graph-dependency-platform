@@ -234,6 +234,21 @@ class Reporter:
             icon2 = "✅" if check_result["passed"] else "❌"
             lines.append(f"- {icon2} {check_result['desc']}")
 
+        # 注入目标 Pod 健康（T-214h）。有损伤必须写进报告 —— 历史上实验报 PASSED
+        # 却留下两个重启循环的 Pod，污染被 HPA 新拉的干净 Pod 完全掩盖。
+        pb, pa = result.target_pods_before or {}, result.target_pods_after or {}
+        if pb or pa:
+            lines += ["", "## 注入目标 Pod 健康（Phase 0 → Phase 5）"]
+            lines.append(
+                f"- 就绪: {pb.get('running','?')}/{pb.get('total','?')} → "
+                f"{pa.get('running','?')}/{pa.get('total','?')}")
+            lines.append(
+                f"- 容器重启数: {pb.get('restarts','?')} → {pa.get('restarts','?')}")
+        if result.pod_damage:
+            lines += ["", "### ⚠️ 本次实验对目标 Pod 造成的损伤"]
+            for d in result.pod_damage:
+                lines.append(f"- {d}")
+
         # FIS 特有信息
         if exp.backend == "fis":
             lines += ["", "## FIS 实验信息"]

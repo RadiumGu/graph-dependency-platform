@@ -66,6 +66,8 @@ def classify_intervention(
     observer_baseline_requests: int,
     observer_injected_requests: int,
     observer_degradation_pct: float,
+    evidence_channel: str = 'both',
+    throughput_only_confirm_pct: float = 60.0,
 ) -> tuple[str, str]:
     """把一次注入的观测结果判成 confirmed / refuted / inconclusive。
 
@@ -73,6 +75,9 @@ def classify_intervention(
         observer_baseline_requests: **观测方**（调用侧）基线期请求数
         observer_injected_requests: **观测方**注入期请求数
         observer_degradation_pct:   观测方成功率下降的百分点
+        evidence_channel:           'success_rate' / 'throughput_only' / 'both' / 'none'
+                                    —— 证据来自哪条通道，决定证据强度
+        throughput_only_confirm_pct: 纯吞吐证据要判 confirmed 需达到的退化率
 
     Returns:
         (status, reason) —— reason 会写进图谱与报告，便于事后追溯为何如此判定。
@@ -80,6 +85,20 @@ def classify_intervention(
     判定顺序刻意先查数据量：metrics.collect() 在无数据时 fallback
     success_rate=100.0 / total_requests=0，**零流量与健康长得完全一样**。
     不先设请求量下限，一条没有流量的边会被判成 refuted（假阴性）。
+
+    ## 为什么要分证据通道（2026-08-31 15:56 实测补入）
+
+    两条通道的证据强度**不对等**：
+      · 成功率下降 = 观测方**自己**返回了失败 —— 归因明确
+      · 吞吐塌陷   = 观测方的请求量少了 —— 三种成因分不清：它自己失败到不产生
+        response 行（真依赖）／它的上游不再调它（传导）／测量管道受影响
+
+    实测踩到第二种：断 DynamoDB 后 pay-for-adoption 成功率退化 **0.00pp**、
+    吞吐塌陷 100%，但它的入流量来自 petsite，而 petsite 因 petsearch 失败已不再
+    提交领养 —— 「它不再被调用」被当成了「它依赖 DynamoDB」。
+
+    所以纯吞吐证据判 confirmed 的门槛显著抬高；达不到就判 inconclusive 而不是
+    confirmed —— 与「零流量不判 refuted」同一方向：**宁可判不了，不可判错**。
     """
     need = _T['min_observation_requests']
     if observer_baseline_requests < need or observer_injected_requests < need:
@@ -89,9 +108,18 @@ def classify_intervention(
                 f"零流量与健康在指标上无法区分，不能据此证伪")
 
     if observer_degradation_pct >= _T['confirm_degradation_pct']:
+        if (evidence_channel == 'throughput_only'
+                and observer_degradation_pct < throughput_only_confirm_pct):
+            return (STATUS_INCONCLUSIVE,
+                    f"退化 {observer_degradation_pct:.1f}% 全部来自**吞吐塌陷**、"
+                    f"成功率通道无信号，而吞吐下降分不清「观测方自己失败」与"
+                    f"「上游不再调它」。纯吞吐证据需 >= {throughput_only_confirm_pct}% "
+                    f"才判 confirmed，故不下结论")
+        chan = {'both': '成功率+吞吐双通道', 'success_rate': '成功率通道',
+                'throughput_only': '仅吞吐通道'}.get(evidence_channel, evidence_channel)
         return (STATUS_CONFIRMED,
                 f"观测方退化 {observer_degradation_pct:.1f}% "
-                f">= {_T['confirm_degradation_pct']}%，依赖成立")
+                f">= {_T['confirm_degradation_pct']}%（{chan}），依赖成立")
 
     if observer_degradation_pct <= _T['refute_degradation_pct']:
         return (STATUS_REFUTED,

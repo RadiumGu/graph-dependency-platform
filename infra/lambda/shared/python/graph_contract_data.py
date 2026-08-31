@@ -15,7 +15,7 @@ TIMESTAMP_FIELD = 'last_seen'
 # 历史遗留的时间戳字段名。读取侧要兼容，写入侧只写 TIMESTAMP_FIELD。
 TIMESTAMP_LEGACY_ALIASES = ('last_updated', 'last_scanned')
 
-SOURCES = frozenset(['aws-etl', 'business-layer', 'cfn-etl', 'deepflow-dns', 'deepflow-etl', 'deepflow-l4', 'manual-fix', 'nfm', 'xray'])
+SOURCES = frozenset(['aws-etl', 'aws-etl-static', 'business-layer', 'cfn-etl', 'deepflow-dns', 'deepflow-etl', 'deepflow-l4', 'eks-etl', 'manual-fix', 'nfm', 'xray'])
 
 # 写一次属性：边上这些属性只由**首个发现者**写入，后续任何源都不得覆盖。
 # source 记录的是谁首先发现了这条依赖 —— 被覆盖等于抹掉发现史。

@@ -52,6 +52,19 @@ class MetricsSnapshot:
     success_rate: float       # %，0-100
     latency_p99_ms: float     # ms
     total_requests: int = 0
+    # 采集是否成功。**False 表示这个采样点没有数据，不表示"指标为 0"**。
+    #
+    # 2026-08-31 实测缺陷：`metrics.collect()` 在 ClickHouse 查询异常时
+    # fallback 成 `success_rate=100.0 / total_requests=0`，与「真的零流量」
+    # 以及「真的健康」三者在结构上无法区分。后果落在吞吐通道上：
+    # `observer_min_requests` 取各采样点最小值，一次查询抖动就把谷值压成 0，
+    # 于是 322 → 0 被算成「吞吐塌陷 100%」，合成退化率 100pp，
+    # 一条边会被**误判 confirmed**。
+    #
+    # 成功率通道当初专门防过这件事（min 只在有值时更新、判定前先查请求量下限），
+    # 吞吐通道是后加的，没有跟上同一条纪律 —— 这正是「不变量要写成代码而不是
+    # 写在注释里」的又一例。
+    ok: bool = True
 
     def get(self, metric: str) -> float:
         return {
@@ -84,6 +97,18 @@ class StopCondition:
     window: str = "30s"
     action: str = "abort"
     cloudwatch_alarm_arn: Optional[str] = None  # FIS 原生 Stop Condition
+    # 护栏**看谁**（T-214b）。默认 injection 保持既有行为。
+    #   "injection"        —— 注入目标自己
+    #   "any_observer"     —— 任一观测方触发即熔断
+    #   "observer:<svc>"   —— 指定某个观测方
+    #
+    # 为什么必须能选：边验证实验里**注入目标本来就该失败** —— abort 掉 B 的流量，
+    # B 的成功率必然掉到接近 0，于是基于 B 的护栏必然在 Phase 5 之前触发，
+    # `_verify_edges` 永远跑不到（2026-08-31 首次真实注入即如此：T+71s 掉到 27.4%
+    # 触发 <40% 熔断，实验以 ERROR 收场、零判定）。
+    # 要防的是**附带损害**（调用方崩了），不是预期效果。注入目标侧只保留一个
+    # 极低的地板，防注入手段本身失控。
+    target: str = "injection"
 
     def is_triggered(self, snapshot: MetricsSnapshot) -> bool:
         op, threshold = parse_threshold(self.threshold)
@@ -92,7 +117,20 @@ class StopCondition:
 
     def describe(self, snapshot: MetricsSnapshot) -> str:
         value = snapshot.get(self.metric)
-        return f"{self.metric}={value:.1f} 满足停止条件 {self.threshold}"
+        return f"{self.metric}={value:.1f} 满足停止条件 {self.threshold} [{self.target}]"
+
+    # ── 护栏对象判定 ────────────────────────────────────────────────────────
+    def applies_to_injection(self) -> bool:
+        return self.target == "injection"
+
+    def observer_scope(self) -> Optional[str]:
+        """返回 '*'（任一观测方）、具体服务名，或 None（不看观测方）。"""
+        if self.target == "any_observer":
+            return "*"
+        if self.target.startswith("observer:"):
+            svc = self.target.split(":", 1)[1].strip()
+            return svc or None
+        return None
 
 
 @dataclass
@@ -264,6 +302,7 @@ def _parse_stops(items) -> list[StopCondition]:
         window=c.get('window', '30s'),
         action=c.get('action', 'abort'),
         cloudwatch_alarm_arn=_expand_arn(c.get('cloudwatch_alarm_arn') or ""),
+        target=(c.get('target') or 'injection').strip(),
     ) for c in (items or [])]
 
 

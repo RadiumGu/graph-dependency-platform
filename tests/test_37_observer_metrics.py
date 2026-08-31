@@ -190,3 +190,163 @@ def test_o12_no_cardinality_on_edge_properties():
         for m in re.finditer(r"""g\.E\(\)[^"']*?property\(\s*single""", t, re.S):
             bad.append(f"{p}:{t[:m.start()].count(chr(10)) + 1}")
     assert not bad, f"边属性上仍有 property(single, ...): {bad}"
+
+
+# ─── SLI 口径（2026-08-31 实测缺陷）─────────────────────────────────────────
+
+def test_o13_sli_query_excludes_dns():
+    """
+    SLI 查询必须只统计应用层协议。
+
+    实测缺陷：原实现只按 `request_domain LIKE '%svc%'` 过滤，于是同一服务名的
+    **DNS 查询**也被计入成功率。K8s 默认 ndots=5 会把 FQDN 逐个拼上搜索域
+    再查一遍，产生大量预期内的 NXDOMAIN（response_status=4 / response_code=3），
+    被当成服务故障：
+
+        list-adoptions   混合口径 31.37%  ->  仅 HTTP 100.00%
+        search-service   混合口径 69.16%  ->  仅 HTTP 100.00%
+
+    后果有两层，第二层更要紧：稳态检查 >= 95% 永远过不了（实验在 preflight 就失败）；
+    且噪声底盘随 DNS 行为波动，一次真实的 20pp HTTP 退化会被淹没或伪造出来 ——
+    与不变量 7 同类：「坏掉」和「正常」在指标上分不开。
+    """
+    from runner.metrics import DeepFlowMetrics
+    f = DeepFlowMetrics._proto_filter()
+    assert "l7_protocol_str" in f, "SLI 未按协议过滤"
+    assert "'HTTP'" in f
+    assert "DNS" not in f, "DNS 绝不能进 SLI 白名单"
+
+
+def test_o14_collect_sql_carries_proto_filter():
+    """过滤必须真的进到 collect() 的 SQL 里，不能只定义了常量没人用。"""
+    src = (ROOT / "chaos" / "code" / "runner" / "metrics.py").read_text(encoding="utf-8")
+    i = src.index("def collect(")
+    j = src.index("def collect_steady(")
+    body = src[i:j]
+    assert "_proto_filter()" in body, "collect() 的 SQL 未应用协议过滤"
+
+
+def test_o15_app_protocol_allowlist_is_by_name_not_number():
+    """
+    白名单用协议名而非数字枚举：实测本环境 HTTP=20 / DNS=120，
+    但数字是 DeepFlow 内部实现，升级可能变。
+    """
+    from runner.metrics import DeepFlowMetrics
+    assert all(isinstance(p, str) and not p.isdigit()
+               for p in DeepFlowMetrics.APP_PROTOCOLS)
+
+
+# ─── 清理路径（2026-08-31 真实注入暴露）───────────────────────────────────────
+
+def test_o16_cleanup_calls_delete_with_keywords_only():
+    """
+    清理路径调用 injector.delete 必须全部用关键字传参。
+
+    `ChaosMCPClient.delete(self, chaos_type, name, namespace)` 的**第一个**位置参数
+    是 `chaos_type` 而不是 `name`。原实现按位置传实验名、又用关键字传 chaos_type，
+    撞成 `TypeError: got multiple values for argument 'chaos_type'`。
+
+    这个 bug 一直没被发现，是因为两处调用都在**熔断/异常清理路径**上 ——
+    72 个历史实验全部 result='passed'，清理路径从未被执行过。
+    与「写回 100% 失败 21 次」是同一个元模式：失败路径从不被走到。
+
+    2026-08-31 真实注入实测后果（这不是理论风险）：
+      stop condition 在 27.4% 触发 -> 清理抛异常 -> HTTPChaos CRD 留在集群继续生效
+      -> 强删仍在生效的 CRD 会把 tproxy 拦截残留在目标 Pod 的网络命名空间
+      -> 容器重启清不掉，两个被命中的 Pod 进 CrashLoopBackOff，只能删 Pod 重建。
+    """
+    import re
+    src = (ROOT / "chaos" / "code" / "runner" / "runner.py").read_text(encoding="utf-8")
+    calls = re.findall(r"injector\.delete\((.*?)\)", src, re.S)
+    assert calls, "runner.py 里找不到 injector.delete 调用"
+    for c in calls:
+        args = [a.strip() for a in c.split(",") if a.strip()]
+        for a in args:
+            assert "=" in a, (
+                f"injector.delete 有位置参数 {a!r} —— 第一个位置参数是 chaos_type "
+                f"不是 name，必须全部用关键字传参"
+            )
+
+
+def test_o17_delete_signature_order_is_chaos_type_first():
+    """
+    钉住被调方签名顺序。若将来有人把 delete 的参数顺序改成 (name, chaos_type)，
+    这条测试会失败，提醒同步改所有调用点 —— 而不是让它在只有熔断时才走的
+    路径上静默炸掉。
+    """
+    import inspect, sys as _sys
+    sys.path.insert(0, str(ROOT / "chaos" / "code"))
+    from runner.chaos_mcp import ChaosMCPClient
+    params = list(inspect.signature(ChaosMCPClient.delete).parameters)
+    assert params[:3] == ["self", "chaos_type", "name"], (
+        f"delete 签名变了：{params} —— 请同步 runner.py 的两处调用点")
+
+
+def test_o18_phase4_deletes_crd_on_normal_completion():
+    """
+    正常完成路径也必须删 Chaos Mesh CRD。
+
+    原 docstring 写着「Chaos Mesh duration 字段负责到期删除 CR」——**假设是错的**。
+    2026-08-31 实测：duration 到期后故障停止生效但 CRD 对象仍存在，
+    而 runner 只在熔断/异常路径删。后果是一个 PASSED 的实验结束后
+    httpchaos 仍有 1 条，两个被注入过的 Pod 随后从 2/2 退回 1/2
+    （tproxy 仍挂在 netns），而 Phase 5 在这之前采样、显示 100% 通过 ——
+    污染被完全掩盖，并成为下一次实验的稳态基线污染源。
+    """
+    src = (ROOT / "chaos" / "code" / "runner" / "runner.py").read_text(encoding="utf-8")
+    i = src.index("def _phase4_recover")
+    j = src.index("def _phase5_steady_state_after")
+    body = src[i:j]
+    assert "injector.delete(" in body, "Phase4 未在正常路径删除 CRD"
+    assert "chaos_type=" in body, "Phase4 的 delete 必须关键字传参"
+    # 删不掉要显式报错，不能静默
+    assert "logger.error" in body, "Phase4 删除 CRD 失败时必须显式报错"
+
+
+# ── 采集失败不得伪造谷值（2026-08-31 二次实测缺陷）──────────────────────────
+
+def test_o90_failed_collection_excluded_from_min_requests():
+    """`ok=False` 的采样点只入列表、不参与 min。
+
+    `metrics.collect()` 查询异常时 fallback 成 (100%, 0 requests)。把它算进
+    `observer_min_requests`，一次 ClickHouse 抖动就让谷值变 0 —— 实测把
+    petsite 的基线 322 → 谷值 0 算成「吞吐塌陷 100%」，合成退化率 100pp，
+    足以把一条边**误判成 confirmed**。
+    """
+    from runner.experiment import MetricsSnapshot
+
+    r = _result()
+    r.record_observer_baseline('petsite', MetricsSnapshot(
+        timestamp=0, success_rate=100.0, latency_p99_ms=10.0, total_requests=322))
+
+    # 两个真实采样点 + 一个采集失败的采样点
+    r.record_observer_snapshot('petsite', MetricsSnapshot(
+        timestamp=1, success_rate=100.0, latency_p99_ms=10.0, total_requests=300))
+    r.record_observer_snapshot('petsite', MetricsSnapshot(
+        timestamp=2, success_rate=100.0, latency_p99_ms=0.0, total_requests=0, ok=False))
+    r.record_observer_snapshot('petsite', MetricsSnapshot(
+        timestamp=3, success_rate=100.0, latency_p99_ms=10.0, total_requests=310))
+
+    assert len(r.observer_snapshots['petsite']) == 3, "失败的采样点仍应入列表（留痕）"
+    assert r.observer_min_requests['petsite'] == 300, "谷值不得被失败采样点污染"
+    # 真实情况是"健康"：吞吐几乎没掉，合成退化率应接近 0 而不是 100
+    drop = r.observer_throughput_drop_pct('petsite')
+    assert drop is not None and drop < 10.0, f"吞吐塌陷应接近 0，实得 {drop}"
+
+
+def test_o91_all_collections_failed_yields_no_verdict_input():
+    """全部采样点都采集失败时，min 一个都不写 —— 宁可判不了，不可编一个谷值。"""
+    from runner.experiment import MetricsSnapshot
+
+    r = _result()
+    r.record_observer_baseline('petsite', MetricsSnapshot(
+        timestamp=0, success_rate=100.0, latency_p99_ms=10.0, total_requests=322))
+    for i in range(3):
+        r.record_observer_snapshot('petsite', MetricsSnapshot(
+            timestamp=i, success_rate=100.0, latency_p99_ms=0.0,
+            total_requests=0, ok=False))
+
+    assert 'petsite' not in r.observer_min_requests
+    assert 'petsite' not in r.observer_min_success_rate
+    assert r.observer_throughput_drop_pct('petsite') is None
+    assert r.observer_degradation_rate('petsite') is None
