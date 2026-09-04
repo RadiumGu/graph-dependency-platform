@@ -37,6 +37,8 @@
 | 21 | FIS 目录 37 条里 5 条从来不可执行（14%） | 声明存在但一次没跑过 | ✅ 已修 |
 | 22 | `target_service` 兼任 kubectl 选择器与图谱节点名 | 边切断拓扑无法表达 | ✅ 已修 |
 | 23 | 「PetSite 只在启动时读一次 SSM」这条既有认知是错的 | 依赖强度判断全错 | ✅ 已更正 |
+| 24 | 契约三个元字段全部零消费方，note 过期半个月无人发现 | 身份键迁移被永久阻塞 | ✅ 已修 |
+| 25 | 采集 skip 规则只挡新写入、从不回收旧数据 | 9 个越界节点长期滞留 | ✅ 已修（Lambda 那 5 个待授权） |
 
 其中 **#7 / #8 / #10 是 08:30–09:00 为了拿到第一条边的判定而查出的**，
 **#11 – #14 是 10:10–11:12 扩大验证覆盖面时查出的**，都不在最初报给用户的 6 条里。
@@ -709,6 +711,136 @@ PetSite 自身请求      total=854              (15 分钟)
 
 ---
 
+---
+
+## 24. 契约三个元字段全部零消费方（2026-09-04 审计）
+
+起因是核一遍 33 个节点类型的 `identity` 与 `scope_note` 是否自洽。
+**身份键本身全绿**——活图谱里 33/33 类型的身份键 100% 存在且唯一，没有重演
+EC2Instance 那种 4/14 重复实体。问题全在围绕身份键的三个元字段上：
+
+| 元字段 | 状态 | 后果 |
+|---|---|---|
+| `immutable` | 唯一读取函数 `identity_is_immutable` **全仓库零调用方** | 见下 |
+| `scope_note` | 纯注释，无任何读取方 | 已知缺陷无法被程序取用 |
+| `preferred` | 声明了「将来切到 arn」，**无任何机制检查前提何时满足** | TargetGroup 迁移被永久阻塞 |
+
+### `identity_is_immutable` 的问题不是「写错了」，是一个名字混淆了两个问题
+
+我在审计的第一轮把它判成「语义是反的」，**这个判断过重了**。函数体
+`return spec.get('immutable') in (True, 'lifetime')` 本身是对的——对某个问题而言：
+
+```
+Q1 「这个键可以安全 merge 吗」      -> 'lifetime' 是 **可以**
+Q2 「这个键跨对象重建还成立吗」      -> 'lifetime' 是 **不成立**
+```
+
+函数名写的是 Q2（immutable 的字面意思），函数体答的是 Q1。因为它**零调用方**，
+两种读法都从未被验证过，所以哪个语义"对"取决于第一个调用者以为自己在问什么。
+
+为什么 Q1 上 `lifetime` 合格：可变身份键的真实危害是「同一实体裂成两份」
+（EC2Instance 的 name 取自可变 Name 标签，而机器一直是同一台，实测 4/14 重复）。
+Pod 换名产生的是**新实体**，不构成这种危害。
+
+修法是拆成 `identity_is_stable_for_merge`（Q1）与
+`identity_survives_recreation`（Q2），并由 `test_42` 的 m04 锁住
+「两者必须在且仅在 lifetime 类型上分歧」——如果永远一致，拆分就是纯噪声。
+
+### `preferred` 的代价是实测出来的
+
+TargetGroup 的 note（2026-08-30）写着「18 个现存节点**全部**没有 arn 属性，
+待存量都带上 arn 后再切」。2026-09-04 实况：
+
+- **14/18 已有 arn**——note 过期半个月无人发现，因为没有任何读取方
+- 那个条件**在结构上不可满足**：剩下 4 个节点，3 个（`nginx-tg-1/2/3`）在
+  AWS 侧已删除、1 个（`openclaw-tg-v2`）被 `SKIP_TG_PREFIXES` 刻意排除采集，
+  ETL 永远不会再碰它们、永远补不上 arn
+
+补上自动检查后立刻浮出一个没人知道的事实：**8 个 `preferred` 类型里 7 个早已
+回填完整、当时就能切**（DynamoDBTable / ECRRepository / LambdaFunction /
+LoadBalancer / SNSTopic / SQSQueue / StepFunction）。
+
+### 判据设计：必须区分 PENDING 与 RESIDUE
+
+`test_42::m08` 对活图谱核验，三种状态只有中间那种判失败：
+
+| 状态 | 判据 | 含义 | 处置 |
+|---|---|---|---|
+| PENDING | 0 个节点有该属性 | 写入方还没开始写 | 等待合理 |
+| **RESIDUE** | 0 < k < N 有 | **写入方在写，缺的是刷不到的残留** | **必须回收** |
+| UNLOCKED | N 个全有且唯一 | 可以切了 | 报出来 |
+
+两者都表现为「条件未满足」，但前者该等、后者该动手。TargetGroup 当时是
+14/18（RESIDUE），note 却用 PENDING 的措辞描述它（「全部没有」），
+据此得出的「等回填完成再切」是个永远不会到来的前提。
+
+### 一条必须绕开的陷阱
+
+`conftest.py` 把 `sys.modules['neptune_client_base']` 全局桩成
+`neptune_query = lambda g: {'result':{'data':{'@value':[]}}}`，而
+`NEPTUNE_ENDPOINT` 又总被 `setdefault` 成真实端点。所以 live 用例
+**不能**用那个桩、也不能靠 `NEPTUNE_ENDPOINT` 是否设置来 gate：
+每个 label 都会查到 0 个节点，然后「没有节点缺 preferred」自动成立——
+一次空查询伪装成条件满足。这正是本项目反复踩的假健康 fallback。
+修法是按文件路径显式加载真模块，并用独立的 `GRAPH_LIVE_AUDIT=true` 开关。
+
+顺带发现：`tests/test_26` 里 `if not os.environ.get('NEPTUNE_ENDPOINT'): skip`
+这个守卫**永不触发**（conftest 已 setdefault），那两个用例一直在跑桩数据。
+未修，另记。
+
+---
+
+## 25. 采集 skip 规则只挡新写入、从不回收旧数据（2026-09-04）
+
+`openclaw-tg-v2` 我一开始判成「死资源」，**实测推翻**：`describe-target-groups`
+显示它在 AWS 侧活得很好。182.7 天不刷新的真正原因是
+`etl_aws/config.py:61` 的 `SKIP_TG_PREFIXES = ('openclaw-',)`——**被刻意排除采集**。
+
+进一步查图谱：名字含 openclaw 的节点有 17 个，其中 **14 个是新鲜的（0.0d）**。
+Subnet / LoadBalancer / S3Bucket / SecurityGroup / ListenerRule / EC2Instance
+全部在正常采集，skip 只作用在六个采集器中的两个（TargetGroup 与 Lambda）上。
+
+所以结论是：**skip 规则是有意的、该保留；缺的是「加了 skip 之后回收已写入的旧数据」。**
+这与 `source` 词表门禁那个坑完全同型——「代码已挡住新的、旧的还在库里」。
+
+dry-run 出来的残留比预期多，共 9 个节点、四条 skip 前缀：
+
+| 类型 | 节点 | 陈旧 | 命中规则 |
+|---|---|--:|---|
+| LambdaFunction | `Applications-Providerframeworkon...` | 175.7d | A·`Applications-` |
+| LambdaFunction | `ApplicationsMyCluster-Handler...` | 175.7d | A·`Applications-` |
+| LambdaFunction | `...health-canar-7bcf6eac-...` | 175.7d | A·`cwsyn-` |
+| LambdaFunction | `neptune-etl-from-cfn` | 175.7d | A·`neptune-etl-from-cfn` |
+| LambdaFunction | `openclaw-health-check` | 175.7d | A·`openclaw-` |
+| TargetGroup | `openclaw-tg-v2` | 182.7d | A·`openclaw-` |
+| TargetGroup | `nginx-tg-1` / `-2` / `-3` | 60.7d | B·源端已消失 |
+
+5 个 Lambda 全是 175.7d、每个恰好 1 条边——同一轮 ETL 写入，之后 skip 前缀才加上。
+
+### 回收器的两条规则与两个设计约束
+
+`infra/reap_stale_nodes.py`，默认 dry-run：
+
+- **规则 A（策略残留）**：节点名命中当前 skip 前缀。前缀**从 etl_aws/config.py 读**，
+  不在脚本里硬写——否则两处漂移，而漂移方向必然是脚本删掉策略其实想保留的东西
+- **规则 B（源端已消失）**：向 AWS 实查清单再比对。**判据绝不能是时间戳陈旧**——
+  4 个「看起来都死了」的 TargetGroup 里有 1 个活着，只按陈旧度删会销毁活资源的节点。
+  刻意只覆盖 TargetGroup：推广到别的类型前必须先为那个类型写出等价的实查逻辑
+
+### 结构缺口
+
+边有过期收敛（T-272），节点没有。契约里结构边写的
+`expires_seconds: None`（生命周期跟随两端节点）在实现上是**悬空的**——
+节点根本没有生命周期机制。
+
+### 验收
+
+按「清完后再跑一轮写入侧、违约仍为零」执行：ETL 复跑写入 310 节点 / 454 边，
+4 个被回收的节点**全部未再生**，TargetGroup 稳定 14/14 有唯一 arn、零孤立节点。
+`test_42::m08` 从失败翻成通过，8 个类型全部 UNLOCKED——证明这个闸门双向有效。
+
+---
+
 ## 收敛成四条方法论
 
 ### 一、缺陷类别高度集中，且都不是「数据采少了」
@@ -723,7 +855,8 @@ PetSite 自身请求      total=854              (15 分钟)
 | **判据覆盖面不足** | #11 Phase 5 只问「服务还好吗」不问「我干了什么」 |
 | **统计量不同量纲 / 证据强度不分级** | #16 min 比单点基线、#17 吞吐通道当成功率通道用 |
 | **前提未经证明就下结论**（新增第六类） | #20 没证明注入生效就判 refuted、#23 沿用未复核的既有认知 |
-| **一个字段承担两个职责** | #22 target_service 兼任选择器与图谱节点名、#12 Pod 标签 vs Deployment 名 |
+| **一个字段承担两个职责** | #22 target_service 兼任选择器与图谱节点名、#12 Pod 标签 vs Deployment 名、#24 identity_is_immutable 一个名字混淆两个问题 |
+| **门禁只挡新的、不回收旧的**（新增第七类） | #25 skip 前缀残留 9 个节点、source 词表门禁存量未归一 |
 
 > **所以瓶颈在数据契约，不在采集覆盖面。**
 > 规划重心应该是把这三类变成守门测试，而不是继续接新数据源。
@@ -775,7 +908,7 @@ PetSite 自身请求      total=854              (15 分钟)
 | 未声明的 source 取值 | **0**（节点 3 种 / 边 11 种，全部在契约词表内） |
 | 四个 ETL 函数 | 全部 200 OK，层 `:8`，门禁违约 0 条 |
 | `Microservice-[RunsOn]->Pod` | 36 → **42** |
-| 测试 | 461 → **497 passed / 0 failed**（新增 36 个守门用例） |
+| 测试 | 461 → **504 passed / 0 failed**（新增 43 个守门用例） |
 
 ### 仍然未解的
 

@@ -24,10 +24,10 @@
 | **9 打开托管资源边（FIS + Chaos Mesh）** ★ | 10 | 5 | 1 | 0 | 4 |
 | **8 闭环校正** ★ 终点 | 4 | 0 | 0 | 0 | 4 |
 | （T-202 方向写反，作废） | 1 | — | — | — | wontfix |
-| **合计** | **64** | **25** | **3** | **0** | **36** |
+| **合计** | **66** | **27** | **3** | **0** | **36** |
 
 基线：提交 `3477896` 时 **442 passed / 145 skipped / 0 failed**。
-**当前水位：497 passed / 144 skipped / 0 failed**（python3.11）。
+**当前水位：504 passed / 145 skipped / 0 failed**（python3.11）。
 活图谱（2026-08-31 17:05Z 实测）：94 条依赖边，
 **confirmed 11 / inconclusive 3 / untested 80 —— 已判定覆盖率 14.89%**（今晨 0.0%）。
 横跨 `Calls` / `AccessesData` 两种边类型，三种注入拓扑
@@ -697,6 +697,40 @@
      （只有 `fis_eks_pod` 前缀），调用即抛 ValueError → 补 `aws:eks:cluster` 目标
 - 推广判据：目录里 60 条故障声明，凡没有对应 validation-results 记录的
   都应假定「未验证」而非「可用」
+
+### T-300 契约三个元字段零消费方 · `done`（2026-09-04 07:5xZ）★
+- 起因：核一遍 33 个节点类型的 identity/scope_note 是否自洽。**身份键本身全绿**
+  （活图谱 33/33 类型身份键 100% 存在且唯一），问题全在元字段
+- `immutable` 的唯一读取函数 `identity_is_immutable` **全仓库零调用方**，
+  且一个名字混淆了两个问题：名字问「跨重建是否不变」，函数体答「能否安全 merge」。
+  拆成 `identity_is_stable_for_merge` 与 `identity_survives_recreation`，
+  由 m04 锁住「两者在且仅在 lifetime 类型上分歧」
+- **我第一轮把它判成「语义是反的」，这个判断过重**：函数体对 Q1 是正确的，
+  问题是命名歧义而非实现错误。已在缺陷文档里更正
+- `scope_note` / `preferred` 同样零读取方。`preferred` 的代价实测出来了：
+  TargetGroup 的 note 写「18 个全部没有 arn」，实况 14/18 已有——
+  过期半个月无人发现，且它写的解锁条件**结构上不可满足**
+- 新增 `tests/test_42_contract_meta_fields.py`（8 用例，含 1 个 opt-in live）。
+  m08 判据的关键是**区分 PENDING（写入方没开始写，该等）与 RESIDUE
+  （写入方在写、缺的是刷不到的残留，该动手）**——两者都表现为「条件未满足」
+- 补检查后浮出：**8 个 preferred 类型里 7 个早已可切**，之前没有机制会告知
+- 陷阱：conftest 全局桩化 neptune_query 且 setdefault 真实端点，
+  live 用例不能靠 NEPTUNE_ENDPOINT gate（空查询会伪装成条件满足）
+
+### T-301 采集 skip 规则只挡新写入、从不回收旧数据 · `done`（2026-09-04 07:5xZ）★
+- `openclaw-tg-v2` 我一开始判「死资源」，**实测推翻**：AWS 侧活得很好，
+  182.7d 不刷新是因为 `SKIP_TG_PREFIXES` 刻意排除采集
+- 图谱里 17 个 openclaw 节点中 **14 个新鲜**——skip 只作用在六个采集器中的两个上。
+  结论：skip 规则该保留，缺的是回收。与 source 词表门禁同型
+- 新增 `infra/reap_stale_nodes.py`（默认 dry-run）。两个设计约束：
+  前缀**从 etl_aws/config.py 读**不硬写（防漂移）；规则 B 判据必须是**向 AWS 实查清单**
+  而非时间戳陈旧（4 个「看起来都死了」的里有 1 个活着）
+- dry-run 命中 9 个节点 / 四条 skip 前缀。按授权只回收 4 个 TargetGroup，
+  5 个 LambdaFunction 同缺陷类但**待授权**
+- 验收按「清完再跑一轮写入侧」：ETL 复跑 310 节点/454 边，4 个残留全部未再生，
+  TargetGroup 14/14 唯一 arn、零孤立。m08 从失败翻通过
+- **结构缺口**：边有过期收敛（T-272），节点没有；契约里结构边的
+  `expires_seconds: None`（生命周期跟随节点）在实现上是悬空的
 
 ### T-260 属性权威表补全 · `todo`
 - 已做：`source` 写一次（`coalesce(values(k), constant(v))`），etl_aws + etl_cfn 两处

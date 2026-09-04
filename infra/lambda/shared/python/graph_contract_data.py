@@ -84,10 +84,13 @@ NODE_TYPES = {   'AWSServiceEndpoint': {   'identity': 'name',
     'TargetGroup': {   'identity': 'name',
                        'immutable': True,
                        'note': 'TargetGroupName 在 AWS 侧创建后不可改，所以 name 是合法身份键。arn '
-                               '更稳（跨账号/区域唯一），但**切换需要先回填** —— 2026-08-30 活图谱审计：18 个现存 '
-                               'TargetGroup 节点全部没有 arn 属性，直接切会在首轮 ETL 造 18 个重复节点。现已把 arn '
-                               '作为普通属性写入（此前图谱里根本没有该字段），待存量都带上 arn 后可用 '
-                               'infra/migrate_identity_keys.py 复核再切',
+                               '更稳（跨账号/区域唯一）。2026-09-04 起**切换条件已满足**：活图谱 14 个节点全部带唯一 arn，由 '
+                               'tests/test_42 的 m08 用例对活图谱自动核验（GRAPH_LIVE_AUDIT=true）。此前 note '
+                               '写的「18 个节点全部没有 arn，待存量都带上 arn 后再切」有两处错——一是 2026-09-04 实况已是 '
+                               '14/18 有 arn，note 过期半个月无人发现（`preferred` '
+                               '当时没有任何读取方）；二是那个条件**不可满足**：剩下 4 个节点里 3 个（nginx-tg-1/2/3）在 AWS '
+                               '侧已删除、1 个（openclaw-tg-v2）被 SKIP_TG_PREFIXES 刻意排除采集，ETL '
+                               '永远不会再碰它们、永远补不上 arn。已用 infra/reap_stale_nodes.py 回收这 4 个残留节点',
                        'preferred': 'arn'},
     'TopologyChange': {   'identity': 'change_id',
                           'immutable': True,

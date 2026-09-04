@@ -209,16 +209,74 @@ def identity_prop_for(label: str) -> str | None:
     return spec.get('identity') if spec else None
 
 
-def identity_is_immutable(label: str) -> bool:
-    """声明的身份键是否不可变。
+def identity_is_stable_for_merge(label: str) -> bool:
+    """身份键能否安全用作 mergeV 的匹配键。
 
-    'lifetime' 视为不可变 —— K8s Pod 那类对象重建后换名是预期语义，
-    不是「同一实体被改名」。
+    'lifetime' **算通过** —— K8s Pod 那类对象重建后换名，那是**新实体**而不是
+    「同一实体被改名」，所以按名 merge 不会把一个实体裂成两份。
+    可变身份键的真实危害是后者（实测 14 个 EC2Instance 里 4 个是重复实体，
+    因为 name 取自可变的 Name 标签而机器本身一直是同一台）。
+
+    这个函数取代了原来的 `identity_is_immutable`。改名的理由见
+    `identity_survives_recreation` 的文档 —— 原名问的是一个问题，
+    实现回答的是另一个。
     """
     spec = NODE_TYPES.get(label)
     if not spec:
         return False
     return spec.get('immutable') in (True, 'lifetime')
+
+
+def identity_survives_recreation(label: str) -> bool:
+    """身份键能否跨「对象被销毁重建」保持不变。只有 immutable: true 才行。
+
+    'lifetime' 明确返回 **False** —— 这正是它与 `true` 的区别所在：
+    Pod / K8sService / Deployment / HPA 重建即换名，同一逻辑对象在图里会换成
+    一个新节点。
+
+    ── 为什么要拆成两个函数（2026-09-04）────────────────────────────────
+    原来只有一个 `identity_is_immutable`，函数体是现在
+    `identity_is_stable_for_merge` 的实现（把 'lifetime' 判成不可变）。
+    问题不是实现写错了，而是**一个名字混淆了两个问题**：
+
+        Q1 「这个键可以安全 merge 吗」        -> 'lifetime' 是 **可以**
+        Q2 「这个键跨对象重建还成立吗」        -> 'lifetime' 是 **不成立**
+
+    函数名写的是 Q2（immutable 的字面意思），函数体答的是 Q1。因为它当时
+    **零调用方**，两种读法都没被真正验证过，所以哪个语义"对"取决于第一个
+    调用者以为自己在问什么 —— 这种歧义迟早会以一个静默错判的形式兑现。
+
+    拆开之后两个问题各有名字，并由 tests/test_42 锁住「两者必须在且仅在
+    lifetime 类型上分歧」这条不变量。
+    """
+    spec = NODE_TYPES.get(label)
+    if not spec:
+        return False
+    return spec.get('immutable') is True
+
+
+def scope_gap_for(label: str) -> str | None:
+    """该类型身份键**已知的作用域缺口**，无缺口返回 None。
+
+    契约里的 `scope_note` 原先没有任何读取方（纯注释），于是
+    TargetGroup 那条过期半个月的 note 无人发现。给它一个 accessor 是让
+    「已知缺陷」能被程序取用的最小代价 —— 报告与审计脚本据此提示，
+    tests/test_42 据此要求每个 `lifetime` 类型必须申报缺口。
+    """
+    spec = NODE_TYPES.get(label)
+    return spec.get('scope_note') if spec else None
+
+
+def preferred_identity_for(label: str) -> str | None:
+    """更稳健的身份键候选（通常是 arn），未声明返回 None。
+
+    这**不是**当前生效的身份键 —— 取当前值要用 `identity_prop_for`。
+    它表达的是「存量回填完成后该切到哪个键」这个待办，切换的前提条件由
+    tests/test_42 的 live 用例对活图谱自动核验（全部节点都有该属性、
+    且取值唯一），而不是靠人记得回来看一眼 note。
+    """
+    spec = NODE_TYPES.get(label)
+    return spec.get('preferred') if spec else None
 
 
 # ── 生命周期 ──────────────────────────────────────────────────────────────
