@@ -36,6 +36,12 @@ sources:
 - xray
 - business-layer
 - manual-fix
+# AgentCore 资源与 agent 调用边的写入源。与 xray 分开是**刻意的**：
+# agent 侧的真值来源是 bedrock-agentcore-control 控制面 API（资源节点）
+# 与 aws/spans 结构化日志（调用边，Transaction Search 开启后 100% span 落那里），
+# 与 X-Ray 的 GetServiceGraph 是两条独立链路，失败模式也不同 ——
+# 前者失败表现为节点缺失，后者失败表现为边缺失。
+- agentcore-etl
 edge_write_once_attrs:
 - source
 - dependency_kind
@@ -230,14 +236,68 @@ node_types:
     expiry_note: 追加式事件日志，稳态可 0 实例
     note: 追加式事件日志，稳态可 0 实例
     writer: etl_deepflow
+  # ── AgentCore / GenAI 组（2026-09-04 新增，写入源 agentcore-etl）──────────
+  #
+  # 身份键一律钉在 **AWS 侧分配的标识**（ARN / KB ID），刻意**不用** OTel 的
+  # gen_ai.* 属性 —— 后者在语义约定里 stability 全是 `development`，没有一个
+  # stable，而本契约要求身份键不可变（g05）。用一个随时可能改名的属性做身份键，
+  # 等于把图的裂库风险押在上游规范的稳定性上。
+  #
+  # 这六类只由 etl_agentcore 一个 ETL 写，**没有 etl_cfn 并写的历史包袱**，
+  # 所以可以直接用 arn 做身份键，不必像 LambdaFunction/DynamoDBTable 那样
+  # 被 preferred_blocked_by 卡着用 name（见 g13）。这是新类型的一次性红利。
+  AgentRuntime:
+    identity: arn
+    immutable: true
+    expires_seconds: 604800
+    writer: etl_agentcore
+    note: Bedrock AgentCore Runtime。arn 形如 arn:aws:bedrock-agentcore:<region>:<acct>:runtime/<id>
+  AgentTool:
+    identity: tool_key
+    immutable: true
+    expires_seconds: 604800
+    writer: etl_agentcore
+    note: |
+      tool **没有 ARN** —— 它是 agent 进程内注册的函数，或 Gateway 聚合出来的
+      虚拟 MCP 工具。所以身份键是复合键 `<owner_arn>#<tool_name>`：
+      owner 是 AgentGateway 的 arn（Gateway 前置的工具）或 AgentRuntime 的 arn
+      （进程内工具）。**不能只用 tool_name** —— 两个 agent 各注册一个同名
+      get_pet 会被并成一个节点，那正是 FIS chaos 模板里「tool 名精确匹配」
+      踩过的同一个坑（名字对不上就零注入而实验仍报成功）。
+  AgentGateway:
+    identity: arn
+    immutable: true
+    expires_seconds: 604800
+    writer: etl_agentcore
+    note: AgentCore Gateway。把 Lambda / OpenAPI / 外部 MCP server 等聚合成单一虚拟 MCP server
+  AgentMemory:
+    identity: arn
+    immutable: true
+    expires_seconds: 604800
+    writer: etl_agentcore
+    note: AgentCore Memory。实测东京已有一个 ACTIVE 实例（xgg_memory-5M0VYBCeFS，2026-07-22 建）
+  KnowledgeBase:
+    identity: arn
+    immutable: true
+    expires_seconds: 604800
+    writer: etl_agentcore
+    note: Bedrock Knowledge Base。本环境向量库是 S3 Vectors（非 OpenSearch Serverless），已有 gp-incident-kb 范式
+  Guardrail:
+    identity: arn
+    immutable: true
+    expires_seconds: 604800
+    writer: etl_agentcore
+    note: Bedrock Guardrail。不是 agent 专属 —— 故不加 Agent 前缀
 edge_types:
   AccessesData:
     src:
+    - AgentRuntime
     - LambdaFunction
     - Microservice
     - StepFunction
     dst:
     - AWSServiceEndpoint
+    - AgentMemory
     - DynamoDBTable
     - LambdaFunction
     - NeptuneCluster
@@ -246,6 +306,12 @@ edge_types:
     - S3Bucket
     - StepFunction
     pairs:
+    # agent 读写自己的 Memory；以及 agent 调 Bedrock 模型（落 AWSServiceEndpoint，
+    # 与 Microservice→AWSServiceEndpoint 同构，故复用本边而不新造 InvokesModel）
+    - - AgentRuntime
+      - AgentMemory
+    - - AgentRuntime
+      - AWSServiceEndpoint
     - - LambdaFunction
       - AWSServiceEndpoint
     - - LambdaFunction
@@ -349,16 +415,45 @@ edge_types:
       - AvailabilityZone
     dependency: false
     expires_seconds: null
+  Delegates:
+    src:
+    - AgentRuntime
+    dst:
+    - AgentRuntime
+    pairs:
+    - - AgentRuntime
+      - AgentRuntime
+    dependency: true
+    expires_seconds: 21600
+    note: |
+      编排 agent 路由到子 agent（本环境是 orchestrator_strands → nutrition/ordering/
+      adoption/concierge 四个）。唯一写入源是 aws/spans —— 控制面 API 看不到
+      「谁调了谁」，那只存在于运行时 span 里。
+      TTL 取 21600（6h）与 AccessesData 一致：同为 span 派生，用同一个源窗口，
+      否则会出现「一条边失效了、同源的另一条还在」的不一致。
+      ⚠️ 判据陷阱：tool 级/agent 级故障被优雅处理后**完成为成功调用**，对基础设施
+      错误指标不可见。验证这条边真实存在要看 agent 自己的信号，不是 HTTP 5xx。
   DependsOn:
     src:
+    - AgentTool
     - BusinessCapability
     - Microservice
     dst:
     - ECRRepository
+    - LambdaFunction
+    - Microservice
     - RDSCluster
     - SNSTopic
     - SQSQueue
     pairs:
+    # ★ 这两条是把 agent 子图接回既有 PetSite 图的**唯一**通路。
+    #   一个 Gateway 前置的 tool 背后是真实后端（Lambda，或经 internal ALB 的
+    #   Microservice）。缺了它们，六个 agent 节点类型会在图里形成一座孤岛 ——
+    #   能查到 agent 内部结构，却回答不了「petsite 挂了会影响哪个 agent」。
+    - - AgentTool
+      - LambdaFunction
+    - - AgentTool
+      - Microservice
     - - BusinessCapability
       - RDSCluster
     - - BusinessCapability
@@ -457,6 +552,22 @@ edge_types:
       - LambdaFunction
     dependency: false
     expires_seconds: null
+  InvokesTool:
+    src:
+    - AgentRuntime
+    dst:
+    - AgentTool
+    pairs:
+    - - AgentRuntime
+      - AgentTool
+    dependency: true
+    expires_seconds: 21600
+    note: |
+      agent → tool 的调用。**刻意不复用现有 Invokes** —— 那个是
+      Lambda/SNS/StepFunction → LambdaFunction 且 dependency: false，
+      而 agent 对 tool 是**真依赖**（tool 拿不到结果 agent 就答不出）。
+      把两种语义塞进一个标签会让「按 dependency 过滤」的查询同时命中
+      结构边与依赖边，那正是本契约区分依赖边与结构边要避免的事。
   InvokesVia:
     src:
     - Microservice
@@ -583,10 +694,16 @@ edge_types:
     expires_seconds: null
   ProtectsAccess:
     src:
+    - Guardrail
     - SecurityGroup
     dst:
+    - AgentRuntime
     - LambdaFunction
     pairs:
+    # Guardrail 拦 agent 的输入输出，与 SecurityGroup 拦 Lambda 的网络访问同构：
+    # 都是「一道策略保护一个执行体」，故复用本边
+    - - Guardrail
+      - AgentRuntime
     - - SecurityGroup
       - LambdaFunction
     dependency: false
@@ -605,6 +722,22 @@ edge_types:
     dependency: false
     expires_seconds: 21600
     note: 受 drift 对账覆盖
+  Retrieves:
+    src:
+    - AgentRuntime
+    dst:
+    - KnowledgeBase
+    pairs:
+    - - AgentRuntime
+      - KnowledgeBase
+    dependency: true
+    expires_seconds: 21600
+    note: |
+      agent → Knowledge Base 的检索（本环境是 nutrition agent 查 10 篇宠物营养
+      知识文档）。是依赖边：KB 检索失败会让 agent 的回答质量下降。
+      ⚠️ 这条边的失效模式与微服务不同 —— KB 返回空结果时调用**是成功的**，
+      表现为输出质量下降而非错误率上升。所以它的证伪判据要看
+      response-quality / task-success，不是 infrastructure error rate。
   Routes:
     src:
     - K8sService
@@ -617,10 +750,16 @@ edge_types:
     expires_seconds: null
   RoutesTo:
     src:
+    - AgentGateway
     - LoadBalancer
     dst:
+    - AgentTool
     - TargetGroup
     pairs:
+    # Gateway 把多个 target 聚合成单一虚拟 MCP server 后路由到具体 tool，
+    # 与 LoadBalancer→TargetGroup 同构：都是「入口分发到后端单元」
+    - - AgentGateway
+      - AgentTool
     - - LoadBalancer
       - TargetGroup
     dependency: false

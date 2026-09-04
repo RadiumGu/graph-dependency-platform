@@ -41,6 +41,35 @@ PENDING_FIRST_INSTANCE = {
     # 状态转变时写入 —— 是活机制，只是当前恰好没有处于该转变的边。
     # 与 APIGateway 那类的区别:那是本账号根本没有的资源，这个必然会有实例。
     "TopologyChange",
+    # 2026-09-04 AgentCore / GenAI 组。契约与 schema_text 已声明，但 Stage 4
+    # 部署 AgentCore 之前活图谱里必然 0 实例 —— 不列进来会让 schema⊆live 与
+    # live⊆schema 两个断言互锁（graph_contract.yaml 的节点段注释里明确警告过）。
+    # ⚠️ Stage 4 部署完成、etl_agentcore 首次写入之后，应把已有实例的类型从这里
+    #    **移除** —— 留在名单里等于放弃对它们的存在性检查，那就是另一种静默失败。
+    "AgentRuntime",
+    "AgentTool",
+    "AgentGateway",
+    # AgentMemory 已于 2026-09-04 09:52 被 etl_agentcore 首次写入（账号内既存的
+    # xgg_memory-5M0VYBCeFS），**按本注释开头声明的纪律从名单移除** ——
+    # 留在名单里等于放弃对它的存在性检查。这是该纪律的第一次实际执行。
+    "KnowledgeBase",
+    "Guardrail",
+}
+
+# 已在 schema 声明、但活图谱里尚无实例的**边**类型。
+#
+# 为什么需要它：节点侧早有 PENDING_FIRST_INSTANCE，边侧却没有 —— 这个不对称
+# 是 2026-09-04 加入 AgentCore 边类型时被暴露出来的（节点测试通过、边测试失败）。
+# 「已声明但尚未产生实例」对边和对节点是同一种合法中间态，只给节点开口子
+# 等于要求「新增边类型必须与写入它的 ETL 同一秒上线」，那是做不到的。
+#
+# ⚠️ 与节点侧同一条纪律：Stage 4 部署完成、etl_agentcore 首次写入之后，
+#    应把已有实例的边类型从这里**移除**。留在名单里等于放弃对它们的存在性
+#    检查，而这三条恰恰是 agent 依赖图的全部内容 —— 静默为空是最坏情况。
+PENDING_FIRST_EDGE = {
+    "Delegates",
+    "InvokesTool",
+    "Retrieves",
 }
 
 # ── Schema parse helpers ──────────────────────────────────────────────────────
@@ -149,11 +178,14 @@ def test_s0_02_edge_types_match_schema(neptune_rca):
     )
     actual_edges = {row["rel_type"] for row in rows if row.get("rel_type")}
 
-    missing_in_neptune = schema_edges - actual_edges
+    missing_in_neptune = schema_edges - actual_edges - PENDING_FIRST_EDGE
     extra_in_neptune = actual_edges - schema_edges
 
     print(f"\nSchema edges  ({len(schema_edges)}): {sorted(schema_edges)}")
     print(f"Neptune edges ({len(actual_edges)}): {sorted(actual_edges)}")
+    pending_now = (schema_edges & PENDING_FIRST_EDGE) - actual_edges
+    if pending_now:
+        print(f"[PENDING] 已声明、尚无实例（在允许名单内）: {sorted(pending_now)}")
     if missing_in_neptune:
         print(f"[MISSING] In schema, absent in Neptune: {sorted(missing_in_neptune)}")
     if extra_in_neptune:

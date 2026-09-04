@@ -172,7 +172,7 @@ neptune:
   # 从 rca/neptune/schema_prompt.py 的 GRAPH_SCHEMA 迁出（Wave 1, 2026-04-18）
   graph_schema_text: |
 
-    ## 节点类型（33 种，schema 声明数）
+    ## 节点类型（39 种，schema 声明数）
     注意这是**schema 声明**的类型数，与活图谱里实际存在实例的类型数可能不同。
     TopologyChange 是追加式事件日志，稳态下可以 0 实例 —— 所以活图谱通常少 1 种。
     test_11 的 PENDING_FIRST_INSTANCE 就是为消解这个差异而存在；
@@ -263,7 +263,24 @@ neptune:
       - 保留期由 TOPOLOGY_CHANGE_LOG_RETENTION_SECONDS 控制，默认 90 天，对账时顺带清理
       - 查询用 Q19: q19_topology_changes(service_name, since_seconds, limit)
 
-    ## 边类型（26 种）
+    ### AgentCore / GenAI 组（2026-09-04 新增，写入源 agentcore-etl）
+    身份键一律钉在 **AWS 侧分配的标识**（arn / kb id），刻意**不用** OTel 的 gen_ai.* 属性 ——
+    后者在语义约定里 stability 全是 development，没有一个 stable，而本 schema 要求身份键不可变。
+    这六类只由 etl_agentcore 一个 ETL 写，没有 etl_cfn 并写的历史包袱，
+    所以直接用 arn 做身份键，不必像 LambdaFunction/DynamoDBTable 那样被卡着用 name。
+    - AgentRuntime: arn(str), runtime_id(str), name(str), status(str), framework(str), model_id(str), endpoint_name(str), last_seen(int)
+    - AgentTool: tool_key(str), tool_name(str), owner_arn(str), owner_kind(gateway|runtime), backend_kind(str), last_seen(int)
+    - AgentGateway: arn(str), gateway_id(str), name(str), status(str), protocol(str), target_count(int), last_seen(int)
+    - AgentMemory: arn(str), memory_id(str), name(str), status(str), strategy(str), last_seen(int)
+    - KnowledgeBase: arn(str), kb_id(str), name(str), status(str), vector_store(str), embedding_model(str), last_seen(int)
+    - Guardrail: arn(str), guardrail_id(str), name(str), status(str), version(str), last_seen(int)
+      - AgentTool 的身份键是**复合键** `<owner_arn>#<tool_name>` —— tool 没有 ARN，
+        它是 agent 进程内注册的函数或 Gateway 聚合出的虚拟 MCP 工具。
+        **不能只用 tool_name**：两个 agent 各注册一个同名 get_pet 会被并成一个节点。
+      - 这六类在 Stage 4 部署 AgentCore 之前是 **0 实例**，已加入
+        test_11 的 PENDING_FIRST_INSTANCE，否则 schema⊆live 与 live⊆schema 两个断言会互锁。
+
+    ## 边类型（29 种）
 
     ### 依赖边的通用属性（Calls / DependsOn / AccessesData 必带）
     这三种边表示「A 依赖 B」，与 LocatedIn / Contains / BelongsTo 等结构边不同，
@@ -392,6 +409,21 @@ neptune:
     - (:Incident)-[:Involves]->(:Microservice)  // Incident 的 root_cause 服务关联（用于历史相似匹配）
     - (:Incident)-[:MentionsResource]->(:Microservice|:EC2Instance)  // Incident 描述中提取的实体关联
     - (:Microservice)-[:TestedBy]->(:ChaosExperiment)
+
+    ### AgentCore / GenAI 关系（2026-09-04 新增，写入源 agentcore-etl）
+    资源节点来自 bedrock-agentcore-control 控制面 API；调用边只能来自 aws/spans ——
+    控制面看不到「谁调了谁」，那只存在于运行时 span 里。
+    - (:AgentRuntime)-[:Delegates]->(:AgentRuntime)  // 编排 agent → 子 agent（orchestrator → nutrition/ordering/adoption/concierge）
+    - (:AgentRuntime)-[:InvokesTool]->(:AgentTool)  // 刻意不复用 Invokes：那个是 dependency:false 的结构边，agent→tool 是真依赖
+    - (:AgentRuntime)-[:Retrieves]->(:KnowledgeBase)  // KB 检索。失败模式是「调用成功但结果为空」，判据看输出质量而非错误率
+    - (:AgentRuntime)-[:AccessesData]->(:AgentMemory|:AWSServiceEndpoint)  // 读写 Memory；调 Bedrock 模型落 AWSServiceEndpoint
+    - (:AgentGateway)-[:RoutesTo]->(:AgentTool)  // Gateway 把多 target 聚合成单一虚拟 MCP server 后分发
+    - (:Guardrail)-[:ProtectsAccess]->(:AgentRuntime)  // 与 SecurityGroup→LambdaFunction 同构：一道策略保护一个执行体
+    - (:AgentTool)-[:DependsOn]->(:LambdaFunction|:Microservice)  // ★ 把 agent 子图接回既有 PetSite 图的唯一通路
+      - 最后那条是关键：缺了它，六个 agent 节点类型会在图里形成一座孤岛 ——
+        能查到 agent 内部结构，却回答不了「petsite 挂了会影响哪个 agent」。
+      - agent 侧的依赖边 TTL 统一 21600（6h），与 AccessesData 同源同窗口；
+        取值不同会出现「一条边失效了、同源的另一条还在」的不一致。
 
     ## 已知服务名（PetSite 应用）
     petsite, petsearch, payforadoption, petlistadoptions, pethistory, petstatusupdater, trafficgenerator, artillery, artillery-write, auth-service, gateway-service, order-service, points-service, product-service

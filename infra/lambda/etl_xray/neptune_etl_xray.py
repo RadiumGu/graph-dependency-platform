@@ -72,6 +72,24 @@ import boto3
 # 与 query_catalog.py 同样的纪律：**import 时不改全局 sys.path**。
 from neptune_client_base import neptune_query, extract_value, REGION  # noqa: F401
 
+# 契约门禁。**2026-09-04 补** —— 此前本 ETL 与共享层 neptune_client_base.py
+# 都完全没有 import graph_contract，而 profiles/graph_contract.yaml 开头明确写着
+# 「合法的 source 取值词表，**由 graph_contract.assert_source() 在写入时强制**」。
+# 对这条路径那句话不成立：etl_aws（4 文件）/ etl_cfn（3）/ etl_deepflow（1）都接了门禁，
+# 唯独 etl_xray 与 etl_trigger 没接 —— 契约当初就是为「四个写入 ETL 无一校验」而建的，
+# 修了三个漏了一个。
+#
+# 门禁只做校验不改写入语义：GRAPH_CONTRACT_MODE=enforce（默认）时未声明的
+# 标签/source 会当场抛错；=warn 时只记日志放行，可用于灰度。
+from graph_contract import (  # noqa: E402
+    assert_edge_type,
+    assert_node_type,
+    assert_source,
+)
+
+# 本 ETL 的 source。契约 sources 词表里已声明。
+XRAY_SOURCE = 'xray'
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -530,6 +548,11 @@ def upsert_aws_service_endpoints(nodes: dict, round_ts: int) -> int:
     for (name, kind, _identity_type), data in nodes.items():
         if kind != 'aws_service':
             continue
+        # 契约门禁 —— 标签与 source 都必须是已声明的。
+        # 放在循环内而非函数头：门禁是**按写入项**校验的，提到外面就变成
+        # 「只要有一项合法就全放行」，那正是无门禁状态的翻版。
+        assert_node_type('AWSServiceEndpoint')
+        assert_source(XRAY_SOURCE, 'upsert_aws_service_endpoints')
         aliases = '; '.join(sorted(data['raw_names']))
         # xray_types 是**集合**：同一个规范服务可能被 X-Ray 以多个 type 报出
         # （SSM 就同时以 AWS::SSM 与 AWS::SimpleSystemsManagement 出现）。
@@ -685,6 +708,14 @@ def upsert_xray_edges(edges: dict, window_hours: int, round_ts: int) -> dict:
         if dst_matcher is None:
             stats['skipped_no_node'] += 1
             continue
+
+        # 契约门禁 —— 按写入项校验边类型与 source。
+        # 只传 label 不传 src/dst：本 ETL 的端点匹配是多标签 or 子句
+        # （见 _src_label_clause / _dst_matcher，一个 Microservice 可能同时
+        #  匹配 LambdaFunction），运行时无法确定唯一的端点标签对。
+        # 校验「这个边类型已声明」已经能挡住拼错与新造标签 —— 那是本门禁的主要目的。
+        assert_edge_type(edge_type)
+        assert_source(XRAY_SOURCE, f'upsert_xray_edges(edge_type={edge_type})')
 
         rt = round(float(data['total_response_time']), 3)
         metrics = (
