@@ -56,6 +56,8 @@ ENVIRONMENT = os.environ.get('ENVIRONMENT', 'prod')
 # 「还没到期但本轮没看到」时被误判失活；大于 TTL 则写进来的边立刻就是过期的。
 SPAN_LOOKBACK_SECONDS = int(os.environ.get('AGENTCORE_SPAN_LOOKBACK_SECONDS', str(6 * 3600)))
 SPAN_LOG_GROUP = os.environ.get('AGENTCORE_SPAN_LOG_GROUP', 'aws/spans')
+# 当 span 没带 kb_id 时，用账号内唯一的营养 KB 作兜底（可用环境变量覆盖）。
+AGENT_KB_FALLBACK_ID = os.environ.get('AGENTCORE_NUTRITION_KB_ID', '')
 INSIGHTS_TIMEOUT_SECONDS = int(os.environ.get('AGENTCORE_INSIGHTS_TIMEOUT', '60'))
 
 
@@ -106,6 +108,40 @@ def _paged(client, op: str, key: str) -> list:
             return out
 
 
+def _enrich_gateways(acc, items: list) -> list:
+    """给每个 gateway 补上 ARN。
+
+    ⚠️ 实测：`list_gateways` **根本不返回 ARN** —— 它只给
+    gatewayId / name / status / authorizerType / description / createdAt / updatedAt。
+    ARN 只能从 `get_gateway` 的 `gatewayArn` 拿。
+
+    而契约规定 AgentGateway 的身份键是 `arn`，所以不补这一步，
+    节点会被门禁以「身份键 arn 取值为空」跳过 —— **静默少一个节点**，
+    而且日志只是 WARNING，很容易被当成正常。
+    这正是首次实跑时发生的事：5 个 Runtime 都写进去了，Gateway 一个没有。
+    """
+    out = []
+    for it in items or []:
+        gid = it.get('gatewayId')
+        if not gid:
+            out.append(it)
+            continue
+        try:
+            detail = acc.get_gateway(gatewayIdentifier=gid)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('get_gateway(%s) 失败，该 gateway 将因缺 arn 被跳过: %s', gid, exc)
+            out.append(it)
+            continue
+        merged = dict(it)
+        # get_gateway 的字段更全，但以 list 的 status 为准（两者可能有滞后差异）
+        for k, v in detail.items():
+            if k not in ('status',):
+                merged.setdefault(k, v)
+        merged['arn'] = detail.get('gatewayArn') or merged.get('gatewayArn')
+        out.append(merged)
+    return out
+
+
 def collect_control_plane() -> dict:
     """返回 {kind: (status, items)}。"""
     acc = boto3.client('bedrock-agentcore-control', region_name=REGION)
@@ -116,7 +152,8 @@ def collect_control_plane() -> dict:
         'runtimes': _collect(
             lambda: _paged(acc, 'list_agent_runtimes', 'agentRuntimes'), 'AgentRuntime'),
         'gateways': _collect(
-            lambda: _paged(acc, 'list_gateways', 'items'), 'AgentGateway'),
+            lambda: _enrich_gateways(acc, _paged(acc, 'list_gateways', 'items')),
+            'AgentGateway'),
         'memories': _collect(
             lambda: _paged(acc, 'list_memories', 'memories'), 'AgentMemory'),
         'guardrails': _collect(
@@ -395,6 +432,46 @@ def _backend_ref(target: dict):
     return 'LambdaFunction', arn.rsplit(':function:', 1)[-1].split(':')[0]
 
 
+# ── span 到边的映射（实测校准，勿凭直觉改）─────────────────────────────────────
+
+def _runtime_id_from_span(raw: str) -> str:
+    """从 span 的 runtime_id 里取出裸 runtime id。
+
+    ⚠️ 实测：`aws/spans` 里的 runtime_id 是**带 endpoint 后缀的完整 ARN**：
+        arn:aws:bedrock-agentcore:<r>:<acct>:runtime/WaggleAIOrchestrator-K85tG867Xt/runtime-endpoint/DEFAULT:DEFAULT
+    而 `_runtime_index()` 的键是裸 id（WaggleAIOrchestrator-K85tG867Xt）和名字。
+    直接 `idx.get(runtime_id)` **永远匹配不上** —— 首次实跑就是这样：
+    span 收到 12 条、节点全部写入，但 edges 是 `{}`，而且**不报任何错**。
+    """
+    if not raw:
+        return ''
+    if 'runtime/' in raw:
+        tail = raw.split('runtime/', 1)[1]
+        # 去掉 /runtime-endpoint/... 与 :DEFAULT 后缀
+        return tail.split('/', 1)[0].split(':', 1)[0]
+    return raw.split(':', 1)[0]
+
+
+# orchestrator 用来委派子 agent 的 tool 名 -> 子 agent 的 runtime 名。
+#
+# ⚠️ **不能用 span 的 `peer_agent` 字段判断委派** —— 实测它的值是**框架名**
+#    （'Strands Agents' / 'LangGraph' / 'Agent'），不是 agent 名字，
+#    拿它去查 runtime 索引必然落空。
+#    真正的委派信号是 orchestrator 的 `execute_tool` + tool_name。
+_DELEGATION_TOOLS: dict = {
+    'nutrition_advisor': 'WaggleAINutrition',
+    'nutrition': 'WaggleAINutrition',
+    'ordering': 'WaggleAIOrdering',
+    'order_specialist': 'WaggleAIOrdering',
+    'adoption': 'WaggleAIAdoption',
+    'adoption_specialist': 'WaggleAIAdoption',
+    'concierge': 'WaggleAIConcierge',
+}
+
+# 表示「去 KB 取知识」的 tool 名 —— 用来建 Retrieves 边。
+_KB_TOOLS = {'retrieve_nutrition_guidance', 'retrieve_nutrition', 'nutrition_kb'}
+
+
 def write_span_edges(rows: list, round_ts: int) -> dict:
     """从 span 写调用边。runtime_id → AgentRuntime 的 arn 需要先建索引。"""
     n = defaultdict(int)
@@ -404,7 +481,7 @@ def write_span_edges(rows: list, round_ts: int) -> dict:
         return dict(n)
 
     for r in rows:
-        arn = idx.get(r.get('runtime_id') or '')
+        arn = idx.get(_runtime_id_from_span(r.get('runtime_id') or ''))
         if not arn:
             continue
         calls = int(float(r.get('calls') or 0))
@@ -420,13 +497,20 @@ def write_span_edges(rows: list, round_ts: int) -> dict:
                          'AgentTool', tool_key, round_ts, props)
             n['InvokesTool'] += 1
 
-        peer = r.get('peer_agent')
-        if peer and idx.get(peer) and idx[peer] != arn:
-            _upsert_edge('Delegates', 'AgentRuntime', arn,
-                         'AgentRuntime', idx[peer], round_ts, props)
-            n['Delegates'] += 1
+        # Delegates：由 execute_tool 的 tool_name 判定，不是 peer_agent（那是框架名）
+        if tool:
+            peer_name = _DELEGATION_TOOLS.get(tool.lower())
+            peer_arn = idx.get(peer_name) if peer_name else None
+            if peer_arn and peer_arn != arn:
+                _upsert_edge('Delegates', 'AgentRuntime', arn,
+                             'AgentRuntime', peer_arn, round_ts, props)
+                n['Delegates'] += 1
 
         kb = r.get('kb_id')
+        # span 里通常没有 kb_id 字段（实测 12 行里一条都没有），
+        # 所以还要认「取知识」这类 tool 名，否则 Retrieves 永远建不出来。
+        if not kb and tool and tool.lower() in _KB_TOOLS:
+            kb = AGENT_KB_FALLBACK_ID or ''
         if kb:
             kb_arn = _kb_arn_for(kb)
             if kb_arn:
@@ -434,6 +518,39 @@ def write_span_edges(rows: list, round_ts: int) -> dict:
                              'KnowledgeBase', kb_arn, round_ts, props)
                 n['Retrieves'] += 1
     return dict(n)
+
+
+def _gmap(item) -> dict:
+    """把 Gremlin 的 `g:Map` 解成 Python dict。
+
+    ⚠️ 这一步不能省，也不能用 `extract_value` 代替。
+    `g:Map` 在 GraphSON 里是**扁平的键值交替列表**，不是对象：
+
+        {"@type": "g:Map",
+         "@value": ["arn", {"@type":"g:List","@value":[...]},
+                    "rid", {"@type":"g:List","@value":[...]}]}
+
+    `extract_value(item)` 拿到的是 `@value` 的**第一个元素**，也就是字符串
+    `"arn"`（键名本身），于是后面 `d.get('arn')` 报
+    `AttributeError: 'str' object has no attribute 'get'`。
+
+    我第一次「修」这个 bug 时加的是 `if not isinstance(d, dict): continue` ——
+    那把崩溃换成了**静默跳过所有行**，索引恒为空，ETL 于是报
+    「图里还没有 AgentRuntime 节点，跳过 span 边写入」，
+    而此时 5 个节点明明已经写进去了。**比崩溃更糟：它不报错。**
+    """
+    if not isinstance(item, dict) or item.get('@type') != 'g:Map':
+        return {}
+    flat = item.get('@value') or []
+    out = {}
+    # 键值交替，成对取
+    for i in range(0, len(flat) - 1, 2):
+        key = flat[i]
+        val = flat[i + 1]
+        if isinstance(val, dict) and val.get('@type') in ('g:List', 'g:Set'):
+            val = val.get('@value') or []
+        out[str(key)] = val
+    return out
 
 
 def _runtime_index() -> dict:
@@ -451,7 +568,7 @@ def _runtime_index() -> dict:
         return {}
     idx = {}
     for item in (rows.get('result', {}).get('data', {}).get('@value', []) or []):
-        d = extract_value(item) or {}
+        d = _gmap(item)
         arn = (d.get('arn') or [None])[0] if isinstance(d.get('arn'), list) else d.get('arn')
         if not arn:
             continue

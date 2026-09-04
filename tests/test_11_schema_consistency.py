@@ -41,19 +41,12 @@ PENDING_FIRST_INSTANCE = {
     # 状态转变时写入 —— 是活机制，只是当前恰好没有处于该转变的边。
     # 与 APIGateway 那类的区别:那是本账号根本没有的资源，这个必然会有实例。
     "TopologyChange",
-    # 2026-09-04 AgentCore / GenAI 组。契约与 schema_text 已声明，但 Stage 4
-    # 部署 AgentCore 之前活图谱里必然 0 实例 —— 不列进来会让 schema⊆live 与
-    # live⊆schema 两个断言互锁（graph_contract.yaml 的节点段注释里明确警告过）。
-    # ⚠️ Stage 4 部署完成、etl_agentcore 首次写入之后，应把已有实例的类型从这里
-    #    **移除** —— 留在名单里等于放弃对它们的存在性检查，那就是另一种静默失败。
-    "AgentRuntime",
-    "AgentTool",
-    "AgentGateway",
-    # AgentMemory 已于 2026-09-04 09:52 被 etl_agentcore 首次写入（账号内既存的
-    # xgg_memory-5M0VYBCeFS），**按本注释开头声明的纪律从名单移除** ——
-    # 留在名单里等于放弃对它的存在性检查。这是该纪律的第一次实际执行。
-    "KnowledgeBase",
-    "Guardrail",
+    # ── 2026-09-04 15:50：AgentCore 组已全部清空 ────────────────────────────
+    # 原先列在这里的 AgentRuntime / AgentTool / AgentGateway / KnowledgeBase /
+    # Guardrail 在 Stage 4 部署并跑通 etl_agentcore 后**均已有实例**
+    # （5 / 5 / 1 / 1 / 1），按本名单开头声明的纪律逐个移除。
+    # 留在名单里等于放弃对它们的存在性检查 —— 那本身就是一种静默失败。
+    # AgentMemory 更早（09:52）就已移除。
 }
 
 # 已在 schema 声明、但活图谱里尚无实例的**边**类型。
@@ -66,11 +59,20 @@ PENDING_FIRST_INSTANCE = {
 # ⚠️ 与节点侧同一条纪律：Stage 4 部署完成、etl_agentcore 首次写入之后，
 #    应把已有实例的边类型从这里**移除**。留在名单里等于放弃对它们的存在性
 #    检查，而这三条恰恰是 agent 依赖图的全部内容 —— 静默为空是最坏情况。
-PENDING_FIRST_EDGE = {
-    "Delegates",
-    "InvokesTool",
-    "Retrieves",
-}
+# ── 2026-09-04 15:50：已全部清空 ────────────────────────────────────────────
+# Delegates / InvokesTool / Retrieves 在 orchestrator 被实调后均已写入
+# （2 / 5 / 1 条），按纪律移除。
+#
+# ⚠️ 必须写 `set()` 而不是 `{}` —— 后者在 Python 里是**空 dict**，
+#    会让 `schema_edges - actual_edges - PENDING_FIRST_EDGE` 报
+#    `TypeError: unsupported operand type(s) for -: 'set' and 'dict'`。
+#    我清空名单时就踩了这一下。
+#
+# ⚠️ Delegates 能建出来的前提是 **AGENT_TRANSPORT=gateway**。
+#    若哪天改回上游默认的 local，五个 agent 会同容器、委派走进程内调用，
+#    这三种边会全部消失 —— 届时**不要**把它们加回本名单来「修」测试，
+#    那是在掩盖真实的观测能力退化。
+PENDING_FIRST_EDGE: set = set()
 
 # ── Schema parse helpers ──────────────────────────────────────────────────────
 
