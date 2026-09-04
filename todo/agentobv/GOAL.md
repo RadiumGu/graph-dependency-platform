@@ -28,9 +28,9 @@
 | 0 | Step 0 四项验证 | — | ✅ 完成（`06`） |
 | 1 | 必须存活清单 + 差异清点 | 3h | ✅ 完成（`07`） |
 | 2 | 图契约扩展 + ETL 改造 | 6h | ✅ 完成（`08`） |
-| **3** | **PetSite 应用追平** | ~~10h~~ **31h**（实测修正） | ⚠️ **5/6**（`petstatusupdater`/`payforadoption-go`/`petfood-rs`/`petsite` 已构建验证，`petlistadoptions` 已核对完成）；**只剩 `petsearch-java` 🛑 阻塞待用户定夺**（`09`） |
-| **4** | **AgentCore 部署** | 8h | ⚠️ **进行中**，配置已定、CDK 未移植未部署（`10`） |
-| 5 | 观测部署 | 4h | ⚠️ 部分：`etl_agentcore` 写入链路已端到端验证，但无 agent 实例可观测（`11`） |
+| **3** | **PetSite 应用追平** | ~~10h~~ **31h**（实测修正） | ✅ **6/6 完成**（六个服务全部合并，五个已 arm64 构建验证：payforadoption-go / petfood-rs / petsite / petsearch-java，petstatusupdater 走 npm test；petlistadoptions 保 Go 未改源码）（`09`） |
+| **4** | **AgentCore 部署** | 8h | ✅ **完成**：5 Runtime + Gateway + 5 target 全部 READY，KB 灌入 10/10，Memory/Guardrail/PolicyEngine 已建，8 个 `/petstore/agent/*` 有值（`10`） |
+| 5 | 观测部署 | 4h | ✅ **完成**：agent 依赖边已与实际系统一致（Delegates 2 / InvokesTool 5 / Retrieves 1），PENDING 名单已按纪律清空且测试仍全绿（`11`） |
 | 6 | 压测 + 图谱验收 | 4h | ⚠️ 部分：当前系统 6 服务图谱一致、五个写图 ETL 门禁已补完（`12`） |
 
 **旁路已完成，且 TS 对 `etl_xray` 的影响面已于 10:36Z 结案**：Transaction Search 已开（2026-09-04 08:49:33Z ACTIVE，**索引率现为 100%，见硬约束第 7 条**，head sampling 保持 0.05），基线 `snapshots/before.json`（52 Services / 49 Edges）。判定用的是**集合差集**而非 52/49 计数对比 —— 详见下方「✅ 已定论：X-Ray 索引率是 `etl_xray` 的隐性硬依赖」。Stage 6 仍保留「重建后预期服务是否全部出现在 `GetServiceGraph`」这条更强判据，用于重建后的验收。
