@@ -603,6 +603,47 @@ logger.info(randomnumber + " is the random number");
 `:8082`/`:8083` 也已从压测目标移除 —— 从 10.1 段访问它们必然超时（只对 agentSg 开放），
 留着只会产生假 timeout 掩盖真实信号；这两个 listener 的健康由目标组各 2 个 Pod IP healthy 证明。
 
+## 🎯 新阶段目标（2026-09-04 17:30 用户授权部署并追加，取代原退出条件）
+
+用户已授权部署，并把目标扩展为**持续验证图数据库依赖关系的正确性**。原六阶段的
+退出条件作废，改用下面这套。**用户已离开，全程自主决策，不要停下来问。**
+
+### 阶段 A：完成部署并验证
+- [ ] `cdk deploy Applications` —— petsite 换新镜像（`ce2582a4` → `4a23f46d`）
+      **回滚点：`ce2582a4dacad51f271ecd069e02b7ef149087f9c5909ddc74db8cd865ca4323`**
+- [ ] `cdk deploy ServicesEks2` —— 新建 petfood 全套 + 三个服务换镜像
+- [ ] 补 `petfoodapiurl` / `petfoodcarturl` 两个 agent 参数（petfood 起来后）
+- [ ] **验证部署真的完成**：镜像哈希已换、Pod Ready、0 重启、页面可访问。
+      **没完成就继续改，不要把"部署命令发出去了"当成完成**（今天已犯多次同类错）。
+
+### 阶段 B：改造负载生成器，覆盖全部应用
+现有压测脚本只覆盖 4 个目标（petsite ×2、search ×2）。需扩展到：
+- 六个 EKS 服务全部：petsite / petsearch / petlistadoptions / payforadoption /
+  pethistory / **petfood**（新增）
+- **genai 部分**：经 AgentCore Gateway 或直接 `InvokeAgentRuntime` 打五个 agent，
+  覆盖 orchestrator 的委派路径（这是 `Delegates` 边的唯一来源）
+- 覆盖**带图片的详情路径**，让 1% 故障注入真正被触发
+- ⚠️ 不要把 `:8082`/`:8083` 放进从 10.1 段发起的压测 —— 那两个端口只对 agentSg 开放，
+  必然超时，会产生假信号
+
+### 阶段 C：用 FIS 或 Chaos Mesh 验证图里的依赖关系
+对图数据库里**每一条依赖边**做故障注入验证：断掉 A，看 B 是否如图所示受影响。
+- 已有素材：`04-FIS模板库与agent注入_20260904-0830.md`
+- 每验证一条边，在图上标记 confirmed / refuted（契约里已有这套语义）
+- **验证不了的就记录原因，然后继续下一条，不要卡住**
+- 持续循环，直到所有环节验证完
+
+### 硬约束不变
+Neptune 绝对不能删；ETL 可改不可删；ALB 不得新增公网入口；不得用 ECS；
+**新增一条**：故障注入必须可自动恢复，不得留下持续故障状态。
+
+### 纪律（今天已 14 次栽在这上面）
+**验证手段本身必须先被验证。** 具体已犯过的：把自己的 echo 当运行证据；
+`ls` 返回空读成"目录为空"而非"不存在"；S3 上传成功而下载端 403；
+grep 过滤条件滤掉关键行；`context canceled` 其实是自己设的超时；
+把异常吞成静默空结果（比崩溃更糟）。
+**长任务一律后台跑 + 日志落文件 + 用 ps/字节数实证，不要用单次调用超时去卡。**
+
 ## 退出条件
 
 六个 Stage 全部完成，且满足：五服务 + petfood + agent 全部 Running、loadgen 压测下无异常、
