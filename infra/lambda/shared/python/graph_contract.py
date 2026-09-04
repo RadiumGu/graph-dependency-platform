@@ -274,9 +274,54 @@ def preferred_identity_for(label: str) -> str | None:
     它表达的是「存量回填完成后该切到哪个键」这个待办，切换的前提条件由
     tests/test_42 的 live 用例对活图谱自动核验（全部节点都有该属性、
     且取值唯一），而不是靠人记得回来看一眼 note。
+
+    注意「回填完成」只是**必要**条件。2026-09-04 实测还有第二个条件：
+    该类型不能被第二个按 name 匹配的 ETL 同时写入 —— 见 `preferred_blocked_by`。
     """
     spec = NODE_TYPES.get(label)
     return spec.get('preferred') if spec else None
+
+
+def preferred_blocked_by(label: str) -> str | None:
+    """候选身份键为何**还不能**切换，无阻塞返回 None。
+
+    存在的理由：光有 `preferred` 会重造它自己刚修掉的缺陷 —— 一个没有
+    时限也没有阻塞说明的承诺，过期了没人知道（TargetGroup 那条 note 过期
+    半个月就是这么来的）。声明了 `preferred` 却既不可切换又不说明原因的类型，
+    由 tests/test_42 判失败。
+
+    2026-09-04 的实测阻塞：6 个类型（LoadBalancer / DynamoDBTable / SQSQueue /
+    SNSTopic / LambdaFunction / StepFunction）同时被 etl_cfn 写入，而
+    etl_cfn 的 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被
+    规范化成短名的 physical_id。单方面切 arn 会让两个 ETL 用不同身份键写
+    同一类节点 —— 这正是 test_35::g13 预告过的形态。
+    """
+    spec = NODE_TYPES.get(label)
+    return spec.get('preferred_blocked_by') if spec else None
+
+
+def node_expires_seconds_for(label: str):
+    """该**节点**类型的软过期阈值（秒）。None 表示不过期。
+
+    ── 为什么节点也需要这个（2026-09-04）──────────────────────────────
+    契约里结构边写的 `expires_seconds: None` 注解是「生命周期跟随两端节点」，
+    但节点此前**根本没有生命周期机制**，所以那句话在实现上是悬空的。
+    代价实测：Pod 在图里有 581 个节点，集群实际只跑 70 个 —— 511 个（88%）
+    超过 1 天没刷新。任何「这个服务跑在哪些 Pod 上」的查询都会拖出一堆
+    早已消失的 Pod。
+
+    None 的类型必须同时声明 `expiry_note` 说明理由（追加式事件日志、
+    或来自 json 的声明而非观测值），由 tests/test_43 强制 —— 不允许沉默地
+    不声明，那与「忘了写」无法区分。
+    """
+    spec = NODE_TYPES.get(label)
+    return spec.get('expires_seconds') if spec else None
+
+
+def node_expiry_note_for(label: str) -> str | None:
+    """节点类型不过期的理由（仅 expires_seconds 为 None 时应存在）。"""
+    spec = NODE_TYPES.get(label)
+    return spec.get('expiry_note') if spec else None
 
 
 # ── 生命周期 ──────────────────────────────────────────────────────────────

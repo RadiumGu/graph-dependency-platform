@@ -51,13 +51,122 @@ from __future__ import annotations
 import logging
 import os
 
-from graph_contract import EDGE_TYPES, TIMESTAMP_FIELD
+from graph_contract import EDGE_TYPES, NODE_TYPES, TIMESTAMP_FIELD
 
 logger = logging.getLogger()
 
 
 def expiry_enabled() -> bool:
     return (os.environ.get('GRAPH_EDGE_EXPIRY_ENABLED') or '').strip().lower() == 'true'
+
+
+def node_expiry_enabled() -> bool:
+    """节点过期收敛的开关，与边的开关**分开** —— 两者风险面不同。
+
+    边置 active=false 只影响依赖查询；节点置 active=false 会影响以该节点为
+    端点的一切遍历。分开开关让节点侧可以先跑几轮 dry-run 再启用。
+    """
+    return (os.environ.get('GRAPH_NODE_EXPIRY_ENABLED') or '').strip().lower() == 'true'
+
+
+def expiring_node_labels() -> list[tuple[str, int]]:
+    """返回 [(节点类型, expires_seconds)]，只含声明了 TTL 的类型。"""
+    return sorted((lb, spec['expires_seconds'])
+                  for lb, spec in NODE_TYPES.items()
+                  if spec.get('expires_seconds'))
+
+
+def _node_count_query(label: str, cutoff: int) -> str:
+    # 刻意**不**要求 has('active', true)：节点侧此前没有任何写入方写 active
+    # （实测 581 个 Pod 里 0 个带该属性），要求它会让查询恒为空 —— 与边侧
+    # 不同，边的写入方一直在写 active。判据改为「尚未被判过期」。
+    return (f"g.V().hasLabel('{label}')"
+            f".has('{TIMESTAMP_FIELD}', lt({cutoff}))"
+            f".not(__.has('active', false))"
+            f".count()")
+
+
+def _node_unjudgeable_query(label: str) -> str:
+    """缺少判据字段、因此**无法判定**的节点数。
+
+    这个查询是本模块最要紧的一条。没有它，一个 TIMESTAMP_FIELD 覆盖率只有
+    1.4% 的图谱会让所有 count 返回 0，然后「0 条陈旧」被读成「图谱很干净」——
+    与真的干净完全同形。2026-09-04 实测正是这个状态：1077 个节点里只有 15 个
+    带 last_seen。所以「不可判定」必须与「已判定为新鲜」分开上报，
+    这与指标采集侧的 ok=False 标记是同一条原则。
+    """
+    return f"g.V().hasLabel('{label}').not(__.has('{TIMESTAMP_FIELD}')).count()"
+
+
+def _node_deactivate_query(label: str, cutoff: int) -> str:
+    return (f"g.V().hasLabel('{label}')"
+            f".has('{TIMESTAMP_FIELD}', lt({cutoff}))"
+            f".not(__.has('active', false))"
+            f".property(single, 'active', false)"
+            f".property(single, 'expired_at', {cutoff})"
+            f".iterate()")
+
+
+def expire_stale_nodes(neptune_query, round_ts: int, only_labels=None) -> dict:
+    """把过期节点置 active=false（**软过期，不删除**）。
+
+    不删除的理由与边一致：删节点会连带删掉其上所有边，一次误判就不可逆；
+    软过期可以先观察几轮，判据错了改回来即可。真正要物理删除的走
+    infra/reap_stale_nodes.py，那条路要求「向源端实查一遍清单」这个更强的前提。
+
+    Args:
+        neptune_query: 查询函数（调用方注入，便于单测替换）
+        round_ts:      本轮基准时间戳（秒），同一轮所有判定共用一个基准
+        only_labels:   限定类型，None 表示全部声明了 TTL 的类型
+
+    Returns:
+        {'enabled': bool, 'unjudgeable_total': int,
+         'per_label': {label: {'expires', 'stale', 'expired', 'unjudgeable'}}}
+
+        `unjudgeable` 不为 0 意味着该类型有节点缺 TIMESTAMP_FIELD，
+        本轮对它们**什么都没判**。调用方必须把它当告警而不是 0 风险。
+    """
+    enabled = node_expiry_enabled()
+    result = {'enabled': enabled, 'unjudgeable_total': 0, 'per_label': {}}
+
+    def _num(resp):
+        vals = (resp or {}).get('result', {}).get('data', {}).get('@value', [])
+        raw = vals[0] if vals else 0
+        return int((raw.get('@value', raw) if isinstance(raw, dict) else raw) or 0)
+
+    for label, expires in expiring_node_labels():
+        if only_labels and label not in only_labels:
+            continue
+        cutoff = round_ts - expires
+        try:
+            stale = _num(neptune_query(_node_count_query(label, cutoff)))
+            unjudge = _num(neptune_query(_node_unjudgeable_query(label)))
+        except Exception as e:      # 单个类型失败不该中断整轮
+            logger.warning("node-expiry: 统计 %s 失败（非致命）: %s", label, e)
+            continue
+
+        entry = {'expires': expires, 'stale': stale, 'expired': 0,
+                 'unjudgeable': unjudge}
+        result['unjudgeable_total'] += unjudge
+        if unjudge:
+            logger.warning(
+                "node-expiry: %s 有 %d 个节点缺 %s，本轮**未对它们做任何判定** "
+                "—— 不要把 stale=%d 读成「只有这么多陈旧节点」",
+                label, unjudge, TIMESTAMP_FIELD, stale)
+        if stale and enabled:
+            try:
+                neptune_query(_node_deactivate_query(label, cutoff))
+                entry['expired'] = stale
+                logger.info("node-expiry: %s 置 active=false %d 个（TTL %ds）",
+                            label, stale, expires)
+            except Exception as e:
+                logger.warning("node-expiry: 置 %s 失败（非致命）: %s", label, e)
+        elif stale:
+            logger.info("node-expiry[dry-run]: %s 有 %d 个节点超过 TTL %ds 未刷新",
+                        label, stale, expires)
+        result['per_label'][label] = entry
+
+    return result
 
 
 def expiring_edge_labels() -> list[tuple[str, int]]:

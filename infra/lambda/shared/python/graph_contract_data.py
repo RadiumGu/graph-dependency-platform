@@ -26,77 +26,180 @@ NODE_ATTR_AUTHORITY = {   'Microservice': {   'az': ['aws-etl'],
                         'fault_boundary': ['aws-etl'],
                         'recovery_priority': ['aws-etl', 'business-layer']}}
 
-NODE_TYPES = {   'AWSServiceEndpoint': {   'identity': 'name',
+NODE_TYPES = {   'AWSServiceEndpoint': {   'expires_seconds': 604800,
+                              'identity': 'name',
                               'immutable': True,
                               'note': '归一化后的服务名（ssm 与 SimpleSystemsManagement 已归一）'},
-    'AvailabilityZone': {'identity': 'name', 'immutable': True, 'note': 'az name，AWS 侧不可变'},
-    'BusinessCapability': {   'identity': 'name',
+    'AvailabilityZone': {   'expires_seconds': None,
+                            'expiry_note': 'AWS 可用区不会消失',
+                            'identity': 'name',
+                            'immutable': True,
+                            'note': 'az name，AWS 侧不可变'},
+    'BusinessCapability': {   'expires_seconds': None,
+                              'expiry_note': 'business_config.json 的声明，同 Microservice',
+                              'identity': 'name',
                               'immutable': True,
                               'note': '业务声明，来自 business_config.json'},
-    'ChaosExperiment': {'identity': 'experiment_id', 'immutable': True, 'writer': 'chaos'},
-    'Database': {'identity': 'name', 'immutable': True, 'note': '逻辑库名'},
-    'Deployment': {   'identity': 'name',
+    'ChaosExperiment': {   'expires_seconds': None,
+                           'expiry_note': '追加式事件日志，实验记录是历史证据',
+                           'identity': 'experiment_id',
+                           'immutable': True,
+                           'writer': 'chaos'},
+    'Database': {   'expires_seconds': 604800,
+                    'identity': 'name',
+                    'immutable': True,
+                    'note': '逻辑库名'},
+    'Deployment': {   'expires_seconds': 604800,
+                      'identity': 'name',
                       'immutable': 'lifetime',
                       'scope_note': '未按 namespace 限定'},
-    'DynamoDBTable': {'identity': 'name', 'immutable': True, 'preferred': 'arn'},
-    'EC2Instance': {   'identity': 'instance_id',
+    'DynamoDBTable': {   'expires_seconds': 604800,
+                         'identity': 'name',
+                         'immutable': True,
+                         'preferred': 'arn',
+                         'preferred_blocked_by': 'etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 '
+                                                 'name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda 的 '
+                                                 'PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn '
+                                                 '会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 '
+                                                 'test_35::g13。解锁前提：先让 etl_cfn 也从契约派生身份键并取得 '
+                                                 'ARN'},
+    'EC2Instance': {   'expires_seconds': 604800,
+                       'identity': 'instance_id',
                        'immutable': True,
                        'note': 'name 取自 Name 标签，已于 2026-08-29 改以 instance_id 为身份'},
-    'ECRRepository': {'identity': 'name', 'immutable': True, 'preferred': 'arn'},
-    'EKSCluster': {'identity': 'name', 'immutable': True},
-    'HPA': {'identity': 'name', 'immutable': 'lifetime', 'scope_note': '未按 namespace 限定'},
-    'Incident': {'identity': 'id', 'immutable': True, 'writer': 'rca_window_flush'},
-    'K8sService': {   'identity': 'name',
+    'ECRRepository': {   'expires_seconds': 604800,
+                         'identity': 'arn',
+                         'immutable': True,
+                         'note': '2026-09-04 从 name 切到 arn。前提已由 tests/test_42::m08 对活图谱核验（12 '
+                                 '个节点全带唯一 arn），且该类型**只有 etl_aws 写**（不在 etl_cfn 的 TYPE_TO_LABEL '
+                                 '里），不存在两个 ETL 用不同身份键的风险'},
+    'EKSCluster': {'expires_seconds': 604800, 'identity': 'name', 'immutable': True},
+    'HPA': {   'expires_seconds': 604800,
+               'identity': 'name',
+               'immutable': 'lifetime',
+               'scope_note': '未按 namespace 限定'},
+    'Incident': {   'expires_seconds': None,
+                    'expiry_note': '追加式事件日志，历史事件不该过期',
+                    'identity': 'id',
+                    'immutable': True,
+                    'writer': 'rca_window_flush'},
+    'K8sService': {   'expires_seconds': 604800,
+                      'identity': 'name',
                       'immutable': 'lifetime',
                       'scope_note': '未按 namespace 限定'},
-    'LambdaFunction': {'identity': 'name', 'immutable': True, 'preferred': 'arn'},
-    'ListenerRule': {   'identity': 'name',
+    'LambdaFunction': {   'expires_seconds': 604800,
+                          'identity': 'name',
+                          'immutable': True,
+                          'preferred': 'arn',
+                          'preferred_blocked_by': 'etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 '
+                                                  'name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda 的 '
+                                                  'PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 '
+                                                  'arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 '
+                                                  'test_35::g13。解锁前提：先让 etl_cfn 也从契约派生身份键并取得 '
+                                                  'ARN'},
+    'ListenerRule': {   'expires_seconds': 604800,
+                        'identity': 'name',
                         'immutable': True,
                         'note': 'name 传入的就是 rule_arn（handler.py:273）'},
-    'LoadBalancer': {   'identity': 'name',
+    'LoadBalancer': {   'expires_seconds': 604800,
+                        'identity': 'name',
                         'immutable': True,
                         'note': 'ALB 创建后不可改名；dict 里已有 arn，可升级',
-                        'preferred': 'arn'},
-    'Microservice': {   'identity': 'name',
+                        'preferred': 'arn',
+                        'preferred_blocked_by': 'etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name '
+                                                '匹配，且它手上只有被规范化成短名的 physical_id（Lambda 的 '
+                                                'PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn '
+                                                '会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 '
+                                                'test_35::g13。解锁前提：先让 etl_cfn 也从契约派生身份键并取得 '
+                                                'ARN'},
+    'Microservice': {   'expires_seconds': None,
+                        'expiry_note': 'service_mappings.json 的声明，不是观测值；删声明才该消失',
+                        'identity': 'name',
                         'immutable': True,
                         'note': '规范服务名，来自 service_mappings.json，是声明而非观测值'},
-    'Namespace': {   'identity': 'name',
+    'Namespace': {   'expires_seconds': 604800,
+                     'identity': 'name',
                      'immutable': True,
                      'scope_note': '未按 cluster 限定；多集群场景同名 namespace 会碰撞'},
-    'NeptuneCluster': {'identity': 'name', 'immutable': True},
-    'NeptuneInstance': {'identity': 'name', 'immutable': True},
-    'Pod': {   'identity': 'name',
+    'NeptuneCluster': {'expires_seconds': 604800, 'identity': 'name', 'immutable': True},
+    'NeptuneInstance': {'expires_seconds': 604800, 'identity': 'name', 'immutable': True},
+    'Pod': {   'expires_seconds': 259200,
+               'identity': 'name',
                'immutable': 'lifetime',
                'scope_note': '未按 namespace 限定；Pod 重建即换名，属预期'},
-    'RDSCluster': {'identity': 'name', 'immutable': True, 'note': 'DBClusterIdentifier'},
-    'RDSInstance': {'identity': 'name', 'immutable': True, 'note': 'DBInstanceIdentifier'},
-    'Region': {'identity': 'name', 'immutable': True, 'note': 'region code，AWS 侧不可变'},
-    'S3Bucket': {'identity': 'name', 'immutable': True, 'note': '桶名全局唯一且不可变'},
-    'SNSTopic': {'identity': 'name', 'immutable': True, 'preferred': 'arn'},
-    'SQSQueue': {'identity': 'name', 'immutable': True, 'preferred': 'arn'},
-    'SecurityGroup': {   'identity': 'sg_id',
+    'RDSCluster': {   'expires_seconds': 604800,
+                      'identity': 'name',
+                      'immutable': True,
+                      'note': 'DBClusterIdentifier'},
+    'RDSInstance': {   'expires_seconds': 604800,
+                       'identity': 'name',
+                       'immutable': True,
+                       'note': 'DBInstanceIdentifier'},
+    'Region': {   'expires_seconds': None,
+                  'expiry_note': 'AWS 区域不会消失',
+                  'identity': 'name',
+                  'immutable': True,
+                  'note': 'region code，AWS 侧不可变'},
+    'S3Bucket': {   'expires_seconds': 604800,
+                    'identity': 'name',
+                    'immutable': True,
+                    'note': '桶名全局唯一且不可变'},
+    'SNSTopic': {   'expires_seconds': 604800,
+                    'identity': 'name',
+                    'immutable': True,
+                    'preferred': 'arn',
+                    'preferred_blocked_by': 'etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name '
+                                            '匹配，且它手上只有被规范化成短名的 physical_id（Lambda 的 '
+                                            'PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 '
+                                            'ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 '
+                                            'test_35::g13。解锁前提：先让 etl_cfn 也从契约派生身份键并取得 ARN'},
+    'SQSQueue': {   'expires_seconds': 604800,
+                    'identity': 'name',
+                    'immutable': True,
+                    'preferred': 'arn',
+                    'preferred_blocked_by': 'etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name '
+                                            '匹配，且它手上只有被规范化成短名的 physical_id（Lambda 的 '
+                                            'PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 '
+                                            'ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 '
+                                            'test_35::g13。解锁前提：先让 etl_cfn 也从契约派生身份键并取得 ARN'},
+    'SecurityGroup': {   'expires_seconds': 604800,
+                         'identity': 'sg_id',
                          'immutable': True,
                          'note': 'GroupName 创建后不可改，但 sg_id 更稳且已在 dict 里'},
-    'StepFunction': {'identity': 'name', 'immutable': True, 'preferred': 'arn'},
-    'Subnet': {   'identity': 'subnet_id',
+    'StepFunction': {   'expires_seconds': 604800,
+                        'identity': 'name',
+                        'immutable': True,
+                        'preferred': 'arn',
+                        'preferred_blocked_by': 'etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name '
+                                                '匹配，且它手上只有被规范化成短名的 physical_id（Lambda 的 '
+                                                'PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn '
+                                                '会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 '
+                                                'test_35::g13。解锁前提：先让 etl_cfn 也从契约派生身份键并取得 '
+                                                'ARN'},
+    'Subnet': {   'expires_seconds': 604800,
+                  'identity': 'subnet_id',
                   'immutable': True,
                   'note': 'name 取自 Name 标签（collectors/ec2.py:56）是可变的，必须以 subnet_id 为身份'},
-    'TargetGroup': {   'identity': 'name',
+    'TargetGroup': {   'expires_seconds': 604800,
+                       'identity': 'arn',
                        'immutable': True,
-                       'note': 'TargetGroupName 在 AWS 侧创建后不可改，所以 name 是合法身份键。arn '
+                       'note': '2026-09-04 从 name 切到 arn（14 个节点全带唯一 arn，且只有 etl_aws 写）。原 '
+                               'note：TargetGroupName 在 AWS 侧创建后不可改，所以 name 是合法身份键。arn '
                                '更稳（跨账号/区域唯一）。2026-09-04 起**切换条件已满足**：活图谱 14 个节点全部带唯一 arn，由 '
                                'tests/test_42 的 m08 用例对活图谱自动核验（GRAPH_LIVE_AUDIT=true）。此前 note '
                                '写的「18 个节点全部没有 arn，待存量都带上 arn 后再切」有两处错——一是 2026-09-04 实况已是 '
                                '14/18 有 arn，note 过期半个月无人发现（`preferred` '
                                '当时没有任何读取方）；二是那个条件**不可满足**：剩下 4 个节点里 3 个（nginx-tg-1/2/3）在 AWS '
                                '侧已删除、1 个（openclaw-tg-v2）被 SKIP_TG_PREFIXES 刻意排除采集，ETL '
-                               '永远不会再碰它们、永远补不上 arn。已用 infra/reap_stale_nodes.py 回收这 4 个残留节点',
-                       'preferred': 'arn'},
-    'TopologyChange': {   'identity': 'change_id',
+                               '永远不会再碰它们、永远补不上 arn。已用 infra/reap_stale_nodes.py 回收这 4 个残留节点'},
+    'TopologyChange': {   'expires_seconds': None,
+                          'expiry_note': '追加式事件日志，稳态可 0 实例',
+                          'identity': 'change_id',
                           'immutable': True,
                           'note': '追加式事件日志，稳态可 0 实例',
                           'writer': 'etl_deepflow'},
-    'VPC': {   'identity': 'vpc_id',
+    'VPC': {   'expires_seconds': 604800,
+               'identity': 'vpc_id',
                'immutable': True,
                'note': "name 取自 Name 标签（collectors/ec2.py:76 tags.get('Name', "
                        "v['VpcId'])）是可变的，必须以 vpc_id 为身份"}}

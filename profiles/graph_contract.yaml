@@ -53,136 +53,181 @@ node_types:
   Region:
     identity: name
     immutable: true
+    expires_seconds: null
+    expiry_note: AWS 区域不会消失
     note: region code，AWS 侧不可变
   AvailabilityZone:
     identity: name
     immutable: true
+    expires_seconds: null
+    expiry_note: AWS 可用区不会消失
     note: az name，AWS 侧不可变
   VPC:
     identity: vpc_id
     immutable: true
+    expires_seconds: 604800
     note: name 取自 Name 标签（collectors/ec2.py:76 tags.get('Name', v['VpcId'])）是可变的，必须以 vpc_id 为身份
   Subnet:
     identity: subnet_id
     immutable: true
+    expires_seconds: 604800
     note: name 取自 Name 标签（collectors/ec2.py:56）是可变的，必须以 subnet_id 为身份
   SecurityGroup:
     identity: sg_id
     immutable: true
+    expires_seconds: 604800
     note: GroupName 创建后不可改，但 sg_id 更稳且已在 dict 里
   EC2Instance:
     identity: instance_id
     immutable: true
+    expires_seconds: 604800
     note: name 取自 Name 标签，已于 2026-08-29 改以 instance_id 为身份
   EKSCluster:
     identity: name
     immutable: true
+    expires_seconds: 604800
   Namespace:
     identity: name
     immutable: true
+    expires_seconds: 604800
     scope_note: 未按 cluster 限定；多集群场景同名 namespace 会碰撞
   Pod:
     identity: name
     immutable: lifetime
+    expires_seconds: 259200
     scope_note: 未按 namespace 限定；Pod 重建即换名，属预期
   Microservice:
     identity: name
     immutable: true
+    expires_seconds: null
+    expiry_note: service_mappings.json 的声明，不是观测值；删声明才该消失
     note: 规范服务名，来自 service_mappings.json，是声明而非观测值
   K8sService:
     identity: name
     immutable: lifetime
+    expires_seconds: 604800
     scope_note: 未按 namespace 限定
   Deployment:
     identity: name
     immutable: lifetime
+    expires_seconds: 604800
     scope_note: 未按 namespace 限定
   HPA:
     identity: name
     immutable: lifetime
+    expires_seconds: 604800
     scope_note: 未按 namespace 限定
   LoadBalancer:
     identity: name
     immutable: true
+    expires_seconds: 604800
+    preferred_blocked_by: etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda 的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 test_35::g13。解锁前提：先让 etl_cfn 也从契约派生身份键并取得 ARN
     preferred: arn
     note: ALB 创建后不可改名；dict 里已有 arn，可升级
   TargetGroup:
-    identity: name
+    identity: arn
     immutable: true
-    preferred: arn
-    note: TargetGroupName 在 AWS 侧创建后不可改，所以 name 是合法身份键。arn 更稳（跨账号/区域唯一）。2026-09-04 起**切换条件已满足**：活图谱 14 个节点全部带唯一
+    expires_seconds: 604800
+    note: 2026-09-04 从 name 切到 arn（14 个节点全带唯一 arn，且只有 etl_aws 写）。原 note：TargetGroupName 在 AWS 侧创建后不可改，所以 name 是合法身份键。arn 更稳（跨账号/区域唯一）。2026-09-04 起**切换条件已满足**：活图谱 14 个节点全部带唯一
       arn，由 tests/test_42 的 m08 用例对活图谱自动核验（GRAPH_LIVE_AUDIT=true）。此前 note 写的「18 个节点全部没有 arn，待存量都带上 arn 后再切」有两处错——一是
       2026-09-04 实况已是 14/18 有 arn，note 过期半个月无人发现（`preferred` 当时没有任何读取方）；二是那个条件**不可满足**：剩下 4 个节点里 3 个（nginx-tg-1/2/3）在
       AWS 侧已删除、1 个（openclaw-tg-v2）被 SKIP_TG_PREFIXES 刻意排除采集，ETL 永远不会再碰它们、永远补不上 arn。已用 infra/reap_stale_nodes.py 回收这 4 个残留节点
   ListenerRule:
     identity: name
     immutable: true
+    expires_seconds: 604800
     note: name 传入的就是 rule_arn（handler.py:273）
   RDSCluster:
     identity: name
     immutable: true
+    expires_seconds: 604800
     note: DBClusterIdentifier
   RDSInstance:
     identity: name
     immutable: true
+    expires_seconds: 604800
     note: DBInstanceIdentifier
   Database:
     identity: name
     immutable: true
+    expires_seconds: 604800
     note: 逻辑库名
   DynamoDBTable:
     identity: name
     immutable: true
+    expires_seconds: 604800
+    preferred_blocked_by: etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda 的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 test_35::g13。解锁前提：先让 etl_cfn 也从契约派生身份键并取得 ARN
     preferred: arn
   NeptuneCluster:
     identity: name
     immutable: true
+    expires_seconds: 604800
   NeptuneInstance:
     identity: name
     immutable: true
+    expires_seconds: 604800
   S3Bucket:
     identity: name
     immutable: true
+    expires_seconds: 604800
     note: 桶名全局唯一且不可变
   SQSQueue:
     identity: name
     immutable: true
+    expires_seconds: 604800
+    preferred_blocked_by: etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda 的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 test_35::g13。解锁前提：先让 etl_cfn 也从契约派生身份键并取得 ARN
     preferred: arn
   SNSTopic:
     identity: name
     immutable: true
+    expires_seconds: 604800
+    preferred_blocked_by: etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda 的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 test_35::g13。解锁前提：先让 etl_cfn 也从契约派生身份键并取得 ARN
     preferred: arn
   LambdaFunction:
     identity: name
     immutable: true
+    expires_seconds: 604800
+    preferred_blocked_by: etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda 的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 test_35::g13。解锁前提：先让 etl_cfn 也从契约派生身份键并取得 ARN
     preferred: arn
   StepFunction:
     identity: name
     immutable: true
+    expires_seconds: 604800
+    preferred_blocked_by: etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda 的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 test_35::g13。解锁前提：先让 etl_cfn 也从契约派生身份键并取得 ARN
     preferred: arn
   ECRRepository:
-    identity: name
+    identity: arn
     immutable: true
-    preferred: arn
+    expires_seconds: 604800
+    note: 2026-09-04 从 name 切到 arn。前提已由 tests/test_42::m08 对活图谱核验（12 个节点全带唯一 arn），且该类型**只有 etl_aws 写**（不在 etl_cfn 的 TYPE_TO_LABEL 里），不存在两个 ETL 用不同身份键的风险
   BusinessCapability:
     identity: name
     immutable: true
+    expires_seconds: null
+    expiry_note: business_config.json 的声明，同 Microservice
     note: 业务声明，来自 business_config.json
   AWSServiceEndpoint:
     identity: name
     immutable: true
+    expires_seconds: 604800
     note: 归一化后的服务名（ssm 与 SimpleSystemsManagement 已归一）
   Incident:
     identity: id
     immutable: true
+    expires_seconds: null
+    expiry_note: 追加式事件日志，历史事件不该过期
     writer: rca_window_flush
   ChaosExperiment:
     identity: experiment_id
     immutable: true
+    expires_seconds: null
+    expiry_note: 追加式事件日志，实验记录是历史证据
     writer: chaos
   TopologyChange:
     identity: change_id
     immutable: true
+    expires_seconds: null
+    expiry_note: 追加式事件日志，稳态可 0 实例
     note: 追加式事件日志，稳态可 0 实例
     writer: etl_deepflow
 edge_types:

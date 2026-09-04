@@ -159,10 +159,13 @@ def test_m07_all_three_meta_fields_have_a_reader(gc, contract):
     没有 accessor 的字段等于注释，注释会过期而且过期时没人知道。
     """
     readers = {
-        'identity':   gc.identity_prop_for,
-        'immutable':  gc.identity_is_stable_for_merge,
-        'scope_note': gc.scope_gap_for,
-        'preferred':  gc.preferred_identity_for,
+        'identity':             gc.identity_prop_for,
+        'immutable':            gc.identity_is_stable_for_merge,
+        'scope_note':           gc.scope_gap_for,
+        'preferred':            gc.preferred_identity_for,
+        'preferred_blocked_by': gc.preferred_blocked_by,
+        'expires_seconds':      gc.node_expires_seconds_for,
+        'expiry_note':          gc.node_expiry_note_for,
     }
     declared = {k for v in contract['node_types'].values() for k in v}
     # note / writer 是自由文本与归属标注，不参与判定
@@ -179,6 +182,67 @@ def test_m07_all_three_meta_fields_have_a_reader(gc, contract):
             continue
         assert any(fn(n) is not None for n in owners), (
             f"{field} 有 {len(owners)} 个类型声明了它，但其 accessor 对所有类型都返回 None")
+
+
+def test_m09_preferred_must_be_actionable_or_declare_its_blocker(gc, contract):
+    """声明了 `preferred` 的类型，必须要么现在就能切，要么申报阻塞原因。
+
+    这条断言的存在本身就是为了不重造它上游的那个缺陷：TargetGroup 曾经带着一条
+    「待存量都带上 arn 后再切」的 note 过期半个月，因为那句话既没有读取方、
+    也没有说清到底卡在哪。一个既不可切换又不说明原因的 `preferred`
+    就是同一个东西换了个字段名。
+
+    2026-09-04 实测的阻塞是**第二类**前提，此前完全没被记录：
+    6 个类型（LoadBalancer / DynamoDBTable / SQSQueue / SNSTopic /
+    LambdaFunction / StepFunction）同时被 etl_cfn 写入，而 etl_cfn 的
+    get_or_create_vertex 硬编码按 name 匹配、且它手上只有被规范化成短名的
+    physical_id（Lambda 的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。
+    单方面切 arn 会让两个 ETL 用不同身份键写同一类节点 —— 正是
+    test_35::g13 预告的形态。
+
+    判据：凡是被 etl_cfn 的 TYPE_TO_LABEL 覆盖的类型，若声明了 `preferred`
+    就必须同时声明 `preferred_blocked_by`。
+    """
+    cfn = REPO / 'infra' / 'lambda' / 'etl_cfn' / 'neptune_etl_cfn.py'
+    import re
+    m = re.search(r'TYPE_TO_LABEL\s*=\s*\{(.*?)\n\}', cfn.read_text(), re.S)
+    assert m, "找不到 TYPE_TO_LABEL 映射，本用例的判据失效了"
+    cfn_labels = set(re.findall(r":\s*'([A-Za-z0-9]+)'", m.group(1)))
+
+    silent = []
+    for n, v in contract['node_types'].items():
+        if not v.get('preferred'):
+            continue
+        if n in cfn_labels and not gc.preferred_blocked_by(n):
+            silent.append(n)
+    assert not silent, (
+        f"这些类型声明了 preferred，且被 etl_cfn（按 name 匹配）同时写入，"
+        f"却没有申报 preferred_blocked_by: {silent}。"
+        f"不申报就会变成又一条过期而无人知晓的承诺。")
+
+    # 反向：申报了阻塞的类型不该已经切过去了（切完就该把两个字段都撤掉）
+    stale = [n for n, v in contract['node_types'].items()
+             if v.get('preferred_blocked_by') and v.get('identity') == v.get('preferred')]
+    assert not stale, f"这些类型已经切到 preferred 了，阻塞声明应当撤掉: {stale}"
+
+
+def test_m10_switched_types_are_not_written_by_a_name_matching_etl(gc, contract):
+    """已经切到非 name 身份键的类型，不得被 etl_cfn 同时写入。
+
+    这是 m09 的另一半，也是 test_35::g13 的加强版：g13 只看 etl_cfn 写的类型
+    在契约里是否为 name 身份，本条从相反方向锁 —— 任何非 name 身份的类型都
+    不能出现在 etl_cfn 的写入面里。两条合起来让「切身份键」这个动作无法
+    绕开 etl_cfn 这个约束。
+    """
+    cfn = REPO / 'infra' / 'lambda' / 'etl_cfn' / 'neptune_etl_cfn.py'
+    import re
+    m = re.search(r'TYPE_TO_LABEL\s*=\s*\{(.*?)\n\}', cfn.read_text(), re.S)
+    cfn_labels = set(re.findall(r":\s*'([A-Za-z0-9]+)'", m.group(1)))
+    bad = {n: v['identity'] for n, v in contract['node_types'].items()
+           if v.get('identity') != 'name' and n in cfn_labels}
+    assert not bad, (
+        f"这些类型的身份键不是 name，但 etl_cfn 仍按 name 匹配着写它们，"
+        f"图里会裂成两份: {bad}")
 
 
 # ── m08 live：preferred 的解锁条件自动核验 ────────────────────────────────
@@ -227,7 +291,7 @@ def test_m08_preferred_unlock_condition_against_live_graph(contract):
     pref = {n: v['preferred'] for n, v in contract['node_types'].items() if v.get('preferred')}
     assert pref, "契约里没有任何 preferred 声明 —— 这条用例的前提已失效"
 
-    residue, unlocked, pending, empty = {}, [], [], []
+    residue, unlocked, pending, empty, blocked = {}, [], [], [], []
     for label, p in pref.items():
         total = one(f"g.V().hasLabel('{label}').count()")
         if total == 0:
@@ -242,15 +306,23 @@ def test_m08_preferred_unlock_condition_against_live_graph(contract):
             uniq = one(f"g.V().hasLabel('{label}').values('{p}').dedup().count()")
             if uniq < withp:
                 residue[f"{label}.{p}"] = f"{withp - uniq} 个 {p} 取值重复"
+            elif contract['node_types'][label].get('preferred_blocked_by'):
+                # 回填已完成，但还有**第二个**前提没满足（2026-09-04 实测：
+                # etl_cfn 也按 name 写这些类型）。报成 UNLOCKED 会误导人去切，
+                # 切下去就是两个 ETL 用不同身份键写同一类节点。
+                blocked.append(f"{label}.{p}")
             else:
                 unlocked.append(f"{label}.{p}")
 
     print(f"\npreferred 解锁状态："
-          f"UNLOCKED={sorted(unlocked)} PENDING={sorted(pending)} "
-          f"空类型={sorted(empty)}")
+          f"UNLOCKED={sorted(unlocked)} BLOCKED={sorted(blocked)} "
+          f"PENDING={sorted(pending)} 空类型={sorted(empty)}")
     if unlocked:
-        print(f"⬆ 以下类型的候选身份键已回填完整且唯一，可以切换："
+        print(f"⬆ 以下类型的候选身份键已回填完整且唯一、且无其它阻塞，可以切换："
               f"{sorted(unlocked)} —— 用 infra/migrate_identity_keys.py 复核后改契约")
+    if blocked:
+        print(f"⛔ 以下类型回填已完成但仍被阻塞（见契约 preferred_blocked_by）："
+              f"{sorted(blocked)}")
 
     assert not residue, (
         f"这些类型的候选身份键处于 RESIDUE 状态 —— 写入方已在写该属性，"

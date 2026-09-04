@@ -245,17 +245,17 @@ def run_etl():
             lb_vid = lb_vid_map.get(lb_name)
             if not lb_vid:
                 continue
+            # 身份键 2026-09-04 从 name 切到 arn。切换前提两条都已核实：
+            #   ① 活图谱 14 个节点全带唯一 arn（tests/test_42::m08 自动核验）
+            #   ② 该类型**只有 etl_aws 写**，不在 etl_cfn 的 TYPE_TO_LABEL 里，
+            #      所以不存在两个 ETL 用不同身份键写同一类节点的风险
+            #      （那正是 test_35::g13 守的形态，也是 6 个类型至今切不了的原因）
             tg_vid = upsert_vertex('TargetGroup', tg['name'], {
                 'arn': tg['arn'],
                 'port': str(tg['port']),
                 'protocol': tg['protocol'],
                 'role': 'target-group',
-            # arn 作为普通属性写入 —— 原先只在循环变量里，图谱上取不到。
-            # 身份键仍是 name（TargetGroupName 在 AWS 侧不可改，是合法身份键）：
-            # 2026-08-30 活图谱审计显示 18 个现存节点全无 arn 属性，
-            # 直接切成 arn 身份会在首轮 ETL 造 18 个重复。待存量都带上 arn 后
-            # 用 infra/migrate_identity_keys.py 复核再切。
-            }, 'cloudformation')
+            }, 'cloudformation', identity_prop='arn')
             stats['vertices'] += 1
             if tg_vid:
                 upsert_edge(lb_vid, tg_vid, 'RoutesTo', {'source': 'aws-etl'})
@@ -269,7 +269,7 @@ def run_etl():
             tg_name_v = upsert_vertex('TargetGroup', tg['name'], {
                 'arn': tg['arn'],
                 'port': str(tg['port']), 'protocol': tg['protocol'], 'role': 'target-group',
-            }, 'cloudformation')
+            }, 'cloudformation', identity_prop='arn')
             tg_arn_to_vid[tg['arn']] = tg_name_v
 
         for rule in listener_rules:
@@ -1044,10 +1044,12 @@ def run_etl():
     # ── Step 12: ECR ──────────────────────────────────────────────────────────
     ecr_repos = collect_ecr_repositories(ecr_client)
     for repo in ecr_repos:
+        # 身份键 2026-09-04 从 name 切到 arn。与 TargetGroup 同理：
+        # 12 个节点全带唯一 arn，且该类型只有 etl_aws 写。
         r_vid = upsert_vertex('ECRRepository', repo['name'], {
             'arn': repo['arn'],
             'uri': repo['uri'],
-        }, repo['managed_by'])
+        }, repo['managed_by'], identity_prop='arn')
         stats['vertices'] += 1
         if r_vid and region_vid:
             try:
@@ -1292,6 +1294,33 @@ def run_etl():
                     _exp['enabled'], _stale, _done)
     except Exception as e:
         logger.warning(f"edge expiry failed (non-fatal): {e}")
+
+    # ── 节点过期收敛（2026-09-04 新增）─────────────────────────────────────
+    #
+    # 补的是契约里一句悬空的话：结构边的 `expires_seconds: None` 注解写着
+    # 「生命周期跟随两端节点」，但节点侧此前没有任何生命周期机制。
+    # 实测代价：Pod 在图里 581 个节点，集群实际 Running 70 个，
+    # 511 个（88%）超过一天没刷新。
+    #
+    # 开关与边的**分开**（GRAPH_NODE_EXPIRY_ENABLED）：节点置 active=false 会
+    # 影响以它为端点的一切遍历，风险面比边大，要能独立灰度。
+    #
+    # `unjudgeable` 必须单独看：它是「本轮对多少个节点什么都没判」，
+    # 不为 0 时 stale 这个数就**不能**读成「只有这么多陈旧节点」。
+    # 这一轮之前 TIMESTAMP_FIELD 在节点上的覆盖率只有 1.4%，
+    # 整个机制会结构上永不触发而毫无征兆 —— 所以这个字段进 stats。
+    try:
+        from graph_cleanup import expire_stale_nodes
+        _nexp = expire_stale_nodes(neptune_query, round_ts=int(time.time()))
+        _nstale = sum(v['stale'] for v in _nexp['per_label'].values())
+        _ndone = sum(v['expired'] for v in _nexp['per_label'].values())
+        stats['node_expiry_stale'] = _nstale
+        stats['node_expiry_expired'] = _ndone
+        stats['node_expiry_unjudgeable'] = _nexp['unjudgeable_total']
+        logger.info("node-expiry: enabled=%s stale=%d expired=%d unjudgeable=%d",
+                    _nexp['enabled'], _nstale, _ndone, _nexp['unjudgeable_total'])
+    except Exception as e:
+        logger.warning(f"node expiry failed (non-fatal): {e}")
 
     try:
         neptune_query(

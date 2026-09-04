@@ -171,6 +171,19 @@ def upsert_vertex(label: str, name: str, extra_props: dict, managed_by: str = 'm
         fv = _format_prop_val(k, v)
         prop_chain += f".property(single,'{ks}',{fv})"
     prop_chain += f".property(single,'last_updated',{ts_now})"
+    # 契约声明的统一时间戳字段（timestamp_field）。
+    #
+    # 2026-09-04 实测：etl_aws 此前**只写 last_updated**，从不写 TIMESTAMP_FIELD，
+    # 于是 1077 个节点里只有 15 个（1.4%）带 last_seen —— 而那 15 个全是 etl_cfn
+    # 写的。后果有两层：
+    #   ① 任何按 TIMESTAMP_FIELD 判定的机制（节点过期收敛）**结构上永不触发**，
+    #      查询返回 0 条会伪装成「没有陈旧节点」，与真的干净完全同形
+    #   ② 反过来，若改用 last_updated 当判据，会**误杀 etl_cfn 独家写的节点** ——
+    #      实测 7 个 LambdaFunction 活着且被 etl_cfn 每日刷新（last_seen 新鲜），
+    #      但 etl_aws 不碰它们，last_updated 已陈旧 >7 天
+    # 所以统一字段必须由**每个**节点写入方都写，判据才成立。
+    # last_updated 保留：存量查询与报告仍在用它，属过渡态。
+    prop_chain += f".property(single,'{TIMESTAMP_FIELD}',{ts_now})"
     gremlin = (
         f"g.mergeV([(T.label): '{label}', '{id_key}': '{id_val}'])"
         f".option(Merge.onCreate, [(T.label): '{label}', {props_create}])"

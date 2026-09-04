@@ -24,10 +24,10 @@
 | **9 打开托管资源边（FIS + Chaos Mesh）** ★ | 10 | 5 | 1 | 0 | 4 |
 | **8 闭环校正** ★ 终点 | 4 | 0 | 0 | 0 | 4 |
 | （T-202 方向写反，作废） | 1 | — | — | — | wontfix |
-| **合计** | **66** | **27** | **3** | **0** | **36** |
+| **合计** | **68** | **29** | **3** | **0** | **36** |
 
 基线：提交 `3477896` 时 **442 passed / 145 skipped / 0 failed**。
-**当前水位：504 passed / 145 skipped / 0 failed**（python3.11）。
+**当前水位：516 passed / 145 skipped / 0 failed**（python3.11）。
 活图谱（2026-08-31 17:05Z 实测）：94 条依赖边，
 **confirmed 11 / inconclusive 3 / untested 80 —— 已判定覆盖率 14.89%**（今晨 0.0%）。
 横跨 `Calls` / `AccessesData` 两种边类型，三种注入拓扑
@@ -731,6 +731,36 @@
   TargetGroup 14/14 唯一 arn、零孤立。m08 从失败翻通过
 - **结构缺口**：边有过期收敛（T-272），节点没有；契约里结构边的
   `expires_seconds: None`（生命周期跟随节点）在实现上是悬空的
+
+### T-302 节点过期收敛 + 统一时间戳字段 · `done`（2026-09-04 08:3xZ）★
+- 填掉契约里「结构边生命周期跟随两端节点」这句**悬空的话** —— 节点侧此前
+  根本没有生命周期机制。实测：Pod 图谱 581 个 vs kubectl 实际 Running **70** 个
+- 与边过期对称但四处刻意不同：开关分开（节点置 active=false 影响一切遍历）、
+  不要求 has('active',true)（节点侧无写入方写它，照抄会让查询恒为空）、
+  软过期绝不 drop、TTL 下限 3 天（etl_cfn 每日一次 + etl_xray 曾连死两天）
+- **前置缺陷 #27**：etl_aws 的 upsert_vertex 只写 last_updated、从不写契约声明的
+  TIMESTAMP_FIELD，覆盖率仅 1.4%。不能顺手改用 last_updated —— 7 个
+  LambdaFunction 由 etl_cfn 独家刷新，按 last_updated 判会**误杀活节点**
+- **差点交付一个永不触发的闸门**：只修写入方救不了死节点（它们不会再被触碰、
+  永远拿不到判据字段）。修完写入方覆盖率 1.4%→30.4% 而 unjudgeable 仍是 528，
+  升上去的全是活节点。补 infra/backfill_node_timestamp.py 一次性回填后
+  79.4%、unjudgeable 528→**0**、stale 0→**527**
+- 回填 dry-run 的印证：Pod 已有 last_seen 的恰好 70 个 = kubectl Running 70 个
+- 执行器把 unjudgeable **单独上报**，不为 0 时 stale 不能读成「只有这么多陈旧」
+- 守门测试 tests/test_43_node_expiry.py（10 用例）。**当前仍 dry-run**，
+  开启需 GRAPH_NODE_EXPIRY_ENABLED=true（527 个节点会被软标记，未做）
+
+### T-303 身份键切到 arn —— 8 个候选里只有 2 个能切 · `done`（2026-09-04 08:3xZ）★
+- 上一轮的解锁检查报「7 个早已可切」，实际去切时发现**回填完整只是必要条件**
+- test_35::g13 的文档早就预告了第二个前提：etl_cfn 按 name 匹配，单方面切会让
+  两个 ETL 用不同身份键写同一类节点。按 TYPE_TO_LABEL 求交集，8 个里 **6 个**中招
+- 而且不是「改下 etl_cfn 就行」：get_or_create_vertex 手上根本没有 arn，
+  且 etl_cfn 刻意把内嵌 ARN 规范化成短名让两个 ETL 在 name 上对齐；
+  Lambda 的 PhysicalResourceId 就是函数名，本地拿不到 ARN
+- **已切**：TargetGroup、ECRRepository（只有 etl_aws 写）。实跑 ETL 验证零重复
+- **剩 6 个**：不留裸的 preferred —— 那重造 #24 的「不可满足承诺」。新增
+  preferred_blocked_by 写明原因，m09/m10 双向锁死，m08 报 BLOCKED 而非 UNLOCKED
+- 顺带回收了上一轮未授权的 5 个 LambdaFunction 策略残留
 
 ### T-260 属性权威表补全 · `todo`
 - 已做：`source` 写一次（`coalesce(values(k), constant(v))`），etl_aws + etl_cfn 两处
