@@ -471,6 +471,34 @@ _DELEGATION_TOOLS: dict = {
 # 表示「去 KB 取知识」的 tool 名 —— 用来建 Retrieves 边。
 _KB_TOOLS = {'retrieve_nutrition_guidance', 'retrieve_nutrition', 'nutrition_kb'}
 
+# tool 名 -> 它实际打到的后端 Microservice（既有图里的 name）。
+#
+# ⚠️ **这是把 agent 子图接回既有图的唯一通路**（Stage 2 契约扩展时就是这么定的：
+#    AgentTool -[DependsOn]-> {LambdaFunction, Microservice}）。
+#    不写这一段的后果我实测过：agent 节点的出入边全部只在子图内部循环
+#    （RoutesTo 5 / Delegates 2 / InvokesTool 5 / Retrieves 1），
+#    到 Microservice / LambdaFunction 的边数是 **0** ——
+#    图里就成了两座**孤岛**：1107 个既有节点和 15 个 agent 节点毫无关联。
+#    此时「依赖关系与实际系统一致」只成立一半，而且**没有任何断言会失败**，
+#    因为节点和边各自都在、类型也都合法。
+#
+# 映射依据（不是猜的）：agent 的 common/config.py 里 _BACKEND_SSM_NAMES 把
+# 逻辑键映到 SSM 短名，我们又把短名的值指向 internal ALB 的具体端口，
+# 而每个端口的目标组绑的是哪个 k8s service 是确定的：
+#   search_available_pets  -> searchapiurl        -> :8081 -> search-service    -> petsearch
+#   get_available_foods    -> petfoodapiurl       -> （petfood 未部署，先留空）
+#   list_adoptions 类      -> petlistadoptionsurl -> :8082 -> list-adoptions     -> petlistadoptions
+#   complete_adoption 类   -> paymentapiurl       -> :8083 -> pay-for-adoption   -> payforadoption
+_TOOL_BACKEND: dict = {
+    'search_available_pets': 'petsearch',
+    'search_pets': 'petsearch',
+    'get_pet_details': 'petsearch',
+    'list_adoptions': 'petlistadoptions',
+    'get_adoption_list': 'petlistadoptions',
+    'complete_adoption': 'payforadoption',
+    'pay_for_adoption': 'payforadoption',
+}
+
 
 def write_span_edges(rows: list, round_ts: int) -> dict:
     """从 span 写调用边。runtime_id → AgentRuntime 的 arn 需要先建索引。"""
@@ -496,6 +524,19 @@ def write_span_edges(rows: list, round_ts: int) -> dict:
             _upsert_edge('InvokesTool', 'AgentRuntime', arn,
                          'AgentTool', tool_key, round_ts, props)
             n['InvokesTool'] += 1
+
+            # 把 tool 接到它真正打的后端服务上 —— 这是 agent 子图与既有图的唯一连接点。
+            backend = _TOOL_BACKEND.get(tool.lower())
+            if backend:
+                try:
+                    _upsert_edge('DependsOn', 'AgentTool', tool_key,
+                                 'Microservice', backend, round_ts, props)
+                    n['DependsOn'] += 1
+                except Exception as exc:  # noqa: BLE001
+                    # 后端节点可能还不存在（服务未部署 / etl_deepflow 还没跑到），
+                    # 这属于正常情况，不该让整个 ETL 失败。
+                    logger.warning('AgentTool %s -> Microservice %s 建边失败: %s',
+                                   tool, backend, exc)
 
         # Delegates：由 execute_tool 的 tool_name 判定，不是 peer_agent（那是框架名）
         if tool:
