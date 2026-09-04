@@ -31,7 +31,7 @@
 | **3** | **PetSite 应用追平** | ~~10h~~ **31h**（实测修正） | ✅ **6/6 完成**（六个服务全部合并，五个已 arm64 构建验证：payforadoption-go / petfood-rs / petsite / petsearch-java，petstatusupdater 走 npm test；petlistadoptions 保 Go 未改源码）（`09`） |
 | **4** | **AgentCore 部署** | 8h | ✅ **完成**：5 Runtime + Gateway + 5 target 全部 READY，KB 灌入 10/10，Memory/Guardrail/PolicyEngine 已建，8 个 `/petstore/agent/*` 有值（`10`） |
 | 5 | 观测部署 | 4h | ✅ **完成**：agent 依赖边已与实际系统一致（Delegates 2 / InvokesTool 5 / Retrieves 1），PENDING 名单已按纪律清空且测试仍全绿（`11`） |
-| 6 | 压测 + 图谱验收 | 4h | ⚠️ 部分：当前系统 6 服务图谱一致、五个写图 ETL 门禁已补完（`12`） |
+| 6 | 压测 + 图谱验收 | 4h | ⚠️ **压测已通过（100% / 注入生效）、孤岛已接通**；仅剩 petfood 与 petsite 部署待用户定夺（`12`） |
 
 **旁路已完成，且 TS 对 `etl_xray` 的影响面已于 10:36Z 结案**：Transaction Search 已开（2026-09-04 08:49:33Z ACTIVE，**索引率现为 100%，见硬约束第 7 条**，head sampling 保持 0.05），基线 `snapshots/before.json`（52 Services / 49 Edges）。判定用的是**集合差集**而非 52/49 计数对比 —— 详见下方「✅ 已定论：X-Ray 索引率是 `etl_xray` 的隐性硬依赖」。Stage 6 仍保留「重建后预期服务是否全部出现在 `GetServiceGraph`」这条更强判据，用于重建后的验收。
 
@@ -550,6 +550,58 @@ Stage 2 契约扩展时明确写了「`AgentTool -[DependsOn]-> {LambdaFunction,
 
 处置：新增 `_TOOL_BACKEND` 映射（依据实际链路：tool -> SSM 短名 -> ALB 端口 ->
 k8s service -> 既有图 name），接通后实证 `WaggleAIOrchestrator ~3跳~> petsearch`。
+
+## ✅ Stage 6 压测与故障注入验证（2026-09-04 17:12）
+
+**压测**：6288 请求 / 150s / 24 并发，**成功率 100%、零错误**。
+
+| 目标 | 请求 | 成功率 | p50 | p95 | p99 |
+|---|---|---|---|---|---|
+| petsite 首页 | 1572 | 100% | 315ms | 779ms | 1238ms |
+| petsite 搜索页 | 1572 | 100% | 92ms | 479ms | 816ms |
+| search API | 1572 | 100% | 30ms | 239ms | 374ms |
+| search 健康检查 | 1572 | 100% | 5ms | 15ms | 44ms |
+
+HPA 全程远低于阈值（petsite CPU 13%/60%，其余 3–7%），未触发扩容；0 Pod 重启。
+
+**1% 故障注入确认仍生效**：同期 `search-service` 日志里
+「Trying to create a S3 Bucket」**84 次**、「Error while accessing S3 bucket」**84 次**，
+一一对应 —— 注入既触发也真的抛异常。
+注入率 84 ÷ (1572 搜索 × 约 15 宠物) ≈ **0.36%**，与 100/9999 ≈ 1% 同量级。
+
+### ⚠️ 「100% 成功率」与「84 次 ERROR」并不矛盾
+
+`getPetUrl` 的 catch 块 `span.recordException(e)` 后 `throw`，而 `mapToPet`
+（`SearchController` 第 119 行）在 `/api/search` 里被**逐个宠物**调用 ——
+单个宠物的异常不会让整个 HTTP 响应失败。
+所以注入的效果是**部分结果缺失 + trace 里有 exception，而非 HTTP 500**。
+这正是这个 demo 想要的形态：在 X-Ray / 服务图上看得见错误，但用户请求仍返回。
+
+（我一度以为「压的是列表查询、没走到注入路径」—— 那是错的，第 119 行明明就调了 `getPetUrl`。）
+
+### 次要发现：线上 search-service 镜像比本地源码旧
+
+代码里紧挨着的两行日志：
+```java
+logger.info("Trying to create a S3 Bucket");
+logger.info(randomnumber + " is the random number");
+```
+前一句命中 84 次、**后一句命中 0 次** —— 说明线上镜像（`868c93f3...`）
+里没有第二行。不影响注入功能，但确认线上镜像与本地当前源码不同版本。
+
+### 压测本身踩的坑（全部是我自己的假信号，值得单列）
+
+追这一个压测花了五轮，全部消耗在验证手段上：
+1. `ls -la /home/ubuntu/` 返回空被读成「空目录」—— 实际**该目录不存在**
+   （压测机是 **Amazon Linux 2023 / ec2-user**，不是 Ubuntu）。
+2. `aws s3 cp` 上传后打印了「✅ 已上传」，但**下载端 403 Forbidden**
+   （压测机实例角色读不了 CDK 资产桶），脚本从未落地。改为把脚本 base64 内联进 SSM 命令。
+3. **我把自己的 echo「压测已启动」当成了运行证据** —— 进程根本没起来。
+   修正为看 `ps aux` 的真实 PID 与日志字节数。
+
+**教训与今天其余几次同源：验证手段本身没被验证。**
+`:8082`/`:8083` 也已从压测目标移除 —— 从 10.1 段访问它们必然超时（只对 agentSg 开放），
+留着只会产生假 timeout 掩盖真实信号；这两个 listener 的健康由目标组各 2 个 Pod IP healthy 证明。
 
 ## 退出条件
 
