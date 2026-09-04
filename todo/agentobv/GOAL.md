@@ -530,6 +530,27 @@ git 操作需 `-c safe.directory=/home/ubuntu/tech/one-observability-demo`；长
 
 **纪律**：单个关键词 grep 返回空时，**必须先确认文件存在、再换关键词**，不能直接下「不存在」的结论。
 
+## 🔥 Stage 6 最重要的发现：agent 子图曾是一座孤岛（2026-09-04 15:58）
+
+所有验收都是绿的 —— 节点齐全（5 Runtime / 1 Gateway / 2 Memory / 1 KB / 1 Guardrail / 5 Tool）、
+边齐全（RoutesTo 5 / Delegates 2 / InvokesTool 5 / Retrieves 1）、类型全部合法、
+契约测试 6 passed / 1 skipped、PENDING 名单也已清空。
+
+**但 agent 节点到 `Microservice` / `LambdaFunction` 的边数是 0。**
+1107 个既有节点和 15 个 agent 节点毫无关联，是两座孤岛。
+agent 的出入边全部只在子图内部循环。
+
+**没有任何断言会因此失败** —— 节点和边各自都在、类型也都声明过。
+Stage 2 契约扩展时明确写了「`AgentTool -[DependsOn]-> {LambdaFunction, Microservice}`
+是把 agent 子图接回既有图的唯一通路」，但 ETL 里**从来没实现这条边**。
+是主动去查「agent 子图有没有出边连到既有图」才发现的。
+
+**教训**：类型齐全 ≠ 图连通。验收判据里必须包含**跨子图连通性**，
+否则可以做到每一条断言都通过、而图在结构上是碎的。
+
+处置：新增 `_TOOL_BACKEND` 映射（依据实际链路：tool -> SSM 短名 -> ALB 端口 ->
+k8s service -> 既有图 name），接通后实证 `WaggleAIOrchestrator ~3跳~> petsearch`。
+
 ## 退出条件
 
 六个 Stage 全部完成，且满足：五服务 + petfood + agent 全部 Running、loadgen 压测下无异常、
