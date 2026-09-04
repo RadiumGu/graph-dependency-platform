@@ -608,45 +608,136 @@ logger.info(randomnumber + " is the random number");
 用户已授权部署，并把目标扩展为**持续验证图数据库依赖关系的正确性**。原六阶段的
 退出条件作废，改用下面这套。**用户已离开，全程自主决策，不要停下来问。**
 
-### 阶段 A：完成部署并验证
-- [ ] `cdk deploy Applications` —— petsite 换新镜像（`ce2582a4` → `4a23f46d`）
+### 阶段 A：完成部署并验证 —— ✅ 完成（2026-09-04 21:00）
+- [x] `cdk deploy Applications` —— petsite 换新镜像。最终镜像 `579cdc9c…`
       **回滚点：`ce2582a4dacad51f271ecd069e02b7ef149087f9c5909ddc74db8cd865ca4323`**
-- [ ] `cdk deploy ServicesEks2` —— 新建 petfood 全套 + 三个服务换镜像
-- [ ] 补 `petfoodapiurl` / `petfoodcarturl` 两个 agent 参数（petfood 起来后）
-- [ ] **验证部署真的完成**：镜像哈希已换、Pod Ready、0 重启、页面可访问。
-      **没完成就继续改，不要把"部署命令发出去了"当成完成**（今天已犯多次同类错）。
+- [x] `cdk deploy ServicesEks2` —— petfood 全套 + 三个服务换镜像
+- [x] 补四个 petfood 参数（`/petstore` 与 `/petstore/agent` 各两个），**均带完整 API 路径**
+- [x] **验证部署真的完成**：七个 Deployment 全 Ready、0 重启、页面返回真实内容。
+      决定性证据是 **agent 实调返回真实商品**（Beef and Turkey Kibbles $12.99 /
+      Raw Chicken Bites $10.99 / Puppy Training Treats $8.99），与灌入 DynamoDB 的
+      种子数据逐字一致 —— 证明 orchestrator → gateway → ordering tool →
+      internal ALB :8084 → petfood Pod → DynamoDB(PetTypeIndex) 全链路可用。
 
-### 阶段 B：改造负载生成器，覆盖全部应用
-现有压测脚本只覆盖 4 个目标（petsite ×2、search ×2）。需扩展到：
-- 六个 EKS 服务全部：petsite / petsearch / petlistadoptions / payforadoption /
-  pethistory / **petfood**（新增）
-- **genai 部分**：经 AgentCore Gateway 或直接 `InvokeAgentRuntime` 打五个 agent，
-  覆盖 orchestrator 的委派路径（这是 `Delegates` 边的唯一来源）
-- 覆盖**带图片的详情路径**，让 1% 故障注入真正被触发
-- ⚠️ 不要把 `:8082`/`:8083` 放进从 10.1 段发起的压测 —— 那两个端口只对 agentSg 开放，
-  必然超时，会产生假信号
+petfood 一共有**六层串联问题**，每层都被上一层遮蔽（详见下方「petfood 六层问题」）。
 
-### 阶段 C：用 FIS 或 Chaos Mesh 验证图里的依赖关系
-对图数据库里**每一条依赖边**做故障注入验证：断掉 A，看 B 是否如图所示受影响。
-- 已有素材：`04-FIS模板库与agent注入_20260904-0830.md`
-- 每验证一条边，在图上标记 confirmed / refuted（契约里已有这套语义）
-- **验证不了的就记录原因，然后继续下一条，不要卡住**
-- 持续循环，直到所有环节验证完
+### 阶段 B：改造负载生成器，覆盖全部应用 —— ✅ 完成（2026-09-04 20:10）
+- [x] 六个 EKS 服务：5658 请求 / 420s。修复上线后复测 **8/8 目标 100%（313/313）**
+- [x] **genai 部分**：38 次真实 `InvokeAgentRuntime`，orchestrator 日志里
+      `nutrition_advisor` **63 次** —— 证明委派真实发生，不是 orchestrator 自答
+- [x] 1% 注入被触发：`Trying to create a S3 Bucket` 83 次 /
+      `Error while accessing S3 bucket` 84 次，一一对应
+- [x] 未把 `:8082`/`:8083` 放进从 10.1 段发起的压测
 
-### 硬约束不变
-Neptune 绝对不能删；ETL 可改不可删；ALB 不得新增公网入口；不得用 ECS；
-**新增一条**：故障注入必须可自动恢复，不得留下持续故障状态。
+**顺带纠正一个方向错误**：1% 注入的触发点在 **search-service 的 `getPetUrl`**
+（组装 presigned S3 URL 时），所以触发路径是**搜索**，不是收养列表 ——
+收养列表来自 petlistadoptions 服务，压根不经过 `getPetUrl`。
 
-### 纪律（今天已 14 次栽在这上面）
-**验证手段本身必须先被验证。** 具体已犯过的：把自己的 echo 当运行证据；
-`ls` 返回空读成"目录为空"而非"不存在"；S3 上传成功而下载端 403；
-grep 过滤条件滤掉关键行；`context canceled` 其实是自己设的超时；
-把异常吞成静默空结果（比崩溃更糟）。
-**长任务一律后台跑 + 日志落文件 + 用 ps/字节数实证，不要用单次调用超时去卡。**
+**给压测加了错误页识别**：petsite 的异常处理渲染 "Oops! Something went wrong"
+并返回 **HTTP 200**。只看状态码会把错误页当成功 —— 加了正文校验后
+`petsite-petfood-legacy` 立刻从「100% 成功」变成 `ERRPAGE:701`。
+这类假绿最危险：状态码正常、字节数也在合理区间。
 
-## 退出条件
+### 阶段 C：用 Chaos Mesh 验证图里的依赖关系 —— ✅ 完成（2026-09-04 22:45）
 
-六个 Stage 全部完成，且满足：五服务 + petfood + agent 全部 Running、loadgen 压测下无异常、
-AgentCore 观测出 span、图数据库依赖关系与实际系统一致 → 调 `autonudge_stop` 并汇报。
+**所有 `Calls` 边 100% 定性，无一条 untested。**
+
+| 判定 | 数量 | 说明 |
+|---|---|---|
+| confirmed | 15 | 含本轮注入 5 条 + agent 3 条 + 历史 7 条 |
+| refuted | 3 | **图谱纠错成果** |
+| inconclusive | 35 | 每条都带机器可读的原因 |
+
+**三条 refuted（图谱确实有误报，这正是阶段 C 的价值）**
+- `gateway-service -Calls-> petsite`、`order-service -Calls-> petsite`
+  —— awesomeshop 六个 Deployment 副本全 0、Pod 总数 0，且全部 spec 中
+  **零命中** petsite/petadoptions 关键词。跨应用误归因。
+- `pethistory -Calls-> petlistadoptions`
+  —— 代码全仓零调用 + Pod env 无对端地址 + 注入期日志零异常（三重证据）。
+  ETL 从**同一条 trace** 误推的旁系边：`petsite→pethistory` 与
+  `petsite→petlistadoptions` 都成立，但两者之间没有直接调用。
+
+**五条注入 confirmed（退化 75%~100%，对照组全 0.0%）**
+`petsite→petsearch` 100% / `petsite→pethistory` 100% /
+`petlistadoptions→petsearch` 100% / `petsite→petfood` 87.5% /
+`petsite→petlistadoptions` 75%
+
+**inconclusive 的四类原因（都写进了 `verify_experiment`）**
+- `chaos-mesh-cannot-target-lambda` —— Lambda/StepFn 在集群外
+- `image-repo-dependency` —— 断 ECR 只影响新 Pod 拉取，运行中的不受影响
+- `target-scaled-to-zero` —— awesomeshop **应用内部**边，副本 0 无法施加负载。
+  ⚠️ 刻意**不标 refuted**：它很可能真实成立，与跨应用的
+  `gateway-service→petsite` 有本质区别
+- `self-loop-from-trace` / `source-absent-from-cluster` / `synthetic-traffic-source`
+
+### 硬约束执行情况
+Neptune 未删任何数据（写回只用 `property()` 更新已存在边）；ETL 只改不删；
+ALB 只加 internal listener `:8084`，无新增公网入口；全部容器在 arm64 EKS；
+**故障注入全程可自动恢复**，每轮收尾断言残留实验数为 0 —— 且实测有双重保障：
+`duration` 到期自愈，以及删除 CR 主动恢复（中断脚本时验证过）。
+
+---
+
+## petfood 六层问题（每层都被上一层遮蔽）
+
+| 层 | 症状 | 根因 |
+|---|---|---|
+| ① | 启动即崩 | K8s 给同名 Service 注入 `PETFOOD_PORT=tcp://…`，与应用的 `PETFOOD` 配置前缀撞名。已在基类对**全部服务**统一 `enableServiceLinks: false` |
+| ② | `Foods table name cannot be empty` | 设了 `PETFOOD_PARAM_PREFIX` 又把**表名本身**塞进 env，应用当参数名去查、**查不到返回空串而非回落**。去掉这层间接 |
+| ③ | `Available=False` 而应用其实健康 | 探针写 `/health`，真实路由是 `/health/status`（`main.rs` 第 228 行），404 |
+| ④ | `/petfood` 404 | 遗留 `PetFoodController` 硬编码 `http://petfood` 根路径，而新服务无 `/` 路由 |
+| ⑤ | `/FoodService` 500 | **GSI 在 CDK 里从未声明** → 索引不存在 **且** IAM 无 `/index/*` |
+| ⑥ | 页面 "No food items" | 表是空的，需调 `/api/admin/seed`（灌入 9 条） |
+
+**第⑤层的双重问题一处修复**：CDK 的 `grantReadWriteData` 内部是
+`hasIndex ? [tableArn, tableArn+'/index/*'] : [tableArn]`，而 `hasIndex` 仅由
+CDK 自己知道的索引置真。所以即便索引在运行时被应用建出来，IAM 依然会拒。
+在 CDK 里声明 GSI 让 `hasIndex` 转真，授权**自动**覆盖 `/index/*`（已实测）。
+这也终结了「CDK 建表、应用建索引」的 split-brain。
+
+⚠️ **DynamoDB 一次 update 只能增删一个 GSI**，两个一起加会 `UPDATE_FAILED`
+并整栈回滚（表未受损）。但该限制**只作用于 UPDATE** —— 全新建表时一起声明合法，
+所以最终代码保留两个索引，只有迁移路径需分两步。
+
+---
+
+## 阶段 C 的方法学（三次迭代才得到可信数据）
+
+**第一版作废**：`samples=8` 低于契约 `min_observation_requests=20`。
+
+**第二版作废且极具误导性**：`samples=24` 但探测**跑出了 `duration=90s` 的故障窗口**，
+六条边整齐地假 refuted（`24→20`）。识破线索是
+**失败绝对数在两次运行里恒为 4，而不是失败比例恒定** ——
+8 样本时 4/8=50% 判 confirmed，24 样本时 4/24=16.7% 判 refuted。
+同一条边只因样本数变化就翻转结论，说明有效故障时间固定，即窗口早已到期。
+根因：故障期请求**超时**而非快速失败，窗口 90s 扣掉 22s 等待只剩 68s，
+68÷15≈**4 次**。
+
+**第三版三处结构性修复**（已固化进 `scripts/verify_edges_chaos.sh`）
+1. 探测**结束后**再断言 `AllInjected=True`，并记录探测实际耗时
+2. 窗口按最坏耗时 `2×SAMPLES×PROBE_TIMEOUT+30` **自动校准**
+3. 判据改用契约的退化百分比（`confirm≥20%` / `refute≤5%`），
+   新增 **`inconclusive`** 处理 5%~20% 中间带
+
+第三版数据自洽的旁证：**探测耗时自己就区分了结论** ——
+五条 confirmed 耗时 112~146s（请求在超时），refuted 那条仅 **3s**（请求正常返回）。
+
+**`pod-failure` 在本集群完全不可用**：它要往运行中的 Pod 插 pause initContainer，
+而 K8s 禁止修改 `spec.initContainers`，报
+`Failed to apply chaos: Pod is invalid: spec.initContainers: Forbidden`、
+`AllInjected=False`。危险在于此时探测**全绿** —— 不查 `AllInjected`
+就会把每条边都判成 refuted。改用 `NetworkChaos`（chaos-daemon 在宿主机对
+Pod netns 下 tc 规则，不碰 Pod spec）。
+
+**用 `direction:to` + `target` 而非直接杀下游**：只切断 A→B 这一条边，
+B 本身保持健康，才能区分「A 依赖 B」与「B 挂了」。
+
+---
+
+## 退出条件 —— ✅ 已达成
+
+三阶段全部完成：七个 Deployment 全 Ready、压测 100% 通过、
+agent 实调返回真实业务数据、图数据库的依赖关系已用主动故障注入逐条定性
+（所有 `Calls` 边 100% 定性，3 条误报边已标 refuted）。
 
 **遇到需要用户定夺的阻塞**（Bedrock 成本闸数字、任何破坏性操作确认）**停下来问，不要自行决定。**

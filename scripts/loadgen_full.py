@@ -62,26 +62,59 @@ def http_targets() -> list[tuple[str, str]]:
         ("petsite-home", f"http://{ALB}/"),
         ("petsite-search", f"http://{ALB}/?selectedPetType={random.choice(PET_TYPES)}"
                            f"&selectedPetColor={random.choice(PET_COLORS)}"),
-        # ⚠️ 带图片的详情/列表 —— 这条才会让 petsearch 的 getPetUrl 被调用，
-        #    也是 1% 故障注入（Math.random()*9999 < 100）唯一的触发路径。
-        ("petsite-adoptionlist", f"http://{ALB}/adoptionlist"),
+        # ⚠️ 1% 故障注入（Math.random()*9999 < 100）的触发点在 **search-service
+        #    的 getPetUrl**，它在组装每个宠物的 presigned S3 URL 时被调用。
+        #    所以触发路径是**搜索**（首页与 /api/search），不是收养列表 ——
+        #    我原先把 ("petsite-adoptionlist", "/adoptionlist") 当成注入路径，
+        #    既路径错（真实路由是 /PetListAdoptions，旧写法 43/43 全 404），
+        #    方向也错（收养列表来自 petlistadoptions 服务，压根不经 getPetUrl）。
+        #    上一轮压测实测：搜索流量 1572 次对应 84 次注入日志，比率约 0.36%，
+        #    与 100/9999 同量级 —— 证实注入确实由搜索路径触发。
+        ("petsite-petlistadoptions", f"http://{ALB}/PetListAdoptions?userId={random.randint(1000, 9999)}"),
         ("petsite-pethistory", f"http://{ALB}/pethistory"),
         # search 直连（图里 petsite -> petsearch 的对端）
         ("search-api", f"http://{ALB}:8081/api/search?pettype={random.choice(PET_TYPES)}"),
         ("search-health", f"http://{ALB}:8081/health/status"),
-        # petfood —— 部署后才有；未部署时 petsite 的食品页返回 500，
-        # 这是**预期**（controller 层按请求抛），不是压测失败。
-        ("petsite-petfood", f"http://{ALB}/petfood"),
+        # petfood（2026-09-04 已部署并验证：9 条食品、PetTypeIndex ACTIVE）。
+        #
+        # ⚠️ 真实的食品 UI 是 **/FoodService**，不是 /petfood。
+        #    /petfood 是本地保留的遗留桩 PetFoodController（值得保是因为它有
+        #    X-Ray subsegment 埋点），而 /FoodService 才是上游新增的正式控制器，
+        #    会真正调 /api/foods 与 /api/cart。
+        #    /FoodService **必须带 userId**：不带会 302 跳回 /Home/Index，
+        #    压出来的是首页流量而不是食品流量 —— 那种假流量最难发现，
+        #    因为响应码是 200、字节数也正常。
+        ("petsite-foodservice", f"http://{ALB}/FoodService?userId={random.randint(1000, 9999)}"
+                                f"&petType={random.choice(['puppy', 'kitten', 'bunny'])}"),
+        # 遗留桩也压一下 —— 它的 X-Ray subsegment 是图里 petsite->petfood 边的来源之一
+        ("petsite-petfood-legacy", f"http://{ALB}/petfood"),
     ]
     return t
 
 
 def hit_http(name: str, url: str, timeout: int = 20):
+    """打一个 HTTP 目标。
+
+    ⚠️ 只看状态码会**把错误页当成功**。petsite 的异常处理是渲染一个
+       "Oops! Something went wrong" 页面并返回 **HTTP 200** ——
+       实测 /petfood 在 PetFoodController 打错地址时就是 200 + 错误页，
+       压测报表显示 100% 成功，而那个功能其实完全不可用。
+       这类假绿最危险：状态码正常、字节数也在合理范围。
+       所以额外扫正文里的错误标记，命中就记为 ERRPAGE 而不是成功。
+    """
     t0 = time.time()
     try:
         with urllib.request.urlopen(url, timeout=timeout) as r:
-            body = r.read(4096)
-            return name, r.status, (time.time() - t0) * 1000, len(body)
+            body = r.read(65536)
+            elapsed = (time.time() - t0) * 1000
+            if r.status == 200:
+                text = body.decode("utf-8", errors="replace")
+                for marker in ("Oops! Something went wrong",
+                               "Unable to load",
+                               "does not indicate success"):
+                    if marker in text:
+                        return name, "ERRPAGE", elapsed, len(body)
+            return name, r.status, elapsed, len(body)
     except urllib.error.HTTPError as e:
         return name, e.code, (time.time() - t0) * 1000, 0
     except Exception as e:  # noqa: BLE001
@@ -98,8 +131,9 @@ AGENT_PROMPTS = [
     "Show me puppies available for adoption right now.",
     # -> Nutrition + Adoption 双委派（一次产生两条 Delegates）
     "I want to adopt a kitten and need food advice for a young cat.",
-    # -> Ordering（petfood 未部署时会报 not configured，属预期）
-    "Add the recommended food to my cart and check out.",
+    # -> Ordering（petfood 已上线，实调返回真实商品名与价格；
+    #    已实测 orchestrator 能拿到 Beef and Turkey Kibbles $12.99 等真实数据）
+    "What dog food do you have in stock for a puppy? Add one to my cart.",
     # -> Concierge
     "What services does this pet store offer?",
 ]
