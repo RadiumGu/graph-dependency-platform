@@ -381,6 +381,10 @@ EDGE_VERIFICATION = {
         'min_observation_requests': 20,     # 观测方基线与注入期各自的最小请求数
         'confirm_degradation_pct': 20.0,    # 观测方退化 >= 此值 -> confirmed
         'refute_degradation_pct': 5.0,      # 观测方退化 <= 此值 -> refuted
+        # 观测方退化 >= 此值 -> hard dependency（Google SRE 三级分类）。
+        # 70 不是凭空定的：项目护栏把 success_rate < 30% 当作「已经坏了」
+        # （见各实验规格 stop_conditions），退化 >= 70pp 即调用方跌破自身那条线。
+        'hard_degradation_pct': 70.0,
         'stale_verification_seconds': 2592000,  # 30 天未复验即视为过期
     },
 }

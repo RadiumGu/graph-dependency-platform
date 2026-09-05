@@ -847,4 +847,5 @@ edge_verification:
     min_observation_requests: 20
     confirm_degradation_pct: 20.0
     refute_degradation_pct: 5.0
+    hard_degradation_pct: 70.0
     stale_verification_seconds: 2592000

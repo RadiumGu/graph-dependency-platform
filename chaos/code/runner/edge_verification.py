@@ -46,7 +46,8 @@ _LAYER = os.path.abspath(os.path.join(_HERE, '..', '..', '..',
 if _LAYER not in sys.path:
     sys.path.insert(0, _LAYER)
 
-from graph_confidence import (  # noqa: E402
+from graph_confidence import (
+    classify_dependency_strength,  # noqa: E402
     STATUS_CONFIRMED,
     STATUS_INCONCLUSIVE,
     STATUS_REFUTED,
@@ -240,12 +241,22 @@ def verify_edge(
     分离计算与写入是刻意的：判定逻辑可以被单测穷举，不需要 Neptune。
     """
     now = now_epoch or int(time.time())
+    # 独立观测源数必须**先**算出来再判定：它同时是两道门禁的输入 ——
+    # 存在性侧「有独立证据的边不得判 refuted」，强度侧「soft 需要独立证据」。
+    st, obs, conf_n, ref_n = evidence_from_props(edge.get('props') or {})
+
     status, reason = classify_intervention(
         observer_baseline_requests, observer_injected_requests,
         observer_degradation_pct, evidence_channel=evidence_channel,
-        injection_confirmed=injection_confirmed)
+        injection_confirmed=injection_confirmed,
+        independent_observing_sources=obs)
 
-    st, obs, conf_n, ref_n = evidence_from_props(edge.get('props') or {})
+    dep_class, dep_reason = classify_dependency_strength(
+        observer_degradation_pct, evidence_channel=evidence_channel,
+        injection_confirmed=injection_confirmed,
+        independent_observing_sources=obs,
+        observer_baseline_requests=observer_baseline_requests,
+        observer_injected_requests=observer_injected_requests)
     if status == STATUS_CONFIRMED:
         conf_n += 1
     elif status == STATUS_REFUTED:
@@ -261,6 +272,9 @@ def verify_edge(
         'degradation_pct': round(observer_degradation_pct, 2),
         'evidence_channel': evidence_channel,
         'injection_confirmed': injection_confirmed,
+        'dependency_class': dep_class,
+        'dependency_class_reason': dep_reason,
+        'observing_sources': obs,
         'confirm_count': conf_n,
         'refute_count': ref_n,
         'verified_at': now,
@@ -276,6 +290,10 @@ def write_verdict(v: dict) -> bool:
     按 edge id 精确定位，避免原实现「一次写给所有出入边」的伪造。
     """
     esc = str(v['reason']).replace("'", "").replace('\\', '')[:300]
+    # 分级理由单独落盘：它记录的是「为什么能/不能分级」，与存在性的 reason 不同。
+    # 不分级（None）时写 'unclassified' 而不是留空 —— 属性缺失与「判过但分不了级」
+    # 在查询上无法区分，这与节点过期那次踩的是同一个坑。
+    dep_esc = str(v.get('dependency_class_reason') or '').replace("'", "").replace('\\', '')[:300]
     q = (
         "g.E('%s')"
         ".property('verify_status', '%s')"
@@ -288,10 +306,15 @@ def write_verdict(v: dict) -> bool:
         ".property('verify_confirm_count', %d)"
         ".property('verify_refute_count', %d)"
         ".property('verify_evidence_channel', '%s')"
+        ".property('verify_dependency_class', '%s')"
+        ".property('verify_dependency_class_reason', '%s')"
+        ".property('verify_observing_sources', %d)"
         % (v['edge_id'], v['status'], v['confidence'], v['verified_at'],
            VERIFIER, v['experiment_id'], v['degradation_pct'], esc,
            v['confirm_count'], v['refute_count'],
-           v.get('evidence_channel', 'unknown'))
+           v.get('evidence_channel', 'unknown'),
+           v.get('dependency_class') or 'unclassified', dep_esc,
+           int(v.get('observing_sources') or 0))
     )
     try:
         query_gremlin_parsed(q)

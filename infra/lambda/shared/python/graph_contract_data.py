@@ -532,6 +532,7 @@ EDGE_VERIFICATION = {   'attrs': [   'verify_status',
                             'static_declaration': 1.0},
     'statuses': ['untested', 'confirmed', 'refuted', 'inconclusive'],
     'thresholds': {   'confirm_degradation_pct': 20.0,
+                      'hard_degradation_pct': 70.0,
                       'min_observation_requests': 20,
                       'refute_degradation_pct': 5.0,
                       'stale_verification_seconds': 2592000}}
