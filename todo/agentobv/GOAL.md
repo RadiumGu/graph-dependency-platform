@@ -734,6 +734,93 @@ B 本身保持健康，才能区分「A 依赖 B」与「B 挂了」。
 
 ---
 
+---
+
+## 📌 2026-09-05 UI 与领养链路修复存档（用户逐项验收阶段）
+
+三阶段收尾后，用户在真实页面上逐项验收，暴露出一批**只有从前端看才会发现**的缺陷。
+全部已修并推到 fork。这一节记录**判据**与**推理错误**，实现细节在 commit message 里。
+
+### 已修的九个缺陷
+
+| # | 症状 | 根因 | 判据 |
+|---|---|---|---|
+| 1 | Waggle 聊天永远回「connection was interrupted」 | petsite 的 IRSA 角色缺 `bedrock-agentcore:InvokeAgentRuntime` | 复现取得 `AccessDeniedException`；请求 **0.08 秒**返回，排除了超时猜测 |
+| 2 | 首页 hero 破图 | `GetLeftPart(Authority)` 丢掉 presigned 签名；且前缀写成 `kittens/`（桶里是 `kitten/`） | 两个 hero URL 实测 403；桶内顶层只有 `puppies/ kitten/ bunnies/` |
+| 3 | 食品卡片破图 | seed 数据 `image` 为空串（上游靠 CloudFront 填，本项目不引入） | API 返回 `image = `；新增 8 张 SVG 由 petsite wwwroot 提供 |
+| 4 | 弹窗 Close 按钮无效 | 视图用 Bootstrap **5** 的 `data-bs-dismiss`，打包的是 **v4.3.1** | `bootstrap.min.js` 自报 `v4.3.1`；`$().modal('show')` 能用**反证**运行时是 v4 |
+| 5 | Housekeeping 报 `NotFound` | SSM 参数多了一段 `/home`（真实路由无它） | `/api/home/...` → 404，去掉 → 500（路由匹配上了，进了业务层） |
+| 6 | Housekeeping 500 | 线上 `transactions` 表缺 `pet_type`/`user_id` | 代码假定 6 列，实测表只有 4 列；`CREATE TABLE IF NOT EXISTS` 让新列永不补上 |
+| 7 | 每分钟约 42 次无效 SSM 调用 | `_Layout.cshtml` 查不存在的 `/petstore/rumscriptparameter` | **CloudTrail 50 条 GetParameter 里 49 条是它** |
+| 8 | pethistory 单 Pod 永久 500 而 `ready=true` | `except psycopg.OperationalError` 抓不到 `InFailedSqlTransaction` | 容器内实测 `issubclass(...) == False`，二者是 `DatabaseError` 下的**兄弟分支** |
+| 9 | 点领养显示「Adoption Complete」而后端什么都没做 | 三层叠加，见下 | 后端 `availability` 未变 + 数据库无新行 + 日志 `userId=` 为空 |
+
+### 第 9 项值得单独记：一个三层叠加的「假成功」
+
+```
+① MakePayment 签名里没有 userId    → 模型绑定拿不到表单字段
+② 我第一版改成 Request.Query["userId"] → 那是**查询串**，POST 表单里是空的
+③ 拿到 result 却从不看 IsSuccessStatusCode → 400 被当成功，txStatus 保持 success
+```
+
+任何一层单独存在都会造成假成功。**第 ③ 层是最危险的**：它把前两层的错误全部隐藏，
+页面正常显示领养完成页。从前端完全无法察觉，只有比对后端状态才会暴露。
+
+修法除了传对 `userId`，还加了显式失败：`userId` 为空时直接抛异常而不是
+发一个注定 400 的请求 —— **宁可报错也不要假成功**。
+
+### 本轮犯的推理错误（连同前面已 4 次，现共 8 次）
+
+5. **把「服务端要求」当成「调用方已满足」**。看到 `paymentapiurl` 路径修好后从
+   404 变 400 就以为快好了，实际暴露的是另一个独立缺陷（缺 `userId`）。
+   错误码变化说明「进了一层」，不代表「快好了」。
+6. **凭服务类型推断启动耗时**。想给四个缺 `startupProbe` 的服务统一补上，
+   实测才发现 Go/Rust 三个只要 6~7 秒（不需要），而 pethistory 要 **41 秒**（需要）。
+   按数据决定，不按类型推断。
+7. **误报「search-service 缺 startupProbe」**。它其实有（`startupGraceSeconds: 150`），
+   是我在给用户的选项里表述错了。给结论前要再查一遍自己的上一轮输出。
+8. **`Request.Query` 与 `[FromForm]` 混淆**。同一个 `userId` 在 GET 页面走查询串、
+   在 POST 表单走 body，取值方式不能照搬。
+
+### 探针现状（六个接流量服务）
+
+| 服务 | startup | readiness | liveness | 依据 |
+|---|---|---|---|---|
+| petsite | 60×5s | 2×5s | 3×10s | 原先**三个全无**，而它是唯一入口 |
+| search-service | 30×5s | 3×5s | 3×10s | 本来就有（`startupGraceSeconds: 150`） |
+| pethistory | 30×5s | 2×5s | 3×10s | 实测启动 **41 秒**，liveness 余量只有 19 秒 |
+| list-adoptions | — | 3×5s | 3×10s | 实测启动 7 秒，**刻意不加** |
+| pay-for-adoption | — | 3×5s | 3×10s | 实测启动 7 秒，**刻意不加** |
+| petfood | — | 3×5s | 3×10s | 实测启动 6 秒，**刻意不加** |
+| traffic-generator | — | — | — | 只发流量不接流量，无 Endpoint 语义 |
+
+`readinessProbe` 的效果是**实测**的，不是「配置下去了」：用 Chaos Mesh 切断
+pethistory 到 Aurora 的网络后，Endpoint 从两个地址变为一个，不健康 Pod 确实被摘出。
+
+参数让 readiness 先于 liveness 生效（`2×5s = 10 秒`摘流量，早于 liveness 的
+`3×10s = 30 秒`重启）—— 先「别给我流量」，再「不行才杀掉重来」。
+
+### 部署层面的新陷阱
+
+**`cdk deploy` 成功 ≠ 新代码上线。** pethistory 用 `ContainerImageBuilder` 推**固定
+`:latest`** tag（其余服务用 `DockerImageAsset`，按内容哈希生成新 tag）。
+镜像内容变了但 Deployment 的 `image` 字段一个字符没动，K8s 判定 spec 无变化、
+**不触发滚动更新**。`imagePullPolicy: Always` 也救不了 —— 它只在创建容器时生效。
+
+实测：`ECR digest 5681042f…`（3 分钟前刚推）而 `Pod digest 27699d4f…`，
+`PHEXIT=0`、CloudFormation 一切正常，而修复根本没生效。
+**这类服务改完必须显式 `rollout restart`，且验证要比对 digest 而非看 rollout 输出。**
+
+### 环境限制（记录，避免下次重试）
+
+- **浏览器不可用**：Chromium 缺 `libatk-1.0.so.0`，装它需要 root 而**免密 sudo 不可用**。
+  所以「用浏览器点一遍」做不到，改用带 cookie 的 HTTP 逐步提交真实表单来模拟，
+  并在每步比对后端状态。这个替代方案发现了第 9 项缺陷，效果不差于点页面。
+- 本机连不上 Aurora（10.1 段 vs 11.0 段，SG 只对集群内 Pod 开放）。
+  查库要用 `kubectl run` 起临时 Pod 并指定 `pay-for-adoption-sa` 服务账号。
+
+---
+
 ## 退出条件 —— ✅ 已达成
 
 三阶段全部完成：七个 Deployment 全 Ready、压测 100% 通过、
