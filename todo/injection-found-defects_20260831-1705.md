@@ -1250,6 +1250,88 @@ GraphContractError: 未声明的节点类型 'AgentRuntime'（契约 v1 共 33 �
 遗留债务（已记录未处理）：4 条 ETL 仍跑在 33 类契约上。它们不写 agent 类型所以
 不会报错，但**契约作为「单一事实源」的承诺在部署面上是打折的**。
 
+> ✅ **2026-09-05 13:35 已还：4 条 ETL 全部切到 `:10`，五条 ETL 统一认 39 类契约。**
+>
+> ### 切之前做的三项尽调（结论决定了这件事能做）
+>
+> **① 层里不只有契约。** `:10` 是用仓库当前的 5 个共享模块整体覆盖 `:9`，
+> 所以切层会一次性把这些模块的改动全送进生产。实测只有 **2 个**模块有差异：
+> `graph_contract_data.py`（451→538 行，契约 33→39）与
+> `graph_confidence.py`（141→**491** 行）。其余 3 个
+> （`graph_contract.py` / `graph_cleanup.py` / `neptune_client_base.py`）**字节相同**。
+>
+> **② 那 350 行 `graph_confidence` 在 ETL 里是惰性的。** 全仓检索
+> `import graph_confidence`：5 个 ETL **零引用**（只有 chaos runner 用）。
+>
+> **③ 契约变化纯粹是新增，零收紧。** 这是最关键的一条 —— 风险从来不在「多了 6 类
+> 节点」（新增只会让原本被拒的写入被接受），而在**旧的 33 类有没有哪条声明被改严**。
+> 逐类比对结果：
+>
+> ```
+> 新增节点 6：AgentGateway/AgentMemory/AgentRuntime/AgentTool/Guardrail/KnowledgeBase
+> 新增边   3：Delegates/InvokesTool/Retrieves
+> 删除     ：节点 0、边 0
+> 既有类型的声明变化 4 个，全部形如 +[...] -[]（只往 src/dst/pairs 里加，零移除）：
+>   AccessesData   src +AgentRuntime, dst +AgentMemory
+>   DependsOn      src +AgentTool,    dst +LambdaFunction/Microservice
+>   ProtectsAccess src +Guardrail,    dst +AgentRuntime
+>   RoutesTo       src +AgentGateway, dst +AgentTool
+> 没有任何既有类型的 expires_seconds / identity 被改动
+> ```
+>
+> 所以切层**不可能让生产原本合法的写入变非法**。这条尽调没做之前，
+> 「切个层而已」和「给 5 个生产函数换掉底层库」是同一个动作。
+>
+> ### 执行与验证
+>
+> 一次一条、逐条实测调用，回滚只需 `--layers ...neptune-client-base:9`：
+>
+> | ETL | 频率 | 实测结果 |
+> |---|---|---|
+> | xray | 1h | 50 节点 / 45 边，零报错 |
+> | cfn | 1d | `total_deps: 6` |
+> | aws | 15min | 331 节点 / 498 边，78s |
+> | deepflow | 5min | 2 节点 / 3 边，7.7s |
+>
+> 切层前后图谱计数快照：**节点 1333 → 1333、边 2625 → 2625，零清零、零骤降。**
+>
+> ### 这一步纠正了我先前的一个错误结论
+>
+> 我曾判断「边过期收敛在生产是 dry-run，因为 CDK 里没有 `GRAPH_EDGE_EXPIRY_ENABLED`」。
+> `etl_aws` 的日志直接打脸：**`edge-expiry: enabled=True`** ——
+> 部署的函数里那个变量**是开的**（CDK 里没有，属部署漂移）。
+> 这也正是桥接边 09-04 20:11 被收敛掉的原因。
+> **又一次「查了声明就以为知道了运行时」** —— 与本文件 #36 末尾记的同一个毛病。
+>
+> ### 切层达到了目的，也让一个此前被掩盖的问题浮出水面
+>
+> `expiring_edge_labels()` 现在返回 **8** 种带 TTL 的边类型，**包含
+> `Delegates` / `InvokesTool` / `Retrieves`** —— `:9` 下这 3 类未声明，
+> 过期收敛对它们完全不可见。这就是这笔债的具体危害，现在修好了。
+>
+> 但代价立刻显现：`Retrieves` 边**已被置 `active=false`**。
+> 它 `last_seen` 停在 09-04 20:10，因为 `retrieve_nutrition_guidance` 的最后一次调用
+> 是 09-05 03:26 —— 而 6h 采集窗口从 09:26 起就再也覆盖不到它。
+>
+> ```
+> agentcore-etl 边的活跃状态（2026-09-05 13:36）
+>   InvokesTool   active=8/8     ← search_available_pets 被我 07:47 探测过，在窗口内
+>   Delegates     active=2/2
+>   Retrieves     active=0/1     ← 稀疏调用 + 6h 窗口的必然结果
+>   DependsOn     active=1/1     ← 那条 confirmed/hard 桥接边，5min 前刚刷新
+>   RoutesTo      active=5/5     ← dependency=false，不参与收敛
+> ```
+>
+> **这不是切层引入的 bug，是切层让一个既存缺陷变得可见。** 在 `:9` 下这条边会
+> 永远停在 `active=true` 且永远陈旧 —— 既不刷新也不收敛，图谱说它活着但没有任何
+> 证据支持。现在它诚实地变成了 `false`。
+>
+> 真正待决的是那个耦合问题：**agent 调用稀疏突发**（实测 03:25 一批、07:47 一批，
+> 中间四小时空白），而代码注释要求「span 采集窗口必须等于边 TTL」。
+> 于是任何超过 6 小时没被调用的工具，它的边必然翻 `active=false`。
+> 要么两个一起拉长（如 24h），要么接受「agent 边只反映最近 6 小时的行为」——
+> 但必须显式选一个，因为现在的行为是后者而文档里没写。
+
 ---
 
 ## 部署方式的选择：为什么没有用 cdk deploy
