@@ -79,6 +79,7 @@ def classify_intervention(
     injection_confirmed: bool | None = None,
     independent_observing_sources: int = 0,
     edge_baseline_calls: int | None = None,
+    observer_total_calls: int | None = None,
 ) -> tuple[str, str]:
     """把一次注入的观测结果判成 confirmed / refuted / inconclusive。
 
@@ -99,6 +100,10 @@ def classify_intervention(
                              DeepFlowMetrics.collect_edge_flow 采集）。None = 未采集。
                              低于 min_observation_requests 时一律不下结论 ——
                              见「边级流量门禁」，这是最前置的一道。
+        observer_total_calls: 观测方**同窗口**的入向总请求数。与
+                             edge_baseline_calls 一起算出「稀释上限」，
+                             用于把聚合退化归一成这条路径自己的退化 ——
+                             见「稀释归一化」。
 
     Returns:
         (status, reason) —— reason 会写进图谱与报告，便于事后追溯为何如此判定。
@@ -224,11 +229,113 @@ def classify_intervention(
                 f"且**无任何独立观测源**看到过这条边 —— 注入未传导到调用方，"
                 f"该边可疑")
 
+    # ── 稀释归一化（2026-09-05 实测补入）──────────────────────────────────
+    #
+    # 中间带原本一律 inconclusive。但落在中间带有两种完全不同的成因：
+    #   ① 依赖是真的被韧性机制（重试/熔断/缓存）吸收了 → 确实判不了
+    #   ② 依赖**完全失效**，只是它只占观测方流量的一小部分 → 聚合 SLI 把它稀释了
+    #
+    # 实测②：打断 `petsite -> pethistory` 观测方退化 8.9pp 落在中间带，
+    # 而这条路径只占 petsite 入向请求的 11.31% —— 8.9/11.31 = **78.7%**，
+    # 走这条路径的请求近八成失败了。拿 8.9 去比固定的 20% 阈值是比错了对象。
+    #
+    # 归一化本身带三重保守约束（见 normalize_by_dilution），且原始值与归一值
+    # **都会落盘** —— 只写归一值会让不同轮次的数字不可比。
+    if (edge_baseline_calls is not None and observer_total_calls
+            and observer_degradation_pct > _T['refute_degradation_pct']):
+        norm, why = normalize_by_dilution(
+            observer_degradation_pct, edge_baseline_calls, observer_total_calls)
+        # 归一值必须落在 [confirm_threshold, 100] 内才算确证：
+        # > 100% 说明退化超出这条边的理论上限、归因不清（见 normalize_by_dilution）
+        if norm is not None and _T['confirm_degradation_pct'] <= norm <= 100.0:
+            return (STATUS_CONFIRMED,
+                    f"原始退化 {observer_degradation_pct:.1f}% 落在中间带，但按**稀释"
+                    f"上限归一化**后为 {norm:.1f}% >= {_T['confirm_degradation_pct']}% "
+                    f"—— {why}。依赖成立")
+
     return (STATUS_INCONCLUSIVE,
             f"观测方退化 {observer_degradation_pct:.1f}% 落在中间带 "
             f"({_T['refute_degradation_pct']}%~{_T['confirm_degradation_pct']}%)。"
             f"重试/熔断/缓存会让真实依赖只表现出轻微退化，"
             f"判 refuted 会删掉真实边，故不下结论")
+
+
+def normalize_by_dilution(
+    observer_degradation_pct: float,
+    edge_calls: int,
+    observer_total_calls: int,
+) -> tuple[float | None, str]:
+    """把观测方的聚合退化换算成「这条路径自己退化了多少」。
+
+    ## 要解决的问题（2026-09-05 实测）
+
+    观测方 SLI 是**跨全部端点聚合**的。一条只被部分请求走到的依赖，即便**完全
+    失效**，也只能把聚合退化推到它自己的流量占比那么高 —— 拿这个数字去比固定的
+    `confirm_degradation_pct=20%` 是**比错了对象**。
+
+    实测：打断 `petsite -> pethistory`，观测方退化 **8.9pp** 落在中间带，判不了。
+    但同窗口口径下这条路径只占 petsite 入向请求的 **11.31%**：
+
+        petsite 入向总请求（300s）        67,933
+        petsite -> pethistory             7,685   占 11.31%   <- 稀释上限
+        petsite -> list-adoptions         8,645   占 12.73%
+        petsite -> petfood               16,611   占 24.45%
+        petsite -> search-service        25,042   占 36.86%
+
+    8.9 / 11.31 = **78.7%** —— 走这条路径的请求近八成失败了。这是强依赖，
+    而不是「轻微退化、判不了」。
+
+    ## 三个刻意的保守约束
+
+    1. **上限太小时不归一**：占比越小，归一化对噪声的放大倍数越大。
+       要求占比 >= `refute_degradation_pct`（5%），即放大不超过 20 倍。
+    2. **原始退化必须先超过噪声地板**：要求原始退化 >= 5%。否则是在放大噪声 ——
+       0.3% 除以 3% 的占比会得出 10%，凭空造出一个信号。
+    3. **只作为附加信号**：归一化值与原始值**都要落盘**。只写归一化值会让
+       不同轮次的数字不可比（占比随流量画像变化），而只写原始值就丢掉了这层信息。
+
+    ## 一个必须说明的近似
+
+    占比用「(观测方 -> 目标) 的调用数 / 观测方入向请求数」近似「多少比例的入向
+    请求会走到这条依赖」。它成立的前提是**一个入向请求最多调该依赖一次**。
+    若一个请求会调多次，占比被高估、归一化**偏保守**（算出的路径退化偏低）——
+    方向是安全的。实测四条路径占比之和 85.35%，与「多数请求扇出到恰好一个后端」
+    吻合，说明这个近似在本环境成立。
+
+    Returns:
+        (normalized_pct, reason)。不满足约束时返回 (None, 原因)。
+    """
+    if not observer_total_calls or observer_total_calls <= 0:
+        return (None, "观测方入向请求数为 0，无法算稀释上限")
+    ceiling = edge_calls / observer_total_calls * 100.0
+    floor = _T['refute_degradation_pct']
+    if ceiling < floor:
+        return (None, f"该路径仅占观测方流量 {ceiling:.2f}%（< {floor}%），"
+                      f"归一化会把噪声放大 {100 / max(ceiling, 0.01):.0f} 倍，不归一")
+    if observer_degradation_pct < floor:
+        return (None, f"原始退化 {observer_degradation_pct:.1f}% 未超过噪声地板 "
+                      f"{floor}%，归一化只会放大噪声，不归一")
+    norm = observer_degradation_pct / ceiling * 100.0
+    if norm > 100.0:
+        # ── 超出上限是**信号**，不是要截断的噪声（2026-09-05 实测补入）────────
+        #
+        # 归一值 > 100% 意味着观测方的退化**超出了这条边可能造成的理论上限**，
+        # 即这次退化不能全部归因于它。这正是「传导塌陷」的特征：另有原因让观测方
+        # 整体变差，而被测边只占其中一小部分。
+        #
+        # 实测：打断 `petsite -> list-adoptions`（占比 7.04%）观测到 petsite
+        # 退化 24.7pp —— 24.7/7.04 = **350%**。若把它 min() 成 100% 再据此判
+        # confirmed，就等于把一次归因不清的塌陷写成「这条边成立」的强证据。
+        # 原实现正是这么截断的，那会把最该警惕的形态伪装成最强的证据。
+        return (round(norm, 1),
+                f"⚠️ 归一化后 {norm:.0f}% **超出 100%** —— 观测方退化 "
+                f"{observer_degradation_pct:.1f}pp 大于这条边的理论上限 "
+                f"{ceiling:.1f}pp（占比 {ceiling:.2f}%），说明退化**不能全部归因于"
+                f"这条边**（另有原因让观测方整体变差）。归因不清，不得据此判 confirmed")
+    return (round(norm, 1),
+            f"该路径占观测方流量 {ceiling:.2f}%（即聚合退化的理论上限 "
+            f"{ceiling:.1f}pp）；实测退化 {observer_degradation_pct:.1f}pp "
+            f"= 上限的 {norm:.1f}% —— 走这条路径的请求有这么多失败了")
 
 
 def classify_dependency_strength(

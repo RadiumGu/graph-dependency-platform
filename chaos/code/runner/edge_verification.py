@@ -236,6 +236,7 @@ def verify_edge(
     evidence_channel: str = 'both',
     injection_confirmed: bool | None = None,
     edge_baseline_calls: int | None = None,
+    observer_total_calls: int | None = None,
 ) -> dict:
     """对一条候选边做判定并算出新置信度。**纯计算，不写图。**
 
@@ -251,7 +252,8 @@ def verify_edge(
         observer_degradation_pct, evidence_channel=evidence_channel,
         injection_confirmed=injection_confirmed,
         independent_observing_sources=obs,
-        edge_baseline_calls=edge_baseline_calls)
+        edge_baseline_calls=edge_baseline_calls,
+        observer_total_calls=observer_total_calls)
 
     dep_class, dep_reason = classify_dependency_strength(
         observer_degradation_pct, evidence_channel=evidence_channel,
@@ -275,6 +277,7 @@ def verify_edge(
         'evidence_channel': evidence_channel,
         'injection_confirmed': injection_confirmed,
         'edge_baseline_calls': edge_baseline_calls,
+        'observer_total_calls': observer_total_calls,
         'dependency_class': dep_class,
         'dependency_class_reason': dep_reason,
         'observing_sources': obs,

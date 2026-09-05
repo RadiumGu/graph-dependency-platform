@@ -71,7 +71,18 @@ def http_targets() -> list[tuple[str, str]]:
         #    上一轮压测实测：搜索流量 1572 次对应 84 次注入日志，比率约 0.36%，
         #    与 100/9999 同量级 —— 证实注入确实由搜索路径触发。
         ("petsite-petlistadoptions", f"http://{ALB}/PetListAdoptions?userId={random.randint(1000, 9999)}"),
-        ("petsite-pethistory", f"http://{ALB}/pethistory"),
+        # ⚠️ 2026-09-05 修：原写法 `/pethistory`（**不带 userId**）会 **302 跳回
+        #    /Home/Index**，压出来的是首页流量而不是历史流量 —— 与下面 /FoodService
+        #    注释里记录的是**同一个坑**，只是这条漏了。
+        #    实测对照（经内网 ALB）：
+        #        /pethistory                 -> 302 -> /Home/Index
+        #        /pethistory?userId=userX    -> 200, 18,813 bytes
+        #    后果是可量化的：修之前 DeepFlow 里 `petsite -> pethistory` 恒为 **0 次**
+        #    调用（pethistory 服务收到的全部流量是 kubelet 的 /health/status 探针，
+        #    客户端 IP 是 worker 节点），于是图谱里这条边**永远无法验证**；
+        #    带上 userId 后立刻出现 `petsite-deployment -> pethistory-deployment`
+        #    的 `/petadoptionshistory/api/home/transactions?userId=...`。
+        ("petsite-pethistory", f"http://{ALB}/pethistory?userId={random.randint(1000, 9999)}"),
         # search 直连（图里 petsite -> petsearch 的对端）
         ("search-api", f"http://{ALB}:8081/api/search?pettype={random.choice(PET_TYPES)}"),
         ("search-health", f"http://{ALB}:8081/health/status"),

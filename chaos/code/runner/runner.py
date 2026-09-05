@@ -695,12 +695,16 @@ class ExperimentRunner:
             #   · 它的基线调用数    -> 判据的前置条件（够不够判）
             #   · 它自己的退化      -> 「我真的打断了这条链路吗」的**直接**证据，
             #                          优于拿注入目标聚合 SLI 反推（实测返回 None）
-            edge_calls, edge_took_effect = None, None
+            edge_calls, edge_took_effect, obs_total_calls = None, None, None
             try:
                 from .metrics import DeepFlowMetrics
                 _m = DeepFlowMetrics()
                 _tgt = self._target_metrics_name(exp)
                 _base = _m.collect_edge_flow(obs.service, _tgt, window_seconds=900)
+                # 稀释上限需要**同窗口**的观测方入向总请求数 —— 窗口不同则占比无意义
+                _obs_tot_snap = _m.collect(obs.service, window_seconds=900)
+                if _obs_tot_snap.ok and _obs_tot_snap.total_requests:
+                    obs_total_calls = _obs_tot_snap.total_requests
                 if _base.ok:
                     edge_calls = _base.total_requests
                     # 注入期这条流的成功率：与基线比出退化。窗口取实验时长，
@@ -713,10 +717,13 @@ class ExperimentRunner:
                         # 是非问题，不是「影响有多大」。用 confirm 那条 20% 的线
                         # 会把「生效但影响小」误判成「没生效」，反而放宽 refuted。
                         edge_took_effect = bool(drop >= 5.0 or thin > 0)
+                _share = (f"{edge_calls / obs_total_calls * 100:.2f}%"
+                          if edge_calls and obs_total_calls else '未知')
                 logger.info(
-                    "🔗 边级流量 %s -> %s: 基线 %s 次调用，生效性=%s",
+                    "🔗 边级流量 %s -> %s: 基线 %s 次调用（占观测方 %s，即聚合退化的"
+                    "理论上限），生效性=%s",
                     obs.service, _tgt,
-                    edge_calls if edge_calls is not None else '采集失败',
+                    edge_calls if edge_calls is not None else '采集失败', _share,
                     {True: '已确认', False: '未观测到', None: '无法判断'}[edge_took_effect])
             except Exception as ex:
                 logger.warning("边级流量采集失败（非致命）: %r", ex)
@@ -739,6 +746,9 @@ class ExperimentRunner:
                                          else took_effect),
                     # 边级流量门禁：路径本身没有调用时任何退化数字都是噪声
                     edge_baseline_calls=edge_calls,
+                    # 稀释归一化：聚合退化要与「这条路径的流量占比」比，
+                    # 而不是与固定阈值比 —— 见 normalize_by_dilution
+                    observer_total_calls=obs_total_calls,
                 )
             except Exception as ex:
                 logger.warning(f"边判定失败 {obs.service}: {ex!r}")
