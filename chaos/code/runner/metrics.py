@@ -124,6 +124,82 @@ WHERE start_time > now() - INTERVAL {window_seconds} SECOND
         return MetricsSnapshot(timestamp=ts, success_rate=100.0, latency_p99_ms=0.0,
                                total_requests=0, ok=False)
 
+    def collect_edge_flow(
+        self,
+        client_service: str,
+        server_service: str,
+        window_seconds: int = 60,
+    ) -> MetricsSnapshot:
+        """查询**一条边自己**的 L7 流量：client_service -> server_service。
+
+        ## 为什么必须有这个口径（2026-09-05 实测）
+
+        `collect()` 按 `request_domain` 量的是「打给某服务的全部请求」，即该服务
+        作为**服务端**的聚合 SLI。用它做边验证的观测方指标有一个结构性问题：
+        **一条依赖路径上没有流量时，聚合 SLI 与「依赖不存在」完全同形。**
+
+        实测形态：重验 `petsite -[Calls]-> payforadoption` 得到「观测方退化 0.37%」，
+        看着像「打断了但没传导」。而查边级流量发现真相是
+        **petsite -> pay-for-adoption 近 15 分钟 0 次调用** —— 当时的负载生成器
+        只压 petsite 首页与搜索，领养提交路径压根没有流量：
+
+            traffic-generator  -> service-petsite    22,640 次
+            petsite-deployment -> search-service     18,350 次
+            petsite            -> pay-for-adoption        0 次   ← 无从打断
+
+        那 0.37% 是噪声。没有这个口径，「路径无流量」会被读成「打断未传导」，
+        进而（在注入生效门禁之前）被判 refuted —— 与「零流量不判 refuted」
+        是同一条原则，只是把它从**观测方**下沉到**边**。
+
+        ## 两个用途
+
+        1. **判据的前置条件**：边自身流量低于 min_observation_requests 时不下结论
+        2. **注入生效性的直接证据**：这条流自己的退化就是「我真的打断了它吗」
+           的直接回答，比拿注入目标的聚合 SLI 反推可靠得多
+           （后者在本次实测中返回 None，因为目标侧也查不到流量）
+
+        ## 客户端归属怎么来的
+
+        DeepFlow 的 `l7_flow_log` 用 `_0` 后缀表示**客户端侧**、`_1` 表示服务端侧，
+        但只存 ID。名字经 `flow_tag.pod_group_map` 字典解析（这与
+        etl_deepflow 用的是同一张字典，不另立一套映射）。
+        """
+        sql = f"""
+SELECT
+    countIf(response_status = 0) AS success_cnt,
+    count() AS total_cnt,
+    quantile(0.99)(response_duration) / 1000.0 AS p99_latency_ms
+FROM flow_log.l7_flow_log
+WHERE start_time > now() - INTERVAL {window_seconds} SECOND
+  AND response_duration > 0
+  {self._proto_filter()}
+  AND pod_group_id_0 > 0
+  AND dictGet('flow_tag.pod_group_map', 'name', toUInt64(pod_group_id_0))
+      LIKE '%{client_service}%'
+  AND request_domain LIKE '%{server_service}%'
+"""
+        ts = int(time.time())
+        try:
+            data = _ch_query(sql)
+            rows = data.get("data", [])
+            if rows:
+                row = rows[0]
+                total = int(row.get("total_cnt", 0) or 0)
+                success = int(row.get("success_cnt", 0) or 0)
+                p99 = float(row.get("p99_latency_ms", 0) or 0)
+                rate = round(success / total * 100, 2) if total > 0 else 100.0
+                return MetricsSnapshot(
+                    timestamp=ts, success_rate=rate,
+                    latency_p99_ms=round(p99, 1), total_requests=total, ok=True)
+        except Exception as e:
+            logger.warning(
+                "metrics.collect_edge_flow(%s -> %s) 失败: %s",
+                client_service, server_service, e)
+        # 与 collect() 同一约定：采集失败必须打 ok=False，否则
+        # (100%, 0 requests) 会被下游当成「路径健康但零流量」的真实观测。
+        return MetricsSnapshot(timestamp=ts, success_rate=100.0, latency_p99_ms=0.0,
+                               total_requests=0, ok=False)
+
     def collect_steady(
         self,
         service: str,

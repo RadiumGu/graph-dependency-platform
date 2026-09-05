@@ -78,6 +78,7 @@ def classify_intervention(
     throughput_only_confirm_pct: float = 60.0,
     injection_confirmed: bool | None = None,
     independent_observing_sources: int = 0,
+    edge_baseline_calls: int | None = None,
 ) -> tuple[str, str]:
     """把一次注入的观测结果判成 confirmed / refuted / inconclusive。
 
@@ -94,6 +95,10 @@ def classify_intervention(
         independent_observing_sources: 有多少个**独立观测源**看到过这条边
                              （xray / nfm / deepflow，由 evidence_from_props 计数）。
                              >= 1 时永远不判 refuted —— 见「独立证据门禁」。
+        edge_baseline_calls: **被测这条边自身**基线期的调用数（由
+                             DeepFlowMetrics.collect_edge_flow 采集）。None = 未采集。
+                             低于 min_observation_requests 时一律不下结论 ——
+                             见「边级流量门禁」，这是最前置的一道。
 
     Returns:
         (status, reason) —— reason 会写进图谱与报告，便于事后追溯为何如此判定。
@@ -117,6 +122,30 @@ def classify_intervention(
     confirmed —— 与「零流量不判 refuted」同一方向：**宁可判不了，不可判错**。
     """
     need = _T['min_observation_requests']
+
+    # ── 边级流量门禁（2026-09-05 实测补入，必须排在观测方检查之前）──────────
+    #
+    # 观测方有流量 ≠ **这条依赖路径**有流量。一条路径上没有调用时，
+    # 打断它必然观测不到任何影响 —— 而这与「打断生效但未传导」在聚合 SLI 上
+    # 完全同形，是「零流量不判 refuted」原则在**边**这一层的对应物。
+    #
+    # 实测形态：重验 `petsite -[Calls]-> payforadoption` 得到「观测方退化 0.37%」，
+    # 看着像「打断了但没传导」。查边级流量才发现真相是 **该路径 15 分钟内
+    # 0 次调用** —— 当时的负载生成器只压 petsite 首页与搜索：
+    #
+    #     petsite -> search-service     18,253 次
+    #     petsite -> pay-for-adoption        0 次   ← 无从打断
+    #     petsite -> list-adoptions          0 次
+    #     petsite -> pethistory              0 次
+    #
+    # 那 0.37% 是噪声。这道门禁排在最前面，是因为它比「观测方流量不足」更根本：
+    # 观测方可能有几万请求（petsite 有 23,007），却一次都没走到被测的那条边上。
+    if edge_baseline_calls is not None and edge_baseline_calls < need:
+        return (STATUS_INCONCLUSIVE,
+                f"**被测依赖路径本身**近期只有 {edge_baseline_calls} 次调用"
+                f"（需 >= {need}）—— 观测方总流量再大也无关：没有调用就无从打断，"
+                f"此时任何退化数字都是噪声。需先给这条路径造出流量再验")
+
     if observer_baseline_requests < need or observer_injected_requests < need:
         return (STATUS_INCONCLUSIVE,
                 f"观测方流量不足（基线 {observer_baseline_requests} / "

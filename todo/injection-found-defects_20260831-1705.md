@@ -42,6 +42,9 @@
 | 26 | 节点没有生命周期机制，「跟随节点」是悬空的 | 511 个死 Pod 长期滞留 | ✅ 已修（默认 dry-run） |
 | 27 | etl_aws 从不写契约声明的统一时间戳字段 | 判据覆盖率 1.4%，机制永不触发 | ✅ 已修 |
 | 28 | 6 个类型切 arn 会被 etl_cfn 撕成两份 | 身份键升级不可行却无人知 | ✅ 已申报阻塞 |
+| 29 | `_target_metrics_name` 返回图谱名而非 DeepFlow 名 | **注入生效门禁被静默禁用** | ✅ 已修 |
+| 30 | 边级无流量与「打断未传导」同形 | 噪声被当退化证据 | ✅ 已修 |
+| 31 | 第二条写入路径绕过全部三道门禁 | 3 条错 refuted + 11 条置信度越界 | ✅ 已修 |
 
 其中 **#7 / #8 / #10 是 08:30–09:00 为了拿到第一条边的判定而查出的**，
 **#11 – #14 是 10:10–11:12 扩大验证覆盖面时查出的**，都不在最初报给用户的 6 条里。
@@ -955,6 +958,103 @@ Lambda 的 `PhysicalResourceId` 就是函数名，本地拿不到 ARN。
 
 ---
 
+---
+
+## 29. `_target_metrics_name` 返回图谱名而非 DeepFlow 名（2026-09-05，本轮最隐蔽）
+
+函数名与 docstring 都写着「注入目标在 **DeepFlow SLI 口径**下的名字」，
+而实现调的是 `resolve_graph_name()` —— 返回的是**图谱规范名**。实测：
+
+| 实验里写的名 | 解析成 | 按 k8s 名查 | 按图谱名查 |
+|---|---|--:|--:|
+| `list-adoptions` | `petlistadoptions` | **1,981** | **0** |
+| `search-service` | `petsearch` | **60,504** | **0** |
+| `pethistory` | `pethistory` | — | — （两名一致） |
+| `petfood` | `petfood` | — | — （两名一致） |
+
+**缺陷被长期掩盖的原因非常具体**：原 docstring 举的例子 `pethistory` 恰好是
+两套名字**碰巧相同**的那一个 —— 照着例子验证永远看不出问题。这与 08-31 那次
+`identity_is_immutable`「一个名字混淆两个问题」是同一族：**名字声称的语义与
+实现的语义不一致，而唯一的验证样例正好落在两者重合处。**
+
+后果三层，第二层最隐蔽：
+
+1. petsearch / petlistadoptions 的**注入目标侧稳态检查**一直靠
+   `0 请求 → fallback success_rate=100.0` 这个**假的 100%** 通过 ——
+   正是该 docstring 自己警告的失效模式，而该函数就是成因；
+2. **`_injection_took_effect()` 对这两个服务永远返回 None**，于是注入生效门禁
+   （#20）被静默禁用 —— **门禁在，但判据永远喂不进能触发它的数据**；
+3. 本轮新写的 `collect_edge_flow()` 继承同一个名字，边级流量也恒为 0。
+
+修法：走 `SERVICE_TO_K8S_LABEL`（DeepFlow name == k8s Pod label），
+先归一到规范名再取 k8s_label。修完后 `search-service` 从 0 变成 59,410，
+`注入生效性判定` 首次给出「已确认生效」。
+
+**推广判据**：凡「函数名/文档声称的语义」与「实现调用的解析方向」不一致的地方，
+都要用**两套名字不同**的样例验证，不能用碰巧相同的那个。
+
+---
+
+## 30. 边级无流量与「打断未传导」在聚合 SLI 上同形（2026-09-05）
+
+重验 `petsite -[Calls]-> payforadoption` 得到「观测方退化 0.37%」，看着像
+「打断了但没传导」。查边级流量才发现真相：
+
+```
+traffic-generator  -> service-petsite    22,640 次
+petsite            -> search-service     18,253 次
+petsite            -> pay-for-adoption        0 次   ← 无从打断
+petsite            -> list-adoptions          0 次
+petsite            -> pethistory              0 次
+```
+
+**petsite 有 23,007 请求，却一次都没走到被测的那条边上。** 那 0.37% 是噪声。
+
+这是「零流量不判 refuted」原则在**边**这一层的对应物 —— 此前该原则只覆盖
+**观测方**零流量。修法：新增 `DeepFlowMetrics.collect_edge_flow(client, server)`
+量 (观测方 → 注入目标) 这一条 L7 流，并把 `edge_baseline_calls` 作为
+`classify_intervention` 的**最前置**门禁（比观测方流量检查更根本）。
+
+顺带解决注入生效性：**这条流自己的退化就是「我真的打断了这条链路吗」的直接
+证据**，优于拿注入目标的聚合 SLI 反推。
+
+用他们的 `scripts/loadgen_full.py` 补足流量后（`petsite -> list-adoptions`
+0 → 1,422、`-> petfood` 0 → 3,016），重验 `petsite -> petsearch` 得到
+**confirmed 置信度 0.9999、退化 94.62%、强度 degraded**（退化已达 hard 线 70%
+但证据是 throughput_only，按 #24 的判据封顶为 degraded）。
+
+---
+
+## 31. 第二条写入路径绕过全部三道门禁（2026-09-05）
+
+仓库里有**两条**边验证写入路径，只有一条有门禁：
+
+```
+chaos/code/runner/edge_verification.py   走 classify_intervention（有门禁）
+scripts/write_edge_verdicts.py           自己决定 status 与 confidence（无门禁）
+```
+
+第二条的实测代价：
+
+- **3 条错误的 refuted**：DeepFlow calls 分别 60 / 2404 / 2796（即有独立观测源
+  看到过这条边）。其中一条的 `verify_reason` 自述「流量不足不能据此证伪」
+  而 `verify_status` 却写 refuted，**状态与理由自相矛盾**。
+- **11 条边的 `verify_confidence` 越界**（±4.0，声明值域是 [0,1]）：
+  它直接写了契约里的**证据权重**（`intervention_confirmed=4.0`）而非归一化置信度。
+
+**最要紧的教训**：`authority=chaos-runner` 这道权限门禁只校验**谁在写**，
+不校验**写的值是否合法**。三条越界记录全都盖着合法的 writer 名。
+
+修法：该脚本改为一律调共享判据算状态与置信度，调用方传入的 `verdict` 降级为
+**交叉校验** —— 两者不一致时大声 log（那正是上述错误判定的形态），而不是静默
+采信任何一方；且共享判据导入失败时**拒绝写入**而非退回旧逻辑
+（「导入失败就用备用实现」会让门禁在最需要时悄悄消失）。
+已撤销那 3 条 refuted 并重算全部越界置信度，现越界 0 条。
+新增 `tests/test_46_verdict_gating.py` 强制「任何写 verify_* 的路径都必须复用
+共享判据」，并盯住两处 `_OBSERVER_MARKERS` 不漂移。
+
+---
+
 ## 收敛成四条方法论
 
 ### 一、缺陷类别高度集中，且都不是「数据采少了」
@@ -971,7 +1071,8 @@ Lambda 的 `PhysicalResourceId` 就是函数名，本地拿不到 ARN。
 | **前提未经证明就下结论**（新增第六类） | #20 没证明注入生效就判 refuted、#23 沿用未复核的既有认知 |
 | **一个字段承担两个职责** | #22 target_service 兼任选择器与图谱节点名、#12 Pod 标签 vs Deployment 名、#24 identity_is_immutable 一个名字混淆两个问题 |
 | **门禁只挡新的、不回收旧的** | #25 skip 前缀残留 9 个节点、source 词表门禁存量未归一、#27 修写入方救不了已死的存量 |
-| **声明的字段不是真实在用的那个**（新增第八类） | #27 契约声明 last_seen 而写入方写 last_updated、managedBy/managed_by 并存 |
+| **声明的字段不是真实在用的那个** | #27 契约声明 last_seen 而写入方写 last_updated、#29 函数名声称 DeepFlow 名而实现返回图谱名 |
+| **门禁在但判据喂不进数据**（新增第九类） | #29 注入生效门禁因名字解析错而恒为 None、#31 第二条写入路径整体绕过门禁 |
 
 > **所以瓶颈在数据契约，不在采集覆盖面。**
 > 规划重心应该是把这三类变成守门测试，而不是继续接新数据源。
@@ -1023,7 +1124,7 @@ Lambda 的 `PhysicalResourceId` 就是函数名，本地拿不到 ARN。
 | 未声明的 source 取值 | **0**（节点 3 种 / 边 11 种，全部在契约词表内） |
 | 四个 ETL 函数 | 全部 200 OK，层 `:8`，门禁违约 0 条 |
 | `Microservice-[RunsOn]->Pod` | 36 → **42** |
-| 测试 | 461 → **516 passed / 0 failed**（新增 55 个守门用例） |
+| 测试 | 461 → **591 passed**（新增 80 个守门用例；另有 4 条失败属并发会话在飞的 dr-plan-generator 改动） |
 
 ### 仍然未解的
 

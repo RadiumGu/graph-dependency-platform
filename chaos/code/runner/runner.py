@@ -684,6 +684,43 @@ class ExperimentRunner:
                      if getattr(s, 'ok', True)]
             inj_req = max((s.total_requests or 0) for s in snaps) if snaps else 0
 
+            # ── 边级流量与边级生效性（2026-09-05 补入）─────────────────────
+            #
+            # 观测方有几万请求，不代表**被测这条边**上有流量。实测
+            # `petsite -[Calls]-> payforadoption`：petsite 有 23,007 请求，
+            # 而 petsite -> pay-for-adoption 这条路径 15 分钟内 **0 次调用** ——
+            # 此时「退化 0.37%」是噪声，却与「打断生效但未传导」完全同形。
+            #
+            # 这里量的是 (观测方 -> 注入目标) 这一条 L7 流：
+            #   · 它的基线调用数    -> 判据的前置条件（够不够判）
+            #   · 它自己的退化      -> 「我真的打断了这条链路吗」的**直接**证据，
+            #                          优于拿注入目标聚合 SLI 反推（实测返回 None）
+            edge_calls, edge_took_effect = None, None
+            try:
+                from .metrics import DeepFlowMetrics
+                _m = DeepFlowMetrics()
+                _tgt = self._target_metrics_name(exp)
+                _base = _m.collect_edge_flow(obs.service, _tgt, window_seconds=900)
+                if _base.ok:
+                    edge_calls = _base.total_requests
+                    # 注入期这条流的成功率：与基线比出退化。窗口取实验时长，
+                    # 保守起见只在两侧都有足够样本时才据此判定生效性。
+                    _inj = _m.collect_edge_flow(obs.service, _tgt, window_seconds=180)
+                    if edge_calls and _inj.ok and _inj.total_requests:
+                        drop = _base.success_rate - _inj.success_rate
+                        thin = (_base.total_requests - _inj.total_requests)
+                        # 门槛刻意低（5%）：这里回答的是「有没有作用到链路」这个
+                        # 是非问题，不是「影响有多大」。用 confirm 那条 20% 的线
+                        # 会把「生效但影响小」误判成「没生效」，反而放宽 refuted。
+                        edge_took_effect = bool(drop >= 5.0 or thin > 0)
+                logger.info(
+                    "🔗 边级流量 %s -> %s: 基线 %s 次调用，生效性=%s",
+                    obs.service, _tgt,
+                    edge_calls if edge_calls is not None else '采集失败',
+                    {True: '已确认', False: '未观测到', None: '无法判断'}[edge_took_effect])
+            except Exception as ex:
+                logger.warning("边级流量采集失败（非致命）: %r", ex)
+
             try:
                 verdict = verify_edge(
                     edge=cand,
@@ -694,8 +731,14 @@ class ExperimentRunner:
                     # 证据通道：纯吞吐证据不足以单独判 confirmed，见
                     # graph_confidence.classify_intervention 的 docstring
                     evidence_channel=result.observer_evidence_channel(obs.service),
-                    # 注入生效门禁：无法确认注入生效时不得判 refuted（T-297）
-                    injection_confirmed=took_effect,
+                    # 注入生效门禁：无法确认注入生效时不得判 refuted（T-297）。
+                    # 优先用**这条边自己**的流量退化（edge_took_effect）——
+                    # 它是「我真的打断了这条链路吗」的直接证据；
+                    # 拿注入目标的聚合 SLI 反推是间接的，实测会返回 None。
+                    injection_confirmed=(edge_took_effect if edge_took_effect is not None
+                                         else took_effect),
+                    # 边级流量门禁：路径本身没有调用时任何退化数字都是噪声
+                    edge_baseline_calls=edge_calls,
                 )
             except Exception as ex:
                 logger.warning(f"边判定失败 {obs.service}: {ex!r}")
@@ -830,25 +873,50 @@ class ExperimentRunner:
         """注入目标在 **DeepFlow SLI 口径**下的名字。
 
         这里有三套命名空间，都源自 profiles/petsite.yaml 的同一张 services 表，
-        但取值不同，混用会静默出错（2026-08-31 实测）：
+        但取值不同，混用会静默出错：
 
-            kubectl label selector   app=pethistory-deployment   ← 注入用
-            DeepFlow request_domain  %pethistory%                ← SLI 用
-            图谱 Microservice.name    pethistory                  ← 候选边用
+            kubectl label / DeepFlow request_domain   search-service   ← 注入与 SLI 用
+            k8s Deployment 名                         search-service
+            图谱 Microservice.name (neptune_name)     petsearch        ← 候选边用
 
-        实测 `metrics.collect('pethistory-deployment')` 返回 **0 请求**，
-        而 `collect('pethistory')` 返回 26 请求。0 请求会走 fallback 返回
-        `success_rate=100.0`，于是稳态门 `>= 95%` 被一个**假的 100%** 通过 ——
-        与「零流量和健康在指标上分不开」是同一个缺陷家族。
+        ## 2026-09-05 修：本函数此前返回的是**图谱名**，而它声称返回 SLI 名
 
-        解析用的是 T-214e 引入的同一张别名表，不另立映射。
+        原实现调 `resolve_graph_name()`（→ neptune_name），于是对**两套名字不同**
+        的服务，DeepFlow 查询恒为空。实测：
+
+            实验写的名   图谱名             按 k8s 名查   按图谱名查
+            list-adoptions  petlistadoptions      1,981          0
+            search-service  petsearch            60,504          0
+            pethistory      pethistory                -          - （两名一致）
+            petfood         petfood                   -          - （两名一致）
+
+        缺陷被长期掩盖的原因很具体：**原 docstring 举的例子 `pethistory` 恰好是
+        两套名字碰巧相同的那一个**，照着例子验证永远看不出问题。
+
+        后果三层，第二层最隐蔽：
+          1. petsearch / petlistadoptions 的**注入目标侧稳态检查**一直靠
+             `0 请求 → fallback success_rate=100.0` 这个**假的 100%** 通过 ——
+             正是本 docstring 自己警告的失效模式，而本函数就是成因；
+          2. `_injection_took_effect()` 对这两个服务**永远返回 None**，
+             于是注入生效门禁（T-297）被静默禁用 —— 门禁在，但判据喂不进数据；
+          3. `collect_edge_flow()` 继承同一个名字，边级流量也恒为 0。
+
+        修法：走 `SERVICE_TO_K8S_LABEL`（DeepFlow name == k8s Pod label），
+        先归一到规范名再取 k8s_label，两步都失败才回落原名。
+        这张表与 target_resolver 选 Pod 用的是**同一张**，不另立映射。
         """
+        raw = exp.target_service
         try:
+            from .config import SERVICE_TO_K8S_LABEL
             from .edge_verification import resolve_graph_name
-            resolved = resolve_graph_name(exp.target_service)
+            # 规范名 -> k8s_label。实验里既可能写 k8s 名也可能写规范名，
+            # 所以两个键都试：先按原样查，再归一到规范名后查。
+            if raw in SERVICE_TO_K8S_LABEL:
+                return SERVICE_TO_K8S_LABEL[raw]
+            canon = resolve_graph_name(raw) or raw
+            return SERVICE_TO_K8S_LABEL.get(canon, raw)
         except Exception:
-            return exp.target_service
-        return resolved or exp.target_service
+            return raw
 
     def _check_target_pod_health(self, exp: Experiment, result: ExperimentResult) -> bool:
         """T-214h：注入目标的 Pod 是否被这次实验打伤。返回 False 即判 FAILED。
