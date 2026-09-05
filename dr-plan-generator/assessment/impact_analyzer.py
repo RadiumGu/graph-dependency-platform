@@ -77,22 +77,24 @@ class ImpactAnalyzer:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _estimate_rpo(self, nodes: List[Dict[str, Any]]) -> int:
+    def _estimate_rpo(self, nodes: List[Dict[str, Any]]) -> Optional[int]:
         """按实际复制拓扑推导 RPO（分钟）。
 
         原实现是与 ``plan_generator._estimate_rpo`` 同源的硬编码表
         （RDS=5 / DynamoDB=0 / S3=60），与实际配置无关，审计答不上来。
         现改为委托 ``RPOEstimator``。
 
-        ``ImpactReport.estimated_rpo_minutes`` 是 int 字段，无法表达「不可推定」，
-        因此这里在不可推定时返回 **0** 并依赖 ``DRPlan.rpo_basis`` 承载真实结论
-        ——影响评估是概览，不是举证材料；举证看计划里的 RPO 依据表。
+        **不可推定时返回 ``None``，绝不返回 0。** 早期版本因为
+        ``ImpectReport.estimated_rpo_minutes`` 是 ``int`` 而在推不出时返回 0，
+        于是报告里渲染成「Estimated RPO | 0 min」—— 容灾语境下 0 是
+        **零数据丢失**，最令人安心的那个值，真实含义却是「不知道」。
+        字段已改为 ``Optional[int]``，渲染侧对 None 显式输出「不可推定」。
 
         Args:
             nodes: 受影响节点。
 
         Returns:
-            RPO 分钟数；不可推定时为 0。
+            RPO 分钟数；不可推定时为 ``None``。
         """
         from assessment.rpo_estimator import RPOEstimator
 
@@ -102,8 +104,7 @@ class ImpactAnalyzer:
             profile = get_active_profile()
         except Exception:  # noqa: BLE001
             profile = None
-        assessment = RPOEstimator(profile=profile).assess(nodes)
-        return assessment.minutes if assessment.minutes is not None else 0
+        return RPOEstimator(profile=profile).assess(nodes).minutes
 
     def _build_risk_matrix(
         self,

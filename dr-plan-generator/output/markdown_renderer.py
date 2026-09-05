@@ -111,7 +111,13 @@ class MarkdownRenderer:
             f"| Tier1 services | {len(report.by_tier.get('Tier1', []))} |",
             f"| Tier2 services | {len(report.by_tier.get('Tier2', []))} |",
             f"| Estimated RTO | {report.estimated_rto_minutes} min |",
-            f"| Estimated RPO | {report.estimated_rpo_minutes} min |",
+            # RPO 为 None 时**不能**渲染成 0 —— 见 ImpactReport.estimated_rpo_minutes
+            # 的注释：容灾报告里的 0 min 读作「零数据丢失」。
+            "| Estimated RPO | "
+            + (f"{report.estimated_rpo_minutes} min"
+               if report.estimated_rpo_minutes is not None
+               else "**不可推定**（依据见计划的 RPO 依据表）")
+            + " |",
             "",
         ]
 

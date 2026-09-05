@@ -423,3 +423,71 @@ def test_g12_single_timestamp_field(contract, gc):
     assert {'last_updated', 'last_scanned'} <= aliases
     assert contract['timestamp_field'] not in aliases, "统一字段不应同时列为遗留别名"
     assert gc.TIMESTAMP_FIELD == contract['timestamp_field']
+
+
+# ── g19 写入路径门禁 ──────────────────────────────────────────────────────
+#
+# 2026-09-05 实测缺口：三个 ETL 里只有 etl_aws 与 etl_cfn 在写
+# dependency_kind 之前判了 is_dependency_edge()，etl_agentcore 漏了，
+# 于是 5 条 AgentGateway-[RoutesTo]->AgentTool 带上了依赖属性 ——
+# 而 RoutesTo 声明为 dependency: false。靠人肉对账才发现。
+
+
+def test_g19_generic_edge_writers_gate_dependency_kind(contract):
+    """边标签是**参数**的通用 upsert helper，写 dependency_kind 必须过 is_dependency_edge。
+
+    ## 这条用例挡的是什么（2026-09-05 实测）
+
+    `etl_agentcore/neptune_etl_agentcore.py::_upsert_edge(label, ...)` 对任意边类型
+    **无条件**写 `.property('dependency_kind', ...)`，于是 5 条
+    `AgentGateway -RoutesTo-> AgentTool` 带上了 dependency_kind ——
+    而 RoutesTo 声明为 `dependency: false`。
+    同期 etl_aws 与 etl_cfn 的同名函数都有 `if is_dependency_edge(lb):`。
+    **三个 ETL 里两个有、一个没有**，靠人肉对账才发现。
+
+    ## 为什么只查「标签是参数」的函数
+
+    deepflow / xray / cloudwatch 也无条件写 dependency_kind，但它们的写入点
+    边标签是**硬编码的依赖边字面量**（Calls / AccessesData / DependsOn），
+    不带门禁也不会写错位置。危险的只有对边类型通用的 helper：
+    它的正确性取决于调用方传什么，必须在函数内部自己判。
+    """
+    import ast
+
+    etl_root = REPO / 'infra' / 'lambda'
+    label_param_names = {'label', 'lb', 'edge_label', 'rt', 'edge_type'}
+    offenders = []
+
+    for py in sorted(etl_root.rglob('*.py')):
+        if 'shared' in py.parts:
+            continue
+        src = py.read_text(encoding='utf-8')
+        if 'dependency_kind' not in src:
+            continue
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:                                  # pragma: no cover
+            continue
+        for fn in ast.walk(tree):
+            if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            seg = ast.get_source_segment(src, fn) or ''
+            if 'dependency_kind' not in seg:
+                continue
+            params = {a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}
+            if not (params & label_param_names):
+                continue                                     # 标签是字面量，不适用
+            if 'is_dependency_edge' in seg:
+                continue                                     # 已有门禁
+            offenders.append(
+                f"{py.relative_to(REPO)}::{fn.name}() "
+                f"(边标签参数 {sorted(params & label_param_names)})"
+            )
+
+    assert not offenders, (
+        "以下通用 edge-write helper 的边标签是参数，却无条件写 dependency_kind：\n  "
+        + "\n  ".join(offenders)
+        + "\n\n非依赖边不得携带 dependency_kind。请照 etl_aws/neptune_client.py 的写法加门禁：\n"
+          "    if is_dependency_edge(label):\n"
+          "        write_once['dependency_kind'] = ...\n"
+    )

@@ -43,6 +43,7 @@ from graph_contract import (  # noqa: E402
     assert_node_type,
     assert_source,
     identity_prop_for,
+    is_dependency_edge,
 )
 
 logger = logging.getLogger()
@@ -536,6 +537,20 @@ def _upsert_edge(label: str, src_label: str, src_id: str,
     assert_edge_type(label, src_label, dst_label)
     assert_source(SOURCE, f'_upsert_edge({src_label}-[{label}]->{dst_label})')
 
+    # 非依赖边不得携带 dependency_kind —— 契约的 `dependency` 标志是权威。
+    #
+    # 2026-09-05 实测：本函数此前**无条件**写 dependency_kind，于是 5 条
+    # AgentGateway-[RoutesTo]->AgentTool 带上了 `dependency_kind: static`，
+    # 而 RoutesTo 声明为 `dependency: false`。etl_aws 与 etl_cfn 的同名函数
+    # 一直有这道门禁，本函数是三个 ETL 里唯一漏掉的那个。
+    #
+    # 为什么 RoutesTo 不该改成依赖边：这个标签同时用在 ALB/TargetGroup 的转发上，
+    # 改判会把那些结构边一起误标成依赖。若确实要表达「网关依赖工具」，
+    # 应另立标签 —— 与 InvokesTool 当初刻意不复用 Invokes 是同一个判断
+    # （见契约里 InvokesTool 的 note）。
+    dep_kind_frag = (f".property('dependency_kind','{dependency_kind}')"
+                     if is_dependency_edge(label) else '')
+
     s_key = identity_prop_for(src_label)
     d_key = identity_prop_for(dst_label)
     upd = ''.join(
@@ -549,7 +564,7 @@ def _upsert_edge(label: str, src_label: str, src_id: str,
         f"  __.inE('{label}').where(__.outV().has('{s_key}','{safe_str(src_id)}')),"
         f"  __.addE('{label}').from('s')"
         f"   .property('source','{SOURCE}')"
-        f"   .property('dependency_kind','{dependency_kind}')"
+        f"{dep_kind_frag}"
         f"   .property('first_seen',{round_ts})"
         f")"
         f"{upd}"

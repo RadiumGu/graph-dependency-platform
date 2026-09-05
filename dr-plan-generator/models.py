@@ -67,7 +67,14 @@ class ImpactReport:
     affected_capabilities: list = field(default_factory=list)
     single_points_of_failure: list = field(default_factory=list)
     estimated_rto_minutes: int = 0
-    estimated_rpo_minutes: int = 0
+    #: RPO 分钟数。**None 表示「不可推定」，不是 0。**
+    #
+    # 曾经这里是 `int = 0`，`_estimate_rpo` 在推不出时返回 0。代价是渲染出
+    # 「Estimated RPO | 0 min」—— 在容灾语境里 0 意味着**零数据丢失**，
+    # 是最令人安心的值，而真实含义是「我们不知道」。
+    # 这与本项目最核心那条不变量同形：无法区分时必须显式说无法区分，
+    # 不能借一个看起来正常的数字蒙过去。
+    estimated_rpo_minutes: Optional[int] = None
     risk_matrix: dict = field(default_factory=dict)
 
 
