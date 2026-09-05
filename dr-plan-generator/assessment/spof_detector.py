@@ -30,17 +30,29 @@ class SPOFDetector:
         """
         self._registry: ServiceTypeRegistry = registry if registry is not None else get_registry()
 
-    def detect(self, subgraph: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Detect SPOF risks from a subgraph and Neptune Q16 results.
+    def detect(
+        self, subgraph: Dict[str, Any], offline: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Detect SPOF risks from a subgraph and (when online) Neptune Q16.
 
         Args:
             subgraph: Subgraph dict with ``nodes`` and ``edges`` keys.
+            offline: When True, skip the Neptune Q16 query entirely and analyse
+                only the supplied subgraph. Set this on the disaster-time path:
+                relying on the ``except`` fallback is not good enough, because a
+                Region that is *down* does not refuse connections quickly — the
+                request blocks until timeout, silently inflating RTO at the worst
+                possible moment.
 
         Returns:
             List of SPOF dicts, each with keys:
             ``resource``, ``type``, ``risk``, ``az``, ``impact``,
             ``recommendation``.
         """
+        if offline:
+            logger.info("Offline mode: skipping Neptune Q16, using local subgraph analysis.")
+            return self._detect_from_subgraph(subgraph)
+
         from graph import queries
 
         spof_list: List[Dict[str, Any]] = []

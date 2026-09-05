@@ -2,6 +2,55 @@
 # 可被 custom_policy.yaml / custom_policy.md 覆盖
 # CLI --set 拥有最高优先级
 
+# === 范围与边分类策略 ===
+#
+# 为什么范围边与排序边是两套（不要合并）：
+#
+# 图谱契约（infra/lambda/shared/python/graph_contract_data.py 的 EDGE_TYPES）里
+# `dependency: true` 只有 6 种边：AccessesData / Calls / Delegates /
+# DependsOn / InvokesTool / Retrieves。其余 23 种是 false，包括
+# RunsOn / BelongsTo / WritesTo / PublishesTo / ForwardsTo / RoutesTo。
+#
+#   · 只用 dependency 边界定**范围** → ALB、TargetGroup、SQS 队列会被漏掉。
+#     它们属于这个 workload，只是不构成「谁依赖谁」。
+#   · 用全部边决定**启动顺序** → 引入伪约束。例如 Contains（Region→AZ）、
+#     LocatedIn 表达的是位置而非先后，会让拓扑排序产生无意义的串行。
+#
+# 所以这里显式分成两套。此处是本模块的**策略**（用哪些边做什么），
+# 与契约里的 dependency 标记是不同层面的事，不构成双源真相。
+scope_policy:
+  # 判定「某资源属于这个 workload」时可以走的边。
+  scope_edge_types:
+    - AccessesData      # dependency
+    - Calls             # dependency
+    - Delegates         # dependency
+    - DependsOn         # dependency
+    - InvokesTool       # dependency
+    - Retrieves         # dependency
+    - WritesTo          # 服务写入的队列/桶属于该 workload
+    - PublishesTo       # 同上
+    - RunsOn            # Pod/服务与其承载集群
+    - BelongsTo         # 归属关系
+    - ForwardsTo        # ALB → TargetGroup → Microservice
+    - RoutesTo          # 同上
+    - Invokes           # Lambda 调用链
+    - InvokesVia
+
+  # 决定**启动/恢复先后**只认真正的依赖边（契约 dependency: true）。
+  ordering_edge_types:
+    - AccessesData
+    - Calls
+    - Delegates
+    - DependsOn
+    - InvokesTool
+    - Retrieves
+
+  # 这些验证结论的边不参与范围与排序。
+  # 'refuted' = 已由故障注入证伪；采信它会把不存在的依赖写进恢复顺序。
+  # 保留 untested / inconclusive：证据不足不等于不存在，容灾场景宁可多算。
+  excluded_verify_statuses:
+    - refuted
+
 # === 通用策略 ===
 general:
   # 默认每步估算时间（秒），可被资源类型覆盖
