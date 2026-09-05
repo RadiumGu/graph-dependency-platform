@@ -361,7 +361,15 @@ neptune:
     运行时观测有**两个源，OR 关系**（盲区不重叠：DNS 漏「连接复用」，X-Ray 漏「未插桩」）：
       · DeepFlow DNS —— 域名解析行为
       · AWS X-Ray  —— 服务到 AWS 托管服务的实际调用
-    - drift_status: ok | declared_not_observed | observed_not_declared
+    - drift_status: ok | declared_not_observed | observed_not_declared | observed_then_silent
+        `observed_then_silent` 是 2026-09-05 新增的第四个取值，只出现在
+        `dependency_kind='inference'` 的边上：曾被观测到、当前窗口内没有观测。
+        它与前三个的区别在于**前三个都是对「声明与观测是否一致」的判断，
+        而这一个是对「观测本身够不够近」的判断**。
+        为什么不复用 declared_not_observed：agent 的进程内工具**没有任何声明**
+        （控制面看不到它们，实测 13 个 AgentTool 里 8 个只能从 span 发现），
+        说「声明了但没观测到」是事实错误。用一个语义邻近但不同的值会静默误导 ——
+        与 etl_agentcore 里 empty/contradictory 的区分是同一个道理。
     - runtime_verified(bool): 是否被任一运行时源观测到
     - verified_by: dns | xray | dns+xray | none
         为什么必须有这个属性：双源验证下，X-Ray 若静默失效（权限丢失、服务未插桩、

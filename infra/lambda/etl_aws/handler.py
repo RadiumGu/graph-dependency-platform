@@ -1295,6 +1295,22 @@ def run_etl():
     except Exception as e:
         logger.warning(f"edge expiry failed (non-fatal): {e}")
 
+    # inference 边（LLM 运行时按 query 决定的调用，如 agent → tool）**不走上面那条路**。
+    # 它们的观测是稀疏突发的（实测 agent 工具同一天 03:25 一批、07:47 一批，中间四小时
+    # 空白），所以「窗口内没看到」推不出「依赖消失」—— 只标 drift_status，不碰 active。
+    # 详见 graph_cleanup 模块 docstring 第 3 条。
+    try:
+        from graph_cleanup import mark_stale_inference_edges
+        _inf = mark_stale_inference_edges(neptune_query, round_ts=int(time.time()))
+        _silent = sum(v['silent'] for v in _inf['per_label'].values())
+        _marked = sum(v['marked'] for v in _inf['per_label'].values())
+        stats['inference_drift_silent'] = _silent
+        stats['inference_drift_marked'] = _marked
+        logger.info("inference-drift: enabled=%s silent=%d marked=%d",
+                    _inf['enabled'], _silent, _marked)
+    except Exception as e:
+        logger.warning(f"inference drift marking failed (non-fatal): {e}")
+
     # ── 节点过期收敛（2026-09-04 新增）─────────────────────────────────────
     #
     # 补的是契约里一句悬空的话：结构边的 `expires_seconds: None` 注解写着
