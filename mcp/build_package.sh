@@ -48,8 +48,14 @@ cp "$ROOT/rca/__init__.py"          "$BUILD/rca/" 2>/dev/null || touch "$BUILD/r
 cp -r "$ROOT/rca/neptune/."          "$BUILD/rca/neptune/"
 cp -r "$ROOT/profiles/."             "$BUILD/profiles/"
 cp -r "$ROOT/shared/."               "$BUILD/shared/"
-# query_catalog 用 importlib 按路径加载这 5 条 DR 查询
+# query_catalog 用 importlib 按路径加载这 6 条 DR 查询（Q12–Q16）
 cp -r "$ROOT/dr-plan-generator/graph/." "$BUILD/dr-plan-generator/graph/"
+# config.py 是必需的：graph/neptune_client.py 顶层 `import config`。
+# 漏掉它会让 6 条 DR 查询（q12_az / q12_service / q13 / q14 / q15 / q16）
+# 在运行时报 ModuleNotFoundError —— 占 24 个工具的 25%，
+# 而且只在**带上有效参数**调用时才暴露（无参时先被参数校验挡住），
+# 所以无参冒烟测试查不出来。改动此处务必重跑带参健康检查。
+cp "$ROOT/dr-plan-generator/config.py" "$BUILD/dr-plan-generator/"
 
 # ── 清理 ────────────────────────────────────────────────────────────────────
 find "$BUILD" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
