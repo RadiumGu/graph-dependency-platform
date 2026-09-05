@@ -1,0 +1,128 @@
+{
+  "mcpserver": {
+    "tools": [
+      "q10_infra_root_cause",
+      "q11_broader_impact",
+      "q12_az_dependency_tree",
+      "q12_service_dependency_tree",
+      "q13_data_layer_topology",
+      "q14_cross_region_resources",
+      "q15_critical_path",
+      "q16_single_point_of_failure",
+      "q17_incidents_by_resource",
+      "q18_chaos_history",
+      "q19_topology_changes",
+      "q1_blast_radius",
+      "q20_dependency_verification",
+      "q21_observation_source_coverage",
+      "q22_edge_verification_verdicts",
+      "q23_verification_coverage",
+      "q2_tier0_status",
+      "q3_upstream_deps",
+      "q4_service_info",
+      "q5_similar_incidents",
+      "q6_pod_status",
+      "q7_db_connections",
+      "q8_log_source",
+      "q9_service_infra_path"
+    ],
+    "toolDetails": [
+      {
+        "name": "q10_infra_root_cause",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q11_broader_impact",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q12_az_dependency_tree",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q12_service_dependency_tree",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q13_data_layer_topology",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q14_cross_region_resources",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q15_critical_path",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q16_single_point_of_failure",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q17_incidents_by_resource",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q18_chaos_history",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q19_topology_changes",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q1_blast_radius",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q20_dependency_verification",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q21_observation_source_coverage",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q22_edge_verification_verdicts",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q23_verification_coverage",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q2_tier0_status",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q3_upstream_deps",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q4_service_info",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q5_similar_incidents",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q6_pod_status",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q7_db_connections",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q8_log_source",
+        "toolClassification": "READ_ONLY"
+      },
+      {
+        "name": "q9_service_infra_path",
+        "toolClassification": "READ_ONLY"
+      }
+    ]
+  }
+}

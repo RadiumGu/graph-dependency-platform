@@ -1,0 +1,1655 @@
+{
+  "nodes": [
+    {
+      "label": "AWSServiceEndpoint",
+      "name": "dynamodb"
+    },
+    {
+      "label": "AWSServiceEndpoint",
+      "name": "s3"
+    },
+    {
+      "label": "AWSServiceEndpoint",
+      "name": "secretsmanager"
+    },
+    {
+      "label": "AWSServiceEndpoint",
+      "name": "sqs"
+    },
+    {
+      "label": "AWSServiceEndpoint",
+      "name": "ssm"
+    },
+    {
+      "label": "AWSServiceEndpoint",
+      "name": "sts"
+    },
+    {
+      "label": "AWSServiceEndpoint",
+      "name": "xray"
+    },
+    {
+      "label": "AgentRuntime",
+      "name": "WaggleAIAdoption"
+    },
+    {
+      "label": "AgentRuntime",
+      "name": "WaggleAIConcierge"
+    },
+    {
+      "label": "AgentRuntime",
+      "name": "WaggleAINutrition"
+    },
+    {
+      "label": "AgentRuntime",
+      "name": "WaggleAIOrchestrator"
+    },
+    {
+      "label": "AgentRuntime",
+      "name": "WaggleAIOrdering"
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#adoption"
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#concierge"
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#nutrition"
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#orchestrator"
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#ordering"
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIAdoption-4gnHUlDACh#search_available_pets"
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAINutrition-2NEiCS7VJw#get_available_foods"
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAINutrition-2NEiCS7VJw#retrieve_nutrition_guidance"
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIOrchestrator-K85tG867Xt#adoption"
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIOrchestrator-K85tG867Xt#nutrition_advisor"
+    },
+    {
+      "label": "BusinessCapability",
+      "name": "AdoptionHistoryView"
+    },
+    {
+      "label": "BusinessCapability",
+      "name": "PetAdoptionFlow"
+    },
+    {
+      "label": "BusinessCapability",
+      "name": "PetInventoryManagement"
+    },
+    {
+      "label": "DynamoDBTable",
+      "name": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM"
+    },
+    {
+      "label": "DynamoDBTable",
+      "name": "ServicesEks2-ddbpetfoodcarts77F2B0EA-1HSU365TM7EXJ"
+    },
+    {
+      "label": "DynamoDBTable",
+      "name": "ServicesEks2-ddbpetfoodfoods00C5D62B-4FH25BBOAEWX"
+    },
+    {
+      "label": "DynamoDBTable",
+      "name": "chaos-experiments"
+    },
+    {
+      "label": "DynamoDBTable",
+      "name": "devops-agent-slack-threads"
+    },
+    {
+      "label": "DynamoDBTable",
+      "name": "gp-alert-buffer"
+    },
+    {
+      "label": "EKSCluster",
+      "name": "PetSite"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "ServicesEks2-GuardDutyCleanupLambda94AC761D-p50SIk5dtWQI"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "ServicesEks2-StepFnlambdasteppriceGreaterThan55AD1-kkACGO1yh30X"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "ServicesEks2-StepFnlambdasteppriceLessThan556D8B30-2POHnQIjCcYJ"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "ServicesEks2-awscdkawseks-IsCompleteHandler7073F4D-UM5mGZlllEIl"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "ServicesEks2-awscdkawseks-ProviderframeworkisCompl-sIJBJPos5iM2"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "ServicesEks2-awscdkawseks-ProviderframeworkonEvent-8iPNdJNUCVlK"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "ServicesEks2-awscdkawseks-ProviderframeworkonEvent-xdUeZruuRUdZ"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "ServicesEks2-awscdkawseks-ProviderframeworkonTimeo-T6MAOIsLvvn5"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "ServicesEks2-awscdkawseksCl-OnEventHandler42BEBAE0-bcWZ6VVcgWIb"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "ServicesEks2-awscdkawseksKubectlPr-Handler886CB40B-3JyAmj4TkOLp"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "ServicesEks2-cloudwatchcustomwidgetA34392F1-sVNXho9XOJTZ"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "ServicesEks2-dynamodbqueryfunction3C0E68E0-hSXAsqGf3jXY"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "ServicesEks2-petsiteapplicationresourcecontrolerDC-xWipuliA0V5T"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "ServicesEks2-statusupdaterservicelambdafn37242E00-0SHsIkrhwJ32"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "WaggleAIAgents-WaggleAIAutoReloadReloadFn98FA14D6-m9SxqJ0elBSM"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "devops-agent-cn-bridge-CloudFrontPrefixListLookupF-swkDxu9EbUJ2"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "devops-agent-notify-slack"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "devops-agent-slack-chatbot"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "devops-agent-trigger-investigation"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "gp-window-flush"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "neptune-etl-from-aws"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "neptune-etl-from-deepflow"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "neptune-etl-from-xray"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "neptune-etl-trigger"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "petsite-ops-slack-notifier"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "petsite-rca-engine"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "petsite-rca-interaction"
+    },
+    {
+      "label": "LoadBalancer",
+      "name": "Servic-PetSi-by0kpyBtxswj"
+    },
+    {
+      "label": "LoadBalancer",
+      "name": "Transl-Alb16-AXuaCgljAwMk"
+    },
+    {
+      "label": "LoadBalancer",
+      "name": "devops-agent-cn-bridge-alb"
+    },
+    {
+      "label": "LoadBalancer",
+      "name": "openclaw-alb-v2"
+    },
+    {
+      "label": "LoadBalancer",
+      "name": "petsite-internal-lt"
+    },
+    {
+      "label": "Microservice",
+      "name": "artillery"
+    },
+    {
+      "label": "Microservice",
+      "name": "artillery-write"
+    },
+    {
+      "label": "Microservice",
+      "name": "auth-service"
+    },
+    {
+      "label": "Microservice",
+      "name": "gateway-service"
+    },
+    {
+      "label": "Microservice",
+      "name": "order-service"
+    },
+    {
+      "label": "Microservice",
+      "name": "payforadoption"
+    },
+    {
+      "label": "Microservice",
+      "name": "petfood"
+    },
+    {
+      "label": "Microservice",
+      "name": "pethistory"
+    },
+    {
+      "label": "Microservice",
+      "name": "petlistadoptions"
+    },
+    {
+      "label": "Microservice",
+      "name": "petsearch"
+    },
+    {
+      "label": "Microservice",
+      "name": "petsite"
+    },
+    {
+      "label": "Microservice",
+      "name": "petstatusupdater"
+    },
+    {
+      "label": "Microservice",
+      "name": "points-service"
+    },
+    {
+      "label": "Microservice",
+      "name": "product-service"
+    },
+    {
+      "label": "Microservice",
+      "name": "trafficgenerator"
+    },
+    {
+      "label": "RDSCluster",
+      "name": "grafana-aurora-mysql"
+    },
+    {
+      "label": "RDSCluster",
+      "name": "serviceseks2-databaseb269d8bb-efjeyzicx2ak"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "cdk-hnb659fds-assets-926093770964-ap-northeast-1"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "cdk-hnb660fds-assets-926093770964-ap-northeast-1"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "chaos-fis-config-926093770964"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "kronos-926093770964-apne1"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "m2m-926093770964-ap-northeast-1"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "nlm-cookie-ra"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "nvme-perf-numa-926093770964-apne1"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "observability-workshop-pipelineartifactsbucket-gnyvqkvshnpc"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "observability-workshop-pipelineartifactsbucket-kqzc0jsmuotq"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "observability-workshop-pipelineartifactsbucket-l1h1hksjiqyc"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "observability-workshop-pipelineartifactsbucket-qtwa3cf8gnos"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "observability-workshop-pipelineartifactsbucket-r5ewfsty9gay"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "observability-workshop-pipelineartifactsbucket-to8h8v1jodzh"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "observability-workshop-pipelineartifactsbucket-x6szmifwypdb"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "observability-workshop-pipelinesourcebucket-5mg2a0nsnydk"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "observability-workshop-pipelinesourcebucket-addhx3oupwxz"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "observability-workshop-pipelinesourcebucket-bvgz2opjjkqg"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "observability-workshop-pipelinesourcebucket-eig8xb6ah9uh"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "observability-workshop-pipelinesourcebucket-hcbltcw9xuji"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "observability-workshop-pipelinesourcebucket-ot1a638vr8of"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "observability-workshop-pipelinesourcebucket-tv2nfahepj5s"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "one-observability-workshop-pipelineartifactsbucket-h0wrnuemi4hf"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "one-observability-workshop-pipelinesourcebucket-ahueuhzxlsog"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "openclaw-alb-logs-1770913299"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "openclaw-config-backup-926093770964"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "petsite-canary-artifacts-926093770964"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "petsite-rca-incidents-926093770964"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "pvre-patching-logs-926093770964-ap-northeast-1"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "ssm-onboarding-bucket-926093770964-ap-northeast-1"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "tidb-poc-br-926093770964-apne1"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "translator-mtls-926093770964"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "waggleaiagents-waggleainutritionkbkbsource5dc7be79-gcqtzv4l6oce"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "yuanbao-data-2026"
+    },
+    {
+      "label": "SNSTopic",
+      "name": "ServicesEks2-topicpetadoption192CAB8F-Dn0iiU45RZ1g"
+    },
+    {
+      "label": "SNSTopic",
+      "name": "kronos-alarms"
+    },
+    {
+      "label": "SNSTopic",
+      "name": "petsite-ops-alerts"
+    },
+    {
+      "label": "SNSTopic",
+      "name": "petsite-rca-alerts"
+    }
+  ],
+  "edges": [
+    {
+      "source": "petsearch",
+      "source_label": "Microservice",
+      "edge_type": "Implements",
+      "target": "PetInventoryManagement",
+      "target_label": "BusinessCapability",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite",
+      "source_label": "Microservice",
+      "edge_type": "PublishesTo",
+      "target": "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+      "target_label": "SQSQueue",
+      "verify_status": ""
+    },
+    {
+      "source": "PetAdoptionFlow",
+      "source_label": "BusinessCapability",
+      "edge_type": "DependsOn",
+      "target": "petsite-rca-alerts",
+      "target_label": "SNSTopic",
+      "verify_status": ""
+    },
+    {
+      "source": "Servic-PetSi-by0kpyBtxswj",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "Servic-PetSi-BGUX1XK3RN6D",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
+      "source": "gp-window-flush",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "gp-alert-buffer",
+      "target_label": "DynamoDBTable",
+      "verify_status": ""
+    },
+    {
+      "source": "petsearch",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "s3",
+      "target_label": "AWSServiceEndpoint",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "petsite-internal-lt",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "petsite-lt-listadopt-tg",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
+      "source": "neptune-etl-from-xray",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "xray",
+      "target_label": "AWSServiceEndpoint",
+      "verify_status": ""
+    },
+    {
+      "source": "petsearch",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "target_label": "DynamoDBTable",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-ops-alerts",
+      "source_label": "SNSTopic",
+      "edge_type": "Invokes",
+      "target": "petsite-ops-slack-notifier",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "gateway-service",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "auth-service",
+      "target_label": "Microservice",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "Servic-PetAd-RPOCBTKKJYGI",
+      "source_label": "TargetGroup",
+      "edge_type": "ForwardsTo",
+      "target": "pethistory",
+      "target_label": "Microservice",
+      "verify_status": ""
+    },
+    {
+      "source": "payforadoption",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+      "target_label": "S3Bucket",
+      "verify_status": ""
+    },
+    {
+      "source": "neptune-etl-trigger",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "neptune-etl-from-aws",
+      "target_label": "LambdaFunction",
+      "verify_status": ""
+    },
+    {
+      "source": "Servic-PetSi-by0kpyBtxswj",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "deepflow-grafana-tg",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-internal-lt",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "petsite-lt-payadopt-tg",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-lt-payadopt-tg",
+      "source_label": "TargetGroup",
+      "edge_type": "ForwardsTo",
+      "target": "payforadoption",
+      "target_label": "Microservice",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite",
+      "source_label": "Microservice",
+      "edge_type": "DependsOn",
+      "target": "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+      "target_label": "SQSQueue",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "target_label": "DynamoDBTable",
+      "verify_status": ""
+    },
+    {
+      "source": "order-service",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "petsite",
+      "target_label": "Microservice",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "petsite",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+      "target_label": "S3Bucket",
+      "verify_status": ""
+    },
+    {
+      "source": "ServicesEks2-StepFnlambdasteppriceLessThan556D8B30-2POHnQIjCcYJ",
+      "source_label": "LambdaFunction",
+      "edge_type": "Calls",
+      "target": "ServicesEks2-StepFnlambdasteppriceLessThan556D8B30-2POHnQIjCcYJ",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "WaggleAIOrchestrator",
+      "source_label": "AgentRuntime",
+      "edge_type": "Delegates",
+      "target": "WaggleAINutrition",
+      "target_label": "AgentRuntime",
+      "verify_status": "confirmed"
+    },
+    {
+      "source": "PetAdoptionFlow",
+      "source_label": "BusinessCapability",
+      "edge_type": "DependsOn",
+      "target": "petsite-ops-alerts",
+      "target_label": "SNSTopic",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite",
+      "source_label": "Microservice",
+      "edge_type": "PublishesTo",
+      "target": "ServicesEks2-topicpetadoption192CAB8F-Dn0iiU45RZ1g",
+      "target_label": "SNSTopic",
+      "verify_status": ""
+    },
+    {
+      "source": "payforadoption",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "target_label": "StepFunction",
+      "verify_status": ""
+    },
+    {
+      "source": "PetAdoptionFlow",
+      "source_label": "BusinessCapability",
+      "edge_type": "DependsOn",
+      "target": "grafana-aurora-mysql",
+      "target_label": "RDSCluster",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite",
+      "source_label": "Microservice",
+      "edge_type": "LocatedIn",
+      "target": "PetSite",
+      "target_label": "EKSCluster",
+      "verify_status": ""
+    },
+    {
+      "source": "ServicesEks2-petsiteapplicationresourcecontrolerDC-xWipuliA0V5T",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "target_label": "DynamoDBTable",
+      "verify_status": ""
+    },
+    {
+      "source": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "source_label": "StepFunction",
+      "edge_type": "Invokes",
+      "target": "ServicesEks2-StepFnlambdasteppriceGreaterThan55AD1-kkACGO1yh30X",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "petsite",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "target_label": "RDSCluster",
+      "verify_status": "confirmed"
+    },
+    {
+      "source": "order-service",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "points-service",
+      "target_label": "Microservice",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "Servic-PetSi-by0kpyBtxswj",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "awesomeshop-frontend",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
+      "source": "Servic-PetSi-by0kpyBtxswj",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "streamlit-demo-tg",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
+      "source": "ServicesEks2-statusupdaterservicelambdafn37242E00-0SHsIkrhwJ32",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "dynamodb",
+      "target_label": "AWSServiceEndpoint",
+      "verify_status": ""
+    },
+    {
+      "source": "ServicesEks2-petsiteapplicationresourcecontrolerDC-xWipuliA0V5T",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+      "target_label": "S3Bucket",
+      "verify_status": ""
+    },
+    {
+      "source": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "source_label": "StepFunction",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A",
+      "target_label": "LambdaFunction",
+      "verify_status": ""
+    },
+    {
+      "source": "artillery",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "gateway-service",
+      "target_label": "Microservice",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "PetInventoryManagement",
+      "source_label": "BusinessCapability",
+      "edge_type": "DependsOn",
+      "target": "ServicesEks2-sqspetadoptiondlqEEEFF2AC-EQwBtdEFe8jQ",
+      "target_label": "SQSQueue",
+      "verify_status": ""
+    },
+    {
+      "source": "petstatusupdater",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "target_label": "DynamoDBTable",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-rca-engine",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "target_label": "DynamoDBTable",
+      "verify_status": ""
+    },
+    {
+      "source": "petlistadoptions",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "petsearch",
+      "target_label": "Microservice",
+      "verify_status": "confirmed"
+    },
+    {
+      "source": "pethistory",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "target_label": "RDSCluster",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "ServicesEks2-petsiteapplicationresourcecontrolerDC-xWipuliA0V5T",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "target_label": "RDSCluster",
+      "verify_status": ""
+    },
+    {
+      "source": "points-service",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "target_label": "RDSCluster",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-rca-engine",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+      "target_label": "S3Bucket",
+      "verify_status": ""
+    },
+    {
+      "source": "Providerwaiterstatemachine5D4A9DF0-ZkuIyyskPCyz",
+      "source_label": "StepFunction",
+      "edge_type": "Invokes",
+      "target": "ServicesEks2-awscdkawseks-ProviderframeworkisCompl-sIJBJPos5iM2",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "gateway-service",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "order-service",
+      "target_label": "Microservice",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "payforadoption",
+      "source_label": "Microservice",
+      "edge_type": "LocatedIn",
+      "target": "PetSite",
+      "target_label": "EKSCluster",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-ops-slack-notifier",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "target_label": "DynamoDBTable",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-rca-engine",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "target_label": "RDSCluster",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-internal-lt",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "petsite-lt-search-tg",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
+      "source": "petfood",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "target_label": "DynamoDBTable",
+      "verify_status": ""
+    },
+    {
+      "source": "payforadoption",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "dynamodb",
+      "target_label": "AWSServiceEndpoint",
+      "verify_status": "confirmed"
+    },
+    {
+      "source": "WaggleAIOrchestrator",
+      "source_label": "AgentRuntime",
+      "edge_type": "InvokesTool",
+      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIOrchestrator-K85tG867Xt#nutrition_advisor",
+      "target_label": "AgentTool",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-ops-slack-notifier",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+      "target_label": "S3Bucket",
+      "verify_status": ""
+    },
+    {
+      "source": "AdoptionHistoryView",
+      "source_label": "BusinessCapability",
+      "edge_type": "DependsOn",
+      "target": "grafana-aurora-mysql",
+      "target_label": "RDSCluster",
+      "verify_status": ""
+    },
+    {
+      "source": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "source_label": "StepFunction",
+      "edge_type": "Invokes",
+      "target": "ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "ServicesEks2-awscdkawseks-ProviderframeworkonEvent-8iPNdJNUCVlK",
+      "source_label": "LambdaFunction",
+      "edge_type": "Invokes",
+      "target": "ServicesEks2-awscdkawseksKubectlPr-Handler886CB40B-3JyAmj4TkOLp",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "pethistory",
+      "source_label": "Microservice",
+      "edge_type": "LocatedIn",
+      "target": "PetSite",
+      "target_label": "EKSCluster",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-rca-interaction",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "target_label": "DynamoDBTable",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "payforadoption",
+      "target_label": "Microservice",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "petsite-ops-slack-notifier",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "target_label": "RDSCluster",
+      "verify_status": ""
+    },
+    {
+      "source": "artillery-write",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "gateway-service",
+      "target_label": "Microservice",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "Servic-PetSi-7JEWC19HNKSR",
+      "source_label": "TargetGroup",
+      "edge_type": "ForwardsTo",
+      "target": "petsite",
+      "target_label": "Microservice",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-lt-search-tg",
+      "source_label": "TargetGroup",
+      "edge_type": "ForwardsTo",
+      "target": "petsearch",
+      "target_label": "Microservice",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-lt-listadopt-tg",
+      "source_label": "TargetGroup",
+      "edge_type": "ForwardsTo",
+      "target": "petlistadoptions",
+      "target_label": "Microservice",
+      "verify_status": ""
+    },
+    {
+      "source": "WaggleAIOrchestrator",
+      "source_label": "AgentRuntime",
+      "edge_type": "Delegates",
+      "target": "WaggleAIAdoption",
+      "target_label": "AgentRuntime",
+      "verify_status": "confirmed"
+    },
+    {
+      "source": "petfood",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "dynamodb",
+      "target_label": "AWSServiceEndpoint",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-rca-interaction",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+      "target_label": "S3Bucket",
+      "verify_status": ""
+    },
+    {
+      "source": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "source_label": "StepFunction",
+      "edge_type": "Invokes",
+      "target": "ServicesEks2-StepFnlambdasteppriceLessThan556D8B30-2POHnQIjCcYJ",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "ServicesEks2-awscdkawseks-ProviderframeworkonTimeo-T6MAOIsLvvn5",
+      "source_label": "LambdaFunction",
+      "edge_type": "Invokes",
+      "target": "ServicesEks2-awscdkawseksCl-OnEventHandler42BEBAE0-bcWZ6VVcgWIb",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "payforadoption",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "target_label": "DynamoDBTable",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-rca-interaction",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "target_label": "RDSCluster",
+      "verify_status": ""
+    },
+    {
+      "source": "ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "ssm",
+      "target_label": "AWSServiceEndpoint",
+      "verify_status": ""
+    },
+    {
+      "source": "ServicesEks2-statusupdaterservicelambdafn37242E00-0SHsIkrhwJ32",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "target_label": "DynamoDBTable",
+      "verify_status": ""
+    },
+    {
+      "source": "Servic-PetSi-by0kpyBtxswj",
+      "source_label": "LoadBalancer",
+      "edge_type": "ForwardsTo",
+      "target": "Servic-PetAd-RPOCBTKKJYGI",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "petlistadoptions",
+      "target_label": "Microservice",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "ServicesEks2-dynamodbqueryfunction3C0E68E0-hSXAsqGf3jXY",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "target_label": "DynamoDBTable",
+      "verify_status": ""
+    },
+    {
+      "source": "gateway-service",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "petsite",
+      "target_label": "Microservice",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "openclaw-alb-v2",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "kronos-webui-tg",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
+      "source": "petsearch",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "sts",
+      "target_label": "AWSServiceEndpoint",
+      "verify_status": ""
+    },
+    {
+      "source": "payforadoption",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "ssm",
+      "target_label": "AWSServiceEndpoint",
+      "verify_status": ""
+    },
+    {
+      "source": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "source_label": "StepFunction",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-StepFnlambdasteppriceGreaterThan55AD1-kkACGO1yh30X",
+      "target_label": "LambdaFunction",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "petsearch",
+      "target_label": "Microservice",
+      "verify_status": "confirmed"
+    },
+    {
+      "source": "petlistadoptions",
+      "source_label": "Microservice",
+      "edge_type": "Implements",
+      "target": "PetInventoryManagement",
+      "target_label": "BusinessCapability",
+      "verify_status": ""
+    },
+    {
+      "source": "order-service",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "target_label": "RDSCluster",
+      "verify_status": ""
+    },
+    {
+      "source": "payforadoption",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "target_label": "RDSCluster",
+      "verify_status": "confirmed"
+    },
+    {
+      "source": "gateway-service",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "points-service",
+      "target_label": "Microservice",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "petsite",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "ssm",
+      "target_label": "AWSServiceEndpoint",
+      "verify_status": "confirmed"
+    },
+    {
+      "source": "petsearch",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "ssm",
+      "target_label": "AWSServiceEndpoint",
+      "verify_status": ""
+    },
+    {
+      "source": "WaggleAIAdoption",
+      "source_label": "AgentRuntime",
+      "edge_type": "InvokesTool",
+      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIAdoption-4gnHUlDACh#search_available_pets",
+      "target_label": "AgentTool",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite",
+      "source_label": "Microservice",
+      "edge_type": "Implements",
+      "target": "PetAdoptionFlow",
+      "target_label": "BusinessCapability",
+      "verify_status": ""
+    },
+    {
+      "source": "auth-service",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "target_label": "RDSCluster",
+      "verify_status": ""
+    },
+    {
+      "source": "ServicesEks2-cloudwatchcustomwidgetA34392F1-sVNXho9XOJTZ",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-petsiteapplicationresourcecontrolerDC-xWipuliA0V5T",
+      "target_label": "LambdaFunction",
+      "verify_status": ""
+    },
+    {
+      "source": "ServicesEks2-cloudwatchcustomwidgetA34392F1-sVNXho9XOJTZ",
+      "source_label": "LambdaFunction",
+      "edge_type": "Invokes",
+      "target": "ServicesEks2-petsiteapplicationresourcecontrolerDC-xWipuliA0V5T",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "devops-agent-cn-bridge-alb",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "devops-agent-cn-bridge-proxy-tg",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
+      "source": "Transl-Alb16-AXuaCgljAwMk",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "Transl-AlbHt-CLSUDZZKAEDC",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-internal-lt",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "petsite-lt-petfood-tg",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-lt-tg",
+      "source_label": "TargetGroup",
+      "edge_type": "ForwardsTo",
+      "target": "petsite",
+      "target_label": "Microservice",
+      "verify_status": ""
+    },
+    {
+      "source": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIAdoption-4gnHUlDACh#search_available_pets",
+      "source_label": "AgentTool",
+      "edge_type": "DependsOn",
+      "target": "petsearch",
+      "target_label": "Microservice",
+      "verify_status": ""
+    },
+    {
+      "source": "trafficgenerator",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "petsite",
+      "target_label": "Microservice",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "payforadoption",
+      "source_label": "Microservice",
+      "edge_type": "Implements",
+      "target": "PetAdoptionFlow",
+      "target_label": "BusinessCapability",
+      "verify_status": ""
+    },
+    {
+      "source": "ServicesEks2-awscdkawseks-ProviderframeworkonEvent-xdUeZruuRUdZ",
+      "source_label": "LambdaFunction",
+      "edge_type": "Invokes",
+      "target": "ServicesEks2-awscdkawseks-IsCompleteHandler7073F4D-UM5mGZlllEIl",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "petsearch",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+      "target_label": "S3Bucket",
+      "verify_status": ""
+    },
+    {
+      "source": "ServicesEks2-awscdkawseks-ProviderframeworkisCompl-sIJBJPos5iM2",
+      "source_label": "LambdaFunction",
+      "edge_type": "Invokes",
+      "target": "ServicesEks2-awscdkawseks-IsCompleteHandler7073F4D-UM5mGZlllEIl",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "Servic-PetSi-by0kpyBtxswj",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "Servic-PetSi-7JEWC19HNKSR",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "target_label": "StepFunction",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "petfood",
+      "target_label": "Microservice",
+      "verify_status": "confirmed"
+    },
+    {
+      "source": "ServicesEks2-awscdkawseks-ProviderframeworkonEvent-xdUeZruuRUdZ",
+      "source_label": "LambdaFunction",
+      "edge_type": "Invokes",
+      "target": "ServicesEks2-awscdkawseksCl-OnEventHandler42BEBAE0-bcWZ6VVcgWIb",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "pethistory",
+      "source_label": "Microservice",
+      "edge_type": "Implements",
+      "target": "AdoptionHistoryView",
+      "target_label": "BusinessCapability",
+      "verify_status": ""
+    },
+    {
+      "source": "ServicesEks2-statusupdaterservicelambdafn37242E00-0SHsIkrhwJ32",
+      "source_label": "LambdaFunction",
+      "edge_type": "Implements",
+      "target": "PetInventoryManagement",
+      "target_label": "BusinessCapability",
+      "verify_status": ""
+    },
+    {
+      "source": "product-service",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "target_label": "RDSCluster",
+      "verify_status": ""
+    },
+    {
+      "source": "PetAdoptionFlow",
+      "source_label": "BusinessCapability",
+      "edge_type": "DependsOn",
+      "target": "ServicesEks2-sqspetadoptiondlqEEEFF2AC-EQwBtdEFe8jQ",
+      "target_label": "SQSQueue",
+      "verify_status": ""
+    },
+    {
+      "source": "neptune-etl-trigger",
+      "source_label": "LambdaFunction",
+      "edge_type": "Invokes",
+      "target": "neptune-etl-from-aws",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "Servic-PetSi-BGUX1XK3RN6D",
+      "source_label": "TargetGroup",
+      "edge_type": "ForwardsTo",
+      "target": "petsite",
+      "target_label": "Microservice",
+      "verify_status": ""
+    },
+    {
+      "source": "Servic-PetSi-by0kpyBtxswj",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "Servic-PetAd-RPOCBTKKJYGI",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
+      "source": "WaggleAIOrchestrator",
+      "source_label": "AgentRuntime",
+      "edge_type": "InvokesTool",
+      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIOrchestrator-K85tG867Xt#adoption",
+      "target_label": "AgentTool",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "sts",
+      "target_label": "AWSServiceEndpoint",
+      "verify_status": ""
+    },
+    {
+      "source": "petlistadoptions",
+      "source_label": "Microservice",
+      "edge_type": "LocatedIn",
+      "target": "PetSite",
+      "target_label": "EKSCluster",
+      "verify_status": ""
+    },
+    {
+      "source": "petsearch",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "dynamodb",
+      "target_label": "AWSServiceEndpoint",
+      "verify_status": "confirmed"
+    },
+    {
+      "source": "petsearch",
+      "source_label": "Microservice",
+      "edge_type": "LocatedIn",
+      "target": "PetSite",
+      "target_label": "EKSCluster",
+      "verify_status": ""
+    },
+    {
+      "source": "ServicesEks2-awscdkawseks-ProviderframeworkisCompl-sIJBJPos5iM2",
+      "source_label": "LambdaFunction",
+      "edge_type": "Invokes",
+      "target": "ServicesEks2-awscdkawseksCl-OnEventHandler42BEBAE0-bcWZ6VVcgWIb",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "petlistadoptions",
+      "source_label": "Microservice",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "target_label": "RDSCluster",
+      "verify_status": "confirmed"
+    },
+    {
+      "source": "openclaw-alb-v2",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "code-server-tg",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite",
+      "source_label": "Microservice",
+      "edge_type": "InvokesVia",
+      "target": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "target_label": "StepFunction",
+      "verify_status": ""
+    },
+    {
+      "source": "awesomeshop-frontend",
+      "source_label": "TargetGroup",
+      "edge_type": "ForwardsTo",
+      "target": "petsite",
+      "target_label": "Microservice",
+      "verify_status": ""
+    },
+    {
+      "source": "gateway-service",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "product-service",
+      "target_label": "Microservice",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "petstatusupdater",
+      "source_label": "Microservice",
+      "edge_type": "DependsOn",
+      "target": "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+      "target_label": "SQSQueue",
+      "verify_status": ""
+    },
+    {
+      "source": "devops-agent-cn-bridge-alb",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "devops-agent-cn-bridge-tg",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
+      "source": "ServicesEks2-StepFnlambdasteppriceGreaterThan55AD1-kkACGO1yh30X",
+      "source_label": "LambdaFunction",
+      "edge_type": "Calls",
+      "target": "ServicesEks2-StepFnlambdasteppriceGreaterThan55AD1-kkACGO1yh30X",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "WaggleAINutrition",
+      "source_label": "AgentRuntime",
+      "edge_type": "InvokesTool",
+      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAINutrition-2NEiCS7VJw#retrieve_nutrition_guidance",
+      "target_label": "AgentTool",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-internal-lt",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "petsite-lt-tg",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
+      "source": "Providerwaiterstatemachine5D4A9DF0-ZkuIyyskPCyz",
+      "source_label": "StepFunction",
+      "edge_type": "Invokes",
+      "target": "ServicesEks2-awscdkawseks-ProviderframeworkonTimeo-T6MAOIsLvvn5",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "pethistory",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "petlistadoptions",
+      "target_label": "Microservice",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "Servic-PetSi-by0kpyBtxswj",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "neptune-ui-tg",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
+      "source": "petstatusupdater",
+      "source_label": "Microservice",
+      "edge_type": "DependsOn",
+      "target": "ServicesEks2-sqspetadoptiondlqEEEFF2AC-EQwBtdEFe8jQ",
+      "target_label": "SQSQueue",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-rca-engine",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "gp-alert-buffer",
+      "target_label": "DynamoDBTable",
+      "verify_status": ""
+    },
+    {
+      "source": "ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A",
+      "source_label": "LambdaFunction",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "target_label": "DynamoDBTable",
+      "verify_status": ""
+    },
+    {
+      "source": "ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A",
+      "source_label": "LambdaFunction",
+      "edge_type": "Calls",
+      "target": "ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "WaggleAINutrition",
+      "source_label": "AgentRuntime",
+      "edge_type": "InvokesTool",
+      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAINutrition-2NEiCS7VJw#get_available_foods",
+      "target_label": "AgentTool",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "pethistory",
+      "target_label": "Microservice",
+      "verify_status": "confirmed"
+    },
+    {
+      "source": "ServicesEks2-awscdkawseks-ProviderframeworkonTimeo-T6MAOIsLvvn5",
+      "source_label": "LambdaFunction",
+      "edge_type": "Invokes",
+      "target": "ServicesEks2-awscdkawseks-IsCompleteHandler7073F4D-UM5mGZlllEIl",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "neptune-etl-trigger-queue",
+      "source_label": "SQSQueue",
+      "edge_type": "TriggeredBy",
+      "target": "neptune-etl-trigger",
+      "target_label": "LambdaFunction",
+      "verify_status": ""
+    },
+    {
+      "source": "petsite-rca-engine",
+      "source_label": "LambdaFunction",
+      "edge_type": "Invokes",
+      "target": "gp-window-flush",
+      "target_label": "LambdaFunction",
+      "verify_status": "inconclusive"
+    },
+    {
+      "source": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "source_label": "StepFunction",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-StepFnlambdasteppriceLessThan556D8B30-2POHnQIjCcYJ",
+      "target_label": "LambdaFunction",
+      "verify_status": ""
+    }
+  ],
+  "captured_at": "2026-09-05T06:05:53Z"
+}

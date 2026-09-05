@@ -1,0 +1,2010 @@
+{
+  "by_service": {
+    "petsite": {
+      "q9_service_infra_path": {
+        "why": "基础设施路径 Service→Pod→EC2→AZ",
+        "params": {
+          "service_name": "petsite"
+        },
+        "data": [
+          {
+            "pod_name": "petsite-deployment-99ff8c99f-79d25",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-104.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04865db96ae2f3858",
+            "ec2_id": "i-04865db96ae2f3858",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-99ff8c99f-q24n9",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-6.ap-northeast-1.compute.internal",
+            "ec2_name": "i-0af324e6b70f0f7d8",
+            "ec2_id": "i-0af324e6b70f0f7d8",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-99ff8c99f-4fnbn",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-130.ap-northeast-1.compute.internal",
+            "ec2_name": "i-078e14ddd7e0cac06",
+            "ec2_id": "i-078e14ddd7e0cac06",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-75db64db96-bk4p5",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-52.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04c31adb6981f7286",
+            "ec2_id": "i-04c31adb6981f7286",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-f2m2j",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-130.ap-northeast-1.compute.internal",
+            "ec2_name": "i-078e14ddd7e0cac06",
+            "ec2_id": "i-078e14ddd7e0cac06",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-gjd2p",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-52.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04c31adb6981f7286",
+            "ec2_id": "i-04c31adb6981f7286",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-hm5qx",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-6.ap-northeast-1.compute.internal",
+            "ec2_name": "i-0af324e6b70f0f7d8",
+            "ec2_id": "i-0af324e6b70f0f7d8",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-p5mhw",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-6.ap-northeast-1.compute.internal",
+            "ec2_name": "i-0af324e6b70f0f7d8",
+            "ec2_id": "i-0af324e6b70f0f7d8",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-qxpjj",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-104.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04865db96ae2f3858",
+            "ec2_id": "i-04865db96ae2f3858",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-4sfvp",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-130.ap-northeast-1.compute.internal",
+            "ec2_name": "i-078e14ddd7e0cac06",
+            "ec2_id": "i-078e14ddd7e0cac06",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-zcn2g",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-104.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04865db96ae2f3858",
+            "ec2_id": "i-04865db96ae2f3858",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-csdgh",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-52.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04c31adb6981f7286",
+            "ec2_id": "i-04c31adb6981f7286",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-xfp8t",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-130.ap-northeast-1.compute.internal",
+            "ec2_name": "i-078e14ddd7e0cac06",
+            "ec2_id": "i-078e14ddd7e0cac06",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-8599bcbfc7-8z7v7",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-6.ap-northeast-1.compute.internal",
+            "ec2_name": "i-0af324e6b70f0f7d8",
+            "ec2_id": "i-0af324e6b70f0f7d8",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-8599bcbfc7-crhsr",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-104.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04865db96ae2f3858",
+            "ec2_id": "i-04865db96ae2f3858",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-8599bcbfc7-7qp4j",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-52.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04c31adb6981f7286",
+            "ec2_id": "i-04c31adb6981f7286",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-8599bcbfc7-xjr5z",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-52.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04c31adb6981f7286",
+            "ec2_id": "i-04c31adb6981f7286",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-8599bcbfc7-c4wsm",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-52.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04c31adb6981f7286",
+            "ec2_id": "i-04c31adb6981f7286",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-76bc5b99cd-jrrvv",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-104.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04865db96ae2f3858",
+            "ec2_id": "i-04865db96ae2f3858",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-75db64db96-hvwn9",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-6.ap-northeast-1.compute.internal",
+            "ec2_name": "i-0af324e6b70f0f7d8",
+            "ec2_id": "i-0af324e6b70f0f7d8",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-jbc7d",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-130.ap-northeast-1.compute.internal",
+            "ec2_name": "i-078e14ddd7e0cac06",
+            "ec2_id": "i-078e14ddd7e0cac06",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-h9qzl",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-130.ap-northeast-1.compute.internal",
+            "ec2_name": "i-078e14ddd7e0cac06",
+            "ec2_id": "i-078e14ddd7e0cac06",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-5ggzp",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-130.ap-northeast-1.compute.internal",
+            "ec2_name": "i-078e14ddd7e0cac06",
+            "ec2_id": "i-078e14ddd7e0cac06",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-7548fb886b-7vn47",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-52.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04c31adb6981f7286",
+            "ec2_id": "i-04c31adb6981f7286",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-7548fb886b-fjvh6",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-6.ap-northeast-1.compute.internal",
+            "ec2_name": "i-0af324e6b70f0f7d8",
+            "ec2_id": "i-0af324e6b70f0f7d8",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-7548fb886b-gfq5r",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-104.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04865db96ae2f3858",
+            "ec2_id": "i-04865db96ae2f3858",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-7548fb886b-ksq45",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-6.ap-northeast-1.compute.internal",
+            "ec2_name": "i-0af324e6b70f0f7d8",
+            "ec2_id": "i-0af324e6b70f0f7d8",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-7548fb886b-px6vt",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-130.ap-northeast-1.compute.internal",
+            "ec2_name": "i-078e14ddd7e0cac06",
+            "ec2_id": "i-078e14ddd7e0cac06",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-7548fb886b-qw27n",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-52.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04c31adb6981f7286",
+            "ec2_id": "i-04c31adb6981f7286",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-75c7dd95b6-k8mr2",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-6.ap-northeast-1.compute.internal",
+            "ec2_name": "i-0af324e6b70f0f7d8",
+            "ec2_id": "i-0af324e6b70f0f7d8",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-75c7dd95b6-tbkwm",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-52.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04c31adb6981f7286",
+            "ec2_id": "i-04c31adb6981f7286",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-75c7dd95b6-thgqp",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-130.ap-northeast-1.compute.internal",
+            "ec2_name": "i-078e14ddd7e0cac06",
+            "ec2_id": "i-078e14ddd7e0cac06",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-75c7dd95b6-tnnjj",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-52.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04c31adb6981f7286",
+            "ec2_id": "i-04c31adb6981f7286",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-75c7dd95b6-xx29n",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-6.ap-northeast-1.compute.internal",
+            "ec2_name": "i-0af324e6b70f0f7d8",
+            "ec2_id": "i-0af324e6b70f0f7d8",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-75c7dd95b6-ztvrm",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-104.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04865db96ae2f3858",
+            "ec2_id": "i-04865db96ae2f3858",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-8599bcbfc7-mw9lc",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-130.ap-northeast-1.compute.internal",
+            "ec2_name": "i-078e14ddd7e0cac06",
+            "ec2_id": "i-078e14ddd7e0cac06",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-8599bcbfc7-kzr9g",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-52.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04c31adb6981f7286",
+            "ec2_id": "i-04c31adb6981f7286",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-8599bcbfc7-vslxn",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-52.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04c31adb6981f7286",
+            "ec2_id": "i-04c31adb6981f7286",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "petsite-deployment-8599bcbfc7-vvvpx",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-130.ap-northeast-1.compute.internal",
+            "ec2_name": "i-078e14ddd7e0cac06",
+            "ec2_id": "i-078e14ddd7e0cac06",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "petsite-deployment-8599bcbfc7-59nm9",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-52.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04c31adb6981f7286",
+            "ec2_id": "i-04c31adb6981f7286",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          }
+        ]
+      },
+      "q1_blast_radius": {
+        "why": "下游影响面",
+        "params": {
+          "failed_node": "petsite",
+          "kind": "live"
+        },
+        "data": {
+          "services": [
+            {
+              "name": "pethistory",
+              "type": "Microservice",
+              "priority": "Tier1"
+            },
+            {
+              "name": "payforadoption",
+              "type": "Microservice",
+              "priority": "Tier0"
+            },
+            {
+              "name": "petlistadoptions",
+              "type": "Microservice",
+              "priority": "Tier1"
+            },
+            {
+              "name": "petsearch",
+              "type": "Microservice",
+              "priority": "Tier0"
+            },
+            {
+              "name": "petfood",
+              "type": "Microservice",
+              "priority": "Tier2"
+            },
+            {
+              "name": "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+              "type": "SQSQueue",
+              "priority": null
+            }
+          ],
+          "capabilities": []
+        }
+      },
+      "q3_upstream_deps": {
+        "why": "上游调用者（根因候选）",
+        "params": {
+          "failed_service": "petsite",
+          "kind": "live"
+        },
+        "data": []
+      },
+      "q6_pod_status": {
+        "why": "Pod 状态与重启次数",
+        "params": {
+          "service_name": "petsite"
+        },
+        "data": [
+          {
+            "pod_name": "petsite-deployment-54b89d55fd-njbq5",
+            "status": "Failed",
+            "restarts": 2,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-54b89d55fd-4mp45",
+            "status": "Running",
+            "restarts": 2,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-5745669c95-d4phj",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-5745669c95-6lpwj",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-5745669c95-jm2ns",
+            "status": "Succeeded",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-5745669c95-vxtzv",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-5745669c95-kzg76",
+            "status": "Succeeded",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-5745669c95-bn9xg",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-5745669c95-mql8t",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-6764b479f9-b7n54",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-6764b479f9-px5xq",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-99ff8c99f-79d25",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-99ff8c99f-q24n9",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-99ff8c99f-4fnbn",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-75db64db96-bk4p5",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-f2m2j",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-gjd2p",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-hm5qx",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-p5mhw",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-qxpjj",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-4sfvp",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-zcn2g",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-csdgh",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-xfp8t",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-8599bcbfc7-8z7v7",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-8599bcbfc7-crhsr",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-8599bcbfc7-7qp4j",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-8599bcbfc7-xjr5z",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-8599bcbfc7-c4wsm",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-6764b479f9-6z6qh",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-57f87d858f-qqttz",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-57f87d858f-zsmnk",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-76bc5b99cd-jrrvv",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-75db64db96-hvwn9",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-jbc7d",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-h9qzl",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-559fbdd4b7-5ggzp",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-7548fb886b-7vn47",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-7548fb886b-fjvh6",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "petsite-deployment-7548fb886b-gfq5r",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          }
+        ]
+      },
+      "q10_infra_root_cause": {
+        "why": "基础设施侧反查",
+        "params": {
+          "affected_service": "petsite"
+        },
+        "data": {
+          "unhealthy_ec2": [],
+          "az_impact": {
+            "ap-northeast-1c": {
+              "total_pods": 49,
+              "affected_pods": 0
+            },
+            "ap-northeast-1a": {
+              "total_pods": 50,
+              "affected_pods": 0
+            }
+          },
+          "has_infra_fault": false
+        }
+      },
+      "q19_topology_changes": {
+        "why": "近期依赖变更",
+        "params": {
+          "service_name": "petsite"
+        },
+        "data": [
+          {
+            "ts": 1788582702,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->payforadoption",
+            "source": "petsite",
+            "target": "payforadoption",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788582702,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->pethistory",
+            "source": "petsite",
+            "target": "pethistory",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788582702,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->petlistadoptions",
+            "source": "petsite",
+            "target": "petlistadoptions",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788582702,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->petfood",
+            "source": "petsite",
+            "target": "petfood",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788579102,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->pethistory",
+            "source": "petsite",
+            "target": "pethistory",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788575502,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->petlistadoptions",
+            "source": "petsite",
+            "target": "petlistadoptions",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788575502,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->petfood",
+            "source": "petsite",
+            "target": "petfood",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788575502,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->pethistory",
+            "source": "petsite",
+            "target": "pethistory",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788571902,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->petlistadoptions",
+            "source": "petsite",
+            "target": "petlistadoptions",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788571902,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->petfood",
+            "source": "petsite",
+            "target": "petfood",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788571902,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->pethistory",
+            "source": "petsite",
+            "target": "pethistory",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788568302,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->petfood",
+            "source": "petsite",
+            "target": "petfood",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788568302,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->pethistory",
+            "source": "petsite",
+            "target": "pethistory",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788568302,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->petlistadoptions",
+            "source": "petsite",
+            "target": "petlistadoptions",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788566202,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->pethistory",
+            "source": "petsite",
+            "target": "pethistory",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788564702,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->petfood",
+            "source": "petsite",
+            "target": "petfood",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788564702,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->petlistadoptions",
+            "source": "petsite",
+            "target": "petlistadoptions",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788561102,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->pethistory",
+            "source": "petsite",
+            "target": "pethistory",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788553902,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->pethistory",
+            "source": "petsite",
+            "target": "pethistory",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788550304,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->petlistadoptions",
+            "source": "petsite",
+            "target": "petlistadoptions",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          }
+        ]
+      },
+      "q17_incidents_by_resource": {
+        "why": "同资源历史故障",
+        "params": {
+          "resource_name": "petsite"
+        },
+        "data": []
+      },
+      "q5_similar_incidents": {
+        "why": "同服务历史故障",
+        "params": {
+          "service_name": "petsite",
+          "limit": 3
+        },
+        "data": []
+      },
+      "q22_edge_verification_verdicts": {
+        "why": "该服务依赖边的注入验证判定",
+        "params": {
+          "service_name": "petsite",
+          "limit": 40
+        },
+        "data": [
+          {
+            "src": "petsite",
+            "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+            "dst_type": "RDSCluster",
+            "edge_type": "AccessesData",
+            "verify_status": "confirmed",
+            "verify_confidence": 0.982,
+            "verify_degradation": 36.21,
+            "verify_evidence_channel": null,
+            "verify_experiment": "exp-serviceseks2-databaseb269d8bb-efjeyzicx2ak-fis-rds-reboot-20260831-110323",
+            "verify_last": 1788174652,
+            "verify_reason": "观测方退化 36.2% >= 20.0%，依赖成立",
+            "source": "deepflow-dns"
+          },
+          {
+            "src": "petsite",
+            "dst": "ssm",
+            "dst_type": "AWSServiceEndpoint",
+            "edge_type": "AccessesData",
+            "verify_status": "confirmed",
+            "verify_confidence": 0.989,
+            "verify_degradation": 100.0,
+            "verify_evidence_channel": "throughput_only",
+            "verify_experiment": "exp-petsite-network-partition-20260831-165936",
+            "verify_last": 1788195844,
+            "verify_reason": "观测方退化 100.0% >= 20.0%（仅吞吐通道），依赖成立",
+            "source": "xray"
+          },
+          {
+            "src": "petsite",
+            "dst": "petsearch",
+            "dst_type": "Microservice",
+            "edge_type": "Calls",
+            "verify_status": "confirmed",
+            "verify_confidence": 0.9959,
+            "verify_degradation": 100.0,
+            "verify_evidence_channel": null,
+            "verify_experiment": "networkchaos-partition:petsite->petsearch",
+            "verify_last": 1788561271,
+            "verify_reason": "观测方退化 74.9% >= 20.0%，依赖成立",
+            "source": "deepflow-etl"
+          },
+          {
+            "src": "petsite",
+            "dst": "petfood",
+            "dst_type": "Microservice",
+            "edge_type": "Calls",
+            "verify_status": "confirmed",
+            "verify_confidence": 0.9933,
+            "verify_degradation": 87.5,
+            "verify_evidence_channel": null,
+            "verify_experiment": "networkchaos-partition:petsite->petfood",
+            "verify_last": 1788561271,
+            "verify_reason": null,
+            "source": "deepflow-etl"
+          },
+          {
+            "src": "petsite",
+            "dst": "pethistory",
+            "dst_type": "Microservice",
+            "edge_type": "Calls",
+            "verify_status": "confirmed",
+            "verify_confidence": 0.9959,
+            "verify_degradation": 100.0,
+            "verify_evidence_channel": null,
+            "verify_experiment": "networkchaos-partition:petsite->pethistory",
+            "verify_last": 1788561271,
+            "verify_reason": "观测方退化 77.5% >= 20.0%，依赖成立",
+            "source": "deepflow-etl"
+          },
+          {
+            "src": "gateway-service",
+            "dst": "petsite",
+            "dst_type": "Microservice",
+            "edge_type": "Calls",
+            "verify_status": "inconclusive",
+            "verify_confidence": 0.6225,
+            "verify_degradation": 0.0,
+            "verify_evidence_channel": null,
+            "verify_experiment": "static:awesomeshop replicas=0 pods=0, zero petsite refs in all deployment specs",
+            "verify_last": 1788561271,
+            "verify_reason": "2026-09-05 按独立证据门禁撤销 refuted。该边有独立观测源看到过它（DeepFlow calls 计数非零），按 2026-09-05 引入的门禁，有独立观测证据的边永不得判 refuted —— 打断后无影响的正确结论是 soft dependency 而非边不存在，二者在干预数据上同形，区分依据正是独立观测源。原判定未经该门禁，且其中一条的 verify_reason 自述流量不足不能证伪、status 却写 refuted，状态与理由自相矛盾。现置回 inconclusive（保守方向，不丢信息），待用带门禁的判据重验。",
+            "source": null
+          },
+          {
+            "src": "order-service",
+            "dst": "petsite",
+            "dst_type": "Microservice",
+            "edge_type": "Calls",
+            "verify_status": "inconclusive",
+            "verify_confidence": 0.6225,
+            "verify_degradation": 0.0,
+            "verify_evidence_channel": null,
+            "verify_experiment": "static:awesomeshop replicas=0 pods=0, zero petsite refs in all deployment specs",
+            "verify_last": 1788561271,
+            "verify_reason": "2026-09-05 按独立证据门禁撤销 refuted。该边有独立观测源看到过它（DeepFlow calls 计数非零），按 2026-09-05 引入的门禁，有独立观测证据的边永不得判 refuted —— 打断后无影响的正确结论是 soft dependency 而非边不存在，二者在干预数据上同形，区分依据正是独立观测源。原判定未经该门禁，且其中一条的 verify_reason 自述流量不足不能证伪、status 却写 refuted，状态与理由自相矛盾。现置回 inconclusive（保守方向，不丢信息），待用带门禁的判据重验。",
+            "source": null
+          },
+          {
+            "src": "petsite",
+            "dst": "payforadoption",
+            "dst_type": "Microservice",
+            "edge_type": "Calls",
+            "verify_status": "inconclusive",
+            "verify_confidence": 0.9959,
+            "verify_degradation": 0.37,
+            "verify_evidence_channel": "none",
+            "verify_experiment": "exp-pay-for-adoption-http-chaos-20260905-053059",
+            "verify_last": 1788586838,
+            "verify_reason": "观测方退化仅 0.4%，但注入生效性未知（未提供 injection_confirmed） —— 无法区分「注入生效而未传导」（真 refuted）与「注入根本没生效」（什么都没验证）。证伪需要先证明打断确实发生，故不下结论",
+            "source": "deepflow-etl"
+          },
+          {
+            "src": "petsite",
+            "dst": "petlistadoptions",
+            "dst_type": "Microservice",
+            "edge_type": "Calls",
+            "verify_status": "inconclusive",
+            "verify_confidence": 0.9959,
+            "verify_degradation": 19.94,
+            "verify_evidence_channel": "throughput_only",
+            "verify_experiment": "exp-list-adoptions-http-chaos-20260905-055404",
+            "verify_last": 1788588242,
+            "verify_reason": "**被测依赖路径本身**近期只有 0 次调用（需 >= 20）—— 观测方总流量再大也无关：没有调用就无从打断，此时任何退化数字都是噪声。需先给这条路径造出流量再验",
+            "source": "deepflow-etl"
+          },
+          {
+            "src": "trafficgenerator",
+            "dst": "petsite",
+            "dst_type": "Microservice",
+            "edge_type": "Calls",
+            "verify_status": "inconclusive",
+            "verify_confidence": 0.0,
+            "verify_degradation": 0.0,
+            "verify_evidence_channel": null,
+            "verify_experiment": "synthetic-traffic-source: cutting it only silences the generator itself; no dependent consumer would degrade, so degradation test is not meaningful",
+            "verify_last": 1788561677,
+            "verify_reason": null,
+            "source": null
+          },
+          {
+            "src": "petsite",
+            "dst": "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1",
+            "dst_type": "ECRRepository",
+            "edge_type": "DependsOn",
+            "verify_status": "inconclusive",
+            "verify_confidence": 0.0,
+            "verify_degradation": 0.0,
+            "verify_evidence_channel": null,
+            "verify_experiment": "image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable",
+            "verify_last": 1788561628,
+            "verify_reason": null,
+            "source": "deepflow-etl"
+          },
+          {
+            "src": "petsite",
+            "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+            "dst_type": "DynamoDBTable",
+            "edge_type": "AccessesData",
+            "verify_status": "untested",
+            "verify_confidence": null,
+            "verify_degradation": null,
+            "verify_evidence_channel": null,
+            "verify_experiment": null,
+            "verify_last": null,
+            "verify_reason": null,
+            "source": "deepflow-dns"
+          },
+          {
+            "src": "petsite",
+            "dst": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+            "dst_type": "S3Bucket",
+            "edge_type": "AccessesData",
+            "verify_status": "untested",
+            "verify_confidence": null,
+            "verify_degradation": null,
+            "verify_evidence_channel": null,
+            "verify_experiment": null,
+            "verify_last": null,
+            "verify_reason": null,
+            "source": "deepflow-dns"
+          },
+          {
+            "src": "petsite",
+            "dst": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+            "dst_type": "StepFunction",
+            "edge_type": "AccessesData",
+            "verify_status": "untested",
+            "verify_confidence": null,
+            "verify_degradation": null,
+            "verify_evidence_channel": null,
+            "verify_experiment": null,
+            "verify_last": null,
+            "verify_reason": null,
+            "source": "xray"
+          },
+          {
+            "src": "petsite",
+            "dst": "sts",
+            "dst_type": "AWSServiceEndpoint",
+            "edge_type": "AccessesData",
+            "verify_status": "untested",
+            "verify_confidence": null,
+            "verify_degradation": null,
+            "verify_evidence_channel": null,
+            "verify_experiment": null,
+            "verify_last": null,
+            "verify_reason": null,
+            "source": "xray"
+          },
+          {
+            "src": "petsite",
+            "dst": "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+            "dst_type": "SQSQueue",
+            "edge_type": "DependsOn",
+            "verify_status": "untested",
+            "verify_confidence": null,
+            "verify_degradation": null,
+            "verify_evidence_channel": null,
+            "verify_experiment": null,
+            "verify_last": null,
+            "verify_reason": null,
+            "source": "xray"
+          },
+          {
+            "src": "petsite",
+            "dst": "petadoptions/petsite",
+            "dst_type": "ECRRepository",
+            "edge_type": "DependsOn",
+            "verify_status": "untested",
+            "verify_confidence": null,
+            "verify_degradation": null,
+            "verify_evidence_channel": null,
+            "verify_experiment": null,
+            "verify_last": null,
+            "verify_reason": null,
+            "source": "deepflow-etl"
+          }
+        ]
+      }
+    },
+    "petsearch": {
+      "q9_service_infra_path": {
+        "why": "基础设施路径 Service→Pod→EC2→AZ",
+        "params": {
+          "service_name": "petsearch"
+        },
+        "data": [
+          {
+            "pod_name": "search-service-5cdf85887b-fjnfg",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-104.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04865db96ae2f3858",
+            "ec2_id": "i-04865db96ae2f3858",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "search-service-6d54485b4f-cx274",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-52.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04c31adb6981f7286",
+            "ec2_id": "i-04c31adb6981f7286",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "search-service-6d54485b4f-rcq9k",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-6.ap-northeast-1.compute.internal",
+            "ec2_name": "i-0af324e6b70f0f7d8",
+            "ec2_id": "i-0af324e6b70f0f7d8",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "search-service-5cdf85887b-wsd4m",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-6.ap-northeast-1.compute.internal",
+            "ec2_name": "i-0af324e6b70f0f7d8",
+            "ec2_id": "i-0af324e6b70f0f7d8",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "search-service-579d8cff7b-524m4",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-6.ap-northeast-1.compute.internal",
+            "ec2_name": "i-0af324e6b70f0f7d8",
+            "ec2_id": "i-0af324e6b70f0f7d8",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "search-service-579d8cff7b-f6qqb",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-104.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04865db96ae2f3858",
+            "ec2_id": "i-04865db96ae2f3858",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          }
+        ]
+      },
+      "q1_blast_radius": {
+        "why": "下游影响面",
+        "params": {
+          "failed_node": "petsearch",
+          "kind": "live"
+        },
+        "data": {
+          "services": [],
+          "capabilities": []
+        }
+      },
+      "q3_upstream_deps": {
+        "why": "上游调用者（根因候选）",
+        "params": {
+          "failed_service": "petsearch",
+          "kind": "live"
+        },
+        "data": [
+          {
+            "name": "petsite",
+            "type": "Microservice",
+            "priority": "Tier0"
+          },
+          {
+            "name": "petlistadoptions",
+            "type": "Microservice",
+            "priority": "Tier1"
+          }
+        ]
+      },
+      "q6_pod_status": {
+        "why": "Pod 状态与重启次数",
+        "params": {
+          "service_name": "petsearch"
+        },
+        "data": [
+          {
+            "pod_name": "search-service-5cdf85887b-fjnfg",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "search-service-6d54485b4f-cx274",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "search-service-6d54485b4f-rcq9k",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "search-service-5cdf85887b-wsd4m",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "search-service-579d8cff7b-524m4",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "search-service-579d8cff7b-f6qqb",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          }
+        ]
+      },
+      "q10_infra_root_cause": {
+        "why": "基础设施侧反查",
+        "params": {
+          "affected_service": "petsearch"
+        },
+        "data": {
+          "unhealthy_ec2": [],
+          "az_impact": {
+            "ap-northeast-1c": {
+              "total_pods": 3,
+              "affected_pods": 0
+            },
+            "ap-northeast-1a": {
+              "total_pods": 3,
+              "affected_pods": 0
+            }
+          },
+          "has_infra_fault": false
+        }
+      },
+      "q19_topology_changes": {
+        "why": "近期依赖变更",
+        "params": {
+          "service_name": "petsearch"
+        },
+        "data": [
+          {
+            "ts": 1788582702,
+            "kind": "dependency_deactivated",
+            "subject": "petlistadoptions->petsearch",
+            "source": "petlistadoptions",
+            "target": "petsearch",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788575502,
+            "kind": "dependency_deactivated",
+            "subject": "petlistadoptions->petsearch",
+            "source": "petlistadoptions",
+            "target": "petsearch",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788571902,
+            "kind": "dependency_deactivated",
+            "subject": "petlistadoptions->petsearch",
+            "source": "petlistadoptions",
+            "target": "petsearch",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788568302,
+            "kind": "dependency_deactivated",
+            "subject": "petlistadoptions->petsearch",
+            "source": "petlistadoptions",
+            "target": "petsearch",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          },
+          {
+            "ts": 1788550304,
+            "kind": "dependency_deactivated",
+            "subject": "petlistadoptions->petsearch",
+            "source": "petlistadoptions",
+            "target": "petsearch",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          }
+        ]
+      },
+      "q17_incidents_by_resource": {
+        "why": "同资源历史故障",
+        "params": {
+          "resource_name": "petsearch"
+        },
+        "data": []
+      },
+      "q5_similar_incidents": {
+        "why": "同服务历史故障",
+        "params": {
+          "service_name": "petsearch",
+          "limit": 3
+        },
+        "data": []
+      },
+      "q22_edge_verification_verdicts": {
+        "why": "该服务依赖边的注入验证判定",
+        "params": {
+          "service_name": "petsearch",
+          "limit": 40
+        },
+        "data": [
+          {
+            "src": "petsearch",
+            "dst": "dynamodb",
+            "dst_type": "AWSServiceEndpoint",
+            "edge_type": "AccessesData",
+            "verify_status": "confirmed",
+            "verify_confidence": 0.9998,
+            "verify_degradation": 100.0,
+            "verify_evidence_channel": "both",
+            "verify_experiment": "exp-dynamodb-fis-network-disrupt-20260831-160742",
+            "verify_last": 1788192783,
+            "verify_reason": "观测方退化 100.0% >= 20.0%（成功率+吞吐双通道），依赖成立",
+            "source": "nfm"
+          },
+          {
+            "src": "petlistadoptions",
+            "dst": "petsearch",
+            "dst_type": "Microservice",
+            "edge_type": "Calls",
+            "verify_status": "confirmed",
+            "verify_confidence": 0.9959,
+            "verify_degradation": 100.0,
+            "verify_evidence_channel": null,
+            "verify_experiment": "networkchaos-partition:petlistadoptions->petsearch",
+            "verify_last": 1788561271,
+            "verify_reason": "观测方退化 71.9% >= 20.0%，依赖成立",
+            "source": "deepflow-etl"
+          },
+          {
+            "src": "petsite",
+            "dst": "petsearch",
+            "dst_type": "Microservice",
+            "edge_type": "Calls",
+            "verify_status": "confirmed",
+            "verify_confidence": 0.9959,
+            "verify_degradation": 100.0,
+            "verify_evidence_channel": null,
+            "verify_experiment": "networkchaos-partition:petsite->petsearch",
+            "verify_last": 1788561271,
+            "verify_reason": "观测方退化 74.9% >= 20.0%，依赖成立",
+            "source": "deepflow-etl"
+          },
+          {
+            "src": "petsearch",
+            "dst": "s3",
+            "dst_type": "AWSServiceEndpoint",
+            "edge_type": "AccessesData",
+            "verify_status": "inconclusive",
+            "verify_confidence": 0.7311,
+            "verify_degradation": 1.21,
+            "verify_evidence_channel": "none",
+            "verify_experiment": "exp-s3-fis-network-disrupt-20260831-160219",
+            "verify_last": 1788192432,
+            "verify_reason": "2026-08-31 归因修正：原判 refuted 无效。X-Ray 严格按故障窗口复核显示 PetSearch 在 16:03:25-16:06:27 与 15:53:43-15:56:44 两次注入窗口内各做了 10 次与 13 次 成功的 S3 调用、0 错误 0 故障 —— FIS disrupt-connectivity scope=s3 未切断该路径。归因类别：注入未生效（class 2），不是图谱错（class 1）也不是弱依赖（class 3）。本边有两个独立源硬证据：X-Ray 24h 内 17190 次调用、NFM 50 条流 1.9MB AMAZON_S3。不得删除。",
+            "source": "xray"
+          },
+          {
+            "src": "petsearch",
+            "dst": "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1",
+            "dst_type": "ECRRepository",
+            "edge_type": "DependsOn",
+            "verify_status": "inconclusive",
+            "verify_confidence": 0.0,
+            "verify_degradation": 0.0,
+            "verify_evidence_channel": null,
+            "verify_experiment": "image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable",
+            "verify_last": 1788561628,
+            "verify_reason": null,
+            "source": "deepflow-etl"
+          },
+          {
+            "src": "petsearch",
+            "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+            "dst_type": "DynamoDBTable",
+            "edge_type": "AccessesData",
+            "verify_status": "untested",
+            "verify_confidence": null,
+            "verify_degradation": null,
+            "verify_evidence_channel": null,
+            "verify_experiment": null,
+            "verify_last": null,
+            "verify_reason": null,
+            "source": "aws-etl"
+          },
+          {
+            "src": "petsearch",
+            "dst": "sts",
+            "dst_type": "AWSServiceEndpoint",
+            "edge_type": "AccessesData",
+            "verify_status": "untested",
+            "verify_confidence": null,
+            "verify_degradation": null,
+            "verify_evidence_channel": null,
+            "verify_experiment": null,
+            "verify_last": null,
+            "verify_reason": null,
+            "source": "xray"
+          },
+          {
+            "src": "petsearch",
+            "dst": "ssm",
+            "dst_type": "AWSServiceEndpoint",
+            "edge_type": "AccessesData",
+            "verify_status": "untested",
+            "verify_confidence": null,
+            "verify_degradation": null,
+            "verify_evidence_channel": null,
+            "verify_experiment": null,
+            "verify_last": null,
+            "verify_reason": null,
+            "source": "xray"
+          },
+          {
+            "src": "petsearch",
+            "dst": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+            "dst_type": "S3Bucket",
+            "edge_type": "AccessesData",
+            "verify_status": "untested",
+            "verify_confidence": null,
+            "verify_degradation": null,
+            "verify_evidence_channel": null,
+            "verify_experiment": null,
+            "verify_last": null,
+            "verify_reason": null,
+            "source": "aws-etl"
+          },
+          {
+            "src": "unknown",
+            "dst": "petsearch",
+            "dst_type": "Microservice",
+            "edge_type": "DependsOn",
+            "verify_status": "untested",
+            "verify_confidence": null,
+            "verify_degradation": null,
+            "verify_evidence_channel": null,
+            "verify_experiment": null,
+            "verify_last": null,
+            "verify_reason": null,
+            "source": "agentcore-etl"
+          }
+        ]
+      }
+    },
+    "payforadoption": {
+      "q9_service_infra_path": {
+        "why": "基础设施路径 Service→Pod→EC2→AZ",
+        "params": {
+          "service_name": "payforadoption"
+        },
+        "data": [
+          {
+            "pod_name": "pay-for-adoption-6d7d5d485b-ftc62",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-52.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04c31adb6981f7286",
+            "ec2_id": "i-04c31adb6981f7286",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "pay-for-adoption-6d7d5d485b-s4gj9",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-6.ap-northeast-1.compute.internal",
+            "ec2_name": "i-0af324e6b70f0f7d8",
+            "ec2_id": "i-0af324e6b70f0f7d8",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "pay-for-adoption-6d7d5d485b-n2hjt",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-130.ap-northeast-1.compute.internal",
+            "ec2_name": "i-078e14ddd7e0cac06",
+            "ec2_id": "i-078e14ddd7e0cac06",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "pay-for-adoption-55f757f447-6z95c",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-52.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04c31adb6981f7286",
+            "ec2_id": "i-04c31adb6981f7286",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "pay-for-adoption-55f757f447-d2jfz",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-6.ap-northeast-1.compute.internal",
+            "ec2_name": "i-0af324e6b70f0f7d8",
+            "ec2_id": "i-0af324e6b70f0f7d8",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "pay-for-adoption-6fcffffd75-jrxsq",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-104.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04865db96ae2f3858",
+            "ec2_id": "i-04865db96ae2f3858",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "pay-for-adoption-6d7d5d485b-qnpzs",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-104.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04865db96ae2f3858",
+            "ec2_id": "i-04865db96ae2f3858",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "pay-for-adoption-6fcffffd75-7jg74",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-6.ap-northeast-1.compute.internal",
+            "ec2_name": "i-0af324e6b70f0f7d8",
+            "ec2_id": "i-0af324e6b70f0f7d8",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          },
+          {
+            "pod_name": "pay-for-adoption-55f757f447-hxznj",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-3-52.ap-northeast-1.compute.internal",
+            "ec2_name": "i-04c31adb6981f7286",
+            "ec2_id": "i-04c31adb6981f7286",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1c"
+          },
+          {
+            "pod_name": "pay-for-adoption-55f757f447-qf5gj",
+            "pod_status": "Running",
+            "node_name": "ip-11-0-2-130.ap-northeast-1.compute.internal",
+            "ec2_name": "i-078e14ddd7e0cac06",
+            "ec2_id": "i-078e14ddd7e0cac06",
+            "ec2_state": "running",
+            "ec2_health": "healthy",
+            "az": "ap-northeast-1a"
+          }
+        ]
+      },
+      "q1_blast_radius": {
+        "why": "下游影响面",
+        "params": {
+          "failed_node": "payforadoption",
+          "kind": "live"
+        },
+        "data": {
+          "services": [],
+          "capabilities": []
+        }
+      },
+      "q3_upstream_deps": {
+        "why": "上游调用者（根因候选）",
+        "params": {
+          "failed_service": "payforadoption",
+          "kind": "live"
+        },
+        "data": [
+          {
+            "name": "petsite",
+            "type": "Microservice",
+            "priority": "Tier0"
+          }
+        ]
+      },
+      "q6_pod_status": {
+        "why": "Pod 状态与重启次数",
+        "params": {
+          "service_name": "payforadoption"
+        },
+        "data": [
+          {
+            "pod_name": "pay-for-adoption-55f757f447-6z95c",
+            "status": "Running",
+            "restarts": 3,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "pay-for-adoption-55f757f447-d2jfz",
+            "status": "Running",
+            "restarts": 3,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "pay-for-adoption-6d7d5d485b-ftc62",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "pay-for-adoption-6d7d5d485b-s4gj9",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "pay-for-adoption-6d7d5d485b-n2hjt",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "pay-for-adoption-6fcffffd75-jrxsq",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "pay-for-adoption-6d7d5d485b-qnpzs",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "pay-for-adoption-6fcffffd75-7jg74",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "pay-for-adoption-55f757f447-hxznj",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          },
+          {
+            "pod_name": "pay-for-adoption-55f757f447-qf5gj",
+            "status": "Running",
+            "restarts": 0,
+            "reason": "",
+            "node": null
+          }
+        ]
+      },
+      "q10_infra_root_cause": {
+        "why": "基础设施侧反查",
+        "params": {
+          "affected_service": "payforadoption"
+        },
+        "data": {
+          "unhealthy_ec2": [],
+          "az_impact": {
+            "ap-northeast-1c": {
+              "total_pods": 5,
+              "affected_pods": 0
+            },
+            "ap-northeast-1a": {
+              "total_pods": 5,
+              "affected_pods": 0
+            }
+          },
+          "has_infra_fault": false
+        }
+      },
+      "q19_topology_changes": {
+        "why": "近期依赖变更",
+        "params": {
+          "service_name": "payforadoption"
+        },
+        "data": [
+          {
+            "ts": 1788582702,
+            "kind": "dependency_deactivated",
+            "subject": "petsite->payforadoption",
+            "source": "petsite",
+            "target": "payforadoption",
+            "edge_type": "Calls",
+            "detail": "超过 1800s 未被 DeepFlow 观测到"
+          }
+        ]
+      },
+      "q17_incidents_by_resource": {
+        "why": "同资源历史故障",
+        "params": {
+          "resource_name": "payforadoption"
+        },
+        "data": []
+      },
+      "q5_similar_incidents": {
+        "why": "同服务历史故障",
+        "params": {
+          "service_name": "payforadoption",
+          "limit": 3
+        },
+        "data": []
+      },
+      "q22_edge_verification_verdicts": {
+        "why": "该服务依赖边的注入验证判定",
+        "params": {
+          "service_name": "payforadoption",
+          "limit": 40
+        },
+        "data": [
+          {
+            "src": "payforadoption",
+            "dst": "dynamodb",
+            "dst_type": "AWSServiceEndpoint",
+            "edge_type": "AccessesData",
+            "verify_status": "confirmed",
+            "verify_confidence": 0.9999,
+            "verify_degradation": 96.88,
+            "verify_evidence_channel": "throughput_only",
+            "verify_experiment": "exp-dynamodb-fis-network-disrupt-20260831-160742",
+            "verify_last": 1788192783,
+            "verify_reason": "观测方退化 96.9% >= 20.0%（仅吞吐通道），依赖成立",
+            "source": "nfm"
+          },
+          {
+            "src": "payforadoption",
+            "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+            "dst_type": "RDSCluster",
+            "edge_type": "AccessesData",
+            "verify_status": "confirmed",
+            "verify_confidence": 0.9975,
+            "verify_degradation": 59.57,
+            "verify_evidence_channel": null,
+            "verify_experiment": "exp-serviceseks2-databaseb269d8bb-efjeyzicx2ak-fis-rds-reboot-20260831-110323",
+            "verify_last": 1788174652,
+            "verify_reason": "观测方退化 59.6% >= 20.0%，依赖成立",
+            "source": "aws-etl"
+          },
+          {
+            "src": "petsite",
+            "dst": "payforadoption",
+            "dst_type": "Microservice",
+            "edge_type": "Calls",
+            "verify_status": "inconclusive",
+            "verify_confidence": 0.9959,
+            "verify_degradation": 0.37,
+            "verify_evidence_channel": "none",
+            "verify_experiment": "exp-pay-for-adoption-http-chaos-20260905-053059",
+            "verify_last": 1788586838,
+            "verify_reason": "观测方退化仅 0.4%，但注入生效性未知（未提供 injection_confirmed） —— 无法区分「注入生效而未传导」（真 refuted）与「注入根本没生效」（什么都没验证）。证伪需要先证明打断确实发生，故不下结论",
+            "source": "deepflow-etl"
+          },
+          {
+            "src": "payforadoption",
+            "dst": "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1",
+            "dst_type": "ECRRepository",
+            "edge_type": "DependsOn",
+            "verify_status": "inconclusive",
+            "verify_confidence": 0.0,
+            "verify_degradation": 0.0,
+            "verify_evidence_channel": null,
+            "verify_experiment": "image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable",
+            "verify_last": 1788561628,
+            "verify_reason": null,
+            "source": "deepflow-etl"
+          },
+          {
+            "src": "payforadoption",
+            "dst": "serviceseks2-databasewriter2462cc03-fwgfu4gossqe",
+            "dst_type": "RDSInstance",
+            "edge_type": "AccessesData",
+            "verify_status": "untested",
+            "verify_confidence": null,
+            "verify_degradation": null,
+            "verify_evidence_channel": null,
+            "verify_experiment": null,
+            "verify_last": null,
+            "verify_reason": null,
+            "source": "deepflow-l4"
+          },
+          {
+            "src": "payforadoption",
+            "dst": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+            "dst_type": "S3Bucket",
+            "edge_type": "AccessesData",
+            "verify_status": "untested",
+            "verify_confidence": null,
+            "verify_degradation": null,
+            "verify_evidence_channel": null,
+            "verify_experiment": null,
+            "verify_last": null,
+            "verify_reason": null,
+            "source": "deepflow-dns"
+          },
+          {
+            "src": "payforadoption",
+            "dst": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+            "dst_type": "StepFunction",
+            "edge_type": "AccessesData",
+            "verify_status": "untested",
+            "verify_confidence": null,
+            "verify_degradation": null,
+            "verify_evidence_channel": null,
+            "verify_experiment": null,
+            "verify_last": null,
+            "verify_reason": null,
+            "source": "deepflow-dns"
+          },
+          {
+            "src": "payforadoption",
+            "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+            "dst_type": "DynamoDBTable",
+            "edge_type": "AccessesData",
+            "verify_status": "untested",
+            "verify_confidence": null,
+            "verify_degradation": null,
+            "verify_evidence_channel": null,
+            "verify_experiment": null,
+            "verify_last": null,
+            "verify_reason": null,
+            "source": "aws-etl"
+          },
+          {
+            "src": "payforadoption",
+            "dst": "ssm",
+            "dst_type": "AWSServiceEndpoint",
+            "edge_type": "AccessesData",
+            "verify_status": "untested",
+            "verify_confidence": null,
+            "verify_degradation": null,
+            "verify_evidence_channel": null,
+            "verify_experiment": null,
+            "verify_last": null,
+            "verify_reason": null,
+            "source": "xray"
+          }
+        ]
+      }
+    }
+  },
+  "captured_at": "2026-09-05T06:05:53Z"
+}

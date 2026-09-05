@@ -1,0 +1,2377 @@
+{
+  "q2_tier0_status": {
+    "desc": "所有 Tier0 服务的故障边界 / AZ / 副本数",
+    "rows": [
+      {
+        "name": "petsite",
+        "fault_boundary": "az",
+        "az": "ap-northeast-1a",
+        "replicas": null
+      },
+      {
+        "name": "petsite",
+        "fault_boundary": "az",
+        "az": "ap-northeast-1c",
+        "replicas": null
+      },
+      {
+        "name": "payforadoption",
+        "fault_boundary": "az",
+        "az": "ap-northeast-1a",
+        "replicas": null
+      },
+      {
+        "name": "payforadoption",
+        "fault_boundary": "az",
+        "az": "ap-northeast-1c",
+        "replicas": null
+      },
+      {
+        "name": "petsearch",
+        "fault_boundary": "az",
+        "az": "ap-northeast-1a",
+        "replicas": null
+      },
+      {
+        "name": "petsearch",
+        "fault_boundary": "az",
+        "az": "ap-northeast-1c",
+        "replicas": null
+      }
+    ],
+    "row_count": 6
+  },
+  "q19_topology_changes": {
+    "desc": "拓扑变更事件（依赖出现/消失）。CloudTrail 看不见这两类变化 —— 依赖消失是「流量缺席」而非 API 调用",
+    "rows": [
+      {
+        "ts": 1788582702,
+        "kind": "dependency_deactivated",
+        "subject": "petsite->petfood",
+        "source": "petsite",
+        "target": "petfood",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788582702,
+        "kind": "dependency_deactivated",
+        "subject": "petsite->pethistory",
+        "source": "petsite",
+        "target": "pethistory",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788582702,
+        "kind": "dependency_deactivated",
+        "subject": "petsite->payforadoption",
+        "source": "petsite",
+        "target": "payforadoption",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788582702,
+        "kind": "dependency_deactivated",
+        "subject": "petlistadoptions->petsearch",
+        "source": "petlistadoptions",
+        "target": "petsearch",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788582702,
+        "kind": "dependency_deactivated",
+        "subject": "petsite->petlistadoptions",
+        "source": "petsite",
+        "target": "petlistadoptions",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788579102,
+        "kind": "dependency_deactivated",
+        "subject": "petsite->pethistory",
+        "source": "petsite",
+        "target": "pethistory",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788575502,
+        "kind": "dependency_deactivated",
+        "subject": "petsite->petfood",
+        "source": "petsite",
+        "target": "petfood",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788575502,
+        "kind": "dependency_deactivated",
+        "subject": "petsite->petlistadoptions",
+        "source": "petsite",
+        "target": "petlistadoptions",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788575502,
+        "kind": "dependency_deactivated",
+        "subject": "petlistadoptions->petsearch",
+        "source": "petlistadoptions",
+        "target": "petsearch",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788575502,
+        "kind": "dependency_deactivated",
+        "subject": "petsite->pethistory",
+        "source": "petsite",
+        "target": "pethistory",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788571902,
+        "kind": "dependency_deactivated",
+        "subject": "petlistadoptions->petsearch",
+        "source": "petlistadoptions",
+        "target": "petsearch",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788571902,
+        "kind": "dependency_deactivated",
+        "subject": "petsite->pethistory",
+        "source": "petsite",
+        "target": "pethistory",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788571902,
+        "kind": "dependency_deactivated",
+        "subject": "petsite->petlistadoptions",
+        "source": "petsite",
+        "target": "petlistadoptions",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788571902,
+        "kind": "dependency_deactivated",
+        "subject": "petsite->petfood",
+        "source": "petsite",
+        "target": "petfood",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788568302,
+        "kind": "dependency_deactivated",
+        "subject": "petsite->petlistadoptions",
+        "source": "petsite",
+        "target": "petlistadoptions",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788568302,
+        "kind": "dependency_deactivated",
+        "subject": "petlistadoptions->petsearch",
+        "source": "petlistadoptions",
+        "target": "petsearch",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788568302,
+        "kind": "dependency_deactivated",
+        "subject": "petsite->pethistory",
+        "source": "petsite",
+        "target": "pethistory",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788568302,
+        "kind": "dependency_deactivated",
+        "subject": "petsite->petfood",
+        "source": "petsite",
+        "target": "petfood",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788566202,
+        "kind": "dependency_deactivated",
+        "subject": "petsite->pethistory",
+        "source": "petsite",
+        "target": "pethistory",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      },
+      {
+        "ts": 1788564702,
+        "kind": "dependency_deactivated",
+        "subject": "petsite->petlistadoptions",
+        "source": "petsite",
+        "target": "petlistadoptions",
+        "edge_type": "Calls",
+        "detail": "超过 1800s 未被 DeepFlow 观测到"
+      }
+    ],
+    "row_count": 20
+  },
+  "q20_dependency_verification": {
+    "desc": "依赖边的运行时验证状态：找出「未被观测」「只被单源验证」「验证已过期」的边。漂移判定有 DNS 与 X-Ray 两个观测源，本查询是 verified_by 的读取方 —— X-Ray 若静默失效，判定会悄悄退回 DNS-only 而结果看起来完全正常",
+    "rows": [
+      {
+        "src": "order-service",
+        "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+        "dst_type": "RDSCluster",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "ok",
+        "runtime_verified": true,
+        "verified_by": null,
+        "last_drift_check": 1773907005,
+        "stale_seconds": 14677784,
+        "symptom": "no_verification_source,stale_verification"
+      },
+      {
+        "src": "auth-service",
+        "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+        "dst_type": "RDSCluster",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "ok",
+        "runtime_verified": true,
+        "verified_by": null,
+        "last_drift_check": 1773907005,
+        "stale_seconds": 14677784,
+        "symptom": "no_verification_source,stale_verification"
+      },
+      {
+        "src": "product-service",
+        "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+        "dst_type": "RDSCluster",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": null,
+        "last_drift_check": 1773907005,
+        "stale_seconds": 14677784,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "points-service",
+        "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+        "dst_type": "RDSCluster",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": null,
+        "last_drift_check": 1773907005,
+        "stale_seconds": 14677784,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "ServicesEks2-petsiteapplicationresourcecontrolerDC-xWipuliA0V5T",
+        "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+        "dst_type": "DynamoDBTable",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788017205,
+        "stale_seconds": 567584,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "petsite-rca-engine",
+        "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+        "dst_type": "DynamoDBTable",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788017205,
+        "stale_seconds": 567584,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "petsite-ops-slack-notifier",
+        "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+        "dst_type": "DynamoDBTable",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788017205,
+        "stale_seconds": 567584,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "petsite-rca-interaction",
+        "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+        "dst_type": "DynamoDBTable",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788017205,
+        "stale_seconds": 567584,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "ServicesEks2-petsiteapplicationresourcecontrolerDC-xWipuliA0V5T",
+        "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+        "dst_type": "RDSCluster",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788017205,
+        "stale_seconds": 567584,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "petsite-rca-engine",
+        "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+        "dst_type": "RDSCluster",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788017205,
+        "stale_seconds": 567584,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "petsite-ops-slack-notifier",
+        "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+        "dst_type": "RDSCluster",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788017205,
+        "stale_seconds": 567584,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "petsite-rca-interaction",
+        "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+        "dst_type": "RDSCluster",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788017205,
+        "stale_seconds": 567584,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "ServicesEks2-petsiteapplicationresourcecontrolerDC-xWipuliA0V5T",
+        "dst": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+        "dst_type": "S3Bucket",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": null,
+        "last_drift_check": 1788017205,
+        "stale_seconds": 567584,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "petsite-rca-engine",
+        "dst": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+        "dst_type": "S3Bucket",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": null,
+        "last_drift_check": 1788017205,
+        "stale_seconds": 567584,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "petsite-ops-slack-notifier",
+        "dst": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+        "dst_type": "S3Bucket",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": null,
+        "last_drift_check": 1788017205,
+        "stale_seconds": 567584,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "petsite-rca-interaction",
+        "dst": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+        "dst_type": "S3Bucket",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": null,
+        "last_drift_check": 1788017205,
+        "stale_seconds": 567584,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "pethistory",
+        "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+        "dst_type": "RDSCluster",
+        "edge_type": "AccessesData",
+        "dependency_kind": "static",
+        "source": "aws-etl",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788557805,
+        "stale_seconds": 26984,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "petfood",
+        "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+        "dst_type": "DynamoDBTable",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "ok",
+        "runtime_verified": true,
+        "verified_by": "dns",
+        "last_drift_check": 1788578805,
+        "stale_seconds": 5984,
+        "symptom": "single_source:dns,stale_verification"
+      },
+      {
+        "src": "payforadoption",
+        "dst": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+        "dst_type": "StepFunction",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788579104,
+        "stale_seconds": 5685,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "petlistadoptions",
+        "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+        "dst_type": "RDSCluster",
+        "edge_type": "AccessesData",
+        "dependency_kind": "static",
+        "source": "aws-etl",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788579104,
+        "stale_seconds": 5685,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "payforadoption",
+        "dst": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+        "dst_type": "S3Bucket",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788579104,
+        "stale_seconds": 5685,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "payforadoption",
+        "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+        "dst_type": "DynamoDBTable",
+        "edge_type": "AccessesData",
+        "dependency_kind": "static",
+        "source": "aws-etl",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788579104,
+        "stale_seconds": 5685,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "payforadoption",
+        "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+        "dst_type": "RDSCluster",
+        "edge_type": "AccessesData",
+        "dependency_kind": "static",
+        "source": "aws-etl",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788579104,
+        "stale_seconds": 5685,
+        "symptom": "not_observed,no_verification_source,stale_verification"
+      },
+      {
+        "src": "petsite",
+        "dst": "ServicesEks2-topicpetadoption192CAB8F-Dn0iiU45RZ1g",
+        "dst_type": "SNSTopic",
+        "edge_type": "PublishesTo",
+        "dependency_kind": null,
+        "source": "aws-etl",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788584505,
+        "stale_seconds": 284,
+        "symptom": "not_observed,no_verification_source"
+      },
+      {
+        "src": "petsite",
+        "dst": "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+        "dst_type": "SQSQueue",
+        "edge_type": "PublishesTo",
+        "dependency_kind": null,
+        "source": "aws-etl",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788584505,
+        "stale_seconds": 284,
+        "symptom": "not_observed,no_verification_source"
+      },
+      {
+        "src": "petsite",
+        "dst": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+        "dst_type": "StepFunction",
+        "edge_type": "InvokesVia",
+        "dependency_kind": null,
+        "source": "aws-etl",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788584505,
+        "stale_seconds": 284,
+        "symptom": "not_observed,no_verification_source"
+      },
+      {
+        "src": "petsite",
+        "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+        "dst_type": "DynamoDBTable",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788584505,
+        "stale_seconds": 284,
+        "symptom": "not_observed,no_verification_source"
+      },
+      {
+        "src": "petsite",
+        "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+        "dst_type": "RDSCluster",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788584505,
+        "stale_seconds": 284,
+        "symptom": "not_observed,no_verification_source"
+      },
+      {
+        "src": "petsite",
+        "dst": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+        "dst_type": "StepFunction",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "xray",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788584505,
+        "stale_seconds": 284,
+        "symptom": "not_observed,no_verification_source"
+      },
+      {
+        "src": "petsite",
+        "dst": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+        "dst_type": "S3Bucket",
+        "edge_type": "AccessesData",
+        "dependency_kind": "dynamic",
+        "source": "deepflow-dns",
+        "drift_status": "declared_not_observed",
+        "runtime_verified": false,
+        "verified_by": "none",
+        "last_drift_check": 1788584505,
+        "stale_seconds": 284,
+        "symptom": "not_observed,no_verification_source"
+      }
+    ],
+    "row_count": 30
+  },
+  "q21_observation_source_coverage": {
+    "desc": "按观测源对账依赖边：X-Ray 与 DeepFlow 是盲区不重叠的**平行源**，不是主备。本查询给出每条边被哪些源看到（both / xray_only / deepflow_only / declared_only）以及目标节点的粒度 —— X-Ray 能精确到 AWS 资源名，DeepFlow 只到域名，而走 VPC 端点时 DNS 侧连域名都没有",
+    "rows": [
+      {
+        "src": "petsearch",
+        "edge_type": "AccessesData",
+        "dst": "dynamodb",
+        "dst_type": "AWSServiceEndpoint",
+        "dst_granularity": "service",
+        "discovered_by": "nfm",
+        "dependency_kind": "dynamic",
+        "xray_calls": null,
+        "xray_rt_seconds": null,
+        "xray_errors": null,
+        "deepflow_calls": null,
+        "nfm_last_seen": 1788584538,
+        "nfm_bytes": 74968634.0,
+        "nfm_cross_az": false,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "nfm"
+        ],
+        "observer_count": 1,
+        "coverage": "nfm_only"
+      },
+      {
+        "src": "petsearch",
+        "edge_type": "AccessesData",
+        "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+        "dst_type": "DynamoDBTable",
+        "dst_granularity": null,
+        "discovered_by": "aws-etl",
+        "dependency_kind": "static",
+        "xray_calls": 659119,
+        "xray_rt_seconds": 11070.645,
+        "xray_errors": 17,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": "dns+xray",
+        "active": true,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      },
+      {
+        "src": "petsite",
+        "edge_type": "AccessesData",
+        "dst": "ssm",
+        "dst_type": "AWSServiceEndpoint",
+        "dst_granularity": "service",
+        "discovered_by": "xray",
+        "dependency_kind": "dynamic",
+        "xray_calls": 41377,
+        "xray_rt_seconds": 1097.395,
+        "xray_errors": 16553,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      },
+      {
+        "src": "ServicesEks2-statusupdaterservicelambdafn37242E00-0SHsIkrhwJ32",
+        "edge_type": "AccessesData",
+        "dst": "dynamodb",
+        "dst_type": "AWSServiceEndpoint",
+        "dst_granularity": "service",
+        "discovered_by": "xray",
+        "dependency_kind": "dynamic",
+        "xray_calls": 30615,
+        "xray_rt_seconds": 1516.887,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      },
+      {
+        "src": "petsite",
+        "edge_type": "Calls",
+        "dst": "petsearch",
+        "dst_type": "Microservice",
+        "dst_granularity": null,
+        "discovered_by": "deepflow-etl",
+        "dependency_kind": "dynamic",
+        "xray_calls": 22440,
+        "xray_rt_seconds": 11475.167,
+        "xray_errors": 0,
+        "deepflow_calls": 772,
+        "nfm_last_seen": 1788584538,
+        "nfm_bytes": 371803110.0,
+        "nfm_cross_az": false,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray",
+          "deepflow",
+          "nfm"
+        ],
+        "observer_count": 3,
+        "coverage": "triple_corroborated"
+      },
+      {
+        "src": "petsite",
+        "edge_type": "DependsOn",
+        "dst": "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+        "dst_type": "SQSQueue",
+        "dst_granularity": null,
+        "discovered_by": "xray",
+        "dependency_kind": "dynamic",
+        "xray_calls": 10784,
+        "xray_rt_seconds": 102.768,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      },
+      {
+        "src": "petsite",
+        "edge_type": "Calls",
+        "dst": "petlistadoptions",
+        "dst_type": "Microservice",
+        "dst_granularity": null,
+        "discovered_by": "deepflow-etl",
+        "dependency_kind": "dynamic",
+        "xray_calls": 10724,
+        "xray_rt_seconds": 730.308,
+        "xray_errors": 0,
+        "deepflow_calls": 300,
+        "nfm_last_seen": 1788560237,
+        "nfm_bytes": 5665016.0,
+        "nfm_cross_az": false,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray",
+          "deepflow",
+          "nfm"
+        ],
+        "observer_count": 3,
+        "coverage": "triple_corroborated"
+      },
+      {
+        "src": "petsite",
+        "edge_type": "Calls",
+        "dst": "payforadoption",
+        "dst_type": "Microservice",
+        "dst_granularity": null,
+        "discovered_by": "deepflow-etl",
+        "dependency_kind": "dynamic",
+        "xray_calls": 6870,
+        "xray_rt_seconds": 1989.156,
+        "xray_errors": 5165,
+        "deepflow_calls": 288,
+        "nfm_last_seen": 1788550340,
+        "nfm_bytes": 532714.0,
+        "nfm_cross_az": false,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray",
+          "deepflow",
+          "nfm"
+        ],
+        "observer_count": 3,
+        "coverage": "triple_corroborated"
+      },
+      {
+        "src": "gateway-service",
+        "edge_type": "Calls",
+        "dst": "product-service",
+        "dst_type": "Microservice",
+        "dst_granularity": null,
+        "discovered_by": null,
+        "dependency_kind": "dynamic",
+        "xray_calls": null,
+        "xray_rt_seconds": null,
+        "xray_errors": null,
+        "deepflow_calls": 5340,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": false,
+        "seen_by": [
+          "deepflow"
+        ],
+        "observer_count": 1,
+        "coverage": "deepflow_only"
+      },
+      {
+        "src": "payforadoption",
+        "edge_type": "AccessesData",
+        "dst": "ssm",
+        "dst_type": "AWSServiceEndpoint",
+        "dst_granularity": "service",
+        "discovered_by": "xray",
+        "dependency_kind": "dynamic",
+        "xray_calls": 3894,
+        "xray_rt_seconds": 136.432,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      },
+      {
+        "src": "petsite",
+        "edge_type": "AccessesData",
+        "dst": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+        "dst_type": "StepFunction",
+        "dst_granularity": null,
+        "discovered_by": "xray",
+        "dependency_kind": "dynamic",
+        "xray_calls": 2996,
+        "xray_rt_seconds": 159.175,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": "none",
+        "active": true,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      },
+      {
+        "src": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+        "edge_type": "AccessesData",
+        "dst": "ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A",
+        "dst_type": "LambdaFunction",
+        "dst_granularity": null,
+        "discovered_by": "xray",
+        "dependency_kind": "dynamic",
+        "xray_calls": 2995,
+        "xray_rt_seconds": 1416.185,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      },
+      {
+        "src": "ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A",
+        "edge_type": "AccessesData",
+        "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+        "dst_type": "DynamoDBTable",
+        "dst_granularity": null,
+        "discovered_by": "xray",
+        "dependency_kind": "dynamic",
+        "xray_calls": 2958,
+        "xray_rt_seconds": 218.744,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      },
+      {
+        "src": "ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A",
+        "edge_type": "AccessesData",
+        "dst": "ssm",
+        "dst_type": "AWSServiceEndpoint",
+        "dst_granularity": "service",
+        "discovered_by": "xray",
+        "dependency_kind": "dynamic",
+        "xray_calls": 2958,
+        "xray_rt_seconds": 220.636,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      },
+      {
+        "src": "payforadoption",
+        "edge_type": "AccessesData",
+        "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+        "dst_type": "DynamoDBTable",
+        "dst_granularity": null,
+        "discovered_by": "aws-etl",
+        "dependency_kind": "static",
+        "xray_calls": 2948,
+        "xray_rt_seconds": 52.685,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": "none",
+        "active": true,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      },
+      {
+        "src": "petsearch",
+        "edge_type": "AccessesData",
+        "dst": "s3",
+        "dst_type": "AWSServiceEndpoint",
+        "dst_granularity": "service",
+        "discovered_by": "xray",
+        "dependency_kind": "dynamic",
+        "xray_calls": 2829,
+        "xray_rt_seconds": 1249.391,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": 1788584538,
+        "nfm_bytes": 5767523.0,
+        "nfm_cross_az": false,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray",
+          "nfm"
+        ],
+        "observer_count": 2,
+        "coverage": "double_corroborated"
+      },
+      {
+        "src": "order-service",
+        "edge_type": "Calls",
+        "dst": "petsite",
+        "dst_type": "Microservice",
+        "dst_granularity": null,
+        "discovered_by": null,
+        "dependency_kind": "dynamic",
+        "xray_calls": null,
+        "xray_rt_seconds": null,
+        "xray_errors": null,
+        "deepflow_calls": 2796,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": false,
+        "seen_by": [
+          "deepflow"
+        ],
+        "observer_count": 1,
+        "coverage": "deepflow_only"
+      },
+      {
+        "src": "artillery",
+        "edge_type": "Calls",
+        "dst": "gateway-service",
+        "dst_type": "Microservice",
+        "dst_granularity": null,
+        "discovered_by": null,
+        "dependency_kind": "dynamic",
+        "xray_calls": null,
+        "xray_rt_seconds": null,
+        "xray_errors": null,
+        "deepflow_calls": 2709,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": false,
+        "seen_by": [
+          "deepflow"
+        ],
+        "observer_count": 1,
+        "coverage": "deepflow_only"
+      },
+      {
+        "src": "gateway-service",
+        "edge_type": "Calls",
+        "dst": "order-service",
+        "dst_type": "Microservice",
+        "dst_granularity": null,
+        "discovered_by": null,
+        "dependency_kind": "dynamic",
+        "xray_calls": null,
+        "xray_rt_seconds": null,
+        "xray_errors": null,
+        "deepflow_calls": 2604,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": false,
+        "seen_by": [
+          "deepflow"
+        ],
+        "observer_count": 1,
+        "coverage": "deepflow_only"
+      },
+      {
+        "src": "petlistadoptions",
+        "edge_type": "Calls",
+        "dst": "petsearch",
+        "dst_type": "Microservice",
+        "dst_granularity": null,
+        "discovered_by": "deepflow-etl",
+        "dependency_kind": "dynamic",
+        "xray_calls": 2463,
+        "xray_rt_seconds": 12026.178,
+        "xray_errors": 0,
+        "deepflow_calls": 72,
+        "nfm_last_seen": 1788562940,
+        "nfm_bytes": 5626109.0,
+        "nfm_cross_az": false,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray",
+          "deepflow",
+          "nfm"
+        ],
+        "observer_count": 3,
+        "coverage": "triple_corroborated"
+      },
+      {
+        "src": "gateway-service",
+        "edge_type": "Calls",
+        "dst": "petsite",
+        "dst_type": "Microservice",
+        "dst_granularity": null,
+        "discovered_by": null,
+        "dependency_kind": "dynamic",
+        "xray_calls": null,
+        "xray_rt_seconds": null,
+        "xray_errors": null,
+        "deepflow_calls": 2404,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": false,
+        "seen_by": [
+          "deepflow"
+        ],
+        "observer_count": 1,
+        "coverage": "deepflow_only"
+      },
+      {
+        "src": "artillery-write",
+        "edge_type": "Calls",
+        "dst": "gateway-service",
+        "dst_type": "Microservice",
+        "dst_granularity": null,
+        "discovered_by": null,
+        "dependency_kind": "dynamic",
+        "xray_calls": null,
+        "xray_rt_seconds": null,
+        "xray_errors": null,
+        "deepflow_calls": 1393,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": false,
+        "seen_by": [
+          "deepflow"
+        ],
+        "observer_count": 1,
+        "coverage": "deepflow_only"
+      },
+      {
+        "src": "order-service",
+        "edge_type": "Calls",
+        "dst": "points-service",
+        "dst_type": "Microservice",
+        "dst_granularity": null,
+        "discovered_by": null,
+        "dependency_kind": "dynamic",
+        "xray_calls": null,
+        "xray_rt_seconds": null,
+        "xray_errors": null,
+        "deepflow_calls": 1390,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": false,
+        "seen_by": [
+          "deepflow"
+        ],
+        "observer_count": 1,
+        "coverage": "deepflow_only"
+      },
+      {
+        "src": "payforadoption",
+        "edge_type": "AccessesData",
+        "dst": "dynamodb",
+        "dst_type": "AWSServiceEndpoint",
+        "dst_granularity": "service",
+        "discovered_by": "nfm",
+        "dependency_kind": "dynamic",
+        "xray_calls": 1376,
+        "xray_rt_seconds": 25.258,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": 1788547640,
+        "nfm_bytes": 226178.0,
+        "nfm_cross_az": false,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray",
+          "nfm"
+        ],
+        "observer_count": 2,
+        "coverage": "double_corroborated"
+      },
+      {
+        "src": "petsite",
+        "edge_type": "Calls",
+        "dst": "pethistory",
+        "dst_type": "Microservice",
+        "dst_granularity": null,
+        "discovered_by": "deepflow-etl",
+        "dependency_kind": "dynamic",
+        "xray_calls": 1221,
+        "xray_rt_seconds": 19.979,
+        "xray_errors": 0,
+        "deepflow_calls": 60,
+        "nfm_last_seen": 1788564230,
+        "nfm_bytes": 90524.0,
+        "nfm_cross_az": true,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray",
+          "deepflow",
+          "nfm"
+        ],
+        "observer_count": 3,
+        "coverage": "triple_corroborated"
+      },
+      {
+        "src": "trafficgenerator",
+        "edge_type": "Calls",
+        "dst": "petsite",
+        "dst_type": "Microservice",
+        "dst_granularity": null,
+        "discovered_by": null,
+        "dependency_kind": "dynamic",
+        "xray_calls": null,
+        "xray_rt_seconds": null,
+        "xray_errors": null,
+        "deepflow_calls": 1012,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": false,
+        "seen_by": [
+          "deepflow"
+        ],
+        "observer_count": 1,
+        "coverage": "deepflow_only"
+      },
+      {
+        "src": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+        "edge_type": "AccessesData",
+        "dst": "ServicesEks2-StepFnlambdasteppriceLessThan556D8B30-2POHnQIjCcYJ",
+        "dst_type": "LambdaFunction",
+        "dst_granularity": null,
+        "discovered_by": "xray",
+        "dependency_kind": "dynamic",
+        "xray_calls": 1004,
+        "xray_rt_seconds": 282.115,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      },
+      {
+        "src": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+        "edge_type": "AccessesData",
+        "dst": "ServicesEks2-StepFnlambdasteppriceGreaterThan55AD1-kkACGO1yh30X",
+        "dst_type": "LambdaFunction",
+        "dst_granularity": null,
+        "discovered_by": "xray",
+        "dependency_kind": "dynamic",
+        "xray_calls": 1001,
+        "xray_rt_seconds": 294.474,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      },
+      {
+        "src": "gateway-service",
+        "edge_type": "Calls",
+        "dst": "points-service",
+        "dst_type": "Microservice",
+        "dst_granularity": null,
+        "discovered_by": null,
+        "dependency_kind": "dynamic",
+        "xray_calls": null,
+        "xray_rt_seconds": null,
+        "xray_errors": null,
+        "deepflow_calls": 798,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": false,
+        "seen_by": [
+          "deepflow"
+        ],
+        "observer_count": 1,
+        "coverage": "deepflow_only"
+      },
+      {
+        "src": "gateway-service",
+        "edge_type": "Calls",
+        "dst": "auth-service",
+        "dst_type": "Microservice",
+        "dst_granularity": null,
+        "discovered_by": null,
+        "dependency_kind": "dynamic",
+        "xray_calls": null,
+        "xray_rt_seconds": null,
+        "xray_errors": null,
+        "deepflow_calls": 376,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": false,
+        "seen_by": [
+          "deepflow"
+        ],
+        "observer_count": 1,
+        "coverage": "deepflow_only"
+      },
+      {
+        "src": "neptune-etl-trigger",
+        "edge_type": "AccessesData",
+        "dst": "neptune-etl-from-aws",
+        "dst_type": "LambdaFunction",
+        "dst_granularity": null,
+        "discovered_by": null,
+        "dependency_kind": "static",
+        "xray_calls": 277,
+        "xray_rt_seconds": 8843.007,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      },
+      {
+        "src": "petsearch",
+        "edge_type": "AccessesData",
+        "dst": "sts",
+        "dst_type": "AWSServiceEndpoint",
+        "dst_granularity": "service",
+        "discovered_by": "xray",
+        "dependency_kind": "dynamic",
+        "xray_calls": 159,
+        "xray_rt_seconds": 15.791,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      },
+      {
+        "src": "petsite",
+        "edge_type": "Calls",
+        "dst": "petfood",
+        "dst_type": "Microservice",
+        "dst_granularity": null,
+        "discovered_by": "deepflow-etl",
+        "dependency_kind": "dynamic",
+        "xray_calls": 119,
+        "xray_rt_seconds": 3.986,
+        "xray_errors": 0,
+        "deepflow_calls": 510,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray",
+          "deepflow"
+        ],
+        "observer_count": 2,
+        "coverage": "double_corroborated"
+      },
+      {
+        "src": "ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A",
+        "edge_type": "Calls",
+        "dst": "ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A",
+        "dst_type": "LambdaFunction",
+        "dst_granularity": null,
+        "discovered_by": "xray",
+        "dependency_kind": "dynamic",
+        "xray_calls": 103,
+        "xray_rt_seconds": 56.699,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": false,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      },
+      {
+        "src": "neptune-etl-from-xray",
+        "edge_type": "AccessesData",
+        "dst": "petsite-neptune",
+        "dst_type": "NeptuneCluster",
+        "dst_granularity": null,
+        "discovered_by": "xray",
+        "dependency_kind": "dynamic",
+        "xray_calls": 73,
+        "xray_rt_seconds": 3.33,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": false,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      },
+      {
+        "src": "ServicesEks2-statusupdaterservicelambdafn37242E00-0SHsIkrhwJ32",
+        "edge_type": "AccessesData",
+        "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+        "dst_type": "DynamoDBTable",
+        "dst_granularity": null,
+        "discovered_by": "aws-etl",
+        "dependency_kind": "static",
+        "xray_calls": 71,
+        "xray_rt_seconds": 51.826,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      },
+      {
+        "src": "pethistory",
+        "edge_type": "Calls",
+        "dst": "petlistadoptions",
+        "dst_type": "Microservice",
+        "dst_granularity": null,
+        "discovered_by": null,
+        "dependency_kind": "dynamic",
+        "xray_calls": null,
+        "xray_rt_seconds": null,
+        "xray_errors": null,
+        "deepflow_calls": 60,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": false,
+        "seen_by": [
+          "deepflow"
+        ],
+        "observer_count": 1,
+        "coverage": "deepflow_only"
+      },
+      {
+        "src": "petfood",
+        "edge_type": "AccessesData",
+        "dst": "dynamodb",
+        "dst_type": "AWSServiceEndpoint",
+        "dst_granularity": "service",
+        "discovered_by": "nfm",
+        "dependency_kind": "dynamic",
+        "xray_calls": null,
+        "xray_rt_seconds": null,
+        "xray_errors": null,
+        "deepflow_calls": null,
+        "nfm_last_seen": 1788582885,
+        "nfm_bytes": 50.0,
+        "nfm_cross_az": false,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": true,
+        "seen_by": [
+          "nfm"
+        ],
+        "observer_count": 1,
+        "coverage": "nfm_only"
+      },
+      {
+        "src": "ServicesEks2-StepFnlambdasteppriceLessThan556D8B30-2POHnQIjCcYJ",
+        "edge_type": "Calls",
+        "dst": "ServicesEks2-StepFnlambdasteppriceLessThan556D8B30-2POHnQIjCcYJ",
+        "dst_type": "LambdaFunction",
+        "dst_granularity": null,
+        "discovered_by": "xray",
+        "dependency_kind": "dynamic",
+        "xray_calls": 40,
+        "xray_rt_seconds": 16.014,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": false,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      },
+      {
+        "src": "ServicesEks2-StepFnlambdasteppriceGreaterThan55AD1-kkACGO1yh30X",
+        "edge_type": "Calls",
+        "dst": "ServicesEks2-StepFnlambdasteppriceGreaterThan55AD1-kkACGO1yh30X",
+        "dst_type": "LambdaFunction",
+        "dst_granularity": null,
+        "discovered_by": "xray",
+        "dependency_kind": "dynamic",
+        "xray_calls": 34,
+        "xray_rt_seconds": 99.417,
+        "xray_errors": 0,
+        "deepflow_calls": null,
+        "nfm_last_seen": null,
+        "nfm_bytes": null,
+        "nfm_cross_az": null,
+        "l4_last_seen": null,
+        "l4_flow_count": null,
+        "l4_via_instance": null,
+        "verified_by": null,
+        "active": false,
+        "seen_by": [
+          "xray"
+        ],
+        "observer_count": 1,
+        "coverage": "xray_only"
+      }
+    ],
+    "row_count": 50
+  },
+  "q13_data_layer_topology": {
+    "desc": "数据层拓扑",
+    "rows": [
+      {
+        "data_store": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+        "ds_type": "RDSCluster",
+        "ds_az": null,
+        "dependent_services": [
+          "petlistadoptions",
+          "order-service",
+          "auth-service",
+          "product-service",
+          "pethistory",
+          "payforadoption",
+          "petsite",
+          "ServicesEks2-petsiteapplicationresourcecontrolerDC-xWipuliA0V5T",
+          "petsite-rca-engine",
+          "petsite-ops-slack-notifier",
+          "petsite-rca-interaction",
+          "points-service"
+        ],
+        "tier": null
+      },
+      {
+        "data_store": "serviceseks2-databasewriter2462cc03-fwgfu4gossqe",
+        "ds_type": "RDSInstance",
+        "ds_az": "ap-northeast-1a",
+        "dependent_services": [
+          "payforadoption",
+          "petlistadoptions",
+          "pethistory"
+        ],
+        "tier": null
+      },
+      {
+        "data_store": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+        "ds_type": "DynamoDBTable",
+        "ds_az": null,
+        "dependent_services": [
+          "ServicesEks2-statusupdaterservicelambdafn37242E00-0SHsIkrhwJ32",
+          "petsearch",
+          "petstatusupdater",
+          "petsite",
+          "ServicesEks2-petsiteapplicationresourcecontrolerDC-xWipuliA0V5T",
+          "petsite-rca-engine",
+          "petsite-ops-slack-notifier",
+          "petsite-rca-interaction",
+          "ServicesEks2-dynamodbqueryfunction3C0E68E0-hSXAsqGf3jXY",
+          "payforadoption",
+          "ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A",
+          "petfood"
+        ],
+        "tier": null
+      },
+      {
+        "data_store": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+        "ds_type": "S3Bucket",
+        "ds_az": null,
+        "dependent_services": [
+          "petsearch",
+          "payforadoption",
+          "petsite",
+          "ServicesEks2-petsiteapplicationresourcecontrolerDC-xWipuliA0V5T",
+          "petsite-rca-engine",
+          "petsite-ops-slack-notifier",
+          "petsite-rca-interaction"
+        ],
+        "tier": null
+      },
+      {
+        "data_store": "gp-alert-buffer",
+        "ds_type": "DynamoDBTable",
+        "ds_az": null,
+        "dependent_services": [
+          "gp-window-flush",
+          "petsite-rca-engine"
+        ],
+        "tier": null
+      },
+      {
+        "data_store": "grafana-aurora-mysql",
+        "ds_type": "RDSCluster",
+        "ds_az": null,
+        "dependent_services": [
+          "PetAdoptionFlow",
+          "AdoptionHistoryView"
+        ],
+        "tier": null
+      },
+      {
+        "data_store": "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+        "ds_type": "SQSQueue",
+        "ds_az": null,
+        "dependent_services": [
+          "petstatusupdater",
+          "petsite"
+        ],
+        "tier": null
+      },
+      {
+        "data_store": "ServicesEks2-sqspetadoptiondlqEEEFF2AC-EQwBtdEFe8jQ",
+        "ds_type": "SQSQueue",
+        "ds_az": null,
+        "dependent_services": [
+          "PetAdoptionFlow",
+          "PetInventoryManagement",
+          "petstatusupdater"
+        ],
+        "tier": null
+      },
+      {
+        "data_store": "petsite-neptune",
+        "ds_type": "NeptuneCluster",
+        "ds_az": null,
+        "dependent_services": [
+          "neptune-etl-from-xray",
+          "neptune-etl-from-deepflow",
+          "petsite-rca-interaction",
+          "neptune-etl-from-aws",
+          "petsite-rca-engine"
+        ],
+        "tier": null
+      }
+    ],
+    "row_count": 9
+  },
+  "q14_cross_region_resources": {
+    "desc": "跨区复制资源",
+    "rows": [],
+    "row_count": 0
+  },
+  "q15_critical_path": {
+    "desc": "关键路径",
+    "rows": [
+      {
+        "service": "petsite",
+        "depth": 4,
+        "chain": [
+          "petsite",
+          "pethistory",
+          "petlistadoptions",
+          "petsearch",
+          "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1"
+        ],
+        "types": [
+          "Microservice",
+          "Microservice",
+          "Microservice",
+          "Microservice",
+          "ECRRepository"
+        ]
+      },
+      {
+        "service": "petsite",
+        "depth": 3,
+        "chain": [
+          "petsite",
+          "pethistory",
+          "petlistadoptions",
+          "petsearch"
+        ],
+        "types": [
+          "Microservice",
+          "Microservice",
+          "Microservice",
+          "Microservice"
+        ]
+      },
+      {
+        "service": "petsite",
+        "depth": 3,
+        "chain": [
+          "petsite",
+          "pethistory",
+          "petlistadoptions",
+          "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1"
+        ],
+        "types": [
+          "Microservice",
+          "Microservice",
+          "Microservice",
+          "ECRRepository"
+        ]
+      },
+      {
+        "service": "petsite",
+        "depth": 3,
+        "chain": [
+          "petsite",
+          "petlistadoptions",
+          "petsearch",
+          "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1"
+        ],
+        "types": [
+          "Microservice",
+          "Microservice",
+          "Microservice",
+          "ECRRepository"
+        ]
+      },
+      {
+        "service": "petsite",
+        "depth": 2,
+        "chain": [
+          "petsite",
+          "pethistory",
+          "petlistadoptions"
+        ],
+        "types": [
+          "Microservice",
+          "Microservice",
+          "Microservice"
+        ]
+      },
+      {
+        "service": "petsite",
+        "depth": 2,
+        "chain": [
+          "petsite",
+          "pethistory",
+          "pet-adoptions-history"
+        ],
+        "types": [
+          "Microservice",
+          "Microservice",
+          "ECRRepository"
+        ]
+      },
+      {
+        "service": "petsite",
+        "depth": 2,
+        "chain": [
+          "petsite",
+          "payforadoption",
+          "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1"
+        ],
+        "types": [
+          "Microservice",
+          "Microservice",
+          "ECRRepository"
+        ]
+      },
+      {
+        "service": "petsite",
+        "depth": 2,
+        "chain": [
+          "petsite",
+          "petlistadoptions",
+          "petsearch"
+        ],
+        "types": [
+          "Microservice",
+          "Microservice",
+          "Microservice"
+        ]
+      },
+      {
+        "service": "petsite",
+        "depth": 2,
+        "chain": [
+          "petsite",
+          "petlistadoptions",
+          "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1"
+        ],
+        "types": [
+          "Microservice",
+          "Microservice",
+          "ECRRepository"
+        ]
+      },
+      {
+        "service": "petsite",
+        "depth": 2,
+        "chain": [
+          "petsite",
+          "petsearch",
+          "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1"
+        ],
+        "types": [
+          "Microservice",
+          "Microservice",
+          "ECRRepository"
+        ]
+      },
+      {
+        "service": "petsite",
+        "depth": 2,
+        "chain": [
+          "petsite",
+          "petfood",
+          "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1"
+        ],
+        "types": [
+          "Microservice",
+          "Microservice",
+          "ECRRepository"
+        ]
+      },
+      {
+        "service": "petsite",
+        "depth": 1,
+        "chain": [
+          "petsite",
+          "pethistory"
+        ],
+        "types": [
+          "Microservice",
+          "Microservice"
+        ]
+      },
+      {
+        "service": "petsite",
+        "depth": 1,
+        "chain": [
+          "petsite",
+          "payforadoption"
+        ],
+        "types": [
+          "Microservice",
+          "Microservice"
+        ]
+      },
+      {
+        "service": "petsite",
+        "depth": 1,
+        "chain": [
+          "petsite",
+          "petlistadoptions"
+        ],
+        "types": [
+          "Microservice",
+          "Microservice"
+        ]
+      },
+      {
+        "service": "petsite",
+        "depth": 1,
+        "chain": [
+          "petsite",
+          "petsearch"
+        ],
+        "types": [
+          "Microservice",
+          "Microservice"
+        ]
+      },
+      {
+        "service": "petsite",
+        "depth": 1,
+        "chain": [
+          "petsite",
+          "petfood"
+        ],
+        "types": [
+          "Microservice",
+          "Microservice"
+        ]
+      },
+      {
+        "service": "petsite",
+        "depth": 1,
+        "chain": [
+          "petsite",
+          "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1"
+        ],
+        "types": [
+          "Microservice",
+          "ECRRepository"
+        ]
+      },
+      {
+        "service": "petsite",
+        "depth": 1,
+        "chain": [
+          "petsite",
+          "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj"
+        ],
+        "types": [
+          "Microservice",
+          "SQSQueue"
+        ]
+      },
+      {
+        "service": "petsite",
+        "depth": 1,
+        "chain": [
+          "petsite",
+          "petadoptions/petsite"
+        ],
+        "types": [
+          "Microservice",
+          "ECRRepository"
+        ]
+      },
+      {
+        "service": "payforadoption",
+        "depth": 1,
+        "chain": [
+          "payforadoption",
+          "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1"
+        ],
+        "types": [
+          "Microservice",
+          "ECRRepository"
+        ]
+      },
+      {
+        "service": "petsearch",
+        "depth": 1,
+        "chain": [
+          "petsearch",
+          "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1"
+        ],
+        "types": [
+          "Microservice",
+          "ECRRepository"
+        ]
+      }
+    ],
+    "row_count": 21
+  },
+  "q16_single_point_of_failure": {
+    "desc": "单点故障检测",
+    "rows": [
+      {
+        "resource_name": "i-078e14ddd7e0cac06",
+        "type": "EC2Instance",
+        "single_az": "ap-northeast-1a",
+        "services": [
+          "fluent-bit-t8v7l",
+          "xray-daemon-vkprt",
+          "aws-node-j7vrb",
+          "aws-load-balancer-controller-5cbf754dfc-t9bqr",
+          "coredns-5f486bd4cc-bxv47",
+          "petsite-deployment-75db64db96-bkjc6",
+          "petsite-deployment-559fbdd4b7-pbcrt",
+          "petsite-deployment-559fbdd4b7-gz2dc",
+          "petsite-deployment-559fbdd4b7-s2pkn",
+          "petsite-deployment-8599bcbfc7-cnr24",
+          "aws-network-flow-monitor-agent-vx892",
+          "chaos-daemon-62gw5",
+          "deepflow-agent-ktcqs",
+          "ebs-csi-controller-d88f5c574-qqnxz",
+          "list-adoptions-796d64687-rx9kz",
+          "pethistory-deployment-8469c96cd7-v84gg",
+          "search-service-85c6b6547c-6zstq",
+          "pay-for-adoption-6d7d5d485b-n2hjt",
+          "petsite-deployment-559fbdd4b7-gljqs",
+          "petsite-deployment-f5cd8c745-cmsk9",
+          "cloudwatch-agent-wg2gx",
+          "ebs-csi-node-mnq6d",
+          "eks-pod-identity-agent-4hgzt",
+          "kube-proxy-cghkf",
+          "amazon-cloudwatch-observability-controller-manager-54d7b4548lb6",
+          "chaos-dashboard-6b9c9c6ff7-5bg4s",
+          "chaos-dns-server-6dfff77f97-tr8rr",
+          "search-service-6d54485b4f-r5vxx",
+          "search-service-6d54485b4f-vwkb4",
+          "list-adoptions-796d64687-kbjd5",
+          "petsite-deployment-99ff8c99f-4fnbn",
+          "petsite-deployment-76bc5b99cd-psw66",
+          "petfood-569498bc4b-qtp28",
+          "list-adoptions-645498d57c-sqxjl",
+          "petsite-deployment-559fbdd4b7-f2m2j",
+          "petsite-deployment-559fbdd4b7-jbc7d",
+          "petsite-deployment-559fbdd4b7-6fkh6",
+          "petsite-deployment-559fbdd4b7-tbnkf",
+          "petsite-deployment-75c7dd95b6-thgqp",
+          "pethistory-deployment-6c998c7c69-k47mj",
+          "petsite-deployment-8599bcbfc7-mw9lc",
+          "aws-guardduty-agent-95knl",
+          "chaos-controller-manager-5fff6cddd4-tz6tf",
+          "pethistory-deployment-8469c96cd7-fw2q5",
+          "petsite-deployment-559fbdd4b7-4sfvp",
+          "petsite-deployment-559fbdd4b7-h9qzl",
+          "petsite-deployment-559fbdd4b7-mn5zg",
+          "petsite-deployment-559fbdd4b7-h8mlm",
+          "petsite-deployment-559fbdd4b7-5ggzp",
+          "petsite-deployment-559fbdd4b7-xfp8t",
+          "petsite-deployment-7548fb886b-px6vt",
+          "pethistory-deployment-5c64bcc4cc-2kf4b"
+        ],
+        "svc_count": 52
+      },
+      {
+        "resource_name": "i-04c31adb6981f7286",
+        "type": "EC2Instance",
+        "single_az": "ap-northeast-1c",
+        "services": [
+          "kube-proxy-rd4p6",
+          "petsite-deployment-75db64db96-7bn85",
+          "petsite-deployment-75db64db96-bk4p5",
+          "petsite-deployment-8599bcbfc7-v8ww2",
+          "fluent-bit-x6qnf",
+          "chaos-daemon-qsbg9",
+          "deepflow-agent-6b57d",
+          "xray-daemon-2865q",
+          "aws-node-9q4k6",
+          "ebs-csi-controller-d88f5c574-fldsf",
+          "pay-for-adoption-6d7d5d485b-ftc62",
+          "search-service-6d54485b4f-lk27q",
+          "search-service-6d54485b4f-btkgr",
+          "petsite-deployment-99ff8c99f-mzkq7",
+          "petsite-deployment-54b89d55fd-4mp45",
+          "list-adoptions-655bb775b9-zsjtc",
+          "petsite-deployment-75db64db96-xfq85",
+          "petsite-deployment-6f5fd9ffb-r2d22",
+          "petsite-deployment-f5cd8c745-6dfrm",
+          "petsite-deployment-f5cd8c745-hcd4s",
+          "pethistory-deployment-678c8cbc9-vpvzp",
+          "petsite-deployment-8599bcbfc7-w9kfx",
+          "cloudwatch-agent-727qs",
+          "ebs-csi-node-z4m5f",
+          "eks-pod-identity-agent-65tqz",
+          "chaos-controller-manager-5fff6cddd4-5p428",
+          "prometheus-nfm-5f9f67d6c9-hn8n8",
+          "metrics-server-7cfb66fcc-v9xvt",
+          "search-service-85c6b6547c-xfnc7",
+          "pay-for-adoption-55f757f447-6z95c",
+          "traffic-generator-5945895cf8-gvgkr",
+          "petsite-deployment-559fbdd4b7-gjd2p",
+          "petsite-deployment-559fbdd4b7-csdgh",
+          "pethistory-deployment-6f894d4d75-kq4p8",
+          "pethistory-deployment-87bb8f844-sk954",
+          "petsite-deployment-75c7dd95b6-tbkwm",
+          "petsite-deployment-75c7dd95b6-tnnjj",
+          "petsite-deployment-8599bcbfc7-kzr9g",
+          "petsite-deployment-8599bcbfc7-xjr5z",
+          "aws-guardduty-agent-dlppn",
+          "aws-network-flow-monitor-agent-258x8",
+          "search-service-85c6b6547c-f5mcn",
+          "search-service-6d54485b4f-vkll5",
+          "search-service-6d54485b4f-cx274",
+          "petfood-probe-289782",
+          "petfood-747cfbf777-ggnvb",
+          "petsite-deployment-7548fb886b-7vn47",
+          "petsite-deployment-7548fb886b-qw27n",
+          "petsite-deployment-8599bcbfc7-7qp4j"
+        ],
+        "svc_count": 49
+      },
+      {
+        "resource_name": "i-0af324e6b70f0f7d8",
+        "type": "EC2Instance",
+        "single_az": "ap-northeast-1a",
+        "services": [
+          "xray-daemon-rbq9k",
+          "cluster-autoscaler-95dc8bdcc-mwg5d",
+          "search-service-6d54485b4f-gxmmp",
+          "petsite-deployment-99ff8c99f-gbr96",
+          "petsite-deployment-75db64db96-jvwft",
+          "petsite-deployment-75db64db96-rl7wx",
+          "list-adoptions-655bb775b9-4zmv8",
+          "petsite-deployment-8599bcbfc7-t2dbx",
+          "aws-network-flow-monitor-agent-dzdkc",
+          "chaos-daemon-78p5x",
+          "deepflow-agent-xqhpq",
+          "search-service-85c6b6547c-pgzj8",
+          "pay-for-adoption-6d7d5d485b-s4gj9",
+          "petsite-deployment-99ff8c99f-q24n9",
+          "pay-for-adoption-6fcffffd75-7jg74",
+          "search-service-579d8cff7b-524m4",
+          "search-service-5cdf85887b-wsd4m",
+          "petsite-deployment-6f5fd9ffb-n6dhc",
+          "petsite-deployment-6f5fd9ffb-xvmwj",
+          "petsite-deployment-f5cd8c745-f8q52",
+          "petsite-deployment-f5cd8c745-w86fj",
+          "petsite-deployment-8599bcbfc7-8z7v7",
+          "cloudwatch-agent-8rnmt",
+          "fluent-bit-4p4hs",
+          "aws-node-wnhzw",
+          "ebs-csi-node-qdldj",
+          "eks-pod-identity-agent-tv47k",
+          "kube-proxy-7nzrw",
+          "search-service-85c6b6547c-7j6pn",
+          "search-service-6d54485b4f-vd9dq",
+          "petsite-deployment-76bc5b99cd-x2jqj",
+          "pay-for-adoption-55f757f447-d2jfz",
+          "petfood-768c45858f-79n9l",
+          "petsite-deployment-559fbdd4b7-hm5qx",
+          "petsite-deployment-559fbdd4b7-p5mhw",
+          "petsite-deployment-75c7dd95b6-k8mr2",
+          "petsite-deployment-75c7dd95b6-xx29n",
+          "aws-guardduty-agent-p92gx",
+          "search-service-85c6b6547c-jmpbm",
+          "search-service-6d54485b4f-rcq9k",
+          "petfood-747cfbf777-fdgm8",
+          "petsite-deployment-75db64db96-hvwn9",
+          "petsite-deployment-7548fb886b-fjvh6",
+          "petsite-deployment-7548fb886b-ksq45",
+          "pethistory-deployment-5c64bcc4cc-q8tcn"
+        ],
+        "svc_count": 45
+      },
+      {
+        "resource_name": "i-04865db96ae2f3858",
+        "type": "EC2Instance",
+        "single_az": "ap-northeast-1c",
+        "services": [
+          "aws-network-flow-monitor-agent-qqgd5",
+          "kube-proxy-v7b7w",
+          "aws-load-balancer-controller-5cbf754dfc-hggbl",
+          "search-service-6d54485b4f-cgr52",
+          "petsite-deployment-54b89d55fd-njbq5",
+          "petsite-deployment-75db64db96-769ht",
+          "petsite-deployment-75db64db96-8rph4",
+          "pay-for-adoption-6fcffffd75-jrxsq",
+          "petsite-deployment-75db64db96-6qkpd",
+          "pethistory-deployment-6f894d4d75-8sc57",
+          "fluent-bit-dvpqd",
+          "chaos-daemon-kbdgb",
+          "deepflow-agent-w5hsz",
+          "xray-daemon-cmkcb",
+          "aws-node-sbbhs",
+          "list-adoptions-796d64687-lkvmw",
+          "pethistory-deployment-8469c96cd7-dl8z4",
+          "petsite-deployment-99ff8c99f-79d25",
+          "search-service-85c6b6547c-qb5r6",
+          "petsite-deployment-559fbdd4b7-zcn2g",
+          "petsite-deployment-6f5fd9ffb-n6dw8",
+          "petsite-deployment-f5cd8c745-6c7dm",
+          "pethistory-deployment-678c8cbc9-btzjs",
+          "petsite-deployment-8599bcbfc7-crhsr",
+          "cloudwatch-agent-lkjsb",
+          "ebs-csi-node-f2px8",
+          "eks-pod-identity-agent-62f5z",
+          "chaos-controller-manager-5fff6cddd4-fq2jq",
+          "yace-nfm-58fdbccc48-wkn7p",
+          "coredns-5f486bd4cc-fw5sq",
+          "pethistory-deployment-8469c96cd7-kx9md",
+          "petsite-deployment-76bc5b99cd-jrrvv",
+          "petfood-569498bc4b-6sxj2",
+          "search-service-579d8cff7b-f6qqb",
+          "list-adoptions-645498d57c-tvpgw",
+          "search-service-5cdf85887b-fjnfg",
+          "petsite-deployment-559fbdd4b7-qxpjj",
+          "pethistory-deployment-87bb8f844-hs5cw",
+          "petsite-deployment-75c7dd95b6-ztvrm",
+          "aws-guardduty-agent-64clc",
+          "search-service-6d54485b4f-gdlmq",
+          "list-adoptions-796d64687-fl4gd",
+          "pay-for-adoption-6d7d5d485b-qnpzs",
+          "petsite-deployment-99ff8c99f-xmdf2",
+          "petsite-deployment-7548fb886b-gfq5r"
+        ],
+        "svc_count": 45
+      },
+      {
+        "resource_name": "serviceseks2-databasewriter2462cc03-fwgfu4gossqe",
+        "type": "RDSInstance",
+        "single_az": "ap-northeast-1a",
+        "services": [
+          "payforadoption",
+          "petlistadoptions",
+          "pethistory"
+        ],
+        "svc_count": 3
+      }
+    ],
+    "row_count": 5
+  },
+  "captured_at": "2026-09-05T05:06:29Z"
+}

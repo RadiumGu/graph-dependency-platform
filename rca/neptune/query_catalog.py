@@ -212,6 +212,26 @@ QUERY_CATALOG = {
                    "limit": "int，默认 50"},
         "required": [],
     },
+    # Q22/Q23 补于 2026-09-05：目录里原本没有任何查询能读到边上的**故障注入**
+    # 判定。注意与 Q20 的分工——Q20 是观测层（这条边最近有没有被看到），
+    # Q22/Q23 是干预层（在目标端注入故障，源端会不会退化）。
+    "q22_edge_verification_verdicts": {
+        "mod": "queries", "fn": "q22_edge_verification_verdicts",
+        "desc": ("依赖边的**故障注入**验证判定：confirmed（已确认，带影响强度）/ "
+                 "refuted（已证伪，不可作为推理依据）/ inconclusive（证据不足）/ "
+                 "untested（未验证）。判据是「在依赖目标端注入故障、观测源端是否退化」"),
+        "params": {"service_name": "str，可选（省略=全图）",
+                   "status": "confirmed|refuted|inconclusive|untested，可选",
+                   "limit": "int，默认 100"},
+        "required": [],
+    },
+    "q23_verification_coverage": {
+        "mod": "queries", "fn": "q23_verification_coverage",
+        "desc": ("依赖边验证覆盖率汇总：verified_ratio = (confirmed + refuted) / 全部依赖边，"
+                 "即真正做过主动干预并得出结论的比例，另给出按边类型的分布"),
+        "params": {},
+        "required": [],
+    },
     "q21_observation_source_coverage": {
         "mod": "queries", "fn": "q21_observation_source_coverage",
         "desc": ("按观测源对账依赖边：X-Ray 与 DeepFlow 是盲区不重叠的**平行源**，"

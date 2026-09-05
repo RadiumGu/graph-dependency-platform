@@ -165,7 +165,7 @@ class TestS801GraphExplorerRender:
 
         try:
             at = AppTest.from_file(
-                os.path.join(PAGES_DIR, "1_Graph_Explorer.py"),
+                os.path.join(PAGES_DIR, "3_Graph_Explorer.py"),
                 default_timeout=15,
             )
             at.run()
@@ -189,7 +189,7 @@ class TestS801GraphExplorerRender:
 
         try:
             at = AppTest.from_file(
-                os.path.join(PAGES_DIR, "1_Graph_Explorer.py"),
+                os.path.join(PAGES_DIR, "3_Graph_Explorer.py"),
                 default_timeout=15,
             )
             # 清空多选默认值
@@ -227,7 +227,7 @@ class TestS802GraphExplorerNodeDetail:
 
         try:
             at = AppTest.from_file(
-                os.path.join(PAGES_DIR, "1_Graph_Explorer.py"),
+                os.path.join(PAGES_DIR, "3_Graph_Explorer.py"),
                 default_timeout=15,
             )
             at.run()
@@ -266,7 +266,7 @@ class TestS803SmartQueryReturnsTable:
 
         try:
             at = AppTest.from_file(
-                os.path.join(PAGES_DIR, "2_Smart_Query.py"),
+                os.path.join(PAGES_DIR, "4_Smart_Query.py"),
                 default_timeout=15,
             )
             at.run()
@@ -322,7 +322,7 @@ class TestS804SmartQueryEmptyResult:
 
         try:
             at = AppTest.from_file(
-                os.path.join(PAGES_DIR, "2_Smart_Query.py"),
+                os.path.join(PAGES_DIR, "4_Smart_Query.py"),
                 default_timeout=15,
             )
             at.run()
@@ -356,7 +356,7 @@ class TestS804SmartQueryEmptyResult:
 
         try:
             at = AppTest.from_file(
-                os.path.join(PAGES_DIR, "2_Smart_Query.py"),
+                os.path.join(PAGES_DIR, "4_Smart_Query.py"),
                 default_timeout=15,
             )
             at.run()
@@ -406,7 +406,7 @@ class TestS805RCAReturnsReport:
 
         try:
             at = AppTest.from_file(
-                os.path.join(PAGES_DIR, "3_Root_Cause_Analysis.py"),
+                os.path.join(PAGES_DIR, "6_Root_Cause_Analysis.py"),
                 default_timeout=15,
             )
             at.run()
@@ -447,7 +447,7 @@ class TestS806ChaosExperimentList:
 
         try:
             at = AppTest.from_file(
-                os.path.join(PAGES_DIR, "4_Chaos_Engineering.py"),
+                os.path.join(PAGES_DIR, "7_Chaos_Engineering.py"),
                 default_timeout=15,
             )
             at.run()
@@ -483,7 +483,7 @@ class TestS806ChaosExperimentList:
 
         try:
             at = AppTest.from_file(
-                os.path.join(PAGES_DIR, "4_Chaos_Engineering.py"),
+                os.path.join(PAGES_DIR, "7_Chaos_Engineering.py"),
                 default_timeout=15,
             )
             at.run()
@@ -502,7 +502,7 @@ class TestS807DRPlanGenerate:
         """S8-07: DR Plan 页面加载（默认状态）无异常。"""
         # DR Plan 页面默认显示空状态 + 预生成示例，不调用 Neptune
         at = AppTest.from_file(
-            os.path.join(PAGES_DIR, "5_DR_Plan.py"),
+            os.path.join(PAGES_DIR, "8_DR_Plan.py"),
             default_timeout=15,
         )
         at.run()
@@ -571,7 +571,7 @@ class TestS807DRPlanGenerate:
 
         try:
             at = AppTest.from_file(
-                os.path.join(PAGES_DIR, "5_DR_Plan.py"),
+                os.path.join(PAGES_DIR, "8_DR_Plan.py"),
                 default_timeout=15,
             )
             at.run()
@@ -605,7 +605,7 @@ class TestS808NeptuneConnectionFailure:
 
         try:
             at = AppTest.from_file(
-                os.path.join(PAGES_DIR, "1_Graph_Explorer.py"),
+                os.path.join(PAGES_DIR, "3_Graph_Explorer.py"),
                 default_timeout=15,
             )
             at.run()
@@ -632,7 +632,7 @@ class TestS808NeptuneConnectionFailure:
 
         try:
             at = AppTest.from_file(
-                os.path.join(PAGES_DIR, "4_Chaos_Engineering.py"),
+                os.path.join(PAGES_DIR, "7_Chaos_Engineering.py"),
                 default_timeout=15,
             )
             at.run()
@@ -673,7 +673,7 @@ class TestS808NeptuneConnectionFailure:
 
         try:
             at = AppTest.from_file(
-                os.path.join(PAGES_DIR, "3_Root_Cause_Analysis.py"),
+                os.path.join(PAGES_DIR, "6_Root_Cause_Analysis.py"),
                 default_timeout=15,
             )
             at.run()
@@ -686,7 +686,7 @@ class TestS808NeptuneConnectionFailure:
     def test_dr_page_no_neptune_needed(self):
         """S8-08 [P1]: DR Plan 默认状态不需要 Neptune 连接，应正常加载。"""
         at = AppTest.from_file(
-            os.path.join(PAGES_DIR, "5_DR_Plan.py"),
+            os.path.join(PAGES_DIR, "8_DR_Plan.py"),
             default_timeout=15,
         )
         at.run()

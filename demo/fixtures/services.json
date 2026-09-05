@@ -1,0 +1,145 @@
+{
+  "services": [
+    {
+      "name": "artillery",
+      "tier": null,
+      "az": "ap-northeast-1c",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier2"
+    },
+    {
+      "name": "artillery-write",
+      "tier": null,
+      "az": "ap-northeast-1c",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier2"
+    },
+    {
+      "name": "auth-service",
+      "tier": null,
+      "az": "ap-northeast-1c",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier2"
+    },
+    {
+      "name": "gateway-service",
+      "tier": null,
+      "az": "ap-northeast-1c",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier2"
+    },
+    {
+      "name": "order-service",
+      "tier": null,
+      "az": "ap-northeast-1c",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier2"
+    },
+    {
+      "name": "payforadoption",
+      "tier": "Tier0",
+      "az": "ap-northeast-1a",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier0"
+    },
+    {
+      "name": "payforadoption",
+      "tier": "Tier0",
+      "az": "ap-northeast-1c",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier0"
+    },
+    {
+      "name": "petfood",
+      "tier": null,
+      "az": "ap-northeast-1a",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier2"
+    },
+    {
+      "name": "petfood",
+      "tier": null,
+      "az": "ap-northeast-1c",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier2"
+    },
+    {
+      "name": "pethistory",
+      "tier": "Tier1",
+      "az": "ap-northeast-1c",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier1"
+    },
+    {
+      "name": "petlistadoptions",
+      "tier": "Tier1",
+      "az": "ap-northeast-1a",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier1"
+    },
+    {
+      "name": "petlistadoptions",
+      "tier": "Tier1",
+      "az": "ap-northeast-1c",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier1"
+    },
+    {
+      "name": "petsearch",
+      "tier": "Tier0",
+      "az": "ap-northeast-1a",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier0"
+    },
+    {
+      "name": "petsearch",
+      "tier": "Tier0",
+      "az": "ap-northeast-1c",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier0"
+    },
+    {
+      "name": "petsite",
+      "tier": "Tier0",
+      "az": "ap-northeast-1a",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier0"
+    },
+    {
+      "name": "petsite",
+      "tier": "Tier0",
+      "az": "ap-northeast-1c",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier0"
+    },
+    {
+      "name": "petstatusupdater",
+      "tier": "Tier1",
+      "az": null,
+      "fault_boundary": "region",
+      "recovery_priority": "Tier1"
+    },
+    {
+      "name": "points-service",
+      "tier": null,
+      "az": "ap-northeast-1c",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier2"
+    },
+    {
+      "name": "product-service",
+      "tier": null,
+      "az": "ap-northeast-1c",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier2"
+    },
+    {
+      "name": "trafficgenerator",
+      "tier": null,
+      "az": "ap-northeast-1a",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier2"
+    }
+  ],
+  "captured_at": "2026-09-05T06:05:53Z"
+}

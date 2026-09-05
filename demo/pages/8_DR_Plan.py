@@ -8,25 +8,16 @@ import json
 import os
 import sys
 
-import streamlit as st
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import _common as C  # noqa: E402
 
-# ── 路径设置 ──────────────────────────────────────────────────────────────────
-_DEMO_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.abspath(os.path.join(_DEMO_DIR, "..", ".."))
+import streamlit as st  # noqa: E402
+
+_PROJECT_ROOT = C.PROJECT_ROOT
 _DR_ROOT = os.path.join(_PROJECT_ROOT, "dr-plan-generator")
-_RCA_ROOT = os.path.join(_PROJECT_ROOT, "rca")
 
-for _p in [_PROJECT_ROOT, _DR_ROOT, _RCA_ROOT]:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
-os.environ.setdefault(
-    "NEPTUNE_ENDPOINT",
-    "petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com",
-)
-os.environ.setdefault("REGION", "ap-northeast-1")
-
-st.set_page_config(page_title="DR 计划", page_icon="🛡️", layout="wide")
+C.page_setup("DR 计划", icon="🛡️")
+C.sidebar()
 
 # ── 预设场景 ──────────────────────────────────────────────────────────────────
 PRESET_SCENARIOS = {
@@ -173,8 +164,8 @@ with st.sidebar:
     target = st.text_input("DR 目标 (target)", value=default_target)
     exclude = st.text_input("排除服务（逗号分隔）", value=default_exclude, placeholder="petfood,trafficgenerator")
 
-    generate_btn = st.button("🚀 生成 DR 计划", use_container_width=True, type="primary")
-    show_example = st.button("📄 查看示例计划", use_container_width=True)
+    generate_btn = st.button("🚀 生成 DR 计划", width="stretch", type="primary")
+    show_example = st.button("📄 查看示例计划", width="stretch")
 
     st.markdown("---")
     st.markdown("**计划说明**")
@@ -206,15 +197,35 @@ if generate_btn:
 if show_example:
     example_md = load_example_plan()
     example_json = load_example_plan_json()
+    # 改造要点（2026-09-05）：原实现把 RTO 13 / RPO 15 / affected 7 硬编码在这里，
+    # 与示例 JSON 里的真实值不一致，也与任何新生成的计划不一致。
+    # 现在一律从 JSON 现算，取不到就显示「—」而不是编一个数字。
+    _ej = example_json if isinstance(example_json, dict) else {}
+    _meta = _ej.get("metadata") if isinstance(_ej.get("metadata"), dict) else _ej
+
+    def _pick(*keys, default="—"):
+        for src in (_meta, _ej):
+            for k in keys:
+                if isinstance(src, dict) and src.get(k) not in (None, ""):
+                    return src[k]
+        return default
+
+    _phases = _ej.get("phases") or []
+    _affected = _pick("affected_count", "affected_services_count")
+    if _affected == "—":
+        svcs = _ej.get("affected_services") or _meta.get("affected_services") or []
+        _affected = len(svcs) if isinstance(svcs, list) and svcs else "—"
+
     st.session_state["dr_plan_result"] = {
         "markdown": example_md,
         "json": example_json,
         "error": None,
         "validation_warnings": [],
-        "plan_id": "dr-az-apne1az1-example",
-        "estimated_rto": 13,
-        "estimated_rpo": 15,
-        "affected_count": 7,
+        "plan_id": _pick("plan_id", default="（示例计划）"),
+        "estimated_rto": _pick("estimated_rto", "estimated_rto_minutes", "rto"),
+        "estimated_rpo": _pick("estimated_rpo", "estimated_rpo_minutes", "rpo"),
+        "affected_count": _affected,
+        "_phase_count": len(_phases) if isinstance(_phases, list) else None,
         "_is_example": True,
     }
 
@@ -309,7 +320,7 @@ with tab_download:
             data=result["markdown"],
             file_name=f"{result.get('plan_id', 'dr-plan')}.md",
             mime="text/markdown",
-            use_container_width=True,
+            width="stretch",
         )
     if result.get("json"):
         st.download_button(
@@ -317,7 +328,7 @@ with tab_download:
             data=json.dumps(result["json"], indent=2, ensure_ascii=False, default=str),
             file_name=f"{result.get('plan_id', 'dr-plan')}.json",
             mime="application/json",
-            use_container_width=True,
+            width="stretch",
         )
 
 # ── 多场景对比 ────────────────────────────────────────────────────────────────

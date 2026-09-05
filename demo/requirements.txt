@@ -1,6 +1,19 @@
+# demo 应用依赖。
+# 注意 pyyaml 与 pydantic 是新增的：
+#   pyyaml   —— 首页/各页面从 profiles/graph_contract.yaml 现算节点/边/来源数量
+#   pydantic —— profiles/schema.py 的 validate_profile 依赖它；缺失时
+#               Smart Query 的 few-shot 面板会降级（已加保护，不再整页崩溃）
 streamlit>=1.35.0
 pyvis>=0.3.2
 networkx>=3.0
 boto3>=1.34.0
 requests>=2.31.0
 pandas>=2.0.0
+pyyaml>=6.0
+pydantic>=2.0
+# st-link-analysis —— 交互探索页（9_Interactive_Explorer）用它做
+#   dagre 分层布局 + 双击展开邻居 + **选中回传 Python**。
+#   pyvis 是单向的，拿不回选中事件，那套交互在它上面做不了。
+#   这是目前唯一还在维护的 Cytoscape 封装（v0.4.0 / 2025-09）；
+#   streamlit-cytoscapejs (2022) / st-cytoscape (2023) 均已废弃。
+st-link-analysis>=0.4.0

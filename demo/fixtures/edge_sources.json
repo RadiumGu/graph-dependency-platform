@@ -1,0 +1,225 @@
+{
+  "by_source": [
+    {
+      "source": "eks-etl",
+      "edge_type": "LocatedIn",
+      "c": 630
+    },
+    {
+      "source": "eks-etl",
+      "edge_type": "RunsOn",
+      "c": 352
+    },
+    {
+      "source": "eks-etl",
+      "edge_type": "Manages",
+      "c": 254
+    },
+    {
+      "source": "eks-etl",
+      "edge_type": "BelongsTo",
+      "c": 241
+    },
+    {
+      "source": "eks-etl",
+      "edge_type": "Routes",
+      "c": 231
+    },
+    {
+      "source": "aws-etl",
+      "edge_type": "LocatedIn",
+      "c": 142
+    },
+    {
+      "source": "manual-fix",
+      "edge_type": "AffectedService",
+      "c": 28
+    },
+    {
+      "source": "deepflow-dns",
+      "edge_type": "AccessesData",
+      "c": 22
+    },
+    {
+      "source": "aws-etl",
+      "edge_type": "HasSG",
+      "c": 20
+    },
+    {
+      "source": "eks-etl",
+      "edge_type": "OwnedBy",
+      "c": 20
+    },
+    {
+      "source": "aws-etl",
+      "edge_type": "RoutesTo",
+      "c": 17
+    },
+    {
+      "source": "xray",
+      "edge_type": "AccessesData",
+      "c": 15
+    },
+    {
+      "source": "aws-etl",
+      "edge_type": "ForwardsTo",
+      "c": 14
+    },
+    {
+      "source": "deepflow-etl",
+      "edge_type": "DependsOn",
+      "c": 13
+    },
+    {
+      "source": "aws-etl",
+      "edge_type": "Invokes",
+      "c": 12
+    },
+    {
+      "source": "eks-etl",
+      "edge_type": "Implements",
+      "c": 12
+    },
+    {
+      "source": "aws-etl",
+      "edge_type": "AccessesData",
+      "c": 10
+    },
+    {
+      "source": "aws-etl",
+      "edge_type": "HasRule",
+      "c": 8
+    },
+    {
+      "source": "aws-etl",
+      "edge_type": "BelongsTo",
+      "c": 7
+    },
+    {
+      "source": "deepflow-etl",
+      "edge_type": "Calls",
+      "c": 6
+    },
+    {
+      "source": "business-layer",
+      "edge_type": "DependsOn",
+      "c": 6
+    },
+    {
+      "source": "business-layer",
+      "edge_type": "Implements",
+      "c": 6
+    },
+    {
+      "source": "agentcore-etl",
+      "edge_type": "InvokesTool",
+      "c": 5
+    },
+    {
+      "source": "agentcore-etl",
+      "edge_type": "RoutesTo",
+      "c": 5
+    },
+    {
+      "source": "aws-etl",
+      "edge_type": "Contains",
+      "c": 3
+    },
+    {
+      "source": "cfn-etl",
+      "edge_type": "Invokes",
+      "c": 3
+    },
+    {
+      "source": "deepflow-l4",
+      "edge_type": "AccessesData",
+      "c": 3
+    },
+    {
+      "source": "nfm",
+      "edge_type": "AccessesData",
+      "c": 3
+    },
+    {
+      "source": "xray",
+      "edge_type": "Calls",
+      "c": 3
+    },
+    {
+      "source": "aws-etl",
+      "edge_type": "PublishesTo",
+      "c": 2
+    },
+    {
+      "source": "aws-etl",
+      "edge_type": "WritesTo",
+      "c": 2
+    },
+    {
+      "source": "aws-etl-static",
+      "edge_type": "WritesTo",
+      "c": 2
+    },
+    {
+      "source": "manual-fix",
+      "edge_type": "DependsOn",
+      "c": 2
+    },
+    {
+      "source": "agentcore-etl",
+      "edge_type": "Delegates",
+      "c": 2
+    },
+    {
+      "source": "aws-etl-static",
+      "edge_type": "Invokes",
+      "c": 1
+    },
+    {
+      "source": "manual-fix",
+      "edge_type": "ProtectsAccess",
+      "c": 1
+    },
+    {
+      "source": "aws-etl",
+      "edge_type": "TriggeredBy",
+      "c": 1
+    },
+    {
+      "source": "eks-etl",
+      "edge_type": "ConnectsTo",
+      "c": 1
+    },
+    {
+      "source": "aws-etl",
+      "edge_type": "InvokesVia",
+      "c": 1
+    },
+    {
+      "source": "cfn-etl",
+      "edge_type": "AccessesData",
+      "c": 1
+    },
+    {
+      "source": "manual-fix",
+      "edge_type": "AccessesData",
+      "c": 1
+    },
+    {
+      "source": "agentcore-etl",
+      "edge_type": "Retrieves",
+      "c": 1
+    },
+    {
+      "source": "agentcore-etl",
+      "edge_type": "DependsOn",
+      "c": 1
+    },
+    {
+      "source": "xray",
+      "edge_type": "DependsOn",
+      "c": 1
+    }
+  ],
+  "captured_at": "2026-09-05T06:05:53Z"
+}

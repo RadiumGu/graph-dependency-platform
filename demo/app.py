@@ -1,198 +1,273 @@
 """
-app.py — Graph Dependency Platform Demo 主入口
+app.py — 首页。
 
-架构概览 + 关键指标 + 导航
+改造要点（2026-09-05）：原首页是一份功能目录（5 个指标 + 功能表 + 技术栈 +
+ASCII 架构图），把本项目最强的东西——依赖边可被故障注入证伪——完全埋掉了，
+且三个核心数字全错（22/19/18，实际 39/29/22）。
+
+现在的结构按 todo/project-intro-outline_20260831-0750.md 的叙事骨架：
+先立主张 → 抛两个观众答不上来的问题 → 亮实时计分板 → 对照四种业界范式 →
+点出缺口 → 上证据 → 引导互动。
+
+所有数字均从 profiles/graph_contract.yaml 与活图谱现算，代码中不含计数字面量。
 """
-import os
-import sys
+import _common as C
 
 import streamlit as st
 
-# ── 路径设置 ──────────────────────────────────────────────────────────────────
-_DEMO_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.abspath(os.path.join(_DEMO_DIR, ".."))
-_RCA_ROOT = os.path.join(_PROJECT_ROOT, "rca")
-_CHAOS_ROOT = os.path.join(_PROJECT_ROOT, "chaos", "code")
-_DR_ROOT = os.path.join(_PROJECT_ROOT, "dr-plan-generator")
+C.page_setup("这张图是真的吗", icon="🎯")
+C.sidebar()
 
-for _p in [_PROJECT_ROOT, _RCA_ROOT, _CHAOS_ROOT, _DR_ROOT]:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
-
-# ── 环境变量默认值 ────────────────────────────────────────────────────────────
-os.environ.setdefault(
-    "NEPTUNE_ENDPOINT",
-    "petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com",
-)
-os.environ.setdefault("REGION", "ap-northeast-1")
-os.environ.setdefault("BEDROCK_MODEL", "global.anthropic.claude-sonnet-4-6")
-
-# ── 页面配置（必须最先调用）──────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Graph Dependency Platform",
-    page_icon="🕸️",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-# ── 侧边栏 ────────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.image(
-        "https://img.shields.io/badge/Neptune-openCypher-blue?logo=amazon-aws",
-        use_container_width=False,
-    )
-    st.markdown("## 导航")
-    st.markdown(
-        """
-- 🏠 **首页** ← 当前
-- [🕸️ Graph Explorer](Graph_Explorer)
-- [💬 Smart Query](Smart_Query)
-- [🔍 根因分析 RCA](Root_Cause_Analysis)
-- [💥 混沌工程](Chaos_Engineering)
-- [🛡️ DR 计划](DR_Plan)
-"""
-    )
-    st.markdown("---")
-    st.caption("PetSite · ap-northeast-1 · Neptune openCypher")
-
-# ── 主标题 ────────────────────────────────────────────────────────────────────
-st.title("🕸️ Graph Dependency Platform")
+# ── 主张 ──────────────────────────────────────────────────────────────────────
+st.title("🎯 这张依赖图，是真的吗？")
 st.markdown(
-    "**基于图谱的微服务依赖管理与智能运维平台** — "
-    "将 Neptune 图谱、Bedrock AI 与混沌工程融合，实现全链路可观测与自动化恢复。"
+    "> **市面上的依赖图都在回答「我看到了什么」。这个项目回答的是「我看到的是真的吗」。**"
 )
 
-# ── 关键指标 ──────────────────────────────────────────────────────────────────
+q1, q2 = st.columns(2)
+q1.warning("**问题一**　你怎么知道图上那条边是真的？")
+q2.warning("**问题二**　如果图上少了一条边，你有任何机制会发现吗？")
+st.caption(
+    "绝大多数依赖拓扑工具对这两个问题都没有答案——不是做得不好，是**架构上无法回答**。"
+    "下面的计分板是这个项目对第一个问题的回答。"
+)
+
+# ── 实时计分板（核心）────────────────────────────────────────────────────────
 st.markdown("---")
-col1, col2, col3, col4, col5 = st.columns(5)
-col1.metric("图节点", "171+", "22 种类型")
-col2.metric("边类型", "19 种", "拓扑/调用/依赖")
-col3.metric("查询能力", "18 个", "Q1–Q18")
-col4.metric("微服务", "7 个", "PetSite 应用")
-col5.metric("AI 模型", "Claude Sonnet 4.6", "Bedrock")
+st.subheader("依赖边验证计分板")
 
-# ── 平台功能矩阵 ──────────────────────────────────────────────────────────────
-st.markdown("---")
-st.subheader("平台功能")
+vdata, vmode = C.verification_data()
+C.mode_badge(vmode, "验证数据")
 
-left, right = st.columns([3, 2])
+if vdata:
+    counts = vdata.get("totals_by_status", {})
+    total = vdata.get("dependency_edge_total", 0)
+    C.status_chips(counts, total)
 
-with left:
-    st.markdown(
-        """
-| 模块 | 功能描述 | 技术 |
-|------|----------|------|
-| 🕸️ **Graph Explorer** | Neptune 拓扑可视化，交互式节点探索 | pyvis + openCypher |
-| 💬 **Smart Query** | 自然语言 → openCypher，AI 生成查询 | Bedrock Claude + NL Engine |
-| 🔍 **RCA 分析** | Graph RAG 根因分析，历史故障上下文 | Graph RAG + S3 Vectors |
-| 💥 **混沌工程** | 实验历史浏览，服务韧性评估 | FIS + Neptune 同步 |
-| 🛡️ **DR 计划** | 灾备切换计划生成，RTO/RPO 评估 | Graph Analyzer + Bedrock |
-"""
+    refuted = counts.get("refuted", 0)
+    if refuted:
+        st.error(
+            f"**其中 {refuted} 条边被证伪** —— 图上声称存在、但故障注入证明它不成立。"
+            "这是任何竞品都拿不出来的东西：一个能推翻自己的依赖图。",
+            icon="❌",
+        )
+    st.caption(
+        "「已验证」= confirmed + refuted，即真正做过主动干预并得出结论的边。"
+        "untested 不是缺陷，而是诚实——业界所有依赖图的这个数字都是 100%，只是没人算过。"
     )
+else:
+    st.warning("暂无验证数据。")
 
-with right:
-    st.info(
-        """
-**技术栈**
-
-- **图数据库**: Amazon Neptune (openCypher)
-- **AI**: Amazon Bedrock Claude Sonnet 4.6
-- **语义搜索**: AWS S3 Vectors
-- **可观测性**: DeepFlow + CloudWatch
-- **微服务**: AWS EKS (PetSite)
-- **混沌**: AWS FIS (Fault Injection Simulator)
-"""
-    )
-
-# ── 架构图 ────────────────────────────────────────────────────────────────────
+# ── 图谱规模（动态）──────────────────────────────────────────────────────────
 st.markdown("---")
-st.subheader("系统架构")
+st.subheader("图谱规模")
+
+gstats, gmode = C.graph_stats()
+sc = C.schema_counts()
+qc = C.query_catalog_info()
+fc = C.fault_catalog_counts()
+
+m = st.columns(6)
+m[0].metric("图节点", f"{gstats.get('node_total', 0):,}", f"{gstats.get('node_label_count', 0)} 种在用")
+m[1].metric("图边", f"{gstats.get('edge_total', 0):,}", f"{gstats.get('edge_type_count', 0)} 种在用")
+m[2].metric("契约节点类型", sc["node_types"], "声明值")
+m[3].metric("契约边类型", sc["edge_types"], f"依赖边 {sc['dependency_edge_types']} 种")
+m[4].metric("预置查询", qc["count"], "确定性 Cypher")
+m[5].metric("故障目录", fc.get("total", 0), f"Mesh {fc.get('chaosmesh', 0)} / FIS {fc.get('fis', 0)}+{fc.get('fis_scenarios', 0)}")
+
+if gstats.get("node_label_count") and sc["node_types"]:
+    if gstats["node_label_count"] == sc["node_types"]:
+        st.caption(
+            f"✅ 契约声明的 {sc['node_types']} 种节点类型**全部**在活图谱里有实例——"
+            "声明与现实没有分叉。"
+        )
+    else:
+        st.caption(
+            f"契约声明 {sc['node_types']} 种节点类型，活图谱出现 {gstats['node_label_count']} 种。"
+            "差值通常是仅追加的事件日志类型或尚未产生实例的新类型。"
+        )
+
+# ── 四种业界范式 ──────────────────────────────────────────────────────────────
+st.markdown("---")
+st.subheader("业界怎么做的：四种范式")
+st.caption(
+    "多个数据源写同一张图，**冲突时谁赢、什么时候算一条边消失了**——"
+    "这一个问题分出了四种范式。"
+)
 
 st.markdown(
     """
-```
-                    ┌─────────────────────────────────────────────────────┐
-                    │              Graph Dependency Platform              │
-                    └──────────────────────────┬──────────────────────────┘
-                                               │
-              ┌────────────────┬───────────────┼───────────────┬────────────────┐
-              ▼                ▼               ▼               ▼                ▼
-    ┌──────────────┐  ┌──────────────┐ ┌─────────────┐ ┌──────────────┐ ┌────────────┐
-    │  Graph       │  │  Smart       │ │  RCA 分析   │ │  混沌工程    │ │  DR 计划   │
-    │  Explorer    │  │  Query       │ │  Graph RAG  │ │  FIS + Graph │ │  Generator │
-    └──────┬───────┘  └──────┬───────┘ └──────┬──────┘ └──────┬───────┘ └─────┬──────┘
-           │                 │                │               │               │
-           └─────────────────┴────────────────┴───────────────┴───────────────┘
-                                               │
-                    ┌──────────────────────────▼──────────────────────────┐
-                    │               Amazon Neptune Graph DB               │
-                    │        171+ 节点 · 19 种边 · openCypher API        │
-                    └─────────────────────────────────────────────────────┘
-                                               │
-              ┌────────────────┬───────────────┼───────────────┬────────────────┐
-              ▼                ▼               ▼               ▼                ▼
-    ┌──────────────┐  ┌──────────────┐ ┌─────────────┐ ┌──────────────┐ ┌────────────┐
-    │  EKS Cluster │  │  Bedrock     │ │  DeepFlow   │ │  S3 Vectors  │ │  DynamoDB  │
-    │  (PetSite)   │  │  Claude 4.6  │ │  观测平台   │ │  语义搜索    │ │  / RDS     │
-    └──────────────┘  └──────────────┘ └─────────────┘ └──────────────┘ └────────────┘
-```
+| | 范式 | 代表 | 立场 |
+|---|---|---|---|
+| **A** | 属性级规则仲裁 | ServiceNow IRE | 预先声明每个字段谁能写，低优先级的写入直接挡掉 |
+| **B** | 声明式单一权威 + 派生关系 | Backstage | 从结构上避免冲突：一个实体，一个 owner |
+| **C** | 幂等 upsert + 全量扫描时间戳收敛 | Cartography (CNCF) | 不仲裁——本轮看到就打时间戳，没打上的即视为消失，删除 |
+| **D** | 持久化实体 + 显式 TTL | New Relic / Dynatrace | 边是有生命周期的对象，每种类型自己声明能活多久 |
+
+**A + B 解决「防止冲突」，C + D 解决「管理消失」。**
 """
 )
+st.info(
+    "**值得单独点出的事实**：Datadog、OTel service graph、Elastic APM **根本没有持久化的边实体**——"
+    "一条边「是否存在」等价于「查询窗口内是否观测到」。所以「这条边消失了吗」这个问题，"
+    "在那些系统里不是答不好，而是**无法表达**。只有 New Relic 与 Dynatrace 把边建模成生命周期对象。",
+    icon="💡",
+)
 
-# ── 图谱 Schema 概览 ──────────────────────────────────────────────────────────
+# ── 缺口 ──────────────────────────────────────────────────────────────────────
 st.markdown("---")
-st.subheader("图谱 Schema 概览")
+st.subheader("四种范式都没解的那个缺口")
+st.error(
+    "**这四种范式都在裁决「不同数据源之间谁对」，没有一个在验证「这些源合起来对不对」。**",
+    icon="🕳️",
+)
+g1, g2 = st.columns(2)
+g1.markdown(
+    """
+**学术侧的两个硬停止**
 
-tab1, tab2 = st.tabs(["节点类型（22 种）", "边类型（19 种）"])
+- eBPF 依赖发现（arXiv:2608.04413）只复现了一个**已知的** 20 服务测试床拓扑
+  —— 证明的是「能复现」，不是「能发现未知边」
+- ICPE'24 Casper：阿里 2021 trace 在严格口径下只能重建到 **58.32%**
+"""
+)
+g2.markdown(
+    """
+**我们的选择**
 
-with tab1:
+> 我们没有去做第五个数据源——我们去做了**证伪**。
+
+对边 `A → B`：**在 B 注入故障，观测 A**。
+A 退化 → 边成立（且得到影响强度）；A 毫无反应 → 边可疑。
+"""
+)
+st.caption(
+    "本项目自己的代码最初把故障注入在 A —— 于是历史上 72 个实验「全部通过、零失败」，"
+    "因为那个判据根本没有区分能力。这个错误本身就是最好的说明：判据错了，全绿也毫无意义。"
+)
+
+# ── 证据卡 ────────────────────────────────────────────────────────────────────
+st.markdown("---")
+st.subheader("这套方法查出了什么别人查不出的东西")
+st.caption("每条都带出处标签。这些缺陷的共同点：读代码、跑单元测试都发现不了。")
+
+EVIDENCE = [
+    ("85%", "单一观测源导致的假阴性",
+     "接入 X-Ray 之前，漂移判定只用 DNS。一个 24 小时内被调用 **11,512 次** 的依赖在 DNS 窗口里完全不可见，"
+     "导致 26 条边里 22 条（85%）被误标为 `declared_not_observed`。加一个观测源，85% 的判定被推翻。",
+     "代码注释记录的实测"),
+    ("43%", "唯一没有门禁的字段上的漂移",
+     "`source` 字段在契约里声明了，但直到 2026-08-31 都没有校验。全图普查查出 **1240 条** 取值不合法的边与节点"
+     "（`eks-etl` 1228 / `aws-etl-static` 3 / `deepflow` 8 / `manual` 1）。同一份 YAML 里，"
+     "**有门禁的部分漂移为零**。",
+     "实测"),
+    ("183", "条边因为一次不带标签的查询而指错源端点",
+     "`find_vertex_by_name()` 不带标签，而名字在不同标签间会重复（**12 组**，例如 `gateway-service` "
+     "同时是 Deployment、K8sService、Microservice）。正确的 `Microservice-[RunsOn]->Pod` 只有 36 条，错源 173 条。",
+     "实测"),
+    ("40×", "count 正确，join 却放大 40 倍",
+     "边属性上的 SET 累积：`LambdaFunction` 数出来是 31，正确；但加上 `WHERE last_scanned IS NOT NULL` "
+     "就炸成 **9 个真实节点 / 1,253 行**，最坏的单个节点有 172 个不同的 `last_scanned` 值。"
+     "任何「先 count 看看对不对」的自检都发现不了它。",
+     "代码注释记录的实测"),
+    ("100% → 盲", "`abort` 类故障下成功率是瞎的",
+     "注入 abort 后被注入方成功率**稳定停在 100%**，而请求数从 2240 掉到 56（**-97%**）——"
+     "因为 abort 不产生响应行，成功率无从下降。判据改为「成功率下降」与「吞吐塌陷」取最大值后才看得见。",
+     "代码"),
+    ("1 年", "一条写入路径失败了近一年，而功能「一直存在」",
+     "Neptune 拒绝在边属性上使用 cardinality（`400 UnsupportedOperationException`），"
+     "而这个异常被吞成了一行日志。结果 **21 个实验跑完，19 条 `Calls` 边的混沌属性全是 0**。",
+     "代码注释记录的实测"),
+]
+
+for i in range(0, len(EVIDENCE), 3):
     cols = st.columns(3)
-    node_groups = {
-        "基础设施层": ["Region", "AvailabilityZone", "VPC", "Subnet", "SecurityGroup"],
-        "计算层": ["EC2Instance", "EKSCluster", "Pod", "Microservice"],
-        "网络层": ["ALB", "TargetGroup"],
-        "数据层": ["RDSCluster", "DynamoDB", "Neptune", "S3"],
-        "消息层": ["SQS", "SNS"],
-        "Serverless": ["Lambda", "StepFunction"],
-        "业务/运维层": ["BusinessCapability", "Incident", "ChaosExperiment"],
-    }
-    items = list(node_groups.items())
-    for i, (grp, nodes) in enumerate(items):
-        with cols[i % 3]:
-            st.markdown(f"**{grp}**")
-            for n in nodes:
-                st.markdown(f"- `{n}`")
+    for col, (num, headline, body, tag) in zip(cols, EVIDENCE[i:i + 3]):
+        with col:
+            with st.container(border=True):
+                st.markdown(f"### {num}")
+                st.markdown(f"**{headline}**")
+                st.caption(body)
+                st.markdown(f"`[{tag}]`")
 
-with tab2:
-    edges = [
-        ("EC2Instance", "LocatedIn", "AvailabilityZone", "拓扑"),
-        ("Subnet", "BelongsTo", "VPC", "拓扑"),
-        ("EC2Instance", "BelongsTo", "EKSCluster", "拓扑"),
-        ("Microservice", "RunsOn", "Pod", "运行"),
-        ("Pod", "RunsOn", "EC2Instance", "运行"),
-        ("ALB", "RoutesTo", "TargetGroup", "网络"),
-        ("TargetGroup", "ForwardsTo", "Microservice", "网络"),
-        ("Microservice", "Calls", "Microservice", "调用"),
-        ("Microservice", "DependsOn", "DynamoDB/RDS/SQS/S3", "依赖"),
-        ("Lambda", "Invokes", "Lambda/StepFunction", "调用"),
-        ("Microservice", "WritesTo", "SQS/SNS/S3", "数据"),
-        ("BusinessCapability", "Serves", "Microservice", "业务"),
-        ("Microservice", "Implements", "BusinessCapability", "业务"),
-        ("Incident", "TriggeredBy", "Microservice", "运维"),
-        ("Incident", "MentionsResource", "任意节点", "运维 (Phase A)"),
-        ("Microservice", "TestedBy", "ChaosExperiment", "运维 (Phase A)"),
-    ]
-    import pandas as pd
+st.success(
+    "**贯穿全项目的一条结论**：至今查出的缺陷，**没有一个**是「少采了数据」。"
+    "全部落在三类——粒度错配、写了但没人读、身份不唯一。"
+    "**瓶颈在数据契约，不在采集覆盖面。**",
+    icon="🧭",
+)
 
-    st.dataframe(
-        pd.DataFrame(edges, columns=["源节点", "边类型", "目标节点", "分类"]),
-        use_container_width=True,
-        hide_index=True,
+# ── 引导互动 ──────────────────────────────────────────────────────────────────
+st.markdown("---")
+st.subheader("动手试试")
+st.caption("下面三个入口都**不需要你有任何 AWS 凭证**——环境不可达时会自动展示活图谱的真实快照。")
+
+t1, t2, t3 = st.columns(3)
+with t1:
+    with st.container(border=True):
+        st.markdown("#### 🎯 边验证")
+        st.caption("看那 3 条被证伪的边具体是什么，以及判定它们用的证据权重与阈值。")
+        C.page_link("pages/1_Edge_Verification.py", "→ 打开边验证", width="stretch")
+with t2:
+    with st.container(border=True):
+        st.markdown("#### 📚 查询库")
+        st.caption(f"{qc['count']} 条预置图查询，选一条填参数就能跑。确定性 Cypher，**不用 AI**。")
+        C.page_link("pages/2_Query_Catalog.py", "→ 打开查询库", width="stretch")
+with t3:
+    with st.container(border=True):
+        st.markdown("#### 🤖 Agent 依赖")
+        st.caption("GenAI agent 的依赖也进了同一张图：谁委派谁、调了哪个工具、检索了哪个知识库。")
+        C.page_link("pages/5_Agent_Dependencies.py", "→ 打开 Agent 依赖", width="stretch")
+
+# ── 契约摘要 ──────────────────────────────────────────────────────────────────
+st.markdown("---")
+with st.expander("图谱契约：这张图凭什么可信（点开看门禁细节）"):
+    st.markdown(
+        f"""
+契约文件 `profiles/graph_contract.yaml`（版本 `{sc['contract_version']}`）是 **ETL 写入时实际读取**
+的那一份，不是文档。它规定：
+"""
     )
+    cc1, cc2 = st.columns(2)
+    with cc1:
+        st.markdown(f"**合法数据源白名单（{sc['sources']} 个）**")
+        st.caption(
+            "写入时校验 `source` 取值；这条门禁上线前，有 4 种未声明取值、1240 条数据漂移。"
+        )
+        st.code("\n".join(C.source_vocabulary()), language="text")
+    with cc2:
+        rub = C.verification_rubric()
+        st.markdown("**证据权重**")
+        st.caption("主动干预一次，比被动观测多少次都值钱——观测有上限，干预没有。")
+        w = rub.get("evidence_weights", {})
+        st.markdown(
+            f"""
+| 证据类型 | 权重 |
+|---|---|
+| 静态声明（每个源） | `{w.get('static_declaration')}` |
+| 被动观测（每个源） | `{w.get('observed_per_source')}` |
+| 被动观测**上限** | `{w.get('observed_cap')}` |
+| **主动干预确认** | `{w.get('intervention_confirmed')}`（无上限） |
+| **主动干预证伪** | `{w.get('intervention_refuted')}` |
+"""
+        )
 
-# ── 底部 ──────────────────────────────────────────────────────────────────────
+    st.markdown("**节点类型 · 边类型明细**")
+    tab_n, tab_e, tab_w = st.tabs(
+        [f"节点类型（{sc['node_types']}）", f"边类型（{sc['edge_types']}）", "按 writer 分组"]
+    )
+    with tab_n:
+        st.dataframe(C.df(C.node_type_table()), width="stretch", hide_index=True)
+    with tab_e:
+        st.dataframe(C.df(C.edge_type_table()), width="stretch", hide_index=True)
+        st.caption("「依赖边」列打勾的才参与验证——它们是「A 依赖 B」这种有方向的断言。")
+    with tab_w:
+        for writer, names in C.node_types_by_writer().items():
+            st.markdown(f"**{writer}** — {len(names)} 种")
+            st.caption("　".join(f"`{n}`" for n in names))
+
 st.markdown("---")
 st.caption(
-    "Graph Dependency Platform · AWS ap-northeast-1 · "
-    "Account 926093770964 · Neptune openCypher · Bedrock Claude Sonnet 4.6"
+    f"Graph Dependency Platform · {C.REGION} · Neptune openCypher · "
+    f"契约版本 {sc['contract_version']} · 数字均由契约与活图谱现算"
 )

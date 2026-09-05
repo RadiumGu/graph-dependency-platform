@@ -635,3 +635,158 @@ def q21_observation_source_coverage(service_name: str = None,
     # limit 在**过滤之后**生效 —— 见上方 Cypher 处的注释：
     # 先截断会把调用量为 0 的盲区边整批丢掉，让本查询漏报它本该找的东西。
     return out[:limit] if limit else out
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Q22 / Q23：故障注入验证判定
+#
+# 补这两条的原因（2026-09-05）：查询库里原本**没有任何一条**查询能读到边上的
+# 混沌验证判定，而那是本项目的头号产出。Q20 名字里也有 "verification"，但它读的
+# 是**漂移层面**的验证（声明 vs 观测，DNS/X-Ray 两个观测源，字段 drift_status /
+# runtime_verified / verified_by），与「故障注入证伪」完全是两件事：
+#
+#   Q20  观测层  这条边最近有没有被观测到？        → drift_status
+#   Q22  干预层  在目标端注入故障，源端会不会退化？ → verify_status
+#
+# 两者可以同时成立又互相矛盾（一条边天天被观测到，却在注入实验里被证伪），
+# 那种矛盾正是本平台想暴露的东西。
+#
+# 判定写入方只有 chaos-runner（见 profiles/graph_contract.yaml 的
+# edge_verification.authority），本查询是只读的读取方。
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _dependency_edge_labels() -> list:
+    """
+    契约里标 dependency: true 的边类型。
+
+    优先从契约现取；取不到才用兜底清单——兜底清单与契约漂移会被
+    tests/test_42_mcp_server.py 的同步性测试抓住。
+    """
+    try:
+        import os
+        import yaml
+        _root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        with open(os.path.join(_root, "profiles", "graph_contract.yaml"), encoding="utf-8") as fh:
+            gc = yaml.safe_load(fh) or {}
+        labels = [
+            k for k, v in (gc.get("edge_types") or {}).items()
+            if isinstance(v, dict) and v.get("dependency")
+        ]
+        if labels:
+            return sorted(labels)
+    except Exception:  # noqa: BLE001
+        pass
+    return ["AccessesData", "Calls", "Delegates", "DependsOn", "InvokesTool", "Retrieves"]
+
+
+def q22_edge_verification_verdicts(service_name: str = None,
+                                   status: str = None,
+                                   limit: int = 100) -> list:
+    """Q22: 依赖边的**故障注入**验证判定（confirmed / refuted / inconclusive / untested）。
+
+    ## 判定是怎么来的
+
+    对边 `A → B`：**在 B 注入故障，观测 A**。A 退化 → 依赖成立；A 毫无反应
+    且注入确认生效 → 依赖不成立。方向是全部关键——本项目最初把故障注入在 A
+    再观测 A，于是历史上 72 个实验「全部通过、零失败」，因为那个判据对真边和
+    假边给出完全相同的结果。
+
+    ## 四种状态的含义
+
+    | 状态 | 含义 | 能否作为推理依据 |
+    |---|---|---|
+    | `confirmed` | 观测方退化 ≥ 20%，依赖成立，`verify_degradation` 给出影响强度 | 可以 |
+    | `refuted` | 观测方退化 ≤ 5% 且**注入已确认生效** | **不可以** |
+    | `inconclusive` | 退化落在 5%–20%，或观测流量 < 20 请求，或注入是否生效未知 | 需标注为未定 |
+    | `untested` | 尚未做过主动验证（多数边的状态，属正常） | 需声明未验证 |
+
+    5%–20% 区间一律判未定而非证伪：重试、熔断、缓存都会掩盖真实依赖，
+    在这个区间证伪会**删掉一条真实存在的边**。
+
+    Args:
+        service_name: 只看该服务作为源端的边。None 表示全图。
+        status: 只看某一种状态（confirmed/refuted/inconclusive/untested）。None 表示全部。
+        limit: 返回条数上限。
+
+    Returns:
+        [{'src':..., 'dst':..., 'edge_type':..., 'verify_status':...,
+          'verify_confidence':..., 'verify_degradation':...,
+          'verify_evidence_channel':..., 'verify_experiment':...,
+          'verify_last':..., 'verify_reason':..., 'source':...}]
+    """
+    labels = ", ".join(f"'{x}'" for x in _dependency_edge_labels())
+    where = [f"type(e) IN [{labels}]"]
+    if service_name:
+        where.append(f"(a.name = '{service_name}' OR b.name = '{service_name}')")
+    if status:
+        if status == "untested":
+            where.append("(e.verify_status IS NULL OR e.verify_status = 'untested')")
+        else:
+            where.append(f"e.verify_status = '{status}'")
+
+    cypher = (
+        "MATCH (a)-[e]->(b) WHERE " + " AND ".join(where) + " "
+        "RETURN coalesce(a.name, a.arn, 'unknown') AS src, "
+        "coalesce(b.name, b.arn, 'unknown') AS dst, "
+        "labels(b)[0] AS dst_type, type(e) AS edge_type, "
+        "coalesce(e.verify_status, 'untested') AS verify_status, "
+        "e.verify_confidence AS verify_confidence, "
+        "e.verify_degradation AS verify_degradation, "
+        "e.verify_evidence_channel AS verify_evidence_channel, "
+        "e.verify_experiment AS verify_experiment, "
+        "e.verify_last AS verify_last, "
+        "e.verify_reason AS verify_reason, "
+        "e.source AS source "
+        "ORDER BY verify_status, edge_type, src "
+        f"LIMIT {int(limit)}"
+    )
+    res = nc.query(cypher)
+    return res.get("results", []) if isinstance(res, dict) else (res or [])
+
+
+def q23_verification_coverage() -> dict:
+    """Q23: 依赖边验证覆盖率汇总。
+
+    `verified_ratio = (confirmed + refuted) / 全部依赖边`，即真正做过主动干预
+    并得出结论的比例。
+
+    这个数字对外时容易被误读为「完成度低」，其实相反：业界所有依赖图的这个
+    数字都是 100% untested，只是没人算过——因为没有持久化的边实体、也没有
+    故障注入后端，这个比例**无从计算**。
+
+    Returns:
+        {'total_dependency_edges': int,
+         'by_status': {status: count},
+         'per_edge_type': {edge_type: {status: count}},
+         'verified_ratio': float,
+         'refuted_count': int}
+    """
+    labels = ", ".join(f"'{x}'" for x in _dependency_edge_labels())
+    cypher = (
+        f"MATCH ()-[e]->() WHERE type(e) IN [{labels}] "
+        "RETURN type(e) AS edge_type, "
+        "coalesce(e.verify_status, 'untested') AS verify_status, "
+        "count(*) AS c ORDER BY edge_type, verify_status"
+    )
+    res = nc.query(cypher)
+    rows = res.get("results", []) if isinstance(res, dict) else (res or [])
+
+    by_status: dict = {}
+    per_type: dict = {}
+    for r in rows:
+        st = r.get("verify_status") or "untested"
+        et = r.get("edge_type") or "unknown"
+        c = int(r.get("c") or 0)
+        by_status[st] = by_status.get(st, 0) + c
+        per_type.setdefault(et, {})[st] = per_type.get(et, {}).get(st, 0) + c
+
+    total = sum(by_status.values())
+    decided = by_status.get("confirmed", 0) + by_status.get("refuted", 0)
+    return {
+        "total_dependency_edges": total,
+        "by_status": by_status,
+        "per_edge_type": per_type,
+        "verified_ratio": round(decided / total, 4) if total else 0.0,
+        "refuted_count": by_status.get("refuted", 0),
+        "dependency_edge_types": _dependency_edge_labels(),
+    }

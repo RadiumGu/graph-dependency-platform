@@ -1,0 +1,235 @@
+{
+  "nodes": [
+    {
+      "label": "AgentGateway",
+      "name": "WaggleAIGateway",
+      "arn": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p"
+    },
+    {
+      "label": "AgentMemory",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:memory/WaggleAIMemory-HuA0HS92Yd",
+      "arn": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:memory/WaggleAIMemory-HuA0HS92Yd"
+    },
+    {
+      "label": "AgentMemory",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:memory/xgg_memory-5M0VYBCeFS",
+      "arn": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:memory/xgg_memory-5M0VYBCeFS"
+    },
+    {
+      "label": "AgentRuntime",
+      "name": "WaggleAIAdoption",
+      "arn": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIAdoption-4gnHUlDACh"
+    },
+    {
+      "label": "AgentRuntime",
+      "name": "WaggleAIConcierge",
+      "arn": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIConcierge-Yi6Ub97Ylw"
+    },
+    {
+      "label": "AgentRuntime",
+      "name": "WaggleAINutrition",
+      "arn": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAINutrition-2NEiCS7VJw"
+    },
+    {
+      "label": "AgentRuntime",
+      "name": "WaggleAIOrchestrator",
+      "arn": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIOrchestrator-K85tG867Xt"
+    },
+    {
+      "label": "AgentRuntime",
+      "name": "WaggleAIOrdering",
+      "arn": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIOrdering-Mnr1HiASuX"
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#adoption",
+      "arn": null
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#concierge",
+      "arn": null
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#nutrition",
+      "arn": null
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#orchestrator",
+      "arn": null
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#ordering",
+      "arn": null
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIAdoption-4gnHUlDACh#search_available_pets",
+      "arn": null
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAINutrition-2NEiCS7VJw#get_available_foods",
+      "arn": null
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAINutrition-2NEiCS7VJw#retrieve_nutrition_guidance",
+      "arn": null
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIOrchestrator-K85tG867Xt#adoption",
+      "arn": null
+    },
+    {
+      "label": "AgentTool",
+      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIOrchestrator-K85tG867Xt#nutrition_advisor",
+      "arn": null
+    },
+    {
+      "label": "Guardrail",
+      "name": "WaggleAIGuardrail",
+      "arn": "arn:aws:bedrock:ap-northeast-1:926093770964:guardrail/u4jw0mo0r7pq"
+    },
+    {
+      "label": "KnowledgeBase",
+      "name": "waggle-ai-nutrition-kb",
+      "arn": "QOWP8XIMMU"
+    }
+  ],
+  "edges": [
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAIOrchestrator",
+      "edge_type": "Delegates",
+      "target_label": "AgentRuntime",
+      "target": "WaggleAINutrition",
+      "verify_status": "confirmed",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAIOrchestrator",
+      "edge_type": "Delegates",
+      "target_label": "AgentRuntime",
+      "target": "WaggleAIAdoption",
+      "verify_status": "confirmed",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentTool",
+      "source": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIAdoption-4gnHUlDACh#search_available_pets",
+      "edge_type": "DependsOn",
+      "target_label": "Microservice",
+      "target": "petsearch",
+      "verify_status": "untested",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAIOrchestrator",
+      "edge_type": "InvokesTool",
+      "target_label": "AgentTool",
+      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIOrchestrator-K85tG867Xt#nutrition_advisor",
+      "verify_status": "untested",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAIAdoption",
+      "edge_type": "InvokesTool",
+      "target_label": "AgentTool",
+      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIAdoption-4gnHUlDACh#search_available_pets",
+      "verify_status": "untested",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAIOrchestrator",
+      "edge_type": "InvokesTool",
+      "target_label": "AgentTool",
+      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIOrchestrator-K85tG867Xt#adoption",
+      "verify_status": "untested",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAINutrition",
+      "edge_type": "InvokesTool",
+      "target_label": "AgentTool",
+      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAINutrition-2NEiCS7VJw#retrieve_nutrition_guidance",
+      "verify_status": "untested",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAINutrition",
+      "edge_type": "InvokesTool",
+      "target_label": "AgentTool",
+      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAINutrition-2NEiCS7VJw#get_available_foods",
+      "verify_status": "untested",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAINutrition",
+      "edge_type": "Retrieves",
+      "target_label": "KnowledgeBase",
+      "target": "waggle-ai-nutrition-kb",
+      "verify_status": "confirmed",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentGateway",
+      "source": "WaggleAIGateway",
+      "edge_type": "RoutesTo",
+      "target_label": "AgentTool",
+      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#orchestrator",
+      "verify_status": "untested",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentGateway",
+      "source": "WaggleAIGateway",
+      "edge_type": "RoutesTo",
+      "target_label": "AgentTool",
+      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#concierge",
+      "verify_status": "untested",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentGateway",
+      "source": "WaggleAIGateway",
+      "edge_type": "RoutesTo",
+      "target_label": "AgentTool",
+      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#nutrition",
+      "verify_status": "untested",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentGateway",
+      "source": "WaggleAIGateway",
+      "edge_type": "RoutesTo",
+      "target_label": "AgentTool",
+      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#ordering",
+      "verify_status": "untested",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentGateway",
+      "source": "WaggleAIGateway",
+      "edge_type": "RoutesTo",
+      "target_label": "AgentTool",
+      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#adoption",
+      "verify_status": "untested",
+      "edge_source": "agentcore-etl"
+    }
+  ],
+  "node_total": 20,
+  "edge_total": 14,
+  "captured_at": "2026-09-05T06:05:52Z"
+}

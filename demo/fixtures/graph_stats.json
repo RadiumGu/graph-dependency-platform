@@ -1,0 +1,283 @@
+{
+  "nodes_by_label": [
+    {
+      "label": "Pod",
+      "c": 689
+    },
+    {
+      "label": "Incident",
+      "c": 126
+    },
+    {
+      "label": "ChaosExperiment",
+      "c": 86
+    },
+    {
+      "label": "SecurityGroup",
+      "c": 57
+    },
+    {
+      "label": "S3Bucket",
+      "c": 34
+    },
+    {
+      "label": "TopologyChange",
+      "c": 31
+    },
+    {
+      "label": "LambdaFunction",
+      "c": 28
+    },
+    {
+      "label": "ECRRepository",
+      "c": 17
+    },
+    {
+      "label": "TargetGroup",
+      "c": 17
+    },
+    {
+      "label": "Subnet",
+      "c": 16
+    },
+    {
+      "label": "Microservice",
+      "c": 15
+    },
+    {
+      "label": "K8sService",
+      "c": 13
+    },
+    {
+      "label": "Deployment",
+      "c": 13
+    },
+    {
+      "label": "HPA",
+      "c": 11
+    },
+    {
+      "label": "EC2Instance",
+      "c": 11
+    },
+    {
+      "label": "AgentTool",
+      "c": 10
+    },
+    {
+      "label": "Namespace",
+      "c": 9
+    },
+    {
+      "label": "ListenerRule",
+      "c": 8
+    },
+    {
+      "label": "SQSQueue",
+      "c": 7
+    },
+    {
+      "label": "AWSServiceEndpoint",
+      "c": 7
+    },
+    {
+      "label": "DynamoDBTable",
+      "c": 6
+    },
+    {
+      "label": "LoadBalancer",
+      "c": 5
+    },
+    {
+      "label": "SNSTopic",
+      "c": 5
+    },
+    {
+      "label": "AgentRuntime",
+      "c": 5
+    },
+    {
+      "label": "AvailabilityZone",
+      "c": 3
+    },
+    {
+      "label": "RDSInstance",
+      "c": 3
+    },
+    {
+      "label": "BusinessCapability",
+      "c": 3
+    },
+    {
+      "label": "StepFunction",
+      "c": 2
+    },
+    {
+      "label": "RDSCluster",
+      "c": 2
+    },
+    {
+      "label": "VPC",
+      "c": 2
+    },
+    {
+      "label": "AgentMemory",
+      "c": 2
+    },
+    {
+      "label": "EKSCluster",
+      "c": 1
+    },
+    {
+      "label": "Region",
+      "c": 1
+    },
+    {
+      "label": "NeptuneCluster",
+      "c": 1
+    },
+    {
+      "label": "NeptuneInstance",
+      "c": 1
+    },
+    {
+      "label": "Database",
+      "c": 1
+    },
+    {
+      "label": "KnowledgeBase",
+      "c": 1
+    },
+    {
+      "label": "AgentGateway",
+      "c": 1
+    },
+    {
+      "label": "Guardrail",
+      "c": 1
+    }
+  ],
+  "edges_by_type": [
+    {
+      "t": "LocatedIn",
+      "c": 779
+    },
+    {
+      "t": "RunsOn",
+      "c": 352
+    },
+    {
+      "t": "Manages",
+      "c": 254
+    },
+    {
+      "t": "BelongsTo",
+      "c": 248
+    },
+    {
+      "t": "Routes",
+      "c": 231
+    },
+    {
+      "t": "TriggeredBy",
+      "c": 127
+    },
+    {
+      "t": "TestedBy",
+      "c": 62
+    },
+    {
+      "t": "AccessesData",
+      "c": 56
+    },
+    {
+      "t": "AffectedService",
+      "c": 28
+    },
+    {
+      "t": "DependsOn",
+      "c": 23
+    },
+    {
+      "t": "RoutesTo",
+      "c": 22
+    },
+    {
+      "t": "HasSG",
+      "c": 21
+    },
+    {
+      "t": "OwnedBy",
+      "c": 20
+    },
+    {
+      "t": "Calls",
+      "c": 20
+    },
+    {
+      "t": "Implements",
+      "c": 18
+    },
+    {
+      "t": "MentionsResource",
+      "c": 16
+    },
+    {
+      "t": "Invokes",
+      "c": 16
+    },
+    {
+      "t": "ForwardsTo",
+      "c": 15
+    },
+    {
+      "t": "Involves",
+      "c": 8
+    },
+    {
+      "t": "HasRule",
+      "c": 8
+    },
+    {
+      "t": "InvokesTool",
+      "c": 5
+    },
+    {
+      "t": "WritesTo",
+      "c": 4
+    },
+    {
+      "t": "Contains",
+      "c": 3
+    },
+    {
+      "t": "PublishesTo",
+      "c": 2
+    },
+    {
+      "t": "Delegates",
+      "c": 2
+    },
+    {
+      "t": "ProtectsAccess",
+      "c": 1
+    },
+    {
+      "t": "ConnectsTo",
+      "c": 1
+    },
+    {
+      "t": "Retrieves",
+      "c": 1
+    },
+    {
+      "t": "InvokesVia",
+      "c": 1
+    }
+  ],
+  "node_total": 1251,
+  "edge_total": 2344,
+  "node_label_count": 39,
+  "edge_type_count": 29,
+  "captured_at": "2026-09-05T06:05:52Z"
+}
