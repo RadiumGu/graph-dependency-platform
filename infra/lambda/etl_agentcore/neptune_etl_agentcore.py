@@ -55,7 +55,29 @@ ENVIRONMENT = os.environ.get('ENVIRONMENT', 'prod')
 # expires_seconds=21600（6h）**刻意取同一个值** —— 采集窗口小于 TTL 会让边在
 # 「还没到期但本轮没看到」时被误判失活；大于 TTL 则写进来的边立刻就是过期的。
 SPAN_LOOKBACK_SECONDS = int(os.environ.get('AGENTCORE_SPAN_LOOKBACK_SECONDS', str(6 * 3600)))
-SPAN_LOG_GROUP = os.environ.get('AGENTCORE_SPAN_LOG_GROUP', 'aws/spans')
+# AgentCore 的 span **不在** 共享的 aws/spans 里，而是按 runtime 分散在
+# /aws/bedrock-agentcore/runtimes/<runtime_id>-<endpoint>/ 的 spans 流里。官方原文：
+#   "spans go to the `spans` log stream in
+#    /aws/bedrock-agentcore/runtimes/<agent_id>-<endpoint_name>,
+#    **instead of the shared `aws/spans` log group**."
+#
+# ⚠️ 这里曾经默认 'aws/spans'，是个静默 bug（2026-09-05 实测发现）。把同一条查询
+# 打到两个日志组上，结果相反：aws/spans **0 行**（它有数据，但是别的服务的 span，
+# 实测最新两条是 SSM Get parameter），per-runtime 日志组 **3 行**
+# （op=invoke_agent 234 / chat 312 / execute_tool tool=search_available_pets 78）。
+#
+# 一个默认值造成三个现象：每轮 collection_status.spans 都报 empty（不是 agent 没被
+# 调用，是问错了地方）；runtime 侧的 AgentTool 节点永远拿不到属性（它们只能从 span
+# 发现）；每轮 edges 都是空的（所有 agent 依赖边都来自 span 路）。
+SPAN_LOG_GROUP_PREFIX = os.environ.get(
+    'AGENTCORE_SPAN_LOG_GROUP_PREFIX', '/aws/bedrock-agentcore/runtimes/')
+# 显式指定则不再按前缀发现（逗号分隔）。留这个口子是为了在只想查单个 runtime 时收窄范围。
+SPAN_LOG_GROUPS_OVERRIDE = [
+    g.strip() for g in (os.environ.get('AGENTCORE_SPAN_LOG_GROUPS') or '').split(',')
+    if g.strip()
+]
+# Insights 单次查询的日志组上限是 50。
+MAX_INSIGHTS_LOG_GROUPS = 50
 # 当 span 没带 kb_id 时，用账号内唯一的营养 KB 作兜底（可用环境变量覆盖）。
 AGENT_KB_FALLBACK_ID = os.environ.get('AGENTCORE_NUTRITION_KB_ID', '')
 INSIGHTS_TIMEOUT_SECONDS = int(os.environ.get('AGENTCORE_INSIGHTS_TIMEOUT', '60'))
@@ -74,6 +96,15 @@ class _probe_status:
     OK = 'ok'
     EMPTY = 'empty'
     FAILED = 'failed'
+    # 「问对了地方、确实没有」与「问错了地方、所以没有」在计数上都是 0，
+    # 而 EMPTY 只能表达前者。2026-09-05 实测踩到的正是后者：span 路默认查
+    # aws/spans，每轮都诚实地报 empty，而真正的 agent span 在 per-runtime
+    # 日志组里躺了一整天没人读。
+    #
+    # 所以要有第三种状态：**已知存在 N 个 agent runtime 日志组、且控制面确认有
+    # N 个活跃 runtime，span 查询却零命中** —— 这不是「空」，这是自相矛盾，
+    # 必须当失败上报。没有这条断言，同类 bug 会再次静默一整天。
+    CONTRADICTORY = 'contradictory'
 
 
 def _collect(fn, what: str):
@@ -279,19 +310,57 @@ fields @timestamp, attributes.gen_ai.operation.name as op,
 """
 
 
-def collect_spans() -> tuple:
-    """从 aws/spans 抽 agent 调用关系。
+def _discover_span_log_groups(logs) -> list:
+    """列出 /aws/bedrock-agentcore/runtimes/ 前缀下的全部日志组。
 
-    ⚠️ 硬前置：Transaction Search 必须已开（destination=CloudWatchLogs），
-    否则 aws/spans 日志组根本不存在。开启记录见
-    todo/agentobv/05-etl_xray影响面量化_20260904-0835.md 第六节（2026-09-04 08:49:33Z ACTIVE）。
+    每个 runtime 一个日志组，数量随 agent 数增长；Insights 单次查询最多 50 个。
+    超过 50 要告警 —— 静默截断会让部分 agent 的依赖边凭空消失。
+    """
+    if SPAN_LOG_GROUPS_OVERRIDE:
+        return SPAN_LOG_GROUPS_OVERRIDE[:MAX_INSIGHTS_LOG_GROUPS]
+    out, token = [], None
+    while True:
+        kw = {'logGroupNamePrefix': SPAN_LOG_GROUP_PREFIX, 'limit': 50}
+        if token:
+            kw['nextToken'] = token
+        resp = logs.describe_log_groups(**kw)
+        out += [g['logGroupName'] for g in resp.get('logGroups') or []]
+        token = resp.get('nextToken')
+        if not token:
+            break
+    if len(out) > MAX_INSIGHTS_LOG_GROUPS:
+        logger.warning(
+            'agent runtime 日志组 %d 个，超过 Insights 上限 %d，本轮只查前 %d 个'
+            ' —— 其余 runtime 的依赖边本轮不会被刷新',
+            len(out), MAX_INSIGHTS_LOG_GROUPS, MAX_INSIGHTS_LOG_GROUPS)
+    return sorted(out)[:MAX_INSIGHTS_LOG_GROUPS]
+
+
+def collect_spans(runtime_count: int = 0) -> tuple:
+    """从**各 runtime 自己的**日志组抽 agent 调用关系。
+
+    ⚠️ 硬前置：Transaction Search 必须已开（destination=CloudWatchLogs）。
+    开启记录见 todo/agentobv/05-etl_xray影响面量化_20260904-0835.md
+    第六节（2026-09-04 08:49:33Z ACTIVE，索引采样 100%）。
+
+    ⚠️ **不要改回 `aws/spans`** —— 那里没有 agent 的 span。实测对比与三个后果
+    记在 SPAN_LOG_GROUP_PREFIX 上面那段注释里。
+
+    `runtime_count` 用于矛盾检测：控制面说有 N 个 runtime、日志组也在，
+    span 却零命中 —— 那不是「空」，是查询本身有问题。
     """
     logs = boto3.client('logs', region_name=REGION)
     now = int(time.time())
+    groups = _discover_span_log_groups(logs)
+    if not groups:
+        logger.warning('前缀 %s 下没有任何日志组 —— agent 可能尚未部署，或前缀配错了',
+                       SPAN_LOG_GROUP_PREFIX)
+        return _probe_status.EMPTY, []
+    logger.info('span 采集覆盖 %d 个 runtime 日志组', len(groups))
 
     def _run():
         q = logs.start_query(
-            logGroupName=SPAN_LOG_GROUP,
+            logGroupNames=groups,
             startTime=now - SPAN_LOOKBACK_SECONDS,
             endTime=now,
             queryString=SPAN_QUERY,
@@ -310,7 +379,20 @@ def collect_spans() -> tuple:
         logs.stop_query(queryId=qid)
         raise TimeoutError(f'Logs Insights 超过 {INSIGHTS_TIMEOUT_SECONDS}s 未完成')
 
-    return _collect(_run, 'aws/spans agent 调用')
+    st, rows = _collect(_run, f'{len(groups)} 个 runtime 日志组的 agent span')
+
+    # 矛盾检测：有 runtime、有日志组，却一条 span 都查不到。
+    if st == _probe_status.EMPTY and runtime_count > 0:
+        logger.error(
+            '❌ span 零命中，但存在 %d 个 AgentRuntime 与 %d 个日志组 —— '
+            '这是矛盾而不是「空」。可能原因：查询字段名与实际 span 属性不符'
+            '（实测 attributes.gen_ai.* 会随 ADOT 版本变，用 '
+            'scripts/probe_agent_span_attrs.py 重新实测）、Transaction Search 被关闭、'
+            '或回看窗口 %ds 内确实无人调用 agent。'
+            '**不要当成 empty 放过** —— 这个 bug 曾以 empty 的形式静默了一整天。',
+            runtime_count, len(groups), SPAN_LOOKBACK_SECONDS)
+        return _probe_status.CONTRADICTORY, []
+    return st, rows
 
 
 # ── 写入 ─────────────────────────────────────────────────────────────────────
@@ -719,14 +801,17 @@ def lambda_handler(event=None, context=None):
     gw_targets = collect_gateway_targets(cp['gateways'][1])
     node_stats = write_control_plane(cp, gw_targets, round_ts)
 
-    span_status, span_rows = collect_spans()
+    span_status, span_rows = collect_spans(runtime_count=len(cp['runtimes'][1]))
     edge_stats = write_span_edges(span_rows, round_ts)
 
     # 采集状态逐项上报 —— 「全空」与「全失败」在计数上都是 0，
     # 不把状态带出来就无法区分「还没部署 agent」和「权限丢了」。
     statuses = {k: v[0] for k, v in cp.items()}
     statuses['spans'] = span_status
-    failed = [k for k, v in statuses.items() if v == _probe_status.FAILED]
+    # CONTRADICTORY 与 FAILED 同等对待：两者都意味着本轮结果不可信。
+    # 区别只在诊断信息 —— FAILED 是调用没成功，CONTRADICTORY 是调用成功但结果自相矛盾。
+    failed = [k for k, v in statuses.items()
+              if v in (_probe_status.FAILED, _probe_status.CONTRADICTORY)]
 
     result = {
         'round_ts': round_ts,
