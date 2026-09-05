@@ -87,11 +87,54 @@ def node_expiry_enabled() -> bool:
     return (os.environ.get('GRAPH_NODE_EXPIRY_ENABLED') or '').strip().lower() == 'true'
 
 
+# 由 etl_aws/graph_gc.py 拿**真实 AWS 状态**比对过的节点类型，TTL 过期收敛**不得**碰。
+#
+# ## 为什么（2026-09-05 实测，不是原则性顾虑）
+#
+# 两个机制对同一批节点会给出相反结论，而 GC 那个是对的：
+#
+#   graph_gc      列出 AWS 里真实存在的资源 → 图里不在这个集合的才删。比对的是**事实**。
+#   TTL 过期收敛  「超过 expires_seconds 没被刷新」→ 判过期。只知道**有没有被写过**。
+#
+# 实测冲突点：7 个 `ServicesEks2-awscdkawseks-*` 的 LambdaFunction 节点已 177 天
+# 未刷新（`aws-etl` 采集范围收窄后留下的孤儿），但逐个 `lambda get-function` 核验
+# **7/7 仍存在于 AWS**。GC 判「该留」——对；TTL 会判「该失活」——错。
+# 把活着的资源标成 active=false 是**错误陈述**，不是过期陈述。
+#
+# 这与边侧 `dependency_kind='inference'` 那条规则同源：
+# **「没有观测到」不等于「不存在」**。区别只在于节点侧已经有一个拿事实比对的
+# 机制（GC），所以这里不需要新增状态，只需要让 TTL 让位。
+#
+# ## 为什么不硬编码成 only_labels={'Pod'}
+#
+# 那样能得到同样的结果，但把**判据**换成了**结论**。判据是「有没有权威比对」，
+# Pod 只是筛完剩下的残余（GC 用 AWS API，看不到 EKS 里的 Pod，所以 Pod 只能靠 TTL）。
+# 硬编码会让下一个给 graph_gc 新增类型的人无从得知要同步改这里 ——
+# tests/test_50 用解析 graph_gc.py 源码的方式钉住两者一致，正是为了防这个漂移。
+#
+# 实测覆盖效果：排除后仍能收敛 520/527（Pod 511 + 已核验消失的 SecurityGroup 8
+# + Subnet 1），零误判。
+#
+# ⚠️ 这份清单**不要手抄** —— 我第一版就是用 grep 抄的，漏了 EC2Instance 与 S3Bucket，
+# 被 tests/test_50::m01 当场抓住。那条测试从 graph_gc.py 源码解析真相，
+# 增删 GC 类型时它会失败并告诉你要同步改这里。
+GC_RECONCILED_LABELS = frozenset({
+    'DynamoDBTable', 'EC2Instance', 'ECRRepository', 'EKSCluster',
+    'LambdaFunction', 'LoadBalancer', 'NeptuneCluster', 'NeptuneInstance',
+    'RDSCluster', 'RDSInstance', 'S3Bucket', 'SNSTopic', 'SQSQueue',
+    'StepFunction',
+})
+
+
 def expiring_node_labels() -> list[tuple[str, int]]:
-    """返回 [(节点类型, expires_seconds)]，只含声明了 TTL 的类型。"""
+    """返回 [(节点类型, expires_seconds)]，只含声明了 TTL 的类型。
+
+    **排除 GC_RECONCILED_LABELS** —— 见该常量的说明。
+    """
     return sorted((lb, spec['expires_seconds'])
                   for lb, spec in NODE_TYPES.items()
-                  if spec.get('expires_seconds'))
+                  if spec.get('expires_seconds')
+                  and lb not in GC_RECONCILED_LABELS)
 
 
 def _node_count_query(label: str, cutoff: int) -> str:
