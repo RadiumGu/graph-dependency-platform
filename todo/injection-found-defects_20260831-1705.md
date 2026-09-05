@@ -49,6 +49,8 @@
 | 33 | AgentRuntime 缺执行角色与网络配置 | agent 边选靶无法自动化 | ✅ 已修 |
 | 34 | AgentTool 违反「非 name 身份也必须带 name」约定 | 桥接边显示为 `? -> petsearch` | ✅ 已修 |
 | 35 | 高并发主动探测的 RuntimeClientError 与依赖失败同形 | 误读成注入效果 | ✅ 已识别 |
+| 36 | span 读错日志组，以 `empty` 形式静默一整天 | agent 边全空、桥接边被置失活 | ✅ 已修 |
+| 37 | 部署的层 `:9` 里烧的是旧契约（33 类） | 契约扩展从未生效于任何 Lambda | ⚠️ 仅 agentcore 已切 `:10` |
 
 其中 **#7 / #8 / #10 是 08:30–09:00 为了拿到第一条边的判定而查出的**，
 **#11 – #14 是 10:10–11:12 扩大验证覆盖面时查出的**，都不在最初报给用户的 6 条里。
@@ -1171,6 +1173,113 @@ name 的查询里显示 `?`/`<unnamed>` —— 图仿真报「端点节点没有
 「pet search service temporarily unavailable」（成功率通道，非吞吐塌陷），
 注入效力由 Pod 状态独立核验。判定 **confirmed / 强度 hard / 置信度 0.989** ——
 **全图第一条 hard 强度的边**，也是第一条用主动探测而非被动 SLI 验证的边。
+
+---
+
+## 36. span 读错日志组，且以 `empty` 的形式静默了一整天（2026-09-05 已修）
+
+`neptune_etl_agentcore.py` 的 `SPAN_LOG_GROUP` 默认 `aws/spans`，而官方文档早写明
+AgentCore 的 span 在 `/aws/bedrock-agentcore/runtimes/<id>-<endpoint>/` 的 `spans` 流里，
+**不在**共享的 `aws/spans`。把同一条 Insights 查询打到两处：
+
+| 日志组 | 命中 |
+|---|--:|
+| `aws/spans` | **0 行**（有数据，但是别的服务的 span，实测是 SSM `Get parameter`） |
+| per-runtime 日志组 | **3 行**：`invoke_agent` 234 / `chat` 312 / `execute_tool tool=search_available_pets` 78 |
+
+### 恶劣之处在于它的失败形态，不在于它本身
+
+`_probe_status` 早已区分「空」与「拿不到」——注释论证得很充分：
+「`[]` 与调用失败在下游看起来一样，而它们含义相反」。但这次是**第三种**：
+**采集成功、返回确实为空、空是因为问错了对象**。
+
+`empty` 的语义是「问对了地方、确实没有」，它表达不了「问错了地方」。于是每轮 ETL
+都诚实地报 `spans: empty`、不进 `failed_collections`、没有任何告警——静默一整天。
+
+修复加了第三种状态 `CONTRADICTORY`：**已知有 N 个 AgentRuntime、有 M 个日志组、
+查询成功却零命中 → 这是矛盾不是空**，与 FAILED 同等计入 `failed_collections`。
+`runtime_count=0`（真没部署 agent）时空仍是空，不谎报矛盾。
+
+### 修复效果
+
+| 指标 | 修前 | 修后 |
+|---|---|---|
+| `collection_status.spans` | `empty` | **`ok`，18 条** |
+| `edges` | `{}` | **InvokesTool 8 / DependsOn 1 / Delegates 2** |
+| `AgentTool` 有 name | 5/10 | **13/13** |
+| 桥接边 | `active=False` | **`active=True`** |
+
+AgentTool 从 10 个变 13 个 —— 多出的 `concierge_chat` / `list_available_foods` /
+`get_available_foods` 是**此前整个节点都不存在**，不只是缺属性。
+
+**桥接边这条最要紧**：它 `last_seen` 停在 09-04 20:10、20:11 被置 `active=False`，
+而 #35 那条 confirmed / hard / 0.989 的判定就写在这条**图谱认为已失活**的边上——
+任何带 `has('active', true)` 的查询都看不到全图置信度最高的 agent 判定。
+**判定正确但不可见，与判定错误在使用者眼里没有区别。**
+
+### 顺带修正一处我自己的错误归因
+
+我曾在 `02-agent可观测性方案` 里「纠正」文档说 `dependency_kind` 的取值不是
+`dynamic`/`static` 而是 `static`/`observed`——**那个纠正本身是错的**。
+我只查了契约 YAML（那里 `dynamic` 出现 0 次），而那条主张说的是**数据约定**：
+图里实测 `dynamic` 91 条 / `static` 21 条。用错的数据源去「纠正」一个正确的说法，
+比原来的说法更有害，因为它带着「已实测」的权威。
+
+---
+
+## 37. 部署的层里烧的是旧契约，扩展从未生效于任何 Lambda（2026-09-05 发现）
+
+把 agentcore ETL 部署成 Lambda 后第一次调用直接失败：
+
+```
+GraphContractError: 未声明的节点类型 'AgentRuntime'（契约 v1 共 33 种）
+```
+
+而仓库里的 `graph_contract_data.py` 是 **39 节点 / 29 边**、含 `AgentRuntime`，
+`gen_graph_contract.py --check` 报「产物为最新」。差异在**层**：
+`neptune-client-base:9` 里烧的是 33 类的旧快照。
+
+**这意味着契约从 33 扩到 39 这件事，在任何已部署的 Lambda 里都没有生效过。**
+本地跑 ETL 用 `PYTHONPATH=infra/lambda/shared/python` 读仓库版本，所以一直没暴露；
+一部署就撞上。**「本地能跑」与「部署能跑」之间隔着一个层版本。**
+
+处置：发布 `neptune-client-base:10`（用仓库当前的 5 个共享模块覆盖 `:9` 的内容），
+**只把 agentcore ETL 切到 `:10`**，既有 4 条 ETL 保持 `:9` 不动——它们正在工作，
+切层是对生产的改动，应当单独评估而不是搭本次的便车。
+
+遗留债务（已记录未处理）：4 条 ETL 仍跑在 33 类契约上。它们不写 agent 类型所以
+不会报错，但**契约作为「单一事实源」的承诺在部署面上是打折的**。
+
+---
+
+## 部署方式的选择：为什么没有用 cdk deploy
+
+`infra/lib/neptune-etl-stack.ts` 定义了 Lambda 1–4，`NeptuneEtlStack` 最后一次更新是
+**2026-04-19**——四个多月前。跑 `cdk deploy` 会一次性应用四个月的累积栈改动，
+而不只是新增 agentcore。项目自己的记录也印证这个风险：
+`deploy-result_20260830-1530.md` 写明「后续每次 `cdk deploy ServicesEks2` 都需要
+context 覆盖，直到 ALB 漂移被独立修复——**这是已知债务**」。
+
+而且栈里**根本没有 xray ETL**——`neptune-etl-from-xray` 在 AWS 里是活的、
+不属于任何 CFN 栈，角色上的内联策略 `etl-xray-read` 也是手工加的。
+即**「ETL 在 CDK 之外部署」在本项目已有先例**。
+
+所以选择沿用该先例：`create-function` + `put-rule`，全部为**新增**资源
+（内联策略 `agentcore-etl-readonly`、函数 `neptune-etl-from-agentcore`、
+规则 `neptune-etl-agentcore-every-15min`），不修改任何既有 ETL，逐项可逆。
+
+**这本身是新增的漂移，必须记账**：agentcore 与 xray 两条 ETL 都存在于 AWS 而不在
+IaC 里。在一个分支名叫 `fix/graph-single-source-of-truth` 的项目里，这是要还的债——
+但把它和「一次性应用四个月未部署的栈改动」绑在一起还，风险更大。
+
+### 定时频率取 15 分钟而不是文档写的 5 分钟
+
+span 采集窗口是 6h（**刻意等于边的 `expires_seconds`**，理由见代码注释：
+窗口小于 TTL 会让边在「还没到期但本轮没看到」时被误判失活）。
+只要调度间隔远小于 6h，边就不会因不刷新而过期。
+而 Logs Insights 按扫描量计费，每轮要扫 7 个日志组的 6h 窗口——
+5 分钟一次是 288 轮/天，15 分钟是 96 轮/天，覆盖效果相同。
+与 `neptune-etl-from-aws` 的 15 分钟对齐。
 
 ---
 

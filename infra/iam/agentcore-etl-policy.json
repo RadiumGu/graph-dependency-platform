@@ -1,0 +1,27 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AgentCoreControlPlaneReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "bedrock-agentcore:List*",
+        "bedrock-agentcore:Get*",
+        "bedrock:ListGuardrails",
+        "bedrock:ListKnowledgeBases"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "LogsInsightsForAgentSpans",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogGroups",
+        "logs:StartQuery",
+        "logs:GetQueryResults",
+        "logs:StopQuery"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
