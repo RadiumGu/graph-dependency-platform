@@ -45,6 +45,10 @@
 | 29 | `_target_metrics_name` 返回图谱名而非 DeepFlow 名 | **注入生效门禁被静默禁用** | ✅ 已修 |
 | 30 | 边级无流量与「打断未传导」同形 | 噪声被当退化证据 | ✅ 已修 |
 | 31 | 第二条写入路径绕过全部三道门禁 | 3 条错 refuted + 11 条置信度越界 | ✅ 已修 |
+| 32 | 我判定「FIS 打不了 bedrock」，实际有官方模板 | 结论过早，漏掉唯一可行路径 | ✅ 已更正 |
+| 33 | AgentRuntime 缺执行角色与网络配置 | agent 边选靶无法自动化 | ✅ 已修 |
+| 34 | AgentTool 违反「非 name 身份也必须带 name」约定 | 桥接边显示为 `? -> petsearch` | ✅ 已修 |
+| 35 | 高并发主动探测的 RuntimeClientError 与依赖失败同形 | 误读成注入效果 | ✅ 已识别 |
 
 其中 **#7 / #8 / #10 是 08:30–09:00 为了拿到第一条边的判定而查出的**，
 **#11 – #14 是 10:10–11:12 扩大验证覆盖面时查出的**，都不在最初报给用户的 6 条里。
@@ -1055,6 +1059,121 @@ scripts/write_edge_verdicts.py           自己决定 status 与 confidence（�
 
 ---
 
+---
+
+## 32. 我判定「FIS 打不了 bedrock」是过早的结论（2026-09-05 更正）
+
+上一轮我读了 FIS Actions reference，确认三个 `aws:fis:inject-api-*` 动作的
+`service` 参数**官方只支持 `ec2` 与 `kinesis`**，据此判定 agent 层依赖无法用 FIS
+验证。**这个事实没错，但结论错了** —— 用户提示去看
+`aws-samples/fis-template-library`，那里有 **`agentcore-strands-agent-faults`**，
+README 明确列在「AI Agents (Amazon Bedrock AgentCore)」下。
+
+它的机制与我预设的完全不同，**不是 AWS 服务级故障，而是应用层的工具边界注入**：
+
+```
+FIS aws:ssm:start-automation-execution
+  -> SSM Automation 写 /chaos/{runtime_id}/{fault_rate,fault_injections,active}
+     -> agent 里 vendored 的 strands_agentcore_chaos.py 每次调用读参数并注入
+```
+
+效果分两类：**pre-hook** 取消工具调用（`timeout`/`network_error`/
+`execution_error`/`validation_error`，工具压根不执行）、**post-hook** 让工具跑完
+再污染返回（`truncate_fields`/`remove_fields`/`corrupt_values`）。
+写参数时 `active=true` **最后写**、关闭时 `active=false` **最先写**，
+保证没有调用观察到半写状态。
+
+**它的 README 警告了两件事，与本文件已记录的两个缺陷完全同型：**
+
+> Tool names are matched exactly against your agent's tools, and a name that
+> matches nothing injects nothing: **run the template unmodified against your own
+> agent and the experiment will complete "successfully" while injecting no faults
+> at all.**
+
+这就是 #20（`petsearch -> s3` 被判 refuted 的真因：FIS 报成功、注入未生效）的
+形态。官方模板自己把这个陷阱写在文档里，反过来印证注入生效门禁不是过度设计。
+
+> Because a tool-level fault that the agent handles gracefully completes as a
+> successful invocation, **it is invisible to infrastructure error metrics**.
+> Surface the agent's own signal instead.
+
+这条决定了 agent 边的观测方**不能用基础设施指标**，必须用 agent 自身信号。
+
+**硬前提**（决定它对本项目的适用性）：agent 必须是 Strands agent、把
+`strands_agentcore_chaos.py` vendored 进构建、注册 `plugins=chaos_plugins()`，
+且部署到**与生产分离的专用 chaos runtime**。生产构建必须完全不含这些工件。
+也就是说它无法对未改造的 agent 注入。
+
+**教训**：「查清官方工具有什么」这一步我做了（读了 Actions reference），
+但只查了 **FIS 动作清单**，没查 **aws-samples 的模板库** —— 而模板可以用
+`aws:ssm:start-automation-execution` 把任意 SSM 自动化包装成 FIS 实验，
+所以「FIS 能打什么」的边界比动作清单宽得多。已存在的教训
+「优先用 AWS 官方工具，先升级 aws-cli -> 再找 aws-samples/awslabs -> 最后才自研」
+里的第二步，这次跳过了。
+
+---
+
+## 33/34. agent 层的两个数据缺口（2026-09-05 已修）
+
+**#33 `AgentRuntime` 缺注入目标属性。** 节点只有 arn/status/version/runtime_id，
+而 `list_agent_runtimes` **不返回** roleArn 与 networkConfiguration，
+必须逐个 `get_agent_runtime`。缺了它们，图谱能说「这条 agent 依赖存在」，
+却无法回答「要验证它该往哪注入」。补上后 6/6 runtime 全部拿到：
+
+```
+role_arn            aws:fis:inject-api-* 与 agentcore 模板都要它（后者要求
+                    runtime 执行角色有 ssm:GetParametersByPath on /chaos/*）
+subnet_ids          实测三个子网属于 vpc-010ab37a3f9f74725，与 EKS 同一个 VPC
+security_group_ids  sg-067d521fe3f2ceec4（WaggleAIAgents-AgentRuntimeSg）
+```
+
+修的过程本身踩了一个错：第一版把 `get_agent_runtime` 写在 `write_control_plane()`
+里，报 `NameError: name 'acc' is not defined` —— 那是**写入**函数，拿不到采集阶段
+的 boto3 客户端。正确修法不是在写入函数里另建客户端（那会把采集职责混进写入层），
+而是在采集阶段富化。**告警把这个错误准确暴露出来了**，因为我在 except 里写了
+「本轮该 runtime 缺注入目标属性 —— 选靶将无法自动化」而不是静默 pass。
+
+**#34 `AgentTool` 违反「非 name 身份也必须带 name」的约定。** 契约声明身份键是
+`tool_key`（合理），但节点写的是 `tool_name` 而**不写 `name`**。
+`upsert_vertex` 的注释早已把规则写清：「以非 name 作身份时 name 必须进 onMatch，
+否则改名后图谱留旧名字」。实测代价：10/10 个 AgentTool 缺 name，于是在所有按
+name 的查询里显示 `?`/`<unnamed>` —— 图仿真报「端点节点没有 name 属性」、
+判定日志打成 `? -> petsearch`，那条桥接边看起来像脏数据。
+
+---
+
+## 35. 高并发主动探测的 RuntimeClientError 与「依赖失败」同形（2026-09-05）
+
+验证 `AgentTool(search_available_pets) -[DependsOn]-> petsearch` 时，观测方只能是
+**主动探测**（`invoke_agent_runtime`）—— 见 #32 的第二条 README 警告。
+
+**11 并发探测时 7/22 报 `RuntimeClientError`**，我一度把它读成注入效果。
+按对照原则用**同并发**跑无注入基线才发现问题；降到 2 并发后 **26/26 调用成功**，
+证实那是**探测器自身的假象**（agent runtime 的并发限制），不是依赖信号。
+
+这与本文件反复记录的形态一致：**观测方自己的故障与被测依赖的故障同形**。
+护栏是同一条 —— 观测侧的任何异常都要先用「不该受影响的对照」排除。
+
+同一轮还有第二个污染源：并发探测耗时 103s，**跨过了 3 分钟注入窗口的结束**。
+测量窗口必须完全落在故障窗口内，这与「拿独立数据源做窗口对齐验证时，
+查询窗口必须严格等于故障窗口」是同一条。
+
+### 最终得到的剂量-反应曲线
+
+| petsearch 状态 | 探测 | 返回有效宠物数据 |
+|---|--:|--:|
+| 健康（2 并发） | 26 | **25/26 = 96.2%** |
+| abort 注入中（吞吐塌陷 62.2%，生效已确认） | 3 | 2/3 |
+| **业务容器全挂**（Pod 1/2 Running、重启 +1） | 22 | **0/22 = 0%** |
+| 恢复后 | 6 | 回到 11 只幼犬 |
+
+第三行是这条边的判定依据：退化 **96.2pp**，观测方**自己自述**
+「pet search service temporarily unavailable」（成功率通道，非吞吐塌陷），
+注入效力由 Pod 状态独立核验。判定 **confirmed / 强度 hard / 置信度 0.989** ——
+**全图第一条 hard 强度的边**，也是第一条用主动探测而非被动 SLI 验证的边。
+
+---
+
 ## 收敛成四条方法论
 
 ### 一、缺陷类别高度集中，且都不是「数据采少了」
@@ -1124,7 +1243,7 @@ scripts/write_edge_verdicts.py           自己决定 status 与 confidence（�
 | 未声明的 source 取值 | **0**（节点 3 种 / 边 11 种，全部在契约词表内） |
 | 四个 ETL 函数 | 全部 200 OK，层 `:8`，门禁违约 0 条 |
 | `Microservice-[RunsOn]->Pod` | 36 → **42** |
-| 测试 | 461 → **591 passed**（新增 80 个守门用例；另有 4 条失败属并发会话在飞的 dr-plan-generator 改动） |
+| 测试 | 461 → **599 passed**（新增 80 个守门用例；另有 4 条失败属并发会话在飞的 dr-plan-generator 改动） |
 
 ### 仍然未解的
 

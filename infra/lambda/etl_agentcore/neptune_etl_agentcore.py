@@ -108,6 +108,68 @@ def _paged(client, op: str, key: str) -> list:
             return out
 
 
+def _enrich_runtimes(acc, runtimes: list) -> list:
+    """给每个 runtime 补上**注入目标属性**：执行角色与网络配置。
+
+    ## 为什么必须在采集阶段做
+
+    `list_agent_runtimes` 只返回 arn/id/name/version/status/lastUpdatedAt ——
+    **不含** roleArn 与 networkConfiguration，必须逐个 `get_agent_runtime`。
+
+    第一版我把这段写在 `write_control_plane()` 里，结果 `NameError: name 'acc'
+    is not defined` —— 那是**写入**函数，拿不到采集阶段的客户端。修法不是在写入
+    函数里另建一个客户端（那会把采集职责混进写入层，且每轮多建一次连接），
+    而是在这里富化好再交给写入层。
+
+    ## 这三个属性各对应一条已确认的注入路径
+
+        role_arn            aws:fis:inject-api-* 的目标类型就是 aws:iam:role。
+                            ⚠️ 但其 service 参数官方**只支持 ec2 与 kinesis**
+                            （FIS Actions reference 原文），打不了 bedrock-agentcore。
+                            留着它是为了 aws-samples/fis-template-library 的
+                            agentcore-strands-agent-faults 模板 —— 那条路是
+                            FIS -> SSM Automation -> /chaos/{runtime_id}/* 参数，
+                            需要 runtime 执行角色有 ssm:GetParametersByPath。
+        subnet_ids          aws:network:disrupt-connectivity 的目标是**子网**。
+                            实测这些子网属于 vpc-010ab37a3f9f74725，与 EKS 同 VPC，
+                            所以 agent 的出向连通性可被切断。
+        security_group_ids  安全组级隔离的目标。
+
+    没有它们，图谱能说「这条 agent 依赖存在」，却无法回答「要验证它该往哪注入」。
+
+    失败不致命但必须 log：静默缺失会让选靶误以为「这个 runtime 本来就没有角色」。
+    """
+    out = []
+    for r in runtimes or []:
+        rid = r.get('agentRuntimeId')
+        if not rid:
+            out.append(r)
+            continue
+        try:
+            det = acc.get_agent_runtime(agentRuntimeId=rid)
+            net = det.get('networkConfiguration') or {}
+            nmc = net.get('networkModeConfig') or {}
+            r = dict(r)
+            if det.get('roleArn'):
+                r['_role_arn'] = det['roleArn']
+            if net.get('networkMode'):
+                r['_network_mode'] = net['networkMode']
+            if nmc.get('subnets'):
+                r['_subnet_ids'] = ','.join(nmc['subnets'])
+            if nmc.get('securityGroups'):
+                r['_security_group_ids'] = ','.join(nmc['securityGroups'])
+            proto = (det.get('protocolConfiguration') or {}).get('serverProtocol')
+            if proto:
+                r['_server_protocol'] = proto
+        except Exception as e:
+            logger.warning(
+                "get_agent_runtime(%s) 失败，该 runtime 缺注入目标属性"
+                "（role_arn/subnet_ids/security_group_ids）—— 选靶将无法自动化: %r",
+                rid, e)
+        out.append(r)
+    return out
+
+
 def _enrich_gateways(acc, items: list) -> list:
     """给每个 gateway 补上 ARN。
 
@@ -150,7 +212,8 @@ def collect_control_plane() -> dict:
 
     return {
         'runtimes': _collect(
-            lambda: _paged(acc, 'list_agent_runtimes', 'agentRuntimes'), 'AgentRuntime'),
+            lambda: _enrich_runtimes(acc, _paged(acc, 'list_agent_runtimes', 'agentRuntimes')),
+            'AgentRuntime'),
         'gateways': _collect(
             lambda: _enrich_gateways(acc, _paged(acc, 'list_gateways', 'items')),
             'AgentGateway'),
@@ -335,11 +398,17 @@ def write_control_plane(cp: dict, gw_targets: dict, round_ts: int) -> dict:
 
     for r in cp['runtimes'][1]:
         arn = r.get('agentRuntimeArn')
+        rid = r.get('agentRuntimeId')
+        # 注入目标属性在**采集阶段**由 _enrich_runtimes 富化好（带 _ 前缀），
+        # 这里只做搬运 —— 写入函数拿不到采集阶段的 boto3 客户端。
+        extra = {k.lstrip('_'): v for k, v in r.items() if k.startswith('_')}
+
         _upsert_node('AgentRuntime', arn, {
-            'runtime_id': r.get('agentRuntimeId'),
+            'runtime_id': rid,
             'name': r.get('agentRuntimeName'),
             'status': r.get('status'),
             'version': r.get('agentRuntimeVersion'),
+            **extra,
         }, round_ts)
         n['AgentRuntime'] += 1
 
@@ -389,6 +458,13 @@ def write_control_plane(cp: dict, gw_targets: dict, round_ts: int) -> dict:
                 continue
             tool_key = f'{gw_arn}#{tname}'
             _upsert_node('AgentTool', tool_key, {
+                # name 与 tool_name 同值：身份键是 tool_key，但**项目约定要求
+                # 每个节点都带 name 作为展示属性** —— upsert_vertex 的注释写得很明确：
+                # 「以非 name 作身份时 name 必须进 onMatch，否则改名后图谱留旧名字」。
+                # 实测代价：10/10 个 AgentTool 缺 name，于是在所有按 name 的查询里
+                # 显示为 `?`/`<unnamed>` —— 图仿真报「端点节点没有 name 属性」、
+                # 判定日志打成 `? -> petsearch`，这条桥接边看起来像脏数据。
+                'name': tname,
                 'tool_name': tname,
                 'owner_arn': gw_arn,
                 'owner_kind': 'gateway',
@@ -518,7 +594,10 @@ def write_span_edges(rows: list, round_ts: int) -> dict:
         tool = r.get('tool_name')
         if tool:
             tool_key = f'{arn}#{tool}'
+            # name 同 tool_name，理由见上面 gateway 侧那处注释（项目约定：
+            # 非 name 身份键的节点仍必须带 name 作展示属性）
             _upsert_node('AgentTool', tool_key, {
+                'name': tool,
                 'tool_name': tool, 'owner_arn': arn, 'owner_kind': 'runtime',
             }, round_ts)
             _upsert_edge('InvokesTool', 'AgentRuntime', arn,
