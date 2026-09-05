@@ -369,6 +369,21 @@ def coverage(now_epoch: int | None = None) -> dict:
     }
 
 
+def _observer_marker_probe() -> str:
+    """生成「现场数一遍这条边有几个独立观测源」的 Gremlin 片段。
+
+    与 `evidence_from_props` 用的是**同一张** `_OBSERVER_MARKERS` 表 ——
+    两处各写一份判据必然漂移，而漂移方向是选靶排序与判定用不同的证据口径。
+    每个源出一个 `__.has(...)` 分支，union 后 count 即命中的源数。
+    """
+    branches = []
+    for markers in _OBSERVER_MARKERS.values():
+        # 一个源只要任一标记属性存在就算命中，与 evidence_from_props 的 any() 一致
+        inner = ','.join(f"__.has('{m}')" for m in markers)
+        branches.append(f"__.coalesce(__.or({inner}).limit(1), __.not(__.identity()))")
+    return ','.join(branches)
+
+
 def select_targets_for_verification(limit: int = 10) -> list[dict]:
     """挑出最该验证的边，用于驱动定期实验的选边。
 
@@ -384,14 +399,19 @@ def select_targets_for_verification(limit: int = 10) -> list[dict]:
     后者是参考实现的做法，也是它最弱的一环。
     """
     q = ("g.E().hasLabel(%s)"
-         ".project('eid','label','src','dst','drift','status','last','conf')"
+         ".project('eid','label','src','dst','drift','status','last','conf','obs')"
          ".by(__.id()).by(__.label())"
          ".by(__.outV().values('name')).by(__.inV().values('name'))"
          ".by(__.coalesce(__.values('drift_status'), __.constant('')))"
          ".by(__.coalesce(__.values('verify_status'), __.constant('%s')))"
          ".by(__.coalesce(__.values('verify_last'), __.constant(0)))"
          ".by(__.coalesce(__.values('verify_confidence'), __.constant(-1.0)))"
-         ".fold()" % (_label_list(), STATUS_UNTESTED))
+         # 独立观测源数：优先用判定时落盘的 verify_observing_sources，
+         # 缺失（历史边或走了无门禁路径写入的）则从边上的观测源标记现场数一遍 ——
+         # 不能默认 0，那会让老边在信息增益排序里被误判成「最不确定」而抢占队首。
+         ".by(__.coalesce(__.values('verify_observing_sources'),"
+         "     __.union(%s).count()))"
+         ".fold()" % (_label_list(), STATUS_UNTESTED, _observer_marker_probe()))
     try:
         rows = _flatten(query_gremlin_parsed(q))
     except Exception as e:
@@ -415,5 +435,40 @@ def select_targets_for_verification(limit: int = 10) -> list[dict]:
             pri, why = 2, '上次未能下结论，需重试'
         scored.append((pri, dict(r, priority=pri, why=why)))
 
-    scored.sort(key=lambda x: x[0])
+    # ── 同优先级内按信息增益排序（2026-09-05 引入）─────────────────────────
+    #
+    # 原实现只有粗粒度的四档优先级，同档内是查询返回顺序（即任意顺序）。
+    # 而「下一次注入该选哪条边」本质是**实验设计**问题：应当优先注入
+    # **当前最不确定**的那条边，因为它的一次注入带来的信息量最大。
+    #
+    # 调研（arXiv:2209.04744 等主动学习/因果实验设计）的做法是按不确定性或
+    # 信息增益排序干预。对本项目而言这几乎是**免费**的 —— 不确定性度量所需的
+    # 两个字段图上都已经有：
+    #   · verify_confidence        置信度越低 => 越不确定 => 信息增益越大
+    #   · verify_observing_sources 独立观测源越少 => 存在性越不确定
+    #
+    # 刻意**不**引入 SAT 选靶（LDFI）：LDFI 的剪枝能力全部来自 lineage 里的
+    # **冗余结构**（fallback / 缓存 / 副本），而本图不建模冗余 —— 无冗余时它的
+    # CNF 退化成「逐条失败每条边」，正是本函数已经在做的事，SAT 一分价值不加。
+    # 另一个硬阻塞是 LDFI 每轮需要**按请求粒度**注入并重放（Netflix 靠 FIT 在
+    # Zuul/Hystrix 注入点实现），而本 runner 是 Pod/子网级注入 + 窗口聚合 SLI，
+    # 拿不到「这一个请求成功了吗」这个布尔值。
+    #
+    # 排序键三段，全部升序（小者优先）：
+    #   ① priority          既有的四档粗分类，仍然主导
+    #   ② confidence        同档内置信度低者先测（-1 表示从未验证，天然最优先）
+    #   ③ observing_sources 置信度相同时，独立观测源少者先测
+    def _info_gain_key(item):
+        pri, d = item
+        conf = d.get('conf')
+        conf = -1.0 if conf is None else float(conf)
+        obs = int(d.get('obs') or 0)
+        return (pri, conf, obs)
+
+    scored.sort(key=_info_gain_key)
+    for _, d in scored:
+        c = d.get('conf')
+        d['selection_key'] = (f"priority={d['priority']} confidence="
+                              f"{'未验证' if c in (None, -1.0) else f'{float(c):.3f}'} "
+                              f"独立观测源={int(d.get('obs') or 0)}")
     return [d for _, d in scored[:limit]]
