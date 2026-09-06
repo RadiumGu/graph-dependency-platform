@@ -92,6 +92,16 @@ for col, (name, why) in zip(fcols, FEATURED):
             st.markdown(f"**`{name}`**")
             st.caption(why)
             if st.button("运行", key=f"feat_{name}", width="stretch"):
+                # 必须直接写 selectbox **自己的 state key**（`qc_select_box`）。
+                #
+                # 原实现只设 `qc_selected`，再指望下面 `st.selectbox(..., index=...)`
+                # 去读它 —— 但 **widget 带 key 且 session state 已有值时，
+                # Streamlit 会忽略 `index=`**。于是这四个精选按钮推不动选择框，
+                # 点任何一个都在跑当前选中的那条查询。
+                #
+                # 实测（AppTest）：四个「运行」全部返回 `q10_infra_root_cause`
+                # 的结果，而它们标称的是 q20 / q16 / q21 / q2。
+                st.session_state["qc_select_box"] = name
                 st.session_state["qc_selected"] = name
                 st.session_state["qc_autorun"] = True
 
@@ -118,12 +128,17 @@ def _label(name: str) -> str:
     return f"{badge}{name} {need} — {e.get('desc', '')[:44]}"
 
 
-default_idx = 0
-if st.session_state.get("qc_selected") in pool:
-    default_idx = pool.index(st.session_state["qc_selected"])
+# 选中项**只**由 widget 自己的 state key `qc_select_box` 决定。
+#
+# 原实现同时用 `index=default_idx` 和 session state 两条路，Streamlit 会告警
+# 「created with a default value but also had its value set via the Session
+# State API」，而且 `index=` 在 key 已有值时根本不生效（精选按钮因此失效）。
+# 只留一条路：精选按钮直接写 `qc_select_box`，这里不再传 index。
+if st.session_state.get("qc_select_box") not in pool:
+    st.session_state["qc_select_box"] = pool[0] if pool else None
 
 selected = st.selectbox(
-    "选择一条查询", pool, index=default_idx, format_func=_label, key="qc_select_box"
+    "选择一条查询", pool, format_func=_label, key="qc_select_box"
 )
 
 entry = QUERY_CATALOG[selected]
@@ -154,10 +169,42 @@ with st.container(border=True):
         st.caption("此查询无参数。")
 
 # ── 参数输入 ──────────────────────────────────────────────────────────────────
-KNOWN_SERVICES = [
+#
+# ## 必填参数不能默认空（2026-09-06 修）
+#
+# 原实现给服务类参数生成 `[""] + KNOWN_SERVICES` 的下拉框 —— **空串在第一位，
+# 所以它是默认值**。而「执行查询」按钮是 `disabled=bool(missing) or not online`，
+# 于是只要默认选中的查询带必填服务参数（默认就是 `q10_infra_root_cause`，
+# 必填 `affected_service`），**页面一打开按钮就是禁用的，点了没有任何反应**。
+# 4 个精选「运行」按钮也一样：它们的 `qc_autorun` 路径同样要求 `not missing`。
+#
+# 实测（AppTest）：`selectbox 值: ['q10_infra_root_cause', '']`、
+# `按钮: [..., ('▶️ 执行查询', True)]` —— disabled=True。
+#
+# 改法：**必填参数不给空选项**，直接默认第一个真实取值；可选参数保留空选项
+# （空 = 不传该参数，这是有意义的语义）。
+#
+# ## 服务清单从图谱取，不硬编码
+#
+# 原来的 `KNOWN_SERVICES` 里写着 `petadoptionshistory` —— 图谱里的名字是
+# `pethistory`，这个硬编码清单和图谱漂移了。同一个毛病在 6_Root_Cause_Analysis
+# 也修过。改用 `C.service_names()`（从活图谱现取，离线回退快照）。
+_FALLBACK_SERVICES = [
     "petsite", "petsearch", "payforadoption", "petlistadoptions",
-    "petadoptionshistory", "pethistory", "petfood", "trafficgenerator",
+    "pethistory", "petfood", "trafficgenerator",
 ]
+#: 默认参数优先落在这些服务上。图谱返回的顺序是字母序，第一个是 `artillery`
+#: —— 那是压测工具（DeepFlow 采到它的流量后图里就多出一个「微服务」），
+#: 它的陈旧边已被清理，所以拿它当默认参数几乎所有查询都返回空。
+#: 讲依赖的页面开局给空结果是最差的第一印象，所以把有内容的服务排到前面。
+_PREFERRED_FIRST = ["petsite", "petsearch", "payforadoption", "petlistadoptions",
+                    "pethistory"]
+try:
+    _svcs = list(C.service_names()) or _FALLBACK_SERVICES
+except Exception:  # noqa: BLE001
+    _svcs = _FALLBACK_SERVICES
+KNOWN_SERVICES = ([s for s in _PREFERRED_FIRST if s in _svcs]
+                  + [s for s in _svcs if s not in _PREFERRED_FIRST])
 
 user_params: dict = {}
 if params_spec:
@@ -166,11 +213,14 @@ if params_spec:
     for i, (pname, phint) in enumerate(params_spec.items()):
         col = pcols[i % len(pcols)]
         hint = str(phint)
+        req = pname in required
         with col:
             if "service" in pname or "node" in pname:
+                # 必填 → 不给空选项，否则按钮永远是禁用的
+                opts = KNOWN_SERVICES if req else [""] + KNOWN_SERVICES
                 val = col.selectbox(
-                    f"{pname}{' *' if pname in required else ''}",
-                    [""] + KNOWN_SERVICES, help=hint, key=f"p_{selected}_{pname}",
+                    f"{pname}{' *' if req else ''}",
+                    opts, help=hint, key=f"p_{selected}_{pname}",
                 )
             elif "int" in hint:
                 default = 5
@@ -179,18 +229,21 @@ if params_spec:
                         default = int(tok)
                         break
                 val = col.number_input(
-                    f"{pname}{' *' if pname in required else ''}",
+                    f"{pname}{' *' if req else ''}",
                     min_value=1, value=default, help=hint, key=f"p_{selected}_{pname}",
                 )
             elif "|" in hint:
-                opts = [o.strip() for o in hint.split("，")[0].split("|")]
+                choices = [o.strip() for o in hint.split("，")[0].split("|")]
+                opts = choices if req else [""] + choices
                 val = col.selectbox(
-                    f"{pname}{' *' if pname in required else ''}",
-                    [""] + opts, help=hint, key=f"p_{selected}_{pname}",
+                    f"{pname}{' *' if req else ''}",
+                    opts, help=hint, key=f"p_{selected}_{pname}",
                 )
             else:
+                # 自由文本必填项：给一个可用的默认值，理由同上
                 val = col.text_input(
-                    f"{pname}{' *' if pname in required else ''}",
+                    f"{pname}{' *' if req else ''}",
+                    value=(KNOWN_SERVICES[0] if req and KNOWN_SERVICES else ""),
                     help=hint, key=f"p_{selected}_{pname}",
                 )
         if val not in ("", None):
@@ -233,8 +286,46 @@ if do_run and online:
                         "返回 0 行。这不一定是错误——例如 `q14_cross_region_resources` "
                         "在单区域部署下本来就应该是空的。"
                     )
+            elif isinstance(rows, dict):
+                # 有几条查询返回的是**多个命名集合**而不是行列表
+                # （`q1_blast_radius` → services/capabilities，
+                #   `q10_infra_root_cause` → unhealthy_ec2/az_impact/has_infra_fault，
+                #   `q4_service_info` → 单个对象）。
+                #
+                # 原实现一律走 `st.write(rows)`，渲染成一团原始字典：既没有成功提示、
+                # 也没有表格，看起来跟「点了没反应」没有区别 —— 实测 Query Catalog
+                # 默认选中的正是 `q10_infra_root_cause`，所以首屏体验就是这个。
+                #
+                # 改成按键分开渲染：列表 → 表格，标量 → 指标。
+                lists = {k: v for k, v in rows.items() if isinstance(v, list)}
+                scalars = {k: v for k, v in rows.items() if not isinstance(v, (list, dict))}
+                total = sum(len(v) for v in lists.values())
+                st.success(
+                    f"🟢 实时执行成功，返回 **{len(rows)}** 个集合"
+                    + (f"、共 **{total}** 行" if lists else ""))
+                if scalars:
+                    scols = st.columns(min(len(scalars), 4))
+                    for i, (k, v) in enumerate(scalars.items()):
+                        scols[i % len(scols)].metric(k, str(v))
+                for k, v in lists.items():
+                    st.markdown(f"**{k}** — {len(v)} 行")
+                    if v:
+                        st.dataframe(C.df(v), width="stretch", hide_index=True)
+                    else:
+                        st.caption("0 行。空集合不等于错误 —— 例如没有故障 EC2 时"
+                                   "`unhealthy_ec2` 本来就该是空的。")
+                nested = {k: v for k, v in rows.items() if isinstance(v, dict)}
+                if nested:
+                    with st.expander("嵌套结构"):
+                        st.json(nested, expanded=False)
+                st.download_button(
+                    "下载 JSON",
+                    data=C.json.dumps(rows, ensure_ascii=False, indent=2, default=str),
+                    file_name=f"{selected}.json", mime="application/json",
+                )
             else:
-                st.write(rows)
+                st.success("🟢 实时执行成功（单值）")
+                st.code(str(rows))
         except Exception as exc:  # noqa: BLE001
             st.error(f"执行失败：{type(exc).__name__}: {exc}")
 elif selected in samples:
