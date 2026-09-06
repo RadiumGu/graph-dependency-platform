@@ -1327,19 +1327,86 @@ D4 特别值一提：cycle-0 时 6 小时窗口下 `WaggleAIAdoption` **不可�
 
 ---
 
-## ⚠️ 已知未完成（刻意留给人决策，不由循环自行决定）
+## ⚠️ 已知未完成（2026-09-06 02:xx 更新：7 项已处理 5 项）
 
-1. **契约缺口**：`Microschema → LambdaFunction` 无边类型允许，
-   导致 `petstatusupdater → ServicesEks2-statusupdater...` 写不了（`no_edge_type: 1`）。
-   两条修法（扩 pairs / 让它解析到自己的 LambdaFunction 节点）都动契约或建模，需决策。
-2. **3 条未解析依赖**：`aws::sns`、`aws::stepfunctions`（图上无对应
-   `AWSServiceEndpoint` 节点，且候选资源无法定身份）、`postgres`（2 个 `RDSCluster` 候选）。
-3. **`WaggleController.cs` 未部署**：本机无 dotnet 也无容器运行时。
-4. **P3 未做**：`invocation_errors_24h` 拆 user/system；
-   `Concierge`/`Ordering` 缺 `Delegates` 边。
-5. **可能的重复 Lambda 节点**（cycle-8 立的待查项）：图上 29 个 `LambdaFunction`
-   里 12 个全小写，怀疑是 `etl_xray` 无条件小写化写出的副本。
-6. **所有改动未提交 git**，且工作树混有另一会话的改动。
-7. **技术债**：`ServiceRegistry` 只有本 ETL 和 RCA 在用，
-   另 5 个 ETL 各自造名字映射；契约缺 `appsignals_aliases` 属性。
+### ✅ 已完成
+
+1. **~~契约缺口~~ → 查证后确认不是缺口，刻意不改契约**。
+   图上 `Microservice{petstatusupdater}` 与
+   `LambdaFunction{ServicesEks2-statusupdaterservice...}` 之间**没有任何边**，
+   Lambda 节点上也无属性指向它 —— 它们是**同一个物理 Lambda 在两个抽象层的表示**
+   （业务视角来自 profile 的 `type: lambda`，资源视角来自 aws-etl 的 CFN 采集）。
+   Application Signals 报的是"API Gateway 调它自己的后端 Lambda"，
+   归一化后成了「业务服务依赖自己」。
+   **契约拒绝它是对的** —— 扩 pairs 会注入一条假的自依赖。
+   已在 ETL 里加 `classify()` 的抽象层伪依赖判定（源服务 profile 里是 `type: lambda`
+   且目标是 LambdaFunction → 归为 `self_implementation`，不写）。
+   真正缺的是 `Microservice -实现于-> LambdaFunction` 这类**身份边**，
+   该由持有 CFN 映射的 `aws-etl` / `etl_cfn` 建，**不是观测源的职责**。
+
+2. **✅ 3 条未解析依赖全部处理**
+   - `postgres` → `RDSCluster` **靠 engine 匹配定身份**（图上两个集群分别是
+     aurora-postgresql 与 aurora-mysql，唯一命中）；SSM `/petstore/rdsendpoint`
+     与既有 `payforadoption -AccessesData-> serviceseks2-database...` 边双重佐证。
+     同 engine 多集群时判 unresolved，**绝不挑一个**。
+   - `aws::sns` / `aws::stepfunctions` → 按 `AWSServiceEndpoint` 的设计意图
+     **新建服务级端点节点**（白名单 `_ALLOWED_NEW_ENDPOINTS`，**不做兜底** ——
+     etl_xray 第 477-484 行记着兜底建出重名节点的旧 bug）。
+     只写 `name`/`granularity`/`source`，**不碰 `xray_*` 属性**（那是 etl_xray 的语义）。
+   - 实测：可写边 9 条、未解析降到 **1 条**（只剩 bedrockagentcore，它走合并路径）。
+
+3. **✅ 重复 Lambda 节点：核查后确认不存在**
+   30 个 `LambdaFunction` 里 13 个全小写，但**小写化后与 17 个含大写名字零命中**
+   —— 它们本来就叫小写名（`neptune-etl-from-aws` 这类 CDK 命名），全部 source=aws-etl。
+   cycle-8 的怀疑不成立。（节点数从 29 到 30 是因为 aws-etl 采到了我新建的
+   `neptune-etl-from-appsignals` —— ETL 把自己发现了。）
+
+4. **✅ P3 两项都做了**
+   - `invocation_errors_24h` 拆成 `user_errors_24h` / `system_errors_24h`
+     （合并值保留兼容）。**拆完立刻有诊断价值**：
+     `WaggleAIAdoption` err=34 / user=34 / **system=0**（调用方的问题）；
+     `graph_dependency_mcp` err=2 / user=0 / **system=2**（这才是 runtime 故障）。
+   - `_DELEGATION_TOOLS` 补 `concierge_chat` / `food_ordering`
+     —— Orchestrator 实际注册的 tool 名不在表里，查表落空导致 `Delegates` 永远建不出。
+     实测 `Delegates` 从 2 条涨到 **3 条**（新增 → WaggleAIOrdering）。
+     **刻意只补映射不直插边**：`Delegates` 是观测驱动的，凭"对称性应该有"硬插边
+     会把未观测到的关系写成观测事实。Concierge 仍无边 —— 窗口内还没观测到
+     `concierge_chat` 调用，**这是正确行为**。
+
+5. **✅ git 已提交（两个仓库、各自独立分支）**
+   - `graph-dependency-platform` → 分支 `feat/appsignals-dependency-source`，
+     提交 `9f9b5bf`，28 files / +6196 −502
+   - `one-observability-demo` → 分支 `fix/waggle-session-id-validation`，
+     提交 `83b06979`，2 files / +686 −1
+   - **没有提交到另一会话的 `feat/dr-plan-generator-cross-region` 分支**，
+     也没有提交到 PetSite 的 `main`。
+   - 刻意未暂存：`todo/agentobv/agent-layer-taxonomy-design_20260905-1640.md`
+     （agent 分类学设计，非本会话产出）、`scripts/_tmp_source_audit.py`
+     （另一会话的临时脚本）、`docs/fault-injection-coverage-and-production-safety.md`
+     （归属不明）、PetSite 的 `issues.md` 与 `doc/` 下另两个文件。
+     删除了自己的临时脚本 `scripts/_tmp_nosource_edges.py`。
+
+### ❌ 判断为「现在不该做」的 2 项
+
+6. **`WaggleController.cs` 部署 —— 代码已提交，不在此环境部署**
+   开发机既无 dotnet SDK 也无容器运行时（docker/podman/nerdctl/finch 全无）。
+   为部署一个防御性校验去装完整 .NET 工具链或容器运行时，是对宿主环境的实质改动；
+   而重建并替换 PetSite 镜像会动到正在被合成流量使用的运行实例。
+   **代价与收益不匹配** —— 该走项目自己的 CI/CD，或由人在有工具链的环境做。
+   代码与「未编译验证、线上未生效」的说明都已写进提交信息。
+
+7. **`ServiceRegistry` 技术债 —— 不在 Layer 飞行中重构**
+   现状：`ServiceRegistry` 只有 `etl_appsignals`（本次新接）与 `rca_window_flush`
+   两个消费方，另 5 个 ETL 各自造名字映射。
+   正解是把 profile + registry 提升进 Lambda layer 让 5 个 ETL 收敛，
+   但 **layer 正被另一会话并发发布**（本会话已被顶掉一次 v12→v13，
+   之后又发了 v14、v15）。在飞行中重构共享 layer，会把两件事的失败原因缠在一起，
+   而这个债不造成错误、只造成重复。**应单独立卡，在 layer 稳定后做。**
+
+### 仍然遗留
+
+- `docs/fault-injection-coverage-and-production-safety.md` 归属不明、未入版本控制
+- `postgres → RDSCluster` 的解析逻辑**已实现但未被实测命中**
+  （该轮采集窗口里没有 postgres 依赖，属环境状态）
+
 
