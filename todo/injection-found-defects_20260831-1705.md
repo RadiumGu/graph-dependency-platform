@@ -56,6 +56,7 @@
 | 40 | dependency 边缺 `source` 无人告警，12 条零告警躺了半年 | 边无源认领，永不刷新也永不被清理 | ✅ 已修（审计 + 清理 + 回填，归零） |
 | 41 | 写一次属性被无条件写，`etl_deepflow` 每轮覆盖 `source` | xray 的发现史被 deepflow 抹掉 | ✅ 已修（幂等写法 + `test_51::m03`） |
 | 42 | 我发布层时以旧版本为基线，覆盖了并发会话的两处契约改动 | `graph_contract_data.py` 退回 47 行 | ✅ 已修（基于 `:15` 重建为 `:17`） |
+| 43 | `test_51::m03` 的闭合判据只认一种书写惯例，**漏报 10 处**同类违规 | 测试恒绿，无条件覆盖 `source` 在线上跑着 | ✅ 已修（括号配平判据 + 10 处改幂等） |
 
 其中 **#7 / #8 / #10 是 08:30–09:00 为了拿到第一条边的判定而查出的**，
 **#11 – #14 是 10:10–11:12 扩大验证覆盖面时查出的**，都不在最初报给用户的 6 条里。
@@ -1781,3 +1782,86 @@ DeepFlow，只是那轮代码没写 source），8 条更早的遗留（`artiller
 
 **往共享层叠加改动前必须先查当前最高版本号，不能沿用上一轮记下的基线。**
 共享层是跨会话共享的可变状态，与代码分支不同 —— 它没有 merge，后发布者直接覆盖。
+
+---
+
+## 43. 我的守门测试用书写惯例当语法判据，漏报 10 处同类违规（2026-09-06 已修）
+
+**这条是缺陷 #41 的续集，也是对「加了门禁」这件事本身的一次打脸。**
+
+#41 里我加了 `test_51::m03`「写一次属性不得被无条件写」，它抓到 `etl_deepflow`
+一处并修好，测试转绿，我据此认为这类问题已经堵住。**没有。**
+
+### 判据错在哪
+
+m03 要判断一处 `.property('source', ...)` 落在 `coalesce(...)` 之内还是之外。
+第一版的判法是搜「`")` 单独成行」：
+
+```python
+closed = re.search(r'^\s*f?["\']\s*\)["\']', between, re.M)
+```
+
+那**只是本仓库的一种书写惯例，不是语法事实**。`etl_aws` 把闭合括号和属性写在同一行：
+
+```python
+f"  __.addE('AccessesData').from('fn')"
+f").property('source','aws-etl')"        ← 闭合与属性同行，正则不匹配
+```
+
+于是判为「仍在 addE 分支内 → 合规」。**漏报比误报更隐蔽**：误报会有人来看，
+漏报只让测试变绿，问题继续在线上跑。
+
+### 改成括号配平
+
+从最近的 `.coalesce(` 起逐字符计深度，深度归零处就是它的闭合位置；
+若闭合位置在 property 之前，就是分支外的无条件写。
+Gremlin 字符串字面量里的括号（如 `containing('x')`）本身配平，不影响计数。
+
+**改完第一版仍然恒绿** —— 我把守卫写反了：
+
+```python
+if c == -1 or c < last_adde: continue    # ← c < last_adde 是唯一的正常情形
+```
+
+`coalesce` 必然**开在 `addE` 之前**（addE 是它的分支之一），把这个条件当跳过条件
+等于跳过一切。**两次都是绿的，两次原因不同** —— 一次判据错、一次守卫反。
+门禁自身没有门禁看着，这是它比被检查的代码更容易长期带病的原因。
+
+### 修对之后抓到 10 处，全部真阳性
+
+| 文件 | 行 | 属性 |
+|---|--:|---|
+| `etl_aws/business_layer.py` | 83 | `source='business-layer'`（`DependsOn`） |
+| `etl_aws/business_layer.py` | 117 / 132 | `source='business-layer'`（`Implements`） |
+| `etl_aws/business_layer.py` | 239 | `source='aws-etl'`（`DependsOn`，ECR 启动依赖） |
+| `etl_aws/handler.py` | 1096 | `source='aws-etl'`（动态 label 的基础设施边） |
+| `etl_aws/handler.py` | 1113 | `source='aws-etl'`（statusupdater→DynamoDB） |
+| `etl_deepflow/…deepflow.py` | 872 / 874 | `source` + `dependency_kind`（`AccessesData` 漂移检测） |
+| `etl_deepflow/…deepflow.py` | 1850 / 1852 | `source` + `dependency_kind`（`DependsOn`，ECR） |
+
+即 **#41 只修了 5 处里的 1 处**，同一个文件里还剩 4 处，另一个文件里还有 6 处。
+全部改成 `coalesce(values(k), constant(v))` 幂等写法。
+
+### 这条改变了 #40 里那句结论的适用范围
+
+#40 说「`declared_in` 比 `source` 更可信 —— 它从来没被任何 ETL 覆盖过，
+而 `source` 被改写过」。前半句对（`declared_in` 只有 `etl_cfn` 写），
+**后半句在当时是推测，现在才有了依据** —— `handler.py:1113` 确实无条件覆盖，
+所以 `source` 被改写在结构上是可能的。
+
+但**不能据此去「更正」那 2 条 `declared_in='cfn'` 却写着 `source='aws-etl'` 的边**
+（见 #40 的更正段）：etl_aws 对它们有独立证据且每轮都在写，
+其中一条走的还是幂等的 `upsert_edge`，结构上不可能覆盖任何人。
+
+### 附带查实：三个证据字段的证明力不相等
+
+| 字段 | 谁写 | 能否当溯源证据 |
+|---|---|---|
+| `declared_in='cfn'` | 只有 `etl_cfn`（`neptune_etl_cfn.py:170`） | ✅ 排他 |
+| `stack_name` | 只有 `etl_cfn` | ✅ 排他 |
+| `evidence='env:X'` | **`etl_aws` 与 `etl_cfn` 都写** | ❌ 不排他 |
+
+`evidence` 的 `env:` 前缀在 `handler.py:401/422/958/1040` 与
+`neptune_etl_cfn.py:307` 两边都出现 —— 它记录「凭什么断定有这条依赖」，
+不是「谁断定的」。#40 的回填只依据排他字段 `declared_in`，这一点是对的；
+但当时把 `evidence` 与另两个并列写进了处置指引，已更正。

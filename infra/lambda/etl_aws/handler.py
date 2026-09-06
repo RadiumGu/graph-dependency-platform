@@ -1093,7 +1093,7 @@ def run_etl():
                     f".coalesce("
                     f"  __.out('{edge_label}').where(__.hasLabel('{infra_label}').has('name',containing('{nc}'))),"
                     f"  __.addE('{edge_label}').to('infra')"
-                    f").property('source','aws-etl')"
+                    f").property('source', __.coalesce(__.values('source'), __.constant('aws-etl')))"
                     f".property('evidence','{evidence}')"
                     f".property('declared_in','{declared_in}')"
                     f".property('last_updated',{ts_now})"
@@ -1110,7 +1110,7 @@ def run_etl():
             f".coalesce("
             f"  __.inE('AccessesData').where(__.outV().hasLabel('LambdaFunction').has('name',containing('statusupdater'))),"
             f"  __.addE('AccessesData').from('fn')"
-            f").property('source','aws-etl')"
+            f").property('source', __.coalesce(__.values('source'), __.constant('aws-etl')))"
             f".property('evidence','source:petstatusupdater/index.js#UpdateCommand')"
             f".property('last_updated',{ts_now})"
         )

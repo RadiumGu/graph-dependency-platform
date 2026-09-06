@@ -80,7 +80,7 @@ def upsert_business_capabilities() -> dict:
                             f".coalesce("
                             f"  __.inE('DependsOn').where(__.outV().hasId('{cap_vid}')),"
                             f"  __.addE('DependsOn').from('cap')"
-                            f").property('source','business-layer')"
+                            f").property('source', __.coalesce(__.values('source'), __.constant('business-layer')))"
                             f".property('phase','runtime')"
                             f".property('strength','strong')"
                             f".property('last_updated',{ts})"
@@ -114,7 +114,7 @@ def upsert_business_capabilities() -> dict:
                     f".coalesce("
                     f"  __.inE('Implements').where(__.outV().hasId('{svc_vid}')),"
                     f"  __.addE('Implements').from('svc')"
-                    f").property('source','business-layer').property('last_updated',{ts})"
+                    f").property('source', __.coalesce(__.values('source'), __.constant('business-layer'))).property('last_updated',{ts})"
                 )
                 stats['edges'] += 1
             except Exception as e:
@@ -129,7 +129,7 @@ def upsert_business_capabilities() -> dict:
                     f".coalesce("
                     f"  __.inE('Implements').where(__.outV().hasLabel('LambdaFunction').has('name',containing('{fp}'))),"
                     f"  __.addE('Implements').from('fn')"
-                    f").property('source','business-layer').property('last_updated',{ts})"
+                    f").property('source', __.coalesce(__.values('source'), __.constant('business-layer'))).property('last_updated',{ts})"
                 )
                 stats['edges'] += 1
             except Exception as e:
@@ -236,7 +236,7 @@ def scan_ecr_startup_deps(eks_client, session) -> int:
                     f".coalesce("
                     f"  __.inE('DependsOn').where(__.outV().hasId('{svc_vid}')),"
                     f"  __.addE('DependsOn').from('s')"
-                    f").property('source','aws-etl')"
+                    f").property('source', __.coalesce(__.values('source'), __.constant('aws-etl')))"
                     f".property('phase','startup')"
                     f".property('strength','strong')"
                     f".property('last_updated',{ts})"

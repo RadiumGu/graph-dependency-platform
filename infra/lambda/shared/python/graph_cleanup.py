@@ -337,9 +337,28 @@ def audit_dependency_edges_without_source(neptune_query) -> dict:
     （见 `infra/backfill_edge_source_from_declared_in.py`）。
 
     所以处置顺序是：**先查 `declared_in` / `stack_name` / `evidence` 能不能读出
-    创建者**，读不出来才谈清理或接受。反过来，`declared_in` 比 `source` 更可信 ——
-    它从来没有被任何 ETL 覆盖过，而 `source` 在写一次属性被无条件写的那个时代
-    被改写过（2 条 `declared_in='cfn'` 的边至今写着 `source='aws-etl'`）。
+    创建者**，读不出来才谈清理或接受。
+
+    但这三个字段的证明力**并不相等**，别一视同仁地当溯源用（2026-09-06 查实）：
+
+    | 字段 | 谁写 | 能否当溯源证据 |
+    |---|---|---|
+    | `declared_in='cfn'` | 只有 `etl_cfn`（`neptune_etl_cfn.py:170`） | ✅ 排他 |
+    | `stack_name` | 只有 `etl_cfn` | ✅ 排他 |
+    | `evidence='env:X'` | **`etl_aws` 与 `etl_cfn` 都写** | ❌ 不排他 |
+
+    `evidence` 的 `env:` 前缀在 `handler.py:401/422/958/1040` 与
+    `neptune_etl_cfn.py:307` 两边都出现 —— 它记录的是「凭什么断定有这条依赖」，
+    不是「谁断定的」。**回填只能靠排他字段。**
+
+    另有 2 条 `declared_in='cfn'` 的边写着 `source='aws-etl'`
+    （`statusupdater→ddbpetadoption`、`dynamodbquery→ddbpetadoption`），
+    **这不是矛盾，不要去「更正」**：`etl_aws` 对它们有自己的独立证据
+    （前者 `evidence=source:petstatusupdater/index.js#UpdateCommand` 是代码扫描，
+    后者 `env:DYNAMODB_TABLE_NAME` 是环境变量扫描），每轮都在写。
+    两个字段回答的是不同问题 —— `declared_in` 是哪个 CFN 栈声明了这些资源，
+    `source` 是哪个 ETL 发现了这条依赖。`graph_contract.py:29` 早就写明
+    「xray 只补度量、cfn 只写 declared_in」，各源属性集本来就不同。
 
     ## 被印证的孤儿边是不死的
 

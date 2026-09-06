@@ -15,9 +15,33 @@
 再加一条旁证：`declared_in='cfn'` 的 7 条边里有 4 条带 `source='cfn-etl'` ——
 同批同法创建的兄弟边取值一致。所以这里的 `cfn-etl` 是**读出来的**，不是猜的。
 
-（另 2 条 `declared_in='cfn'` 却写着 `source='aws-etl'` —— 那是写一次属性被
-无条件覆盖那个时代的产物，etl_aws 把 cfn 先写的 source 改掉了。这恰好反证
-`declared_in` 比 `source` 更可信：它从来没有被任何 ETL 覆盖过。）
+更强的一条依据是排除法：`etl_aws` 每次写 `AccessesData` 边都带
+`{'source': 'aws-etl'}`（`handler.py:401/422/958/1040`），而 `upsert_edge` 的
+`coalesce(values('source'), constant(...))` 在 source 为空时**会填上**。
+这条边的 source 是空的 → **`etl_aws` 从未写过它** → 已知写过它的只有 cfn。
+
+## 三个字段的证明力不相等（2026-09-06 查实，别一视同仁）
+
+    declared_in='cfn'   只有 etl_cfn 写（neptune_etl_cfn.py:170）      ✅ 排他
+    stack_name          只有 etl_cfn 写                                ✅ 排他
+    evidence='env:X'    etl_aws 与 etl_cfn 都写                        ❌ 不排他
+
+`evidence` 的 `env:` 前缀在 `handler.py:401/422/958/1040` 与
+`neptune_etl_cfn.py:307` 两边都出现 —— 它记录「凭什么断定有这条依赖」，
+不是「谁断定的」。**所以映射只依据排他字段 `declared_in`。**
+
+## 另 2 条 declared_in='cfn' 却写着 source='aws-etl' 的边不在本脚本范围内
+
+`statusupdater→ddbpetadoption`、`dynamodbquery→ddbpetadoption`。
+**那不是矛盾，不要去「更正」**：etl_aws 对它们有自己的独立证据（前者
+`evidence=source:petstatusupdater/index.js#UpdateCommand` 是代码扫描，后者
+`env:DYNAMODB_TABLE_NAME` 是环境变量扫描），每轮都在写。两个字段回答不同问题 ——
+`declared_in` 是哪个 CFN 栈声明了这些资源，`source` 是哪个 ETL 发现了这条依赖。
+
+（本脚本第一版的注释曾断言这 2 条是「写一次属性被无条件覆盖那个时代的产物，
+etl_aws 把 cfn 先写的 source 改掉了」—— **那是推测，且已被证伪**：etl_cfn 自己
+写 source 就是幂等的（`neptune_etl_cfn.py:157-159` 的 `once_chain`），
+而其中一条走的是幂等的 `upsert_edge`，结构上不可能覆盖任何人。）
 
 ## 为什么这条边一直没被清理掉
 

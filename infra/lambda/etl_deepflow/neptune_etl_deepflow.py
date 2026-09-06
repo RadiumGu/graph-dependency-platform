@@ -869,9 +869,9 @@ def run_drift_detection(service_names: list, ip_map: dict):
                         f".coalesce("
                         f"  __.inE('AccessesData').where(outV().has('name','{svc_name}')),"
                         f"  __.addE('AccessesData').from('src')"
-                        f").property('source','{edge_source}')"
+                        f").property('source', __.coalesce(__.values('source'), __.constant('{edge_source}')))"
                         # 运行时观测得来 → dynamic（与 etl_aws/etl_cfn 声明的 static 相对）
-                        f".property('dependency_kind','dynamic')"
+                        f".property('dependency_kind', __.coalesce(__.values('dependency_kind'), __.constant('dynamic')))"
                         f".property('runtime_verified',true)"
                         f".property('drift_status','observed_not_declared')"
                         f".property('verified_by','{verified_by}')"
@@ -1847,9 +1847,9 @@ ORDER BY calls DESC LIMIT 100 FORMAT TSV
                     f".coalesce("
                     f"  __.inE('DependsOn').where(__.outV().hasId('{svc_vid}')),"
                     f"  __.addE('DependsOn').from('s')"
-                    f").property('source','deepflow-etl')"
+                    f").property('source', __.coalesce(__.values('source'), __.constant('deepflow-etl')))"
                     # ECR 启动依赖同样源自运行时观测（实际拉取的镜像）→ dynamic
-                    f".property('dependency_kind','dynamic')"
+                    f".property('dependency_kind', __.coalesce(__.values('dependency_kind'), __.constant('dynamic')))"
                     f".property('phase','startup')"
                     f".property('strength','strong')"
                     # 观测源标记（2026-09-05 补，T-307）。缺它的后果实测到了：

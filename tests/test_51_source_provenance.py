@@ -238,13 +238,42 @@ def test_m03_写一次属性不得被无条件写(contract):
                 last_adde = before.rfind('.addE(')
                 if last_adde == -1:
                     continue      # 不是建边路径（如更新已有边的独立语句）
-                between = before[last_adde:]
-                # coalesce 的闭合括号 ")" 单独成行是本仓库的写法惯例
-                closed = re.search(r'^\s*f?["\']\s*\)["\']', between, re.M)
-                if not closed:
-                    continue      # 仍在 addE 分支内 → 合规
+
+                # 判断这处 property 是落在 coalesce(...) 之内还是之外。
+                #
+                # 第一版用「`")` 单独成行」当闭合标志 —— 那只是本仓库的一种书写
+                # 惯例，不是语法事实。实测漏报：etl_aws/handler.py 把闭合与属性写在
+                # 同一行（`f").property('source','aws-etl')"`），于是那处**无条件
+                # 覆盖 source** 的真违规被判为合规。漏报比误报更隐蔽 ——
+                # 测试是绿的，问题却在线上跑着。
+                #
+                # 改成括号配平：从最近的 `.coalesce(` 起逐字符计深度，深度归零处
+                # 就是它的闭合位置。Gremlin 字符串字面量里的括号（如
+                # `containing('x')`）本身是配平的，不影响计数。
+                c = before.rfind('.coalesce(')
+                if c == -1:
+                    continue      # 没有 coalesce，无从谈「在分支外」
+                # 注意：coalesce 必然**开在 addE 之前** —— addE 是它的其中一个分支。
+                # 第一版这里写成 `if c < last_adde: continue`，把唯一的正常情形
+                # 当成跳过条件，于是测试恒绿、什么都抓不到。
+                depth = 0
+                closed_at = None
+                for i, ch in enumerate(src[c:m.start()], start=c):
+                    if ch == '(':
+                        depth += 1
+                    elif ch == ')':
+                        depth -= 1
+                        if depth == 0:
+                            closed_at = i
+                            break
+                if closed_at is None:
+                    continue      # 到 property 处仍未闭合 → 在分支内 → 合规
+                if closed_at < last_adde:
+                    continue      # 闭合发生在 addE 之前 → 这不是同一条链
                 offenders.append(
-                    f"{path.parent.name}/{path.name}:{line_no} 无条件写 {attr}")
+                    f"{path.parent.name}/{path.name}:{line_no} 无条件写 {attr}"
+                    f"（coalesce 已在第 "
+                    f"{src[:closed_at].count(chr(10)) + 1} 行闭合）")
 
     assert not offenders, (
         "这些地方在 coalesce 之外无条件写了写一次属性，会抹掉先发现方的记录：\n  "
