@@ -1,300 +1,6 @@
-# 图谱契约 —— 机器可读的权威声明
-#
-# 这份文件是 **ETL 写入门禁读取的权威**。profiles/petsite.yaml 的
-# neptune.graph_schema_text 是给人和 LLM 读的叙述，两者平级、互不生成。
-# 类型名集合必须完全相同，由 tests/test_35_graph_contract.py 强制；
-# 漂移即测试失败。这样就不会再出现「声明说 33 种、代码里写进去 34 种」。
-#
-# 为什么需要它：在引入本文件之前，四个写入 ETL 无一 import profiles，
-# 运行时对节点/边类型零校验 —— 任何拼错或新造的标签都会被静默写进 Neptune。
-# 参见 todo/graph-correctness-audit-and-gaps_20260830-1435.md 缺口 1。
-#
-# 由 scripts/bootstrap_graph_contract.py 初次生成，此后手工维护。
-# Lambda 层产物 infra/lambda/shared/python/graph_contract.py
-# 由 scripts/gen_graph_contract.py 从本文件生成（test_35 校验未过期）。
-version: 1
-timestamp_field: last_seen
-timestamp_legacy_aliases:
-- last_updated
-- last_scanned
-# 合法的 source 取值词表。**由 graph_contract.assert_source() 在写入时强制**
-# （2026-08-31 补：此前本清单只被 re-export、没有任何检查读它，
-#  于是活图谱实测出 4 种未声明取值共 1263 条——声明而不设门禁等于没声明）。
-sources:
-- aws-etl
-# K8s 采集路径写的边（Pod/Deployment/K8sService/Namespace 相关）。与 aws-etl 分开是
-# 刻意的：这批边的真值来源是 Kubernetes API 而非 AWS 控制面 API，失败模式也不同。
-- eks-etl
-# AWS 资源配置里**静态声明**的跨服务依赖（例如 Lambda env 引用），
-# 与运行时观测得到的同类边区分。
-- aws-etl-static
-- cfn-etl
-- deepflow-etl
-- deepflow-l4
-- deepflow-dns
-- nfm
-- xray
-- business-layer
-- manual-fix
-# AgentCore 资源与 agent 调用边的写入源。与 xray 分开是**刻意的**：
-# agent 侧的真值来源是 bedrock-agentcore-control 控制面 API（资源节点）
-# 与 aws/spans 结构化日志（调用边，Transaction Search 开启后 100% span 落那里），
-# 与 X-Ray 的 GetServiceGraph 是两条独立链路，失败模式也不同 ——
-# 前者失败表现为节点缺失，后者失败表现为边缺失。
-- agentcore-etl
-edge_write_once_attrs:
-- source
-- dependency_kind
-- first_seen
-node_attr_authority:
-  Microservice:
-    az:
-    - aws-etl
-    fault_boundary:
-    - aws-etl
-    recovery_priority:
-    - aws-etl
-    - business-layer
-node_types:
-  Region:
-    identity: name
-    immutable: true
-    expires_seconds: null
-    expiry_note: AWS 区域不会消失
-    note: region code，AWS 侧不可变
-  AvailabilityZone:
-    identity: name
-    immutable: true
-    expires_seconds: null
-    expiry_note: AWS 可用区不会消失
-    note: az name，AWS 侧不可变
-  VPC:
-    identity: vpc_id
-    immutable: true
-    expires_seconds: 604800
-    note: name 取自 Name 标签（collectors/ec2.py:76 tags.get('Name', v['VpcId'])）是可变的，必须以 vpc_id 为身份
-  Subnet:
-    identity: subnet_id
-    immutable: true
-    expires_seconds: 604800
-    note: name 取自 Name 标签（collectors/ec2.py:56）是可变的，必须以 subnet_id 为身份
-  SecurityGroup:
-    identity: sg_id
-    immutable: true
-    expires_seconds: 604800
-    note: GroupName 创建后不可改，但 sg_id 更稳且已在 dict 里
-  EC2Instance:
-    identity: instance_id
-    immutable: true
-    expires_seconds: 604800
-    note: name 取自 Name 标签，已于 2026-08-29 改以 instance_id 为身份
-  EKSCluster:
-    identity: name
-    immutable: true
-    expires_seconds: 604800
-  Namespace:
-    identity: name
-    immutable: true
-    expires_seconds: 604800
-    scope_note: 未按 cluster 限定；多集群场景同名 namespace 会碰撞
-  Pod:
-    identity: name
-    immutable: lifetime
-    expires_seconds: 259200
-    scope_note: 未按 namespace 限定；Pod 重建即换名，属预期
-  Microservice:
-    identity: name
-    immutable: true
-    expires_seconds: null
-    expiry_note: service_mappings.json 的声明，不是观测值；删声明才该消失
-    note: 规范服务名，来自 service_mappings.json，是声明而非观测值
-  K8sService:
-    identity: name
-    immutable: lifetime
-    expires_seconds: 604800
-    scope_note: 未按 namespace 限定
-  Deployment:
-    identity: name
-    immutable: lifetime
-    expires_seconds: 604800
-    scope_note: 未按 namespace 限定
-  HPA:
-    identity: name
-    immutable: lifetime
-    expires_seconds: 604800
-    scope_note: 未按 namespace 限定
-  LoadBalancer:
-    identity: name
-    immutable: true
-    expires_seconds: 604800
-    preferred_blocked_by: etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda 的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 test_35::g13。解锁前提：先让 etl_cfn 也从契约派生身份键并取得 ARN
-    preferred: arn
-    note: ALB 创建后不可改名；dict 里已有 arn，可升级
-  TargetGroup:
-    identity: arn
-    immutable: true
-    expires_seconds: 604800
-    note: 2026-09-04 从 name 切到 arn（14 个节点全带唯一 arn，且只有 etl_aws 写）。原 note：TargetGroupName 在 AWS 侧创建后不可改，所以 name 是合法身份键。arn 更稳（跨账号/区域唯一）。2026-09-04 起**切换条件已满足**：活图谱 14 个节点全部带唯一
-      arn，由 tests/test_42 的 m08 用例对活图谱自动核验（GRAPH_LIVE_AUDIT=true）。此前 note 写的「18 个节点全部没有 arn，待存量都带上 arn 后再切」有两处错——一是
-      2026-09-04 实况已是 14/18 有 arn，note 过期半个月无人发现（`preferred` 当时没有任何读取方）；二是那个条件**不可满足**：剩下 4 个节点里 3 个（nginx-tg-1/2/3）在
-      AWS 侧已删除、1 个（openclaw-tg-v2）被 SKIP_TG_PREFIXES 刻意排除采集，ETL 永远不会再碰它们、永远补不上 arn。已用 infra/reap_stale_nodes.py 回收这 4 个残留节点
-  ListenerRule:
-    identity: name
-    immutable: true
-    expires_seconds: 604800
-    note: name 传入的就是 rule_arn（handler.py:273）
-  RDSCluster:
-    identity: name
-    immutable: true
-    expires_seconds: 604800
-    note: DBClusterIdentifier
-  RDSInstance:
-    identity: name
-    immutable: true
-    expires_seconds: 604800
-    note: DBInstanceIdentifier
-  Database:
-    identity: name
-    immutable: true
-    expires_seconds: 604800
-    note: 逻辑库名
-  DynamoDBTable:
-    identity: name
-    immutable: true
-    expires_seconds: 604800
-    preferred_blocked_by: etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda 的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 test_35::g13。解锁前提：先让 etl_cfn 也从契约派生身份键并取得 ARN
-    preferred: arn
-  NeptuneCluster:
-    identity: name
-    immutable: true
-    expires_seconds: 604800
-  NeptuneInstance:
-    identity: name
-    immutable: true
-    expires_seconds: 604800
-  S3Bucket:
-    identity: name
-    immutable: true
-    expires_seconds: 604800
-    note: 桶名全局唯一且不可变
-  SQSQueue:
-    identity: name
-    immutable: true
-    expires_seconds: 604800
-    preferred_blocked_by: etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda 的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 test_35::g13。解锁前提：先让 etl_cfn 也从契约派生身份键并取得 ARN
-    preferred: arn
-  SNSTopic:
-    identity: name
-    immutable: true
-    expires_seconds: 604800
-    preferred_blocked_by: etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda 的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 test_35::g13。解锁前提：先让 etl_cfn 也从契约派生身份键并取得 ARN
-    preferred: arn
-  LambdaFunction:
-    identity: name
-    immutable: true
-    expires_seconds: 604800
-    preferred_blocked_by: etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda 的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 test_35::g13。解锁前提：先让 etl_cfn 也从契约派生身份键并取得 ARN
-    preferred: arn
-  StepFunction:
-    identity: name
-    immutable: true
-    expires_seconds: 604800
-    preferred_blocked_by: etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda 的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 test_35::g13。解锁前提：先让 etl_cfn 也从契约派生身份键并取得 ARN
-    preferred: arn
-  ECRRepository:
-    identity: arn
-    immutable: true
-    expires_seconds: 604800
-    note: 2026-09-04 从 name 切到 arn。前提已由 tests/test_42::m08 对活图谱核验（12 个节点全带唯一 arn），且该类型**只有 etl_aws 写**（不在 etl_cfn 的 TYPE_TO_LABEL 里），不存在两个 ETL 用不同身份键的风险
-  BusinessCapability:
-    identity: name
-    immutable: true
-    expires_seconds: null
-    expiry_note: business_config.json 的声明，同 Microservice
-    note: 业务声明，来自 business_config.json
-  AWSServiceEndpoint:
-    identity: name
-    immutable: true
-    expires_seconds: 604800
-    note: 归一化后的服务名（ssm 与 SimpleSystemsManagement 已归一）
-  Incident:
-    identity: id
-    immutable: true
-    expires_seconds: null
-    expiry_note: 追加式事件日志，历史事件不该过期
-    writer: rca_window_flush
-  ChaosExperiment:
-    identity: experiment_id
-    immutable: true
-    expires_seconds: null
-    expiry_note: 追加式事件日志，实验记录是历史证据
-    writer: chaos
-  TopologyChange:
-    identity: change_id
-    immutable: true
-    expires_seconds: null
-    expiry_note: 追加式事件日志，稳态可 0 实例
-    note: 追加式事件日志，稳态可 0 实例
-    writer: etl_deepflow
-  # ── AgentCore / GenAI 组（2026-09-04 新增，写入源 agentcore-etl）──────────
-  #
-  # 身份键一律钉在 **AWS 侧分配的标识**（ARN / KB ID），刻意**不用** OTel 的
-  # gen_ai.* 属性 —— 后者在语义约定里 stability 全是 `development`，没有一个
-  # stable，而本契约要求身份键不可变（g05）。用一个随时可能改名的属性做身份键，
-  # 等于把图的裂库风险押在上游规范的稳定性上。
-  #
-  # 这六类只由 etl_agentcore 一个 ETL 写，**没有 etl_cfn 并写的历史包袱**，
-  # 所以可以直接用 arn 做身份键，不必像 LambdaFunction/DynamoDBTable 那样
-  # 被 preferred_blocked_by 卡着用 name（见 g13）。这是新类型的一次性红利。
-  AgentRuntime:
-    identity: arn
-    immutable: true
-    expires_seconds: 604800
-    writer: etl_agentcore
-    note: Bedrock AgentCore Runtime。arn 形如 arn:aws:bedrock-agentcore:<region>:<acct>:runtime/<id>
-  AgentTool:
-    identity: tool_key
-    immutable: true
-    expires_seconds: 604800
-    writer: etl_agentcore
-    note: |
-      tool **没有 ARN** —— 它是 agent 进程内注册的函数，或 Gateway 聚合出来的
-      虚拟 MCP 工具。所以身份键是复合键 `<owner_arn>#<tool_name>`：
-      owner 是 AgentGateway 的 arn（Gateway 前置的工具）或 AgentRuntime 的 arn
-      （进程内工具）。**不能只用 tool_name** —— 两个 agent 各注册一个同名
-      get_pet 会被并成一个节点，那正是 FIS chaos 模板里「tool 名精确匹配」
-      踩过的同一个坑（名字对不上就零注入而实验仍报成功）。
-  AgentGateway:
-    identity: arn
-    immutable: true
-    expires_seconds: 604800
-    writer: etl_agentcore
-    note: AgentCore Gateway。把 Lambda / OpenAPI / 外部 MCP server 等聚合成单一虚拟 MCP server
-  AgentMemory:
-    identity: arn
-    immutable: true
-    expires_seconds: 604800
-    writer: etl_agentcore
-    note: AgentCore Memory。实测东京已有一个 ACTIVE 实例（xgg_memory-5M0VYBCeFS，2026-07-22 建）
-  KnowledgeBase:
-    identity: arn
-    immutable: true
-    expires_seconds: 604800
-    writer: etl_agentcore
-    note: Bedrock Knowledge Base。本环境向量库是 S3 Vectors（非 OpenSearch Serverless），已有 gp-incident-kb 范式
-  Guardrail:
-    identity: arn
-    immutable: true
-    expires_seconds: 604800
-    writer: etl_agentcore
-    note: Bedrock Guardrail。不是 agent 专属 —— 故不加 Agent 前缀
 edge_types:
   AccessesData:
-    src:
-    - AgentRuntime
-    - LambdaFunction
-    - Microservice
-    - StepFunction
+    dependency: true
     dst:
     - AWSServiceEndpoint
     - AgentMemory
@@ -305,9 +11,9 @@ edge_types:
     - RDSInstance
     - S3Bucket
     - StepFunction
+    expires_seconds: 21600
+    note: 四个源都写（aws/cfn 静态，deepflow 动态，xray 补度量）；取最长源窗口 = xray 的 6h，否则会误杀 xray 发现的边
     pairs:
-    # agent 读写自己的 Memory；以及 agent 调 Bedrock 模型（落 AWSServiceEndpoint，
-    # 与 Microservice→AWSServiceEndpoint 同构，故复用本边而不新造 InvokesModel）
     - - AgentRuntime
       - AgentMemory
     - - AgentRuntime
@@ -338,32 +44,29 @@ edge_types:
       - StepFunction
     - - StepFunction
       - LambdaFunction
-    dependency: true
-    expires_seconds: 21600
-    note: 四个源都写（aws/cfn 静态，deepflow 动态，xray 补度量）；取最长源窗口 = xray 的 6h，否则会误杀 xray 发现的边
-  AffectedService:
     src:
-    - Incident
+    - AgentRuntime
+    - LambdaFunction
+    - Microservice
+    - StepFunction
+  AffectedService:
+    dependency: false
     dst:
     - Microservice
+    expires_seconds: null
     pairs:
     - - Incident
       - Microservice
-    dependency: false
-    expires_seconds: null
-  BelongsTo:
     src:
-    - Database
-    - EC2Instance
-    - Namespace
-    - NeptuneInstance
-    - Pod
-    - RDSInstance
+    - Incident
+  BelongsTo:
+    dependency: false
     dst:
     - EKSCluster
     - K8sService
     - NeptuneCluster
     - RDSCluster
+    expires_seconds: null
     pairs:
     - - Database
       - RDSCluster
@@ -377,79 +80,87 @@ edge_types:
       - K8sService
     - - RDSInstance
       - RDSCluster
-    dependency: false
-    expires_seconds: null
-  Calls:
     src:
-    - LambdaFunction
-    - Microservice
+    - Database
+    - EC2Instance
+    - Namespace
+    - NeptuneInstance
+    - Pod
+    - RDSInstance
+  Calls:
+    dependency: true
     dst:
     - LambdaFunction
     - Microservice
+    expires_seconds: 1800
+    note: 唯一写入源是 deepflow，阈值同 CALLS_INACTIVE_AFTER_SECONDS
     pairs:
     - - LambdaFunction
       - LambdaFunction
     - - Microservice
       - Microservice
-    dependency: true
-    expires_seconds: 1800
     retention_seconds: 604800
-    note: 唯一写入源是 deepflow，阈值同 CALLS_INACTIVE_AFTER_SECONDS
-  ConnectsTo:
     src:
+    - LambdaFunction
     - Microservice
+  ConnectsTo:
+    dependency: false
     dst:
     - Database
+    expires_seconds: null
     pairs:
     - - Microservice
       - Database
-    dependency: false
-    expires_seconds: null
-  Contains:
     src:
-    - Region
+    - Microservice
+  Contains:
+    dependency: false
     dst:
     - AvailabilityZone
+    expires_seconds: null
     pairs:
     - - Region
       - AvailabilityZone
-    dependency: false
-    expires_seconds: null
-  Delegates:
     src:
-    - AgentRuntime
+    - Region
+  Delegates:
+    dependency: true
     dst:
     - AgentRuntime
+    expires_seconds: 21600
+    note: '编排 agent 路由到子 agent（本环境是 orchestrator_strands → nutrition/ordering/
+
+      adoption/concierge 四个）。唯一写入源是 aws/spans —— 控制面 API 看不到
+
+      「谁调了谁」，那只存在于运行时 span 里。
+
+      TTL 取 21600（6h）与 AccessesData 一致：同为 span 派生，用同一个源窗口，
+
+      否则会出现「一条边失效了、同源的另一条还在」的不一致。
+
+      ⚠️ 判据陷阱：tool 级/agent 级故障被优雅处理后**完成为成功调用**，对基础设施
+
+      错误指标不可见。验证这条边真实存在要看 agent 自己的信号，不是 HTTP 5xx。
+
+      '
     pairs:
     - - AgentRuntime
       - AgentRuntime
-    dependency: true
-    expires_seconds: 21600
-    note: |
-      编排 agent 路由到子 agent（本环境是 orchestrator_strands → nutrition/ordering/
-      adoption/concierge 四个）。唯一写入源是 aws/spans —— 控制面 API 看不到
-      「谁调了谁」，那只存在于运行时 span 里。
-      TTL 取 21600（6h）与 AccessesData 一致：同为 span 派生，用同一个源窗口，
-      否则会出现「一条边失效了、同源的另一条还在」的不一致。
-      ⚠️ 判据陷阱：tool 级/agent 级故障被优雅处理后**完成为成功调用**，对基础设施
-      错误指标不可见。验证这条边真实存在要看 agent 自己的信号，不是 HTTP 5xx。
-  DependsOn:
     src:
-    - AgentTool
-    - BusinessCapability
-    - Microservice
+    - AgentRuntime
+  DependsOn:
+    dependency: true
     dst:
+    - AgentRuntime
     - ECRRepository
     - LambdaFunction
     - Microservice
     - RDSCluster
     - SNSTopic
     - SQSQueue
+    expires_seconds: 21600
+    note: aws + cfn 静态 + deepflow 动态
     pairs:
-    # ★ 这两条是把 agent 子图接回既有 PetSite 图的**唯一**通路。
-    #   一个 Gateway 前置的 tool 背后是真实后端（Lambda，或经 internal ALB 的
-    #   Microservice）。缺了它们，六个 agent 节点类型会在图里形成一座孤岛 ——
-    #   能查到 agent 内部结构，却回答不了「petsite 挂了会影响哪个 agent」。
     - - AgentTool
       - LambdaFunction
     - - AgentTool
@@ -461,20 +172,21 @@ edge_types:
     - - BusinessCapability
       - SQSQueue
     - - Microservice
+      - AgentRuntime
+    - - Microservice
       - ECRRepository
     - - Microservice
       - SQSQueue
-    dependency: true
-    expires_seconds: 21600
-    note: aws + cfn 静态 + deepflow 动态
-  ForwardsTo:
     src:
-    - ListenerRule
-    - LoadBalancer
-    - TargetGroup
+    - AgentTool
+    - BusinessCapability
+    - Microservice
+  ForwardsTo:
+    dependency: false
     dst:
     - Microservice
     - TargetGroup
+    expires_seconds: null
     pairs:
     - - ListenerRule
       - TargetGroup
@@ -482,27 +194,25 @@ edge_types:
       - TargetGroup
     - - TargetGroup
       - Microservice
-    dependency: false
-    expires_seconds: null
-  HasRule:
     src:
+    - ListenerRule
     - LoadBalancer
+    - TargetGroup
+  HasRule:
+    dependency: false
     dst:
     - ListenerRule
+    expires_seconds: null
     pairs:
     - - LoadBalancer
       - ListenerRule
-    dependency: false
-    expires_seconds: null
-  HasSG:
     src:
-    - EC2Instance
-    - EKSCluster
     - LoadBalancer
-    - NeptuneCluster
-    - RDSCluster
+  HasSG:
+    dependency: false
     dst:
     - SecurityGroup
+    expires_seconds: null
     pairs:
     - - EC2Instance
       - SecurityGroup
@@ -514,17 +224,19 @@ edge_types:
       - SecurityGroup
     - - RDSCluster
       - SecurityGroup
-    dependency: false
-    expires_seconds: null
-  Implements:
     src:
-    - K8sService
-    - LambdaFunction
-    - Microservice
+    - EC2Instance
+    - EKSCluster
+    - LoadBalancer
+    - NeptuneCluster
+    - RDSCluster
+  Implements:
+    dependency: false
     dst:
     - BusinessCapability
     - LambdaFunction
     - Microservice
+    expires_seconds: null
     pairs:
     - - K8sService
       - LambdaFunction
@@ -534,15 +246,15 @@ edge_types:
       - BusinessCapability
     - - Microservice
       - BusinessCapability
-    dependency: false
-    expires_seconds: null
-  Invokes:
     src:
+    - K8sService
     - LambdaFunction
-    - SNSTopic
-    - StepFunction
+    - Microservice
+  Invokes:
+    dependency: true
     dst:
     - LambdaFunction
+    expires_seconds: 21600
     pairs:
     - - LambdaFunction
       - LambdaFunction
@@ -550,69 +262,75 @@ edge_types:
       - LambdaFunction
     - - StepFunction
       - LambdaFunction
-    dependency: false
-    expires_seconds: null
-  InvokesTool:
     src:
-    - AgentRuntime
+    - LambdaFunction
+    - SNSTopic
+    - StepFunction
+  InvokesTool:
+    dependency: true
     dst:
     - AgentTool
+    expires_seconds: 21600
+    note: 'agent → tool 的调用。**刻意不复用现有 Invokes**。
+
+      2026-09-05 更新：此前这里的理由是「Invokes 那个 dependency: false」，
+
+      但同日 Invokes 已改判为 dependency: true（StepFunction/SNS → LambdaFunction
+
+      按任何定义都是真依赖），**那条理由已失效**。不复用的理由改为下面两条，
+
+      两条都仍然成立：
+
+      (1) 端点类型不同：Invokes 的目标是 LambdaFunction，本边是 AgentTool；
+
+      (2) **失效语义不同**：本边的 dependency_kind 是 inference（LLM 按 query
+
+      在运行时决定），由 mark_stale_inference_edges 标记观测静默、**不置
+
+      active=false**；而 Invokes 是 static（配置声明），走的是另一条失效路径。
+
+      把两者塞进一个标签，会让「按 dependency_kind 过滤失效」的清理逻辑
+
+      对两种本质不同的边施加同一套判据 —— 实测代价见 graph_cleanup 里
+
+      Retrieves → nutrition-kb 被误置 active=false 那段。
+
+      '
     pairs:
     - - AgentRuntime
       - AgentTool
-    dependency: true
-    expires_seconds: 21600
-    note: |
-      agent → tool 的调用。**刻意不复用现有 Invokes** —— 那个是
-      Lambda/SNS/StepFunction → LambdaFunction 且 dependency: false，
-      而 agent 对 tool 是**真依赖**（tool 拿不到结果 agent 就答不出）。
-      把两种语义塞进一个标签会让「按 dependency 过滤」的查询同时命中
-      结构边与依赖边，那正是本契约区分依赖边与结构边要避免的事。
-  InvokesVia:
     src:
-    - Microservice
+    - AgentRuntime
+  InvokesVia:
+    dependency: false
     dst:
     - StepFunction
+    expires_seconds: 21600
+    note: 受 drift 对账覆盖
     pairs:
     - - Microservice
       - StepFunction
-    dependency: false
-    expires_seconds: 21600
-    note: 受 drift 对账覆盖
-  Involves:
     src:
-    - Incident
+    - Microservice
+  Involves:
+    dependency: false
     dst:
     - Microservice
+    expires_seconds: null
     pairs:
     - - Incident
       - Microservice
-    dependency: false
-    expires_seconds: null
-  LocatedIn:
     src:
-    - AWSServiceEndpoint
-    - EC2Instance
-    - ECRRepository
-    - EKSCluster
-    - LoadBalancer
-    - Microservice
-    - NeptuneCluster
-    - NeptuneInstance
-    - Pod
-    - RDSCluster
-    - RDSInstance
-    - S3Bucket
-    - SNSTopic
-    - SQSQueue
-    - Subnet
-    - VPC
+    - Incident
+  LocatedIn:
+    dependency: false
     dst:
     - AvailabilityZone
     - EKSCluster
     - Region
     - Subnet
     - VPC
+    expires_seconds: null
     pairs:
     - - AWSServiceEndpoint
       - Region
@@ -650,16 +368,30 @@ edge_types:
       - VPC
     - - VPC
       - Region
-    dependency: false
-    expires_seconds: null
-  Manages:
     src:
-    - Deployment
-    - HPA
+    - AWSServiceEndpoint
+    - EC2Instance
+    - ECRRepository
+    - EKSCluster
+    - LoadBalancer
+    - Microservice
+    - NeptuneCluster
+    - NeptuneInstance
+    - Pod
+    - RDSCluster
+    - RDSInstance
+    - S3Bucket
+    - SNSTopic
+    - SQSQueue
+    - Subnet
+    - VPC
+  Manages:
+    dependency: false
     dst:
     - Deployment
     - Microservice
     - Pod
+    expires_seconds: null
     pairs:
     - - Deployment
       - Microservice
@@ -667,150 +399,151 @@ edge_types:
       - Pod
     - - HPA
       - Deployment
-    dependency: false
-    expires_seconds: null
-  MentionsResource:
     src:
-    - Incident
+    - Deployment
+    - HPA
+  MentionsResource:
+    dependency: false
     dst:
     - EC2Instance
     - Microservice
+    expires_seconds: null
     pairs:
     - - Incident
       - EC2Instance
     - - Incident
       - Microservice
-    dependency: false
-    expires_seconds: null
-  OwnedBy:
     src:
-    - Microservice
+    - Incident
+  OwnedBy:
+    dependency: false
     dst:
     - Namespace
+    expires_seconds: null
     pairs:
     - - Microservice
       - Namespace
-    dependency: false
-    expires_seconds: null
-  ProtectsAccess:
     src:
-    - Guardrail
-    - SecurityGroup
+    - Microservice
+  ProtectsAccess:
+    dependency: false
     dst:
     - AgentRuntime
     - LambdaFunction
+    expires_seconds: null
     pairs:
-    # Guardrail 拦 agent 的输入输出，与 SecurityGroup 拦 Lambda 的网络访问同构：
-    # 都是「一道策略保护一个执行体」，故复用本边
     - - Guardrail
       - AgentRuntime
     - - SecurityGroup
       - LambdaFunction
-    dependency: false
-    expires_seconds: null
-  PublishesTo:
     src:
-    - Microservice
+    - Guardrail
+    - SecurityGroup
+  PublishesTo:
+    dependency: false
     dst:
     - SNSTopic
     - SQSQueue
+    expires_seconds: 21600
+    note: 受 drift 对账覆盖
     pairs:
     - - Microservice
       - SNSTopic
     - - Microservice
       - SQSQueue
-    dependency: false
-    expires_seconds: 21600
-    note: 受 drift 对账覆盖
-  Retrieves:
     src:
-    - AgentRuntime
+    - Microservice
+  Retrieves:
+    dependency: true
     dst:
     - KnowledgeBase
+    expires_seconds: 21600
+    note: 'agent → Knowledge Base 的检索（本环境是 nutrition agent 查 10 篇宠物营养
+
+      知识文档）。是依赖边：KB 检索失败会让 agent 的回答质量下降。
+
+      ⚠️ 这条边的失效模式与微服务不同 —— KB 返回空结果时调用**是成功的**，
+
+      表现为输出质量下降而非错误率上升。所以它的证伪判据要看
+
+      response-quality / task-success，不是 infrastructure error rate。
+
+      '
     pairs:
     - - AgentRuntime
       - KnowledgeBase
-    dependency: true
-    expires_seconds: 21600
-    note: |
-      agent → Knowledge Base 的检索（本环境是 nutrition agent 查 10 篇宠物营养
-      知识文档）。是依赖边：KB 检索失败会让 agent 的回答质量下降。
-      ⚠️ 这条边的失效模式与微服务不同 —— KB 返回空结果时调用**是成功的**，
-      表现为输出质量下降而非错误率上升。所以它的证伪判据要看
-      response-quality / task-success，不是 infrastructure error rate。
-  Routes:
     src:
-    - K8sService
+    - AgentRuntime
+  Routes:
+    dependency: false
     dst:
     - Pod
+    expires_seconds: null
     pairs:
     - - K8sService
       - Pod
-    dependency: false
-    expires_seconds: null
-  RoutesTo:
     src:
-    - AgentGateway
-    - LoadBalancer
+    - K8sService
+  RoutesTo:
+    dependency: false
     dst:
     - AgentTool
     - TargetGroup
+    expires_seconds: null
     pairs:
-    # Gateway 把多个 target 聚合成单一虚拟 MCP server 后路由到具体 tool，
-    # 与 LoadBalancer→TargetGroup 同构：都是「入口分发到后端单元」
     - - AgentGateway
       - AgentTool
     - - LoadBalancer
       - TargetGroup
-    dependency: false
-    expires_seconds: null
-  RunsOn:
     src:
-    - Microservice
-    - Pod
+    - AgentGateway
+    - LoadBalancer
+  RunsOn:
+    dependency: false
     dst:
     - EC2Instance
     - Pod
+    expires_seconds: null
     pairs:
     - - Microservice
       - Pod
     - - Pod
       - EC2Instance
-    dependency: false
-    expires_seconds: null
-  TestedBy:
     src:
     - Microservice
+    - Pod
+  TestedBy:
+    dependency: false
     dst:
     - ChaosExperiment
+    expires_seconds: null
     pairs:
     - - Microservice
       - ChaosExperiment
-    dependency: false
-    expires_seconds: null
-  TriggeredBy:
     src:
-    - Incident
-    - SQSQueue
+    - Microservice
+  TriggeredBy:
+    dependency: false
     dst:
     - LambdaFunction
     - Microservice
+    expires_seconds: null
     pairs:
     - - Incident
       - Microservice
     - - SQSQueue
       - LambdaFunction
-    dependency: false
-    expires_seconds: null
-  WritesTo:
     src:
-    - LambdaFunction
-    - Microservice
+    - Incident
+    - SQSQueue
+  WritesTo:
+    dependency: false
     dst:
     - NeptuneCluster
     - S3Bucket
     - SNSTopic
     - SQSQueue
+    expires_seconds: null
     pairs:
     - - LambdaFunction
       - NeptuneCluster
@@ -820,8 +553,9 @@ edge_types:
       - SNSTopic
     - - Microservice
       - SQSQueue
-    dependency: false
-    expires_seconds: null
+    src:
+    - LambdaFunction
+    - Microservice
 edge_verification:
   attrs:
   - verify_status
@@ -832,20 +566,332 @@ edge_verification:
   - verify_degradation
   authority:
   - chaos-runner
+  evidence_weights:
+    intervention_confirmed: 4.0
+    intervention_refuted: -4.0
+    observed_cap: 1.5
+    observed_per_source: 0.5
+    static_declaration: 1.0
   statuses:
   - untested
   - confirmed
   - refuted
   - inconclusive
-  evidence_weights:
-    static_declaration: 1.0
-    observed_per_source: 0.5
-    observed_cap: 1.5
-    intervention_confirmed: 4.0
-    intervention_refuted: -4.0
   thresholds:
-    min_observation_requests: 20
     confirm_degradation_pct: 20.0
-    refute_degradation_pct: 5.0
     hard_degradation_pct: 70.0
+    min_observation_requests: 20
+    refute_degradation_pct: 5.0
     stale_verification_seconds: 2592000
+edge_write_once_attrs:
+- source
+- dependency_kind
+- first_seen
+node_attr_authority:
+  Microservice:
+    az:
+    - aws-etl
+    fault_boundary:
+    - aws-etl
+    recovery_priority:
+    - aws-etl
+    - business-layer
+node_scope:
+  attr: scope
+  authority:
+  - scope-labeler
+  namespace_map:
+    amazon-cloudwatch: observability
+    amazon-guardduty: observability
+    amazon-network-flow-monitor: observability
+    awesomeshop: observed
+    chaos-mesh: platform
+    deepflow: observability
+    kube-system: cluster-infra
+    petadoptions: observed
+  nested_stack_scope: scaffolding
+  primary_query_scope: observed
+  resolvers:
+  - k8s-namespace
+  - cloudformation-stack-membership
+  - node-type
+  - profile-declaration
+  stack_map:
+    AlertBufferStack: platform
+    Applications: observed
+    AwesomeShopInfra: observed
+    CDKToolkit: scaffolding
+    NeptuneEtlStack: platform
+    ServicesEks2: observed
+    WaggleAIAgents: observed
+  unresolved_value: unknown
+  values:
+  - observed
+  - observability
+  - platform
+  - scaffolding
+  - cluster-infra
+  - external
+  - unknown
+node_types:
+  AWSServiceEndpoint:
+    expires_seconds: 604800
+    identity: name
+    immutable: true
+    note: 归一化后的服务名（ssm 与 SimpleSystemsManagement 已归一）
+  AgentGateway:
+    expires_seconds: 604800
+    identity: arn
+    immutable: true
+    note: AgentCore Gateway。把 Lambda / OpenAPI / 外部 MCP server 等聚合成单一虚拟 MCP server
+    writer: etl_agentcore
+  AgentMemory:
+    expires_seconds: 604800
+    identity: arn
+    immutable: true
+    note: AgentCore Memory。实测东京已有一个 ACTIVE 实例（xgg_memory-5M0VYBCeFS，2026-07-22 建）
+    writer: etl_agentcore
+  AgentRuntime:
+    expires_seconds: 604800
+    identity: arn
+    immutable: true
+    note: Bedrock AgentCore Runtime。arn 形如 arn:aws:bedrock-agentcore:<region>:<acct>:runtime/<id>
+    writer: etl_agentcore
+  AgentTool:
+    expires_seconds: 604800
+    identity: tool_key
+    immutable: true
+    note: 'tool **没有 ARN** —— 它是 agent 进程内注册的函数，或 Gateway 聚合出来的
+
+      虚拟 MCP 工具。所以身份键是复合键 `<owner_arn>#<tool_name>`：
+
+      owner 是 AgentGateway 的 arn（Gateway 前置的工具）或 AgentRuntime 的 arn
+
+      （进程内工具）。**不能只用 tool_name** —— 两个 agent 各注册一个同名
+
+      get_pet 会被并成一个节点，那正是 FIS chaos 模板里「tool 名精确匹配」
+
+      踩过的同一个坑（名字对不上就零注入而实验仍报成功）。
+
+      '
+    writer: etl_agentcore
+  AvailabilityZone:
+    expires_seconds: null
+    expiry_note: AWS 可用区不会消失
+    identity: name
+    immutable: true
+    note: az name，AWS 侧不可变
+  BusinessCapability:
+    expires_seconds: null
+    expiry_note: business_config.json 的声明，同 Microservice
+    identity: name
+    immutable: true
+    note: 业务声明，来自 business_config.json
+  ChaosExperiment:
+    expires_seconds: null
+    expiry_note: 追加式事件日志，实验记录是历史证据
+    identity: experiment_id
+    immutable: true
+    writer: chaos
+  Database:
+    expires_seconds: 604800
+    identity: name
+    immutable: true
+    note: 逻辑库名
+  Deployment:
+    expires_seconds: 604800
+    identity: name
+    immutable: lifetime
+    scope_note: 未按 namespace 限定
+  DynamoDBTable:
+    expires_seconds: 604800
+    identity: name
+    immutable: true
+    preferred: arn
+    preferred_blocked_by: etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda
+      的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 test_35::g13。解锁前提：先让
+      etl_cfn 也从契约派生身份键并取得 ARN
+  EC2Instance:
+    expires_seconds: 604800
+    identity: instance_id
+    immutable: true
+    note: name 取自 Name 标签，已于 2026-08-29 改以 instance_id 为身份
+  ECRRepository:
+    expires_seconds: 604800
+    identity: arn
+    immutable: true
+    note: 2026-09-04 从 name 切到 arn。前提已由 tests/test_42::m08 对活图谱核验（12 个节点全带唯一 arn），且该类型**只有 etl_aws 写**（不在
+      etl_cfn 的 TYPE_TO_LABEL 里），不存在两个 ETL 用不同身份键的风险
+  EKSCluster:
+    expires_seconds: 604800
+    identity: name
+    immutable: true
+  Guardrail:
+    expires_seconds: 604800
+    identity: arn
+    immutable: true
+    note: Bedrock Guardrail。不是 agent 专属 —— 故不加 Agent 前缀
+    writer: etl_agentcore
+  HPA:
+    expires_seconds: 604800
+    identity: name
+    immutable: lifetime
+    scope_note: 未按 namespace 限定
+  Incident:
+    expires_seconds: null
+    expiry_note: 追加式事件日志，历史事件不该过期
+    identity: id
+    immutable: true
+    writer: rca_window_flush
+  K8sService:
+    expires_seconds: 604800
+    identity: name
+    immutable: lifetime
+    scope_note: 未按 namespace 限定
+  KnowledgeBase:
+    expires_seconds: 604800
+    identity: arn
+    immutable: true
+    note: Bedrock Knowledge Base。本环境向量库是 S3 Vectors（非 OpenSearch Serverless），已有 gp-incident-kb 范式
+    writer: etl_agentcore
+  LambdaFunction:
+    expires_seconds: 604800
+    identity: name
+    immutable: true
+    preferred: arn
+    preferred_blocked_by: etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda
+      的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 test_35::g13。解锁前提：先让
+      etl_cfn 也从契约派生身份键并取得 ARN
+  ListenerRule:
+    expires_seconds: 604800
+    identity: name
+    immutable: true
+    note: name 传入的就是 rule_arn（handler.py:273）
+  LoadBalancer:
+    expires_seconds: 604800
+    identity: name
+    immutable: true
+    note: ALB 创建后不可改名；dict 里已有 arn，可升级
+    preferred: arn
+    preferred_blocked_by: etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda
+      的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 test_35::g13。解锁前提：先让
+      etl_cfn 也从契约派生身份键并取得 ARN
+  Microservice:
+    expires_seconds: null
+    expiry_note: service_mappings.json 的声明，不是观测值；删声明才该消失
+    identity: name
+    immutable: true
+    note: 规范服务名，来自 service_mappings.json，是声明而非观测值
+  Namespace:
+    expires_seconds: 604800
+    identity: name
+    immutable: true
+    scope_note: 未按 cluster 限定；多集群场景同名 namespace 会碰撞
+  NeptuneCluster:
+    expires_seconds: 604800
+    identity: name
+    immutable: true
+  NeptuneInstance:
+    expires_seconds: 604800
+    identity: name
+    immutable: true
+  Pod:
+    expires_seconds: 259200
+    identity: name
+    immutable: lifetime
+    scope_note: 未按 namespace 限定；Pod 重建即换名，属预期
+  RDSCluster:
+    expires_seconds: 604800
+    identity: name
+    immutable: true
+    note: DBClusterIdentifier
+  RDSInstance:
+    expires_seconds: 604800
+    identity: name
+    immutable: true
+    note: DBInstanceIdentifier
+  Region:
+    expires_seconds: null
+    expiry_note: AWS 区域不会消失
+    identity: name
+    immutable: true
+    note: region code，AWS 侧不可变
+  S3Bucket:
+    expires_seconds: 604800
+    identity: name
+    immutable: true
+    note: 桶名全局唯一且不可变
+  SNSTopic:
+    expires_seconds: 604800
+    identity: name
+    immutable: true
+    preferred: arn
+    preferred_blocked_by: etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda
+      的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 test_35::g13。解锁前提：先让
+      etl_cfn 也从契约派生身份键并取得 ARN
+  SQSQueue:
+    expires_seconds: 604800
+    identity: name
+    immutable: true
+    preferred: arn
+    preferred_blocked_by: etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda
+      的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 test_35::g13。解锁前提：先让
+      etl_cfn 也从契约派生身份键并取得 ARN
+  SecurityGroup:
+    expires_seconds: 604800
+    identity: sg_id
+    immutable: true
+    note: GroupName 创建后不可改，但 sg_id 更稳且已在 dict 里
+  StepFunction:
+    expires_seconds: 604800
+    identity: name
+    immutable: true
+    preferred: arn
+    preferred_blocked_by: etl_cfn 也写该类型且 get_or_create_vertex 硬编码按 name 匹配，且它手上只有被规范化成短名的 physical_id（Lambda
+      的 PhysicalResourceId 就是函数名，本地拿不到 ARN）。单方面切 arn 会让两个 ETL 用不同身份键写同一类节点，图里必然裂成两份 —— 见 test_35::g13。解锁前提：先让
+      etl_cfn 也从契约派生身份键并取得 ARN
+  Subnet:
+    expires_seconds: 604800
+    identity: subnet_id
+    immutable: true
+    note: name 取自 Name 标签（collectors/ec2.py:56）是可变的，必须以 subnet_id 为身份
+  TargetGroup:
+    expires_seconds: 604800
+    identity: arn
+    immutable: true
+    note: 2026-09-04 从 name 切到 arn（14 个节点全带唯一 arn，且只有 etl_aws 写）。原 note：TargetGroupName 在 AWS 侧创建后不可改，所以
+      name 是合法身份键。arn 更稳（跨账号/区域唯一）。2026-09-04 起**切换条件已满足**：活图谱 14 个节点全部带唯一 arn，由 tests/test_42 的 m08 用例对活图谱自动核验（GRAPH_LIVE_AUDIT=true）。此前
+      note 写的「18 个节点全部没有 arn，待存量都带上 arn 后再切」有两处错——一是 2026-09-04 实况已是 14/18 有 arn，note 过期半个月无人发现（`preferred`
+      当时没有任何读取方）；二是那个条件**不可满足**：剩下 4 个节点里 3 个（nginx-tg-1/2/3）在 AWS 侧已删除、1 个（openclaw-tg-v2）被 SKIP_TG_PREFIXES
+      刻意排除采集，ETL 永远不会再碰它们、永远补不上 arn。已用 infra/reap_stale_nodes.py 回收这 4 个残留节点
+  TopologyChange:
+    expires_seconds: null
+    expiry_note: 追加式事件日志，稳态可 0 实例
+    identity: change_id
+    immutable: true
+    note: 追加式事件日志，稳态可 0 实例
+    writer: etl_deepflow
+  VPC:
+    expires_seconds: 604800
+    identity: vpc_id
+    immutable: true
+    note: name 取自 Name 标签（collectors/ec2.py:76 tags.get('Name', v['VpcId'])）是可变的，必须以 vpc_id 为身份
+sources:
+- agentcore-etl
+- appsignals-etl
+- aws-etl
+- aws-etl-static
+- business-layer
+- cfn-etl
+- deepflow-dns
+- deepflow-etl
+- deepflow-l4
+- eks-etl
+- manual-fix
+- nfm
+- xray
+timestamp_field: last_seen
+timestamp_legacy_aliases:
+- last_updated
+- last_scanned
+version: 1

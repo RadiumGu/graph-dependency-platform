@@ -425,12 +425,55 @@ def test_g12_single_timestamp_field(contract, gc):
     assert gc.TIMESTAMP_FIELD == contract['timestamp_field']
 
 
-# ── g19 写入路径门禁 ──────────────────────────────────────────────────────
+# ── g18/g19 「一条边算不算依赖」这件事本身需要门禁 ─────────────────────────
 #
-# 2026-09-05 实测缺口：三个 ETL 里只有 etl_aws 与 etl_cfn 在写
-# dependency_kind 之前判了 is_dependency_edge()，etl_agentcore 漏了，
-# 于是 5 条 AgentGateway-[RoutesTo]->AgentTool 带上了依赖属性 ——
-# 而 RoutesTo 声明为 dependency: false。靠人肉对账才发现。
+# 2026-09-05 实测暴露的缺口：`Invokes.dependency` 从 false 翻成 true、
+# `expires_seconds` 从 None 变成 21600，**g01–g17 全绿放行**。
+# 原因是既有用例只比对类型名**集合**（g01/g02）与「依赖边必须有 TTL」（g07），
+# 没有任何一条锁定「**哪些**边是依赖边」。
+#
+# 为什么这件事必须锁：`dependency` 标志是整张图语义的分水岭 ——
+#   · is_dependency_edge() 据它决定要不要写 dependency_kind
+#   · deactivate_stale_dynamic_edges 只失效 dependency_kind='dynamic' 的边
+#   · 影响面分析 / 容灾恢复顺序只沿依赖边走
+# 翻一个标志会同时改变写入、失效与查询三条链路的行为，却不需要改任何一行代码。
+# 那正是「声明而不设门禁等于没声明」要防的形状。
+
+DEPENDENCY_EDGES = {
+    'AccessesData',
+    'Calls',
+    'Delegates',
+    'DependsOn',
+    'Invokes',
+    'InvokesTool',
+    'Retrieves',
+}
+
+
+def test_g18_dependency_edge_set_is_locked(contract):
+    """依赖边集合必须与本文件的显式清单完全一致。
+
+    这条用例**故意**要求「改分类就得改测试」：新增或移除一种依赖边，
+    必须同时在这里登记，让 diff 里能看见语义变更。
+
+    ## Invokes 为什么在清单里（2026-09-05）
+
+    它曾长期是 `dependency: false`（结构边，生命周期跟随两端节点）。
+    9/5 改判为依赖边，理由是 `StepFunction → LambdaFunction`、
+    `SNSTopic → LambdaFunction`、`LambdaFunction → LambdaFunction`
+    按任何定义都是「A 依赖 B」：被调方不可用，调用方的功能就缺一块。
+    改判同时按 g07 补了 `expires_seconds: 21600`。
+
+    ⚠️ 这次改判是**在没有任何测试拦阻的情况下**发生的，本用例就是补那个洞。
+    """
+    declared = {e for e, v in contract['edge_types'].items() if v.get('dependency')}
+    assert declared == DEPENDENCY_EDGES, (
+        f"依赖边集合发生了变化，而这是会同时改变写入/失效/查询三条链路的语义变更。\n"
+        f"  契约里多出: {sorted(declared - DEPENDENCY_EDGES)}\n"
+        f"  契约里缺少: {sorted(DEPENDENCY_EDGES - declared)}\n"
+        f"若确实要改分类，请同时更新本用例的 DEPENDENCY_EDGES 并在 docstring 写明理由 ——\n"
+        f"「改分类就得改测试」是刻意的，为的是让语义变更出现在 diff 里。"
+    )
 
 
 def test_g19_generic_edge_writers_gate_dependency_kind(contract):

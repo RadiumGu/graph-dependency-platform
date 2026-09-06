@@ -24,6 +24,17 @@ from config import (
     FAULT_BOUNDARY_MAP, ENVIRONMENT,
 )
 
+# scope 的 namespace 判据从**契约**读，不在 ETL 里抄一份 —— 与
+# scripts/label_node_scope.py 共用同一份声明，否则两侧会悄悄分歧
+# （这个项目已经因为「同一判据两份实现」踩过一次）。
+try:
+    from graph_contract_data import NODE_SCOPE as _NODE_SCOPE
+    NODE_SCOPE_NS_MAP = dict(_NODE_SCOPE.get('namespace_map') or {})
+except Exception:  # pragma: no cover
+    # 契约不可用时退化为「不写 scope」而不是猜一个值 —— 猜错比留空更糟，
+    # 留空会被守门测试抓到，猜错不会。
+    NODE_SCOPE_NS_MAP = {}
+
 logger = logging.getLogger()
 
 
@@ -106,6 +117,23 @@ def upsert_vertex(label: str, name: str, extra_props: dict, managed_by: str = 'm
     assert_node_type(label)
 
     all_props = {'environment': ENVIRONMENT}
+
+    # ── scope：算不算「被观测系统」的一部分（T-306）────────────────────────
+    # 为什么在 upsert 时写、而不是全靠 scripts/label_node_scope.py 事后标注：
+    # 那个脚本是**回填与对账**工具，不是稳态机制。ETL 每跑一次就产生一批没有
+    # scope 的新节点（实测：两个 petsite-deployment Pod 在标注跑完 20 分钟后出现），
+    # 于是守门测试每次都变红 —— 而一个反复闪红的门禁会被无视，比没有门禁更糟。
+    #
+    # 这里只做**零外部调用**的那一半：K8s 对象在 upsert 时手上就有 namespace，
+    # 查一次契约的 namespace_map 即可。需要查 CloudFormation 栈归属的那一半
+    # （AWS 资源）仍由脚本定期对账 —— 在 Lambda 里对每个资源调
+    # describe-stacks 既慢又会撞限流。
+    _ns = (extra_props or {}).get('namespace')
+    if _ns:
+        _sc = NODE_SCOPE_NS_MAP.get(_ns)
+        if _sc:
+            all_props['scope'] = _sc
+
     fb_entry = FAULT_BOUNDARY_MAP.get(label)
     if fb_entry:
         fb_type, fb_region = fb_entry

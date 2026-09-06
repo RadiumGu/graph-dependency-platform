@@ -81,6 +81,12 @@ _OBSERVER_MARKERS = {
     'xray': ('xray_call_count', 'xray_last_seen'),
     'nfm': ('nfm_flow_count', 'nfm_last_seen'),
     'deepflow': ('calls', 'error_rate'),
+    # 2026-09-05（T-307）：K8s Pod spec 派生的启动依赖（微服务 → ECRRepository）。
+    # 单列一档而不是塞进 deepflow：deepflow 的 ('calls','error_rate') 语义是
+    # 「eBPF 观测到的流量计数」，而这类边来自镜像引用、不存在流量计数。
+    # 写假的 calls 等于伪造观测证据，所以让写入方记录它实际看到的东西（镜像仓库名），
+    # 这里按那个字段计数。
+    'k8s-image-spec': ('image_ref',),
 }
 _STATIC_SOURCES = ('aws-etl', 'cfn-etl')
 

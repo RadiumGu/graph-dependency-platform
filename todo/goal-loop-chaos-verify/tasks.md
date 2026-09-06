@@ -864,6 +864,169 @@
 - **这个分布就是"这张图有多准"的量化答案**，也是 DoD-4 覆盖率数字的意义所在
 - 依赖：T-281
 
+## Stage 9 —— 验证体系的写入正确性（2026-09-05 加入）
+
+起因：修 `graph_confidence.py` docstring 里一处「干预权重 ±3.0」与契约 ±4.0 不符的
+文档陈旧，顺着这条线在活图谱查出同一根因的**第三种表现**。根因是旧版
+`scripts/write_edge_verdicts.py` 自己决定置信度、直接写契约里的证据权重
+（confirmed→+4.0 / refuted→−4.0 / unverifiable→**0.0**）。三种表现：
+
+| # | 表现 | 为什么之前没被发现 | 状态 |
+|---|---|---|---|
+| 1 | 11 条边 `verify_confidence` = ±4.0 | 越界，被值域守门测试抓到 | `done`（2026-09-05 早先） |
+| 2 | 33 条边 `verify_confidence` = 0.0 | **落在 [0,1] 内**，值域门禁放行 | `done`（T-304 完成 17 条 + 16 条走 T-305） |
+| 3 | 16 条非依赖边带整套 `verify_*` | 门禁只校验「谁在写」，不校验「写到哪种边」 | `done` |
+
+### T-304 回填被写坏的 verify_confidence + 补两道守门测试 · `done`（2026-09-05 09:5xZ）★
+- 判据是纯数学的：`confidence()` = `round(sigmoid(log-odds), 4)` 且**无 clamp**，
+  要得到 0.0 需 log-odds ≤ −9.9，即**至少 3 次证伪**；零证据是 `sigmoid(0) = 0.5`。
+  所以「confidence=0.0 且 refute_count 为 0/缺失」的边一定不是该函数的产物
+- **铁证**：这 33 条的 `verify_confirm_count` / `verify_refute_count` 全为 `null`，
+  而现行两条写入路径都**无条件**写这两个计数器 → 确实出自旧路径
+- 新增 `scripts/backfill_verify_confidence.py`（默认 dry-run）。三条刻意设计：
+  1. **判据严格复用**，`_OBSERVER_MARKERS` / `_STATIC_SOURCES` / `confidence()`
+     全部 import 而非复制 —— 这个 bug 的根源正是「同一判据两份分歧实现」
+  2. **不动 `verify_status`**：`inconclusive` 是正确判定，只有置信度写错了
+  3. **默认拒绝处理 `Invokes`**：那 16 条的处置取决于 T-306，回填等于替一个
+     可能不该存在的状态背书
+- 回填 17 条依赖边（11 `Calls` → 0.6225 = σ(0.5)，6 `DependsOn` → 0.5 = σ(0)），
+  并把两个 null 计数器补成 0（不补则下次读回来仍走同一条路、回填被覆盖）
+- 顺带发现：那 6 条 `DependsOn` 由 `deepflow-etl` 写入，却**不带 deepflow 的观测
+  标记属性**（`calls` / `error_rate` 都没有），所以按现行判据算作零证据 → 0.5。
+  「写入方声明了 source 但没写标记，读取方因此看不见这个观测源」是独立缺陷 → T-307
+- 新增两道 live 守门测试（`tests/test_45_target_selection.py`）：
+  - `test_i06`：依赖边 confidence=0.0 必须有 ≥3 次证伪 —— 堵**值域内的错值**，
+    这是 `test_i05`（越界）抓不到的那一半
+  - `test_i07`：`verify_*` 只能出现在 `dependency: true` 的边类型上
+- 实测：17 passed（含 3 条活图谱核验）。全量套件 14 failed 与本卡**无关** ——
+  已用 `git stash` 摘掉本次改动复跑，仍是同样 14 个，属另一分支未提交的
+  dr-plan-generator / rca 改动
+
+### T-305 靶点选择在选靶前判断「不可注入」并跳过 · `done`（2026-09-05 13:2xZ）★
+- 现状：那 16 条 `Invokes` 的 `verify_experiment` 文本**完全相同**、时间戳也相同
+  （`1788561628`）：`chaos-mesh-cannot-target-lambda: Chaos Mesh operates on Pod
+  netns; Lambda/StepFunctions run outside the cluster`
+- 所以这 16 条记录的信息量是**一条规则**而不是 16 份证据：注入手段的能力边界由
+  **目标的运行平台**决定（Pod netns vs Lambda/StepFunctions）。规则该在选靶前生效，
+  而不是选中 → 注入失败 → 往每条边上各写一份同样的字符串
+- 同类还有 `Calls` 侧的四种：`target-scaled-to-zero`（副本数 0）、
+  `source-absent-from-cluster`（源不在任何 namespace）、`self-loop-from-trace`
+  （自环，无下游可切）、`synthetic-traffic-source`（负载生成器，切断它只静音自己）；
+  以及 `DependsOn` 侧的 `image-repo-dependency`（切 ECR 只影响新 Pod 拉镜像）
+- 这属于「写了但没人读」那一类：判断依据早就写进图了，靶点选择器不读
+- 验收：靶点队列里不再出现已判明不可注入的边；新增守门测试断言这一点
+- 证据留存：`todo/removed-verify-attrs-nondependency-edges_20260905-0959.json`
+
+### T-305b 用「后端 × 目标类型 × 注入位置」矩阵替掉字符串判据 · `done`（2026-09-05 14:0xZ）★
+- T-305 第一版读**边上存储的理由 token**，两个问题：对**从未验证过的边无效**
+  （没有 token 就排除不了），且把**三件不同的事**混成一类、其中两条结论是错的
+- 新增 `chaos/code/runner/injectability.py`，从 `fault_catalog.yaml` 构建矩阵
+  （不硬编码动作清单，加一条动作矩阵自动跟着变）：
+
+  | 后端 | 动作 | 可直接打的目标类型 | 源侧切断 |
+  |---|---|---|---|
+  | Chaos Mesh | 19 | Pod / Microservice / Deployment | 是（NetworkChaos externalTargets） |
+  | FIS | 36 | 加 LambdaFunction / DynamoDBTable / S3Bucket / Subnet / AWSServiceEndpoint / RDSCluster·Instance | 否 |
+
+- **修掉我自己上一轮引入的缺陷**：`chaos-mesh-cannot-target-lambda` 被判 permanent，
+  但 **FIS 有 3 个 Lambda 动作**（`aws:lambda:invocation-add-delay` / `-error` /
+  `-http-integration-response`）—— 永久排除等于把 FIS 能验证的边永久放弃，
+  正是我当时说 conditional 要避免的「自己造盲区」，我在同一张表里犯了它
+- 第二条错判：`image-repo-dependency` 判 permanent，实为 `needs_compound_experiment`
+  —— 它**可以**注入（源是 Pod，externalTargets 能切），缺的是稳态观测窗口，
+  配合删 Pod 就是可验证的复合实验
+- 三条轴分开：工具触不到（矩阵管）／可注入但稳态不可观测／没有观测方。
+  后两者与后端**无关**，换任何后端结论都一样，混进矩阵就会得出错误结论
+- **顺带捞出 16 条原判据从不排除的边**（它们没有 token，一直被选中然后注入失败）：
+  `AgentRuntime→AgentTool` 8、`AgentRuntime→AgentRuntime` 2、
+  `BusinessCapability→SQSQueue/SNSTopic` 4、`LambdaFunction→NeptuneCluster` 1、
+  `AgentRuntime→KnowledgeBase` 1 —— 逐条核实判定都对
+- `precondition_unmet` 改为压到**最低优先级 pri=9** 而非排除：有真靶点时永不被
+  选中，队列空了才轮到（那时重试代价最低）。排除会造盲区，正常排队会白烧预算
+- 如实登记：FIS 的 `volume_arns` / `nodegroup_arn` / `asg_arn` / `route_table_arn` /
+  `role_arn` 在图谱里没有对应节点类型，这些动作永远选不出靶点 ——
+  与 test_41 查出的「37 条里 5 条从来不可执行」同一件事
+- 删掉被取代的 `_NON_INJECTABLE_REASONS` / `non_injectable_kind`：它们成了
+  **零生产调用方**的死代码，留着会让人以为排除逻辑还走那张表（写了但没人读的坑）。
+  `test_47` 加一条断言锁住「必须已删除」
+- 新增 `tests/test_47_target_skip_and_markers.py`（18 用例）、
+  `tests/test_48_node_scope.py`（15 用例，含 2 条活图谱实跑）
+
+### T-306 `Invokes` 的 dependency 归类需重新裁决（破坏性变更） · `doing`（前提已全部具备）★
+- 事实：**16/16** 全部 `Invokes` 边都被靶点选择器当依赖边选中过。16/16 而非零星
+  几条 → 不是偶发泄漏，是两个组件对「什么算依赖」给出了相反答案
+- 语义上契约那一侧才可疑：`StepFunction → LambdaFunction`（3 条，指向
+  `profiles/petsite.yaml` 明确声明的 `stepread` / `stepprice`）与
+  `SNSTopic → LambdaFunction`（1 条，`petsite-ops-alerts` → `petsite-ops-slack-notifier`
+  告警投递链）**按任何定义都是依赖**
+- 但 16 条里 13 条是**平台自身工具链与部署脚手架**（CDK provider framework 7 条、
+  `neptune-etl-trigger`→`neptune-etl-from-aws`、`petsite-rca-engine`→`gp-window-flush`、
+  cloudwatch widget→resource controller）。所以真正的分界不是「算不算依赖」，
+  而是**「算不算被观测系统的一部分」** —— 这正是用户 2026-08-31 提出、至今未答的问题
+- **不要用「非依赖边不得写 verify_*」的门禁来回答这个问题**：那会把建模错误
+  转成静默行为，将来任何真依赖被误标 `dependency: false` 都不会有人发现。
+  `test_i07` 挡的是「属性写错位置」，其 docstring 已显式声明不表示这些边不是依赖
+- 方向：引入 `scope` 维度（六档，见 `docs/dependency-definition.md`「尚缺的第五个维度」），
+  按 scope 过滤靶点与爆炸半径，而不是删数据。理由：删掉会丢**自举依赖**这条真实
+  信息 —— `petsite-rca-engine` 与 `neptune-etl-*` 都依赖 Neptune，即 RCA 引擎依赖它
+  要诊断的那套系统的观测存储，Neptune 挂了 RCA 就查不了。这是本平台恰该发现的
+  单点风险，删掉等于自己造盲区。且项目已有硬约束「Neptune 不能删、ETL 可改不可删」
+- **原「判据只能靠名字前缀」的未决点已解决**（2026-09-05 查证）：两条判据都能落到
+  资源的固有属性上，与命名无关 ——
+  · AWS 侧：`describe-stacks` 的 **ParentId 非空 ⇒ 嵌套栈 ⇒ scaffolding**。
+    实测 19 个栈里恰好 3 个嵌套栈，7 个 CDK provider framework Lambda **全部**
+    落在其中两个里。这条判据还纠正了名字判据的一个错误：
+    `GuardDutyCleanupLambda` 名字像脚手架，实际在**主栈**里、属被观测系统
+  · K8s 侧：**namespace**。observability 栈（cloudwatch/guardduty/nfm/deepflow
+    共 206 个）与业务（petadoptions 302 + awesomeshop 25）干净分开
+  · `cdk-hnb659fds-container-assets` 实为 `CDKToolkit` 栈的 **ECR Repository**
+    （不是 S3 桶），印证 `image-repo-dependency` 判定准确
+- 覆盖率实测（1333 节点）：namespace 787 + arn 107 + 平台自产分析件 273 ≈ **89%**
+  立刻可解析；剩 ~146 个缺 `arn` 的 AWS 资源（SecurityGroup 58 / S3Bucket 34 /
+  Subnet 16 / EC2Instance 11 …）需先补 arn —— **这是现在唯一的未决点**
+- ✅ **前提已全部具备**（2026-09-05 14:2xZ）：
+  · 契约新增 `node_scope`（六档 + unknown），同步进 bootstrap 与生成器
+  · `scripts/label_node_scope.py --apply` 标注全图 1333/1333 成功：
+    observed 394 / platform 346 / observability 210 / cluster-infra 185 /
+    unknown 131 / external 57 / scaffolding 10，可解析 90.2%
+  · 选边器已接 scope 过滤（`EXCLUDED_SCOPES`），实测 110 条依赖边全账：
+    选中 80、scope:platform 16、scope:scaffolding 6、no_observer 4、unreachable 4
+  · 原先记录的阻碍（untested 边没有 token 排除不了）随 T-305b 矩阵替掉
+    字符串判据而消失 —— 矩阵按节点类型算，不需要任何历史记录
+- 覆盖率实测修正：先前估「补 arn 后可达 98%」是错的，那个估算假设所有 AWS 资源
+  都在 CloudFormation 栈里，实际 129 个不在（`managedBy=manual` 就有 79 个）。
+  实际 90.2%，且**不需要补 arn** —— PhysicalResourceId 用的就是节点已有的
+  `sg_id`/`subnet_id`/`vpc_id`/桶名，补 arn 反而制造第二身份键
+- 规模实测（2026-09-05）：29 个 `LambdaFunction` 里约 7 个是被观测业务、
+  9 个平台自身工具链、8 个部署脚手架、5 个其他项目（devops-agent / WaggleAI）。
+  图里**目前没有任何 scope 类属性**（只有 `system` 32 / `tier` 6 / `environment` 1044）
+
+### T-307 deepflow 写的 DependsOn 边不带观测标记，导致证据计数器看不见它 · `done`（2026-09-05 14:2xZ，含部署）
+- 6 条 `{payforadoption, petfood, petlistadoptions, petsearch, petsite,
+  trafficgenerator} → cdk-hnb659fds-container-assets` 边的 `source` 是 `deepflow-etl`，
+  但 `calls` / `error_rate` 两个 deepflow 标记属性都不存在
+- 后果：`_edge_evidence` 的观测源计数按属性标记算，所以这批边被算作**零证据**
+  （confidence 0.5）。`source` 字段说有观测源、标记说没有，两者不一致
+- 与「写了但没人读」相反，这是**读的人找不到**：判据（属性标记）与写入方实际写的
+  字段（source）不在同一处
+- **原倾向「补写 deepflow 标记」被自己推翻**：这批边是从 **Pod spec 的镜像引用**
+  提取的（`neptune_etl_deepflow.py:1004-1012`），不是流量观测。`calls`/`error_rate`
+  的语义是「eBPF 观测到的流量计数」，给它们补这两个字段等于**伪造观测证据** ——
+  与「采集失败的 fallback 值不得与合法测量值同形」是同一条禁令
+- 实修：让写入方记录它**实际看到的东西**（镜像仓库名 → `image_ref`），
+  并在 `_OBSERVER_MARKERS` 里单列 `'k8s-image-spec': ('image_ref',)` 一档。
+  两份标记表同步改（`test_46` 强制一致），新增 `tests/test_47` 4 个用例断言
+  「写入方真的写」「不得折进 deepflow 档」「计数器能看见 → 0.5 变 0.6225」
+- 存量 6 条边等下一轮 ETL 补上 `image_ref`；**刻意不回填** ——
+  我这边没有当时的 Pod spec，回填等于凭空造证据
+- ⚠️ **一处自我更正**：我一度写「等下一轮 ETL 自然补上」，但实测线上
+  `neptune-etl-from-deepflow` 的代码包**不含**该改动 —— ETL 跑的是线上代码，
+  所以永远不会补上。已于 2026-09-05 14:26 部署（599554 字节 / 119 文件），
+  发布前逐项验证包内容（ECR 块含 `image_ref`、不含伪造的 `calls`/`error_rate`、
+  五个第三方依赖齐全、无 pyc 残留），发布后重新下载线上包复核通过
+- 部署前先 diff 线上包与本地：差异恰好只有本次 12 行新增，确认不会覆盖
+  另一会话 13:58 那次部署的内容
+
 ---
 
 ## 上一轮已完成（2026-08-30，commits `c48d63c` / `2988c75` / `186d99f` / `3477896`）

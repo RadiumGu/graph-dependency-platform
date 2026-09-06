@@ -31,6 +31,7 @@ import os
 import sys
 import time
 from collections import defaultdict
+from datetime import datetime, timezone
 
 import boto3
 from botocore.exceptions import ClientError
@@ -51,6 +52,21 @@ logger.setLevel(logging.INFO)
 
 SOURCE = 'agentcore-etl'
 ENVIRONMENT = os.environ.get('ENVIRONMENT', 'prod')
+
+# ── 「业务服务 → AgentRuntime」的声明来源（方法 1，2026-09-05）─────────────────
+# PetSite 在 WaggleController.cs 里读这个 SSM 参数拿 runtime ARN，然后
+# InvokeAgentRuntimeAsync。参数名 → 调用方微服务规范名的映射写在这里而不是猜：
+# 参数前缀 /petstore/agent/ 是 PetSite 那套应用的配置根。
+SSM_AGENT_PREFIX = os.environ.get('AGENT_SSM_PREFIX', '/petstore/agent')
+SSM_RUNTIME_PARAM_CALLERS = {
+    f'{SSM_AGENT_PREFIX}/waggleairuntimearn': 'petsite',
+}
+# CloudWatch 里 AgentCore 的 namespace。**是连字符不是斜杠** ——
+# `AWS/BedrockAgentCore` 返回 0 个指标，正确的是 `AWS/Bedrock-AgentCore`（235 个）。
+CW_AGENTCORE_NAMESPACE = os.environ.get('CW_AGENTCORE_NAMESPACE', 'AWS/Bedrock-AgentCore')
+# runtime 活性回看窗口。取 24h 而非 6h：agent 调用是稀疏突发的
+# （实测同一天 03:25 一批、07:47 一批，中间四小时空白），6h 窗口会频繁读到空。
+ACTIVITY_WINDOW_SECONDS = int(os.environ.get('AGENTCORE_ACTIVITY_WINDOW_SECONDS', str(24 * 3600)))
 
 # aws/spans 的回看窗口。与 AccessesData / Delegates / InvokesTool / Retrieves 的
 # expires_seconds=21600（6h）**刻意取同一个值** —— 采集窗口小于 TTL 会让边在
@@ -257,6 +273,127 @@ def collect_control_plane() -> dict:
             lambda: bra.list_knowledge_bases().get('knowledgeBaseSummaries') or [],
             'KnowledgeBase'),
     }
+
+
+def collect_service_to_runtime_declarations() -> dict:
+    """从 SSM 参数发现「业务服务 → AgentRuntime」的**声明**边（方法 1，2026-09-05）。
+
+    ## 补的是什么盲区
+
+    实测：图谱里 agent 子图是**孤岛** —— 它只靠 `search_available_pets -> petsearch`
+    一条边挂在业务系统上，而**真正的入口边 `petsite -> WaggleAIOrchestrator` 不存在**。
+    后果是爆炸半径查询答不出「AgentCore 挂了会影响 PetSite 什么功能」，
+    而这一跳恰恰是业务关键路径：断了 PetSite 的 AI 问答就不可用（真断过一次，
+    IRSA 角色缺 `bedrock-agentcore:InvokeAgentRuntime`）。
+
+    ## 为什么五个数据源都看不见它
+
+    这一跳是 PetSite 容器里的一次 AWS SDK 调用：
+      · DeepFlow 看不见 —— 跨 VPC 到 AWS 托管服务的 HTTPS
+      · X-Ray 当时看不见 —— PetSite 的 .NET SDK 没给 AgentCore 客户端注册 handler
+        （实测服务图里 `PetSite -> SimpleSystemsManagement` 存在、到 Waggle 的边不存在）
+      · 控制面看不见 —— AgentCore 只知道自己被调了，不知道谁调的
+
+    **但 SSM 参数是现成的声明证据**，只是此前没有任何 ETL 读它来建边。
+
+    ## 证据等级要说实话
+
+    这是 `static`：它证明「配置上 petsite 应该调它」，**不证明「真的调了」**。
+    配置留着而功能下线的情况它分不出来。真正证明「调了」要靠调用方侧的 X-Ray 埋点
+    （方法 2），那会给同一条边加一个独立观测源，置信度 0.7311 -> 0.8176。
+
+    ## 为什么不用 CloudWatch 指标当边证据
+
+    `AWS/Bedrock-AgentCore` 的 `Invocations` 确实在发布数据点（实测 24h 内 74 次），
+    但维度只有 `Resource`/`Operation`/`Name`/`ComputeType` —— **没有调用方维度**。
+    它只能说明「这个 runtime 被调了 74 次」，不能说明「petsite 调了它」；
+    况且那 74 次里混着管理员直调。把它算成这条边的独立观测源是给置信度注水，
+    与「throughput_only 通道不得判 hard」是同一条纪律。
+    它改为写在 runtime **节点**上（见 `collect_runtime_activity`）。
+    """
+    ssm = boto3.client('ssm', region_name=REGION)
+    out: dict = {}
+    try:
+        paginator = ssm.get_paginator('get_parameters_by_path')
+        params = {}
+        for page in paginator.paginate(Path=SSM_AGENT_PREFIX, Recursive=True):
+            for p in page.get('Parameters') or []:
+                params[p['Name']] = p.get('Value') or ''
+    except Exception as e:
+        # AccessDenied 单独识别：这条边是 PetSite→AgentCore 唯一的证据来源
+        # （X-Ray/DeepFlow/CloudWatch 都看不见这一跳，见 docs/），少了权限
+        # 就等于这个功能静默失效。所以要点名缺什么、怎么补，而不是只说"失败"。
+        if 'AccessDenied' in repr(e) or 'UnauthorizedOperation' in repr(e):
+            logger.error(
+                '⚠️ 无权读 SSM %s —— service→runtime 声明边**不会被建出**，'
+                'PetSite→AgentCore 这一跳会重新变成盲区（其他数据源都看不见它）。'
+                '需要给执行角色加 ssm:GetParametersByPath + ssm:GetParameters，'
+                '资源限定 arn:aws:ssm:<region>:<acct>:parameter%s/*。原始错误：%r',
+                SSM_AGENT_PREFIX, SSM_AGENT_PREFIX, e)
+        else:
+            logger.warning('读 SSM %s 失败（非致命）：%r', SSM_AGENT_PREFIX, e)
+        return out
+
+    for name, caller in SSM_RUNTIME_PARAM_CALLERS.items():
+        arn = params.get(name)
+        if not arn:
+            logger.info('SSM 参数 %s 不存在或为空，跳过', name)
+            continue
+        if not arn.startswith('arn:aws:bedrock-agentcore:'):
+            # 参数存在但不是 runtime ARN —— 宁可跳过也不建一条端点错误的边
+            logger.warning('SSM 参数 %s 的值不是 AgentCore runtime ARN，跳过：%s',
+                           name, arn[:80])
+            continue
+        out[arn] = {'caller': caller, 'declared_in': name}
+    return out
+
+
+def collect_runtime_activity(runtimes: list) -> dict:
+    """从 CloudWatch 取每个 runtime 的调用活性（方法 3，2026-09-05）。
+
+    **刻意写在节点上而不是边上。** 指标维度里没有调用方，所以它回答不了
+    「谁在调」，只回答「这个 runtime 有没有被调、调了多少、错多少」。
+    这恰好补 `static` 声明边的局限：配置在但功能实际没人用，靠这个能看出来。
+
+    维度必须给全 `Resource`+`Operation`+`Name` 三个 —— 实测只给前两个返回
+    **0 个数据点**（CloudWatch 维度精确匹配）。少给一个会让人误判「指标没数据」。
+    """
+    cw = boto3.client('cloudwatch', region_name=REGION)
+    now = int(time.time())
+    start = now - ACTIVITY_WINDOW_SECONDS
+    out: dict = {}
+    for r in runtimes:
+        arn = r.get('agentRuntimeArn')
+        nm = r.get('agentRuntimeName')
+        if not arn or not nm:
+            continue
+        dims = [
+            {'Name': 'Resource', 'Value': arn},
+            {'Name': 'Operation', 'Value': 'InvokeAgentRuntime'},
+            {'Name': 'Name', 'Value': f'{nm}::DEFAULT'},
+        ]
+        rec = {}
+        for metric, key in (('Invocations', 'invocations'),
+                            ('Errors', 'errors'),
+                            ('UserErrors', 'user_errors'),
+                            ('SystemErrors', 'system_errors')):
+            try:
+                resp = cw.get_metric_statistics(
+                    Namespace=CW_AGENTCORE_NAMESPACE, MetricName=metric,
+                    Dimensions=dims,
+                    StartTime=datetime.fromtimestamp(start, tz=timezone.utc),
+                    EndTime=datetime.fromtimestamp(now, tz=timezone.utc),
+                    Period=3600, Statistics=['Sum'])
+                pts = resp.get('Datapoints') or []
+                # 采集失败与「真的是 0」必须能区分 —— 没有数据点时写 None
+                # 而不是 0，否则「没采到」会伪装成「没被调用过」。
+                rec[key] = sum(p['Sum'] for p in pts) if pts else None
+            except Exception as e:
+                logger.warning('取 %s/%s 失败：%r', nm, metric, e)
+                rec[key] = None
+        if rec.get('invocations') is not None:
+            out[arn] = rec
+    return out
 
 
 def collect_gateway_targets(gateways: list) -> dict:
@@ -574,7 +711,9 @@ def _upsert_edge(label: str, src_label: str, src_id: str,
     neptune_query(g)
 
 
-def write_control_plane(cp: dict, gw_targets: dict, round_ts: int) -> dict:
+def write_control_plane(cp: dict, gw_targets: dict, round_ts: int,
+                        declarations: dict | None = None,
+                        activity: dict | None = None) -> dict:
     """写资源节点 + 控制面能看到的静态边。"""
     n = defaultdict(int)
 
@@ -585,6 +724,25 @@ def write_control_plane(cp: dict, gw_targets: dict, round_ts: int) -> dict:
         # 这里只做搬运 —— 写入函数拿不到采集阶段的 boto3 客户端。
         extra = {k.lstrip('_'): v for k, v in r.items() if k.startswith('_')}
 
+        # 方法 3：调用活性写在**节点**上。维度里没有调用方，所以它答不了
+        # 「谁在调」，只答「有没有被调」—— 当边证据会给置信度注水。
+        act = (activity or {}).get(arn) or {}
+        if act.get('invocations') is not None:
+            extra['invocations_24h'] = act['invocations']
+            # `Errors` 是 UserErrors + SystemErrors 的合并值，两者语义完全不同：
+            #   UserErrors   = 调用方发了坏请求（4xx）——**runtime 是好的**
+            #   SystemErrors = runtime 自己坏了（5xx）
+            # 只写合并值会把前者误报成"这个 runtime 有故障"，带偏 RCA。
+            # 2026-09-05 实测：WaggleAIAdoption 24h 内 34 次 Errors，
+            # 拆开看是 **34 UserErrors / 0 SystemErrors**，且全部集中在一小时内
+            # （那一小时 100 次调用，其余时段 30 次调用 0 错误）——
+            # 所谓"26% 错误率"是把一小时突发平铺到 24 小时的假象，稳态是 0%。
+            # 极可能全是同一个 runtimeSessionId < 33 字符的 ValidationException。
+            extra['invocation_errors_24h'] = act.get('errors')       # 合并值，保留兼容
+            extra['user_errors_24h'] = act.get('user_errors')        # 调用方的问题
+            extra['system_errors_24h'] = act.get('system_errors')    # runtime 的问题
+            extra['activity_source'] = CW_AGENTCORE_NAMESPACE
+
         _upsert_node('AgentRuntime', arn, {
             'runtime_id': rid,
             'name': r.get('agentRuntimeName'),
@@ -593,6 +751,20 @@ def write_control_plane(cp: dict, gw_targets: dict, round_ts: int) -> dict:
             **extra,
         }, round_ts)
         n['AgentRuntime'] += 1
+
+    # ── 方法 1：业务服务 → AgentRuntime 的声明边 ──────────────────────────
+    # 放在 runtime 节点写完之后：边的两端都必须已存在，否则 upsert 会因为
+    # 找不到端点而静默失败（本项目在 183 条错源边那次踩过端点查找的坑）。
+    for arn, decl in (declarations or {}).items():
+        caller = decl['caller']
+        if arn not in {r.get('agentRuntimeArn') for r in cp['runtimes'][1]}:
+            logger.warning('SSM 声明的 runtime %s 不在控制面列表里，跳过建边', arn[:80])
+            continue
+        _upsert_edge('DependsOn', 'Microservice', caller, 'AgentRuntime', arn, round_ts,
+                     props={'declared_in': decl['declared_in']},
+                     # static：SSM 参数是配置声明，不是流量观测。
+                     dependency_kind='static')
+        n['DependsOn:service->runtime'] += 1
 
     for gw in cp['gateways'][1]:
         arn = gw.get('gatewayArn') or gw.get('arn')
@@ -730,6 +902,20 @@ _DELEGATION_TOOLS: dict = {
     'adoption': 'WaggleAIAdoption',
     'adoption_specialist': 'WaggleAIAdoption',
     'concierge': 'WaggleAIConcierge',
+    # 2026-09-06 补：Orchestrator 实际注册的 tool 名是 `concierge_chat` /
+    # `food_ordering`（图上 InvokesTool 边指向的就是这两个节点），
+    # 而表里原先只有 `concierge` / `ordering` —— span 里出现真实 tool 名时
+    # 查表落空，`Delegates` 边永远建不出来。
+    #
+    # 实测后果：Orchestrator 只有 2 条 Delegates（→ Nutrition / Adoption），
+    # Concierge 与 Ordering 在图上**从 Orchestrator 不可达** ——
+    # 爆炸半径查询答不出"这两个 agent 挂了影响谁"。
+    #
+    # ⚠️ 刻意只补映射，**不直接往图里插边**：`Delegates` 是观测驱动的
+    # （只有 span 里真出现 execute_tool 才建），凭"对称性应该有"硬插边
+    # 会把未观测到的关系写成观测事实。补映射后，等真实调用发生自然建出。
+    'concierge_chat': 'WaggleAIConcierge',
+    'food_ordering': 'WaggleAIOrdering',
 }
 
 # 表示「去 KB 取知识」的 tool 名 —— 用来建 Retrieves 边。
@@ -905,7 +1091,12 @@ def lambda_handler(event=None, context=None):
     round_ts = int(time.time())
     cp = collect_control_plane()
     gw_targets = collect_gateway_targets(cp['gateways'][1])
-    node_stats = write_control_plane(cp, gw_targets, round_ts)
+    # 方法 1（SSM 声明边）与方法 3（runtime 活性）都在控制面之后采：
+    # 前者要用 runtime 列表校验 ARN 存在，后者要按 runtime 逐个取指标。
+    declarations = collect_service_to_runtime_declarations()
+    activity = collect_runtime_activity(cp['runtimes'][1])
+    node_stats = write_control_plane(cp, gw_targets, round_ts,
+                                     declarations=declarations, activity=activity)
 
     span_status, span_rows = collect_spans(runtime_count=len(cp['runtimes'][1]))
     edge_stats = write_span_edges(span_rows, round_ts)

@@ -15,7 +15,7 @@ TIMESTAMP_FIELD = 'last_seen'
 # 历史遗留的时间戳字段名。读取侧要兼容，写入侧只写 TIMESTAMP_FIELD。
 TIMESTAMP_LEGACY_ALIASES = ('last_updated', 'last_scanned')
 
-SOURCES = frozenset(['agentcore-etl', 'aws-etl', 'aws-etl-static', 'business-layer', 'cfn-etl', 'deepflow-dns', 'deepflow-etl', 'deepflow-l4', 'eks-etl', 'manual-fix', 'nfm', 'xray'])
+SOURCES = frozenset(['agentcore-etl', 'appsignals-etl', 'aws-etl', 'aws-etl-static', 'business-layer', 'cfn-etl', 'deepflow-dns', 'deepflow-etl', 'deepflow-l4', 'eks-etl', 'manual-fix', 'nfm', 'xray'])
 
 # 写一次属性：边上这些属性只由**首个发现者**写入，后续任何源都不得覆盖。
 # source 记录的是谁首先发现了这条依赖 —— 被覆盖等于抹掉发现史。
@@ -327,7 +327,8 @@ EDGE_TYPES = {   'AccessesData': {   'dependency': True,
                      'pairs': [['AgentRuntime', 'AgentRuntime']],
                      'src': ['AgentRuntime']},
     'DependsOn': {   'dependency': True,
-                     'dst': [   'ECRRepository',
+                     'dst': [   'AgentRuntime',
+                                'ECRRepository',
                                 'LambdaFunction',
                                 'Microservice',
                                 'RDSCluster',
@@ -340,6 +341,7 @@ EDGE_TYPES = {   'AccessesData': {   'dependency': True,
                                   ['BusinessCapability', 'RDSCluster'],
                                   ['BusinessCapability', 'SNSTopic'],
                                   ['BusinessCapability', 'SQSQueue'],
+                                  ['Microservice', 'AgentRuntime'],
                                   ['Microservice', 'ECRRepository'],
                                   ['Microservice', 'SQSQueue']],
                      'src': ['AgentTool', 'BusinessCapability', 'Microservice']},
@@ -376,9 +378,9 @@ EDGE_TYPES = {   'AccessesData': {   'dependency': True,
                                    ['LambdaFunction', 'BusinessCapability'],
                                    ['Microservice', 'BusinessCapability']],
                       'src': ['K8sService', 'LambdaFunction', 'Microservice']},
-    'Invokes': {   'dependency': False,
+    'Invokes': {   'dependency': True,
                    'dst': ['LambdaFunction'],
-                   'expires_seconds': None,
+                   'expires_seconds': 21600,
                    'pairs': [   ['LambdaFunction', 'LambdaFunction'],
                                 ['SNSTopic', 'LambdaFunction'],
                                 ['StepFunction', 'LambdaFunction']],
@@ -386,11 +388,19 @@ EDGE_TYPES = {   'AccessesData': {   'dependency': True,
     'InvokesTool': {   'dependency': True,
                        'dst': ['AgentTool'],
                        'expires_seconds': 21600,
-                       'note': 'agent → tool 的调用。**刻意不复用现有 Invokes** —— 那个是\n'
-                               'Lambda/SNS/StepFunction → LambdaFunction 且 dependency: false，\n'
-                               '而 agent 对 tool 是**真依赖**（tool 拿不到结果 agent 就答不出）。\n'
-                               '把两种语义塞进一个标签会让「按 dependency 过滤」的查询同时命中\n'
-                               '结构边与依赖边，那正是本契约区分依赖边与结构边要避免的事。\n',
+                       'note': 'agent → tool 的调用。**刻意不复用现有 Invokes**。\n'
+                               '2026-09-05 更新：此前这里的理由是「Invokes 那个 dependency: false」，\n'
+                               '但同日 Invokes 已改判为 dependency: true（StepFunction/SNS → '
+                               'LambdaFunction\n'
+                               '按任何定义都是真依赖），**那条理由已失效**。不复用的理由改为下面两条，\n'
+                               '两条都仍然成立：\n'
+                               '(1) 端点类型不同：Invokes 的目标是 LambdaFunction，本边是 AgentTool；\n'
+                               '(2) **失效语义不同**：本边的 dependency_kind 是 inference（LLM 按 query\n'
+                               '在运行时决定），由 mark_stale_inference_edges 标记观测静默、**不置\n'
+                               'active=false**；而 Invokes 是 static（配置声明），走的是另一条失效路径。\n'
+                               '把两者塞进一个标签，会让「按 dependency_kind 过滤失效」的清理逻辑\n'
+                               '对两种本质不同的边施加同一套判据 —— 实测代价见 graph_cleanup 里\n'
+                               'Retrieves → nutrition-kb 被误置 active=false 那段。\n',
                        'pairs': [['AgentRuntime', 'AgentTool']],
                        'src': ['AgentRuntime']},
     'InvokesVia': {   'dependency': False,
@@ -536,3 +546,40 @@ EDGE_VERIFICATION = {   'attrs': [   'verify_status',
                       'min_observation_requests': 20,
                       'refute_degradation_pct': 5.0,
                       'stale_verification_seconds': 2592000}}
+
+
+# 节点 scope：算不算「被观测系统」的一部分（第五个正交维度）。
+# 判据是权威归属而非名字模式 —— AWS 资源走 CloudFormation 栈归属
+# （ParentId 非空即嵌套栈 ⇒ scaffolding），K8s 对象走 namespace。
+# 靶点选择 / 爆炸半径 / DR 计划只该看 primary_query_scope。
+NODE_SCOPE = {   'attr': 'scope',
+    'authority': ['scope-labeler'],
+    'namespace_map': {   'amazon-cloudwatch': 'observability',
+                         'amazon-guardduty': 'observability',
+                         'amazon-network-flow-monitor': 'observability',
+                         'awesomeshop': 'observed',
+                         'chaos-mesh': 'platform',
+                         'deepflow': 'observability',
+                         'kube-system': 'cluster-infra',
+                         'petadoptions': 'observed'},
+    'nested_stack_scope': 'scaffolding',
+    'primary_query_scope': 'observed',
+    'resolvers': [   'k8s-namespace',
+                     'cloudformation-stack-membership',
+                     'node-type',
+                     'profile-declaration'],
+    'stack_map': {   'AlertBufferStack': 'platform',
+                     'Applications': 'observed',
+                     'AwesomeShopInfra': 'observed',
+                     'CDKToolkit': 'scaffolding',
+                     'NeptuneEtlStack': 'platform',
+                     'ServicesEks2': 'observed',
+                     'WaggleAIAgents': 'observed'},
+    'unresolved_value': 'unknown',
+    'values': [   'observed',
+                  'observability',
+                  'platform',
+                  'scaffolding',
+                  'cluster-infra',
+                  'external',
+                  'unknown']}

@@ -149,3 +149,109 @@ def test_i05_no_edge_has_out_of_range_confidence():
         f"这些边的 verify_confidence 不在 [0,1]: {bad}。"
         f"很可能是写入方直接写了证据权重（intervention_confirmed=4.0 / "
         f"intervention_refuted=-4.0）而不是 graph_confidence.confidence() 的归一化结果。")
+
+
+@pytest.mark.skipif(not LIVE, reason='需 GRAPH_LIVE_AUDIT=true 才对活图谱核验')
+def test_i06_zero_confidence_requires_enough_refutations():
+    """`verify_confidence` 恰为 0.0 的依赖边，必须有足够的证伪证据支撑。
+
+    这是 i05 的补充，堵的是**在值域内但不是 `confidence()` 产物**的值 ——
+    i05 只能抓到越界，抓不到「合法区间里的错值」。
+
+    判据是纯数学的：`confidence()` 是 `round(sigmoid(log-odds), 4)` 且没有 clamp，
+    要得到 0.0 需要 log-odds ≤ -9.9，即**至少 3 次证伪**
+    （3 × intervention_refuted = -12.0）。而零证据是 `sigmoid(0) = 0.5`，
+    不是 0.0 —— 「什么都不知道」与「几乎确定不存在」是相反的语义。
+
+    2026-09-05 实测：33 条边的 confidence 是 0.0 且两个计数器都是 null，出自旧版
+    `scripts/write_edge_verdicts.py`（confirmed→+4.0 / refuted→-4.0 /
+    unverifiable→**0.0**）。同一根因的 ±4.0 那 11 条被 i05 抓到并修了，0.0 这批
+    因为落在 [0,1] 内而全部漏网。已用 `scripts/backfill_verify_confidence.py`
+    回填其中 17 条依赖边。
+
+    **范围限定为依赖边**：`verify_*` 按契约只适用于 `dependency: true` 的边类型。
+    活图谱上另有 16 条 `Invokes`（契约里 `dependency: false`）也带着 0.0，它们属于
+    另一个待决问题（工具链/部署脚手架资源算不算被观测系统的一部分），由
+    `test_i07_only_dependency_edges_carry_verify_attrs` 单独把守 —— 那道断言会连带
+    覆盖它们的置信度，所以这里不重复纳入，避免一个数据问题让两个测试同时红。
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        '_real_nc_for_zero_conf_audit', LAYER / 'neptune_client_base.py')
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    import graph_contract as gc
+    labels = ",".join(f"'{lb}'" for lb in sorted(gc.dependency_edge_labels()))
+    q = (f"g.E().hasLabel({labels}).has('verify_confidence', 0.0)"
+         f".project('s','d','r').by(__.outV().values('name'))"
+         f".by(__.inV().values('name'))"
+         f".by(__.coalesce(__.values('verify_refute_count'), __.constant(0))).fold()")
+    raw = mod.neptune_query(q)['result']['data']['@value'][0]['@value']
+    bad = []
+    for r in raw:
+        it = iter(r['@value'])
+        d = dict(zip(it, it))
+        gv = lambda k: d[k]['@value'] if isinstance(d[k], dict) else d[k]  # noqa: E731
+        if int(gv('r')) < 3:
+            bad.append(f"{gv('s')}->{gv('d')} refute_count={gv('r')}")
+    assert not bad, (
+        f"这些依赖边的 verify_confidence 是 0.0 但证伪次数不足 3："
+        f"{bad}。sigmoid 取不到 0.0（需 log-odds ≤ -9.9），所以这个值不可能由 "
+        f"graph_confidence.confidence() 算出；零证据应为 0.5。"
+        f"用 scripts/backfill_verify_confidence.py 按现有证据回填。")
+
+
+@pytest.mark.skipif(not LIVE, reason='需 GRAPH_LIVE_AUDIT=true 才对活图谱核验')
+def test_i07_only_dependency_edges_carry_verify_attrs():
+    """`verify_*` 只能出现在 `dependency: true` 的边类型上。
+
+    这是 i05（值域）、i06（值域内的错值）之后同一根因的**第三个面**：门禁只校验
+    「谁在写」（`EDGE_VERIFICATION.authority = ['chaos-runner']`），既不校验写的值
+    是否合法，也不校验能写到**哪种边**上。
+
+    2026-09-05 实测：**全部 16 条 `Invokes` 边**都带着完整 `verify_*`，而 `Invokes`
+    在契约里是 `dependency: false`。16/16 而非零星几条，说明这不是偶发泄漏 —— 是
+    靶点选择器把 `Invokes` 当依赖边系统性选中了，两个组件对「什么算依赖」给出了
+    相反答案。已用 `scripts/clean_nondependency_verify_attrs.py` 清除（删前落盘留存）。
+
+    ⚠️ 这道断言**不表示**那些边不是依赖：`StepFunction → LambdaFunction` 与
+    `SNSTopic → LambdaFunction` 按任何定义都是依赖关系，契约把 `Invokes` 标成
+    `dependency: false` 才是可疑的那一侧。该建模问题单独记为 T-304，不因这道门禁
+    通过而消失 —— 门禁挡的是「属性写错位置」，不是「分类是否正确」。
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        '_real_nc_for_nondep_audit', LAYER / 'neptune_client_base.py')
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    import graph_contract as gc
+    from graph_contract_data import EDGE_TYPES, EDGE_VERIFICATION
+
+    dep = gc.dependency_edge_labels()
+    nondep = sorted(lb for lb in EDGE_TYPES if lb not in dep)
+    assert nondep, '契约里应存在非依赖边类型，否则本测试是空断言'
+
+    attrs = sorted(set(EDGE_VERIFICATION['attrs']) | {
+        'verify_reason', 'verify_confirm_count', 'verify_refute_count',
+        'verify_evidence_channel', 'verify_dependency_class',
+        'verify_dependency_class_reason', 'verify_observing_sources'})
+
+    labels = ",".join(f"'{lb}'" for lb in nondep)
+    ors = ",".join(f"__.has('{a}')" for a in attrs)
+    q = (f"g.E().hasLabel({labels}).or({ors})"
+         f".project('l','s','d').by(__.label())"
+         f".by(__.outV().values('name')).by(__.inV().values('name')).fold()")
+    raw = mod.neptune_query(q)['result']['data']['@value'][0]['@value']
+    bad = []
+    for r in raw:
+        it = iter(r['@value'])
+        d = dict(zip(it, it))
+        gv = lambda k: d[k]['@value'] if isinstance(d[k], dict) else d[k]  # noqa: E731
+        bad.append(f"{gv('l')}: {gv('s')}->{gv('d')}")
+    assert not bad, (
+        f"这些边的类型在契约里是 dependency:false，却带着 verify_* 属性：{bad}。"
+        f"要么靶点选择器错把它们当依赖边选中了（用 "
+        f"scripts/clean_nondependency_verify_attrs.py 清除），"
+        f"要么契约把这个边类型的 dependency 标记标错了（改契约，别改门禁）。")

@@ -303,8 +303,12 @@ def build(nodes: list[str], edges: dict) -> dict:
         'version': 1,
         'timestamp_field': 'last_seen',
         'timestamp_legacy_aliases': ['last_updated', 'last_scanned'],
+        # 注：本列表是**首次 bootstrap 的种子**，不是活真源 ——
+        # profiles/graph_contract.yaml 才是 gen_graph_contract.py 读的那份，
+        # 且已先行加入 agentcore-etl / aws-etl-static / eks-etl。
         'sources': ['aws-etl', 'cfn-etl', 'deepflow-etl', 'deepflow-l4', 'deepflow-dns',
-                    'nfm', 'xray', 'business-layer', 'manual-fix'],
+                    'nfm', 'xray', 'business-layer', 'manual-fix',
+                    'appsignals-etl'],
         'edge_write_once_attrs': ['source', 'dependency_kind', 'first_seen'],
         'node_attr_authority': {
             'Microservice': {
@@ -316,7 +320,80 @@ def build(nodes: list[str], edges: dict) -> dict:
         'node_types': node_types,
         'edge_types': edge_types,
         'edge_verification': EDGE_VERIFICATION,
+        'node_scope': NODE_SCOPE,
     }
+
+
+# ── 节点 scope：算不算「被观测系统」的一部分 ──────────────────────────────
+#
+# 为什么放进契约：它是第五个正交维度，与 dependency_kind / verify_status /
+# verify_dependency_class 一样是**查询要过滤的语义**，必须有一份唯一声明。
+# 缺它的后果实测到了：16/16 全部 Invokes 边被靶点选择器当依赖边选中，
+# 其中 13 条其实是 CDK 部署脚手架与本平台自己的工具链。
+#
+# ## 判据是权威归属，不是名字模式
+#
+# AWS 资源走 CloudFormation：`describe-stacks` 的 ParentId 非空即嵌套栈，
+# CDK 把 provider framework 放进独立嵌套栈是它的架构事实。这条判据还纠正了
+# 名字判据的一个错误 —— ServicesEks2-GuardDutyCleanupLambda 名字像脚手架，
+# 但它在主栈里、属被观测系统。
+#
+# **不需要补 arn**：PhysicalResourceId 对这些资源用的就是节点已有的标识
+# （sg-xxx / vpc-xxx / subnet-xxx / 桶名）。补 arn 会制造第二个身份键，
+# 正是本项目踩过多次的「身份不唯一」那一类。
+#
+# K8s 对象走 namespace。
+#
+# ## 为什么 observability 必须与 platform 分开
+#
+# 前者是被观测系统的**观测者**（采集栈），后者是**本依赖图谱平台**。合并就分不清
+# 「谁在观测」与「谁在管依赖图」，而观测自噪声治理（曾从 73.2% 压到 4.6%）
+# 针对的正是前者。cluster-infra 也不能并入 external，否则 CoreDNS 这类真依赖
+# 会被误判成外部系统。
+NODE_SCOPE = {
+    'attr': 'scope',
+    'values': ['observed', 'observability', 'platform', 'scaffolding',
+               'cluster-infra', 'external', 'unknown'],
+    # 解析不出的一律显式写 unknown，不得默认成任何一档 —— 与「不分级时写
+    # unclassified 而非留空」同一条教训：属性缺失与「判过但判不出」在查询上
+    # 无法区分。
+    'unresolved_value': 'unknown',
+    'authority': ['scope-labeler'],
+    'resolvers': [
+        # 顺序即优先级，强判据在前
+        'k8s-namespace',
+        'cloudformation-stack-membership',
+        'node-type',
+        'profile-declaration',
+    ],
+    'namespace_map': {
+        'petadoptions': 'observed',
+        'awesomeshop': 'observed',
+        'kube-system': 'cluster-infra',
+        'amazon-cloudwatch': 'observability',
+        'amazon-guardduty': 'observability',
+        'amazon-network-flow-monitor': 'observability',
+        'deepflow': 'observability',
+        'chaos-mesh': 'platform',
+    },
+    'stack_map': {
+        'ServicesEks2': 'observed',
+        'Applications': 'observed',
+        'AwesomeShopInfra': 'observed',
+        # PetSite 的 AI 问答功能栈：5 个 AgentCore Runtime、Gateway、Guardrail、
+        # Memory、KnowledgeBase、S3Vectors 全在这里。它是**业务功能**不是平台设施 ——
+        # 判错的代价实测过：WaggleAIOrchestrator 一度被标 platform，于是
+        # `petsite -> WaggleAIOrchestrator` 这条业务关键边被选边器当平台边排除。
+        'WaggleAIAgents': 'observed',
+        'NeptuneEtlStack': 'platform',
+        'AlertBufferStack': 'platform',
+        'CDKToolkit': 'scaffolding',
+    },
+    # 嵌套栈（ParentId 非空）一律 scaffolding —— 与栈名无关
+    'nested_stack_scope': 'scaffolding',
+    # 靶点选择、爆炸半径、DR 计划只该看这一档
+    'primary_query_scope': 'observed',
+}
 
 
 # ── 依赖边验证与置信度 ────────────────────────────────────────────────────

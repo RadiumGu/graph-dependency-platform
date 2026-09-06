@@ -1,0 +1,303 @@
+{
+  "removed_at": 1788602340,
+  "reason": "verify_* 只适用于 dependency:true 的边类型；这些边类型在契约里是 dependency:false，属误写。见 scripts/clean_nondependency_verify_attrs.py",
+  "attrs_removed": [
+    "verify_by",
+    "verify_confidence",
+    "verify_confirm_count",
+    "verify_degradation",
+    "verify_dependency_class",
+    "verify_dependency_class_reason",
+    "verify_evidence_channel",
+    "verify_experiment",
+    "verify_last",
+    "verify_observing_sources",
+    "verify_reason",
+    "verify_refute_count",
+    "verify_status"
+  ],
+  "edges": [
+    {
+      "eid": "b0ce8303-fc4d-e8d3-dbc0-d02d02623d27",
+      "label": "Invokes",
+      "src": "neptune-etl-trigger",
+      "dst": "neptune-etl-from-aws",
+      "props": {
+        "evidence": "env:ETL_FUNCTION_NAME",
+        "last_seen": 1788601646,
+        "source": "aws-etl",
+        "last_updated": 1788601646,
+        "verify_status": "inconclusive",
+        "verify_confidence": 0.0,
+        "verify_last": 1788561628,
+        "verify_by": "chaos-runner",
+        "verify_experiment": "chaos-mesh-cannot-target-lambda: Chaos Mesh operates on Pod netns; Lambda/StepFunctions run outside the cluster",
+        "verify_degradation": 0.0
+      }
+    },
+    {
+      "eid": "0cce441d-f67c-a77d-b150-258e58df8118",
+      "label": "Invokes",
+      "src": "ServicesEks2-awscdkawseks-ProviderframeworkonEvent-8iPNdJNUCVlK",
+      "dst": "ServicesEks2-awscdkawseksKubectlPr-Handler886CB40B-3JyAmj4TkOLp",
+      "props": {
+        "evidence": "env:USER_ON_EVENT_FUNCTION_ARN",
+        "source": "aws-etl",
+        "last_updated": 1772722812,
+        "verify_status": "inconclusive",
+        "verify_confidence": 0.0,
+        "verify_last": 1788561628,
+        "verify_by": "chaos-runner",
+        "verify_experiment": "chaos-mesh-cannot-target-lambda: Chaos Mesh operates on Pod netns; Lambda/StepFunctions run outside the cluster",
+        "verify_degradation": 0.0
+      }
+    },
+    {
+      "eid": "cece4702-0320-dbec-a4bb-279cd62fd8ef",
+      "label": "Invokes",
+      "src": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "dst": "ServicesEks2-StepFnlambdasteppriceLessThan556D8B30-2POHnQIjCcYJ",
+      "props": {
+        "declared_in": "cfn",
+        "stack_name": "ServicesEks2",
+        "evidence": "sfn:definition:lambda-ref",
+        "last_scanned": 1788549394,
+        "last_seen": 1788549394,
+        "source": "cfn-etl",
+        "verify_status": "inconclusive",
+        "verify_confidence": 0.0,
+        "verify_last": 1788561628,
+        "verify_by": "chaos-runner",
+        "verify_experiment": "chaos-mesh-cannot-target-lambda: Chaos Mesh operates on Pod netns; Lambda/StepFunctions run outside the cluster",
+        "verify_degradation": 0.0
+      }
+    },
+    {
+      "eid": "76ce441d-f6a1-de3a-5207-73eb5c6b7dce",
+      "label": "Invokes",
+      "src": "ServicesEks2-awscdkawseks-ProviderframeworkonTimeo-T6MAOIsLvvn5",
+      "dst": "ServicesEks2-awscdkawseks-IsCompleteHandler7073F4D-UM5mGZlllEIl",
+      "props": {
+        "evidence": "env:USER_IS_COMPLETE_FUNCTION_ARN",
+        "source": "aws-etl",
+        "last_updated": 1772722812,
+        "verify_status": "inconclusive",
+        "verify_confidence": 0.0,
+        "verify_last": 1788561628,
+        "verify_by": "chaos-runner",
+        "verify_experiment": "chaos-mesh-cannot-target-lambda: Chaos Mesh operates on Pod netns; Lambda/StepFunctions run outside the cluster",
+        "verify_degradation": 0.0
+      }
+    },
+    {
+      "eid": "2ece441d-f66f-1fa1-7055-c4a6891c692a",
+      "label": "Invokes",
+      "src": "ServicesEks2-awscdkawseks-ProviderframeworkonEvent-xdUeZruuRUdZ",
+      "dst": "ServicesEks2-awscdkawseks-IsCompleteHandler7073F4D-UM5mGZlllEIl",
+      "props": {
+        "evidence": "env:USER_IS_COMPLETE_FUNCTION_ARN",
+        "source": "aws-etl",
+        "last_updated": 1772722812,
+        "verify_status": "inconclusive",
+        "verify_confidence": 0.0,
+        "verify_last": 1788561628,
+        "verify_by": "chaos-runner",
+        "verify_experiment": "chaos-mesh-cannot-target-lambda: Chaos Mesh operates on Pod netns; Lambda/StepFunctions run outside the cluster",
+        "verify_degradation": 0.0
+      }
+    },
+    {
+      "eid": "e4ce441d-f694-96f6-f4d2-6dfaf24e61d4",
+      "label": "Invokes",
+      "src": "ServicesEks2-awscdkawseks-ProviderframeworkisCompl-sIJBJPos5iM2",
+      "dst": "ServicesEks2-awscdkawseks-IsCompleteHandler7073F4D-UM5mGZlllEIl",
+      "props": {
+        "evidence": "env:USER_IS_COMPLETE_FUNCTION_ARN",
+        "source": "aws-etl",
+        "last_updated": 1772722812,
+        "verify_status": "inconclusive",
+        "verify_confidence": 0.0,
+        "verify_last": 1788561628,
+        "verify_by": "chaos-runner",
+        "verify_experiment": "chaos-mesh-cannot-target-lambda: Chaos Mesh operates on Pod netns; Lambda/StepFunctions run outside the cluster",
+        "verify_degradation": 0.0
+      }
+    },
+    {
+      "eid": "3ece3af3-c012-650d-aa25-c960d1efa458",
+      "label": "Invokes",
+      "src": "Providerwaiterstatemachine5D4A9DF0-ZkuIyyskPCyz",
+      "dst": "ServicesEks2-awscdkawseks-ProviderframeworkisCompl-sIJBJPos5iM2",
+      "props": {
+        "source": "aws-etl",
+        "last_updated": 1773326860,
+        "verify_status": "inconclusive",
+        "verify_confidence": 0.0,
+        "verify_last": 1788561628,
+        "verify_by": "chaos-runner",
+        "verify_experiment": "chaos-mesh-cannot-target-lambda: Chaos Mesh operates on Pod netns; Lambda/StepFunctions run outside the cluster",
+        "verify_degradation": 0.0
+      }
+    },
+    {
+      "eid": "b0ce441d-f676-7522-66b7-8b88d82c97ed",
+      "label": "Invokes",
+      "src": "ServicesEks2-cloudwatchcustomwidgetA34392F1-sVNXho9XOJTZ",
+      "dst": "ServicesEks2-petsiteapplicationresourcecontrolerDC-xWipuliA0V5T",
+      "props": {
+        "evidence": "env:CONTROLER_LAMBDA_ARN",
+        "last_seen": 1788601646,
+        "source": "aws-etl",
+        "last_updated": 1788601646,
+        "verify_status": "inconclusive",
+        "verify_confidence": 0.0,
+        "verify_last": 1788561628,
+        "verify_by": "chaos-runner",
+        "verify_experiment": "chaos-mesh-cannot-target-lambda: Chaos Mesh operates on Pod netns; Lambda/StepFunctions run outside the cluster",
+        "verify_degradation": 0.0
+      }
+    },
+    {
+      "eid": "1ece4702-030e-deb8-c247-fb50a62ca562",
+      "label": "Invokes",
+      "src": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "dst": "ServicesEks2-StepFnlambdasteppriceGreaterThan55AD1-kkACGO1yh30X",
+      "props": {
+        "declared_in": "cfn",
+        "stack_name": "ServicesEks2",
+        "evidence": "sfn:definition:lambda-ref",
+        "last_scanned": 1788549394,
+        "last_seen": 1788549394,
+        "source": "cfn-etl",
+        "verify_status": "inconclusive",
+        "verify_confidence": 0.0,
+        "verify_last": 1788561628,
+        "verify_by": "chaos-runner",
+        "verify_experiment": "chaos-mesh-cannot-target-lambda: Chaos Mesh operates on Pod netns; Lambda/StepFunctions run outside the cluster",
+        "verify_degradation": 0.0
+      }
+    },
+    {
+      "eid": "68ce4702-0302-8d4f-97b3-33969f416c97",
+      "label": "Invokes",
+      "src": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "dst": "ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A",
+      "props": {
+        "declared_in": "cfn",
+        "stack_name": "ServicesEks2",
+        "evidence": "sfn:definition:lambda-ref",
+        "last_scanned": 1788549394,
+        "last_seen": 1788549394,
+        "source": "cfn-etl",
+        "verify_status": "inconclusive",
+        "verify_confidence": 0.0,
+        "verify_last": 1788561628,
+        "verify_by": "chaos-runner",
+        "verify_experiment": "chaos-mesh-cannot-target-lambda: Chaos Mesh operates on Pod netns; Lambda/StepFunctions run outside the cluster",
+        "verify_degradation": 0.0
+      }
+    },
+    {
+      "eid": "f4ce441d-f668-527e-7dcf-6ab7f872d8d6",
+      "label": "Invokes",
+      "src": "ServicesEks2-awscdkawseks-ProviderframeworkonEvent-xdUeZruuRUdZ",
+      "dst": "ServicesEks2-awscdkawseksCl-OnEventHandler42BEBAE0-bcWZ6VVcgWIb",
+      "props": {
+        "evidence": "env:USER_ON_EVENT_FUNCTION_ARN",
+        "source": "aws-etl",
+        "last_updated": 1772722812,
+        "verify_status": "inconclusive",
+        "verify_confidence": 0.0,
+        "verify_last": 1788561628,
+        "verify_by": "chaos-runner",
+        "verify_experiment": "chaos-mesh-cannot-target-lambda: Chaos Mesh operates on Pod netns; Lambda/StepFunctions run outside the cluster",
+        "verify_degradation": 0.0
+      }
+    },
+    {
+      "eid": "84ce441d-f68e-2cdc-279b-46ce927a6a86",
+      "label": "Invokes",
+      "src": "ServicesEks2-awscdkawseks-ProviderframeworkisCompl-sIJBJPos5iM2",
+      "dst": "ServicesEks2-awscdkawseksCl-OnEventHandler42BEBAE0-bcWZ6VVcgWIb",
+      "props": {
+        "evidence": "env:USER_ON_EVENT_FUNCTION_ARN",
+        "source": "aws-etl",
+        "last_updated": 1772722812,
+        "verify_status": "inconclusive",
+        "verify_confidence": 0.0,
+        "verify_last": 1788561628,
+        "verify_by": "chaos-runner",
+        "verify_experiment": "chaos-mesh-cannot-target-lambda: Chaos Mesh operates on Pod netns; Lambda/StepFunctions run outside the cluster",
+        "verify_degradation": 0.0
+      }
+    },
+    {
+      "eid": "52ce441d-f69b-3c37-a4d9-79688d314a3c",
+      "label": "Invokes",
+      "src": "ServicesEks2-awscdkawseks-ProviderframeworkonTimeo-T6MAOIsLvvn5",
+      "dst": "ServicesEks2-awscdkawseksCl-OnEventHandler42BEBAE0-bcWZ6VVcgWIb",
+      "props": {
+        "evidence": "env:USER_ON_EVENT_FUNCTION_ARN",
+        "source": "aws-etl",
+        "last_updated": 1772722812,
+        "verify_status": "inconclusive",
+        "verify_confidence": 0.0,
+        "verify_last": 1788561628,
+        "verify_by": "chaos-runner",
+        "verify_experiment": "chaos-mesh-cannot-target-lambda: Chaos Mesh operates on Pod netns; Lambda/StepFunctions run outside the cluster",
+        "verify_degradation": 0.0
+      }
+    },
+    {
+      "eid": "76ce3af3-c10b-44cf-3381-72f6813c95d9",
+      "label": "Invokes",
+      "src": "Providerwaiterstatemachine5D4A9DF0-ZkuIyyskPCyz",
+      "dst": "ServicesEks2-awscdkawseks-ProviderframeworkonTimeo-T6MAOIsLvvn5",
+      "props": {
+        "source": "aws-etl",
+        "last_updated": 1773326861,
+        "verify_status": "inconclusive",
+        "verify_confidence": 0.0,
+        "verify_last": 1788561628,
+        "verify_by": "chaos-runner",
+        "verify_experiment": "chaos-mesh-cannot-target-lambda: Chaos Mesh operates on Pod netns; Lambda/StepFunctions run outside the cluster",
+        "verify_degradation": 0.0
+      }
+    },
+    {
+      "eid": "66ce5f75-4232-977d-c1ff-30e12ecdb676",
+      "label": "Invokes",
+      "src": "petsite-ops-alerts",
+      "dst": "petsite-ops-slack-notifier",
+      "props": {
+        "last_seen": 1788601646,
+        "source": "aws-etl-static",
+        "last_updated": 1788601646,
+        "verify_status": "inconclusive",
+        "verify_confidence": 0.0,
+        "verify_last": 1788561628,
+        "verify_by": "chaos-runner",
+        "verify_experiment": "chaos-mesh-cannot-target-lambda: Chaos Mesh operates on Pod netns; Lambda/StepFunctions run outside the cluster",
+        "verify_degradation": 0.0
+      }
+    },
+    {
+      "eid": "d6ced9c8-7409-9b67-4a2d-fdedb8a1231b",
+      "label": "Invokes",
+      "src": "petsite-rca-engine",
+      "dst": "gp-window-flush",
+      "props": {
+        "evidence": "env:WINDOW_FLUSH_FUNCTION_ARN",
+        "last_seen": 1788601646,
+        "source": "aws-etl",
+        "last_updated": 1788601646,
+        "verify_status": "inconclusive",
+        "verify_confidence": 0.0,
+        "verify_last": 1788561628,
+        "verify_by": "chaos-runner",
+        "verify_experiment": "chaos-mesh-cannot-target-lambda: Chaos Mesh operates on Pod netns; Lambda/StepFunctions run outside the cluster",
+        "verify_degradation": 0.0
+      }
+    }
+  ]
+}

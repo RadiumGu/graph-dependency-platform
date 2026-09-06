@@ -69,6 +69,14 @@ def render(contract: dict) -> str:
         "# 否则「谁能写 verify_* 属性」「confirmed 的阈值」会各处一份、悄悄漂移。\n"
         f"EDGE_VERIFICATION = {pp.pformat(contract['edge_verification'])}\n"
     )
+    if contract.get('node_scope'):
+        parts.append(
+            "\n# 节点 scope：算不算「被观测系统」的一部分（第五个正交维度）。\n"
+            "# 判据是权威归属而非名字模式 —— AWS 资源走 CloudFormation 栈归属\n"
+            "# （ParentId 非空即嵌套栈 ⇒ scaffolding），K8s 对象走 namespace。\n"
+            "# 靶点选择 / 爆炸半径 / DR 计划只该看 primary_query_scope。\n"
+            f"NODE_SCOPE = {pp.pformat(contract['node_scope'])}\n"
+        )
     return "\n".join(parts)
 
 

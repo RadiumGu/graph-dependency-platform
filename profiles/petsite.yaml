@@ -72,6 +72,12 @@ services:
     type: lambda
     lambda_name: "petstatusupdater"
     neptune_name: "petstatusupdater"
+    aliases:
+      # CloudWatch Application Signals 报的名字（2026-09-05 实测）。
+      # 少了它，`payforadoption -> petadoptionstatusupdater` 这条观测边
+      # 落不到图上的 `petstatusupdater` 节点，会被当成未解析而丢弃。
+      - "petadoptionstatusupdater"
+      - "PetAdoptionStatusUpdater"
 
   petlistadoptions:
     tier: Tier1

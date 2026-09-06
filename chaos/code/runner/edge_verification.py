@@ -58,6 +58,21 @@ from graph_confidence import (
 )
 
 from .neptune_client import query_gremlin_parsed  # noqa: E402
+from . import injectability as _inj  # noqa: E402
+
+# ── scope 过滤（T-306）：不该打的边，在选靶前排除 ─────────────────────────────
+#
+# 与注入能力矩阵正交：矩阵回答「能不能施加」，scope 回答「该不该打」。
+#
+# 排除的是**触及这几档**的边，而不是「要求两端都是 observed」。差别很实在：
+# 活图谱 110 条依赖边里只有 50 条两端都是 observed，另有 34 条一端是 `unknown`
+# （端点解析不出，其中有真的被观测依赖）。要求两端 observed 会连带丢掉这 34 条，
+# 那是把「解析不出」当成「不该打」，两回事。
+#
+# platform 那一档是**安全问题**不只是噪声：12 条 platform→platform 边是本平台
+# 自己的 ETL/RCA 链，往那里注入可能打断记录本次实验判定的那条管道 ——
+# neptune-etl-* 挂了，这次实验的结论就写不回图。
+EXCLUDED_SCOPES = frozenset({'platform', 'scaffolding', 'observability', 'cluster-infra'})
 
 logger = logging.getLogger(__name__)
 
@@ -77,8 +92,24 @@ _OBSERVER_MARKERS = {
     'xray': ('xray_call_count', 'xray_last_seen'),
     'nfm': ('nfm_flow_count', 'nfm_last_seen'),
     'deepflow': ('calls', 'error_rate'),
+    # 2026-09-05（T-307）：K8s Pod spec 派生的启动依赖（微服务 → ECRRepository）。
+    # 单列一档而不是塞进 deepflow：deepflow 的 ('calls','error_rate') 语义是
+    # 「eBPF 观测到的流量计数」，而这类边来自镜像引用、不存在流量计数。
+    # 写假的 calls 等于伪造观测证据，所以让写入方记录它实际看到的东西（镜像仓库名），
+    # 这里按那个字段计数。
+    'k8s-image-spec': ('image_ref',),
 }
 _STATIC_SOURCES = ('aws-etl', 'cfn-etl')
+
+# 「结构性不可注入」的判据已全部移入 `injectability.py`（T-305b）。
+#
+# 这里曾有一张 `_NON_INJECTABLE_REASONS` 表 + `non_injectable_kind()`，读边上存储的
+# 理由 token 决定 permanent/conditional。删除而不是留着，理由是它变成了**零生产
+# 调用方的死代码**，而「留着一份看起来还在生效、实际没人调的判据」正是本项目反复
+# 踩的那个坑（写了但没人读）。历史与两条错误结论记在 `injectability.py` 的
+# docstring 里：
+#   · `chaos-mesh-cannot-target-lambda` 曾判 permanent，但 FIS 有 3 个 Lambda 动作
+#   · `image-repo-dependency` 曾判 permanent，实为「需复合实验」
 
 
 # ── K8s 服务名 → 图谱规范名 ──────────────────────────────────────────────────
@@ -405,9 +436,18 @@ def select_targets_for_verification(limit: int = 10) -> list[dict]:
     后者是参考实现的做法，也是它最弱的一环。
     """
     q = ("g.E().hasLabel(%s)"
-         ".project('eid','label','src','dst','drift','status','last','conf','obs')"
+         ".project('eid','label','src','dst','src_label','dst_label',"
+         "'src_scope','dst_scope','drift','status','last','conf','obs',"
+         "'reason','experiment')"
          ".by(__.id()).by(__.label())"
          ".by(__.outV().values('name')).by(__.inV().values('name'))"
+         # 两端的**节点类型** —— 后端×目标类型矩阵的输入（T-305b）。
+         # 名字不够：判「哪个后端能打到它」取决于类型不是名字。
+         ".by(__.outV().label()).by(__.inV().label())"
+         # 两端的 scope —— 判「该不该打」（T-306）。缺失按 unknown 处理：
+         # 不排除，因为「没标注」不等于「不该打」。
+         ".by(__.coalesce(__.outV().values('scope'), __.constant('unknown')))"
+         ".by(__.coalesce(__.inV().values('scope'), __.constant('unknown')))"
          ".by(__.coalesce(__.values('drift_status'), __.constant('')))"
          ".by(__.coalesce(__.values('verify_status'), __.constant('%s')))"
          ".by(__.coalesce(__.values('verify_last'), __.constant(0)))"
@@ -417,6 +457,11 @@ def select_targets_for_verification(limit: int = 10) -> list[dict]:
          # 不能默认 0，那会让老边在信息增益排序里被误判成「最不确定」而抢占队首。
          ".by(__.coalesce(__.values('verify_observing_sources'),"
          "     __.union(%s).count()))"
+         # 判定理由：用来在选靶前排除结构性不可注入的边（T-305）。
+         # 两个字段都取：写入方历史上把 token 写进 verify_experiment，
+         # 现行 write_verdict 写进 verify_reason。
+         ".by(__.coalesce(__.values('verify_reason'), __.constant('')))"
+         ".by(__.coalesce(__.values('verify_experiment'), __.constant('')))"
          ".fold()" % (_label_list(), STATUS_UNTESTED, _observer_marker_probe()))
     try:
         rows = _flatten(query_gremlin_parsed(q))
@@ -426,11 +471,53 @@ def select_targets_for_verification(limit: int = 10) -> list[dict]:
 
     now = int(time.time())
     scored = []
+    skipped: dict = {}
     for r in rows:
         if not isinstance(r, dict) or not r.get('eid'):
             continue
+
+        # ── 按「后端 × 目标类型 × 注入位置」矩阵排除（T-305b）─────────────────
+        # 放在打分**之前**：这批边恰好同时命中两个让它们抢占队首的条件 ——
+        # status=inconclusive（pri=2「需重试」）与被旧路径写坏的低 confidence。
+        # 放在打分之后过滤会先把它们排到队首再剔掉，limit 截断时挤掉真正该测的边。
+        #
+        # 自环单独判：矩阵是按类型算的，而自环的问题是**没有可观测的下游**，
+        # 与类型无关，图上也未必留下 self-loop-from-trace 这个 token。
+        reason = str(r.get('reason') or '') or str(r.get('experiment') or '')
+        src_label = str(r.get('src_label') or '')
+        dst_label = str(r.get('dst_label') or '')
+
+        # ── scope：该不该打（T-306）。放在能力矩阵**之前** ────────────────────
+        # 先问「该不该」再问「能不能」：一条 platform→platform 边即使完全可注入，
+        # 也不该打（可能打断记录判定的 ETL 管道）。顺序反了会先算一遍矩阵再丢掉，
+        # 白算而已，但更重要的是语义上「不该打」优先。
+        bad_scope = ({str(r.get('src_scope') or 'unknown'),
+                      str(r.get('dst_scope') or 'unknown')} & EXCLUDED_SCOPES)
+        if bad_scope:
+            key = f"scope:{'/'.join(sorted(bad_scope))}"
+            skipped[key] = skipped.get(key, 0) + 1
+            continue
+
+        if r.get('src') and r.get('src') == r.get('dst'):
+            skipped[_inj.NO_OBSERVER] = skipped.get(_inj.NO_OBSERVER, 0) + 1
+            continue
+        skip, why = _inj.should_skip_target(src_label, dst_label, reason)
+        if skip:
+            verdict, _ = _inj.injectability(src_label, dst_label, reason)
+            skipped[verdict] = skipped.get(verdict, 0) + 1
+            continue
+
         pri = 3
         why = '常规复验'
+        # 前置条件不成立（副本数为 0、源不在集群）：**不排除也不正常排队**，
+        # 压到最低优先级。排除会造出永久盲区（扩容回来后这条边再也不被验证），
+        # 正常排队又会反复注入失败、把同一句理由再写一遍。压到队尾两头都避开：
+        # 有真靶点时它们永远不会被选中，队列空了才轮到 —— 那时重试的代价最低。
+        if _inj.reason_class(reason) == _inj.PRECONDITION_UNMET:
+            pri = 9
+            why = '前置条件不成立（副本数/Pod 存在性），需先廉价复核再注入'
+            scored.append((pri, dict(r, priority=pri, why=why)))
+            continue
         if r.get('drift') == 'declared_not_observed':
             pri, why = 0, '已声明但从未被观测 —— 死代码路径或观测盲区'
         elif r.get('status') == STATUS_UNTESTED:
@@ -472,6 +559,10 @@ def select_targets_for_verification(limit: int = 10) -> list[dict]:
         return (pri, conf, obs)
 
     scored.sort(key=_info_gain_key)
+    if skipped:
+        detail = '、'.join(f'{k} {v} 条' for k, v in sorted(skipped.items()))
+        logger.info("选靶前按注入能力矩阵排除：%s"
+                    "（precondition_unmet 刻意**不**排除，交下游廉价复核）", detail)
     for _, d in scored:
         c = d.get('conf')
         d['selection_key'] = (f"priority={d['priority']} confidence="

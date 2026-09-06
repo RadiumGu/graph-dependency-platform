@@ -1839,6 +1839,17 @@ ORDER BY calls DESC LIMIT 100 FORMAT TSV
                     f".property('dependency_kind','dynamic')"
                     f".property('phase','startup')"
                     f".property('strength','strong')"
+                    # 观测源标记（2026-09-05 补，T-307）。缺它的后果实测到了：
+                    # graph_confidence 侧的观测源计数按**属性标记**算，而这批边
+                    # 只写了 source='deepflow-etl' 没写任何标记，于是 6 条边被算成
+                    # 零证据、confidence 落到 0.5。`source` 说有观测源、标记说没有。
+                    #
+                    # 刻意**不**写 deepflow 的 ('calls','error_rate') 标记：
+                    # 那两个字段的语义是「eBPF 观测到的流量计数」，而这条边是从
+                    # **Pod spec 的镜像引用**提取的，不存在流量计数。写上去等于
+                    # 伪造观测证据 —— 与「采集失败的 fallback 值不得与合法测量值
+                    # 同形」是同一条禁令。改为记录实际看到的东西：镜像仓库名。
+                    f".property('image_ref','{safe_str(repo)}')"
                     f".property('last_updated',{ts_ecr})"
                 )
                 ecr_startup_count += 1
