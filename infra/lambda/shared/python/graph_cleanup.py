@@ -325,6 +325,32 @@ def audit_dependency_edges_without_source(neptune_query) -> dict:
     「**写进去的** source 必须在词表里」，从不校验「**必须有** source」。
     **「写了没人读」的反面：没写也没人查。**
 
+    ## 补得了还是补不了：先看 `declared_in`
+
+    最初这里写的是「补不了 —— 事后无从推断当初是哪个源写的」。
+    **那句话被自己的第一个案例证伪了。** 实测那 12 条里最后剩的一条
+    （`neptune-etl-trigger -[AccessesData]-> neptune-etl-from-aws`）身上带着
+    `declared_in='cfn'` + `stack_name='NeptuneEtlStack'` +
+    `evidence='env:ETL_FUNCTION_NAME'` —— 三个都是 etl_cfn 的签名字段，
+    且 `declared_in='cfn'` 的兄弟边有 4 条带 `source='cfn-etl'`。
+    据此回填不是猜，是读另一个字段里已经记着的事实
+    （见 `infra/backfill_edge_source_from_declared_in.py`）。
+
+    所以处置顺序是：**先查 `declared_in` / `stack_name` / `evidence` 能不能读出
+    创建者**，读不出来才谈清理或接受。反过来，`declared_in` 比 `source` 更可信 ——
+    它从来没有被任何 ETL 覆盖过，而 `source` 在写一次属性被无条件写的那个时代
+    被改写过（2 条 `declared_in='cfn'` 的边至今写着 `source='aws-etl'`）。
+
+    ## 被印证的孤儿边是不死的
+
+    那条边一直没被清理掉，是因为它的 `last_seen` 与 `xray_last_seen` 完全相等 ——
+    **etl_xray 的印证路径每轮刷新它的 last_seen 却不写 source**（xray 没有发现它，
+    不冒领 source 是对的），而真正的创建者 etl_cfn 的 `last_scanned` 是 148 天前。
+
+    后果：清理判据要求 `active=false` ← 要求 TTL 过期 ← 要求 `last_seen` 陈旧，
+    而印证让 `last_seen` 永远新鲜。于是这类边既不会被清理，也永远无人负责。
+    这就是本审计存在的意义 —— 靠 TTL 兜不住它们，只能靠每轮点名。
+
     Returns:
         {'total': int, 'per_label': {label: int}}
     """
@@ -347,8 +373,11 @@ def audit_dependency_edges_without_source(neptune_query) -> dict:
         offenders = {k: v for k, v in result['per_label'].items() if v}
         logger.warning(
             "source-audit: %d 条 dependency 边没有 source %s —— "
-            "这些边不被任何源的 reconcile 认领，永远不会被刷新或清理。"
-            "补不了（事后无从推断当初是哪个源写的），只能清理或接受。",
+            "这些边不被任何源的 reconcile 认领，永远不会被刷新或清理"
+            "（若被别的源印证，last_seen 会一直新鲜，连 TTL 也兜不住）。"
+            "处置：先查边上的 declared_in / stack_name / evidence 能否读出创建者"
+            "（可用 infra/backfill_edge_source_from_declared_in.py 回填），"
+            "读不出来再谈清理。",
             result['total'], offenders)
     return result
 

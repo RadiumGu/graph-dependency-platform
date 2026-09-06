@@ -53,6 +53,9 @@
 | 37 | 部署的层 `:9` 里烧的是旧契约（33 类） | 契约扩展从未生效于任何 Lambda | ✅ 已修（全部切 `:11`） |
 | 38 | agent 边被标 `dynamic`，稀疏调用被判「依赖不存在」 | 图谱给出**错误陈述**而非过期陈述 | ✅ 已修 |
 | 39 | 我加的 `CONTRADICTORY` 门禁自己就在「拿无观测当故障证据」 | 假警报，同一天犯两遍同一个错 | ✅ 已修（三态判据） |
+| 40 | dependency 边缺 `source` 无人告警，12 条零告警躺了半年 | 边无源认领，永不刷新也永不被清理 | ✅ 已修（审计 + 清理 + 回填，归零） |
+| 41 | 写一次属性被无条件写，`etl_deepflow` 每轮覆盖 `source` | xray 的发现史被 deepflow 抹掉 | ✅ 已修（幂等写法 + `test_51::m03`） |
+| 42 | 我发布层时以旧版本为基线，覆盖了并发会话的两处契约改动 | `graph_contract_data.py` 退回 47 行 | ✅ 已修（基于 `:15` 重建为 `:17`） |
 
 其中 **#7 / #8 / #10 是 08:30–09:00 为了拿到第一条边的判定而查出的**，
 **#11 – #14 是 10:10–11:12 扩大验证覆盖面时查出的**，都不在最初报给用户的 6 条里。
@@ -1586,3 +1589,195 @@ spans 流有 526 条记录
   - **不适用运行时验证**：ECRRepository 12（镜像拉取只在启动期）
 - **`pethistory` 的两条边永远拿不到结论**，除非给负载机加详情页流量配比或延长观测窗口。
   **不要降低 `min_observation_requests`** —— 那是拿判据换覆盖率。
+
+---
+
+## 40. dependency 边缺 `source` 无人告警（2026-09-06 已修）
+
+**发现方式不是任何自动检查，是有人在 UI 上看见「数据源」列是空的。**
+三条 `Calls` 边（`trafficgenerator` / `gateway-service` / `order-service` → `petsite`）。
+
+### 缺口的形状：不是「没写」，是「没写也没人查」
+
+契约有 `sources` 词表，代码有 `assert_source()`，`test_35` 有一整套边契约断言 ——
+但它们全都只校验**「写进去的 source 必须在词表里」**，从不校验**「必须有 source」**。
+
+这是本项目反复警惕的「写了没人读」的**反面**：
+
+| | 症状 | 本项目已有的警惕 |
+|---|---|---|
+| 写了没人读 | 契约里声明一个谁都不消费的字段 | `test_42::m07` 强制每个元字段有 accessor |
+| **没写也没人查** | **漏写一个谁都不校验的字段** | **此前无任何机制** |
+
+### 为什么 `source` 缺了就是结构性问题
+
+每个 ETL 的对账只管自己那个 source（`etl_deepflow` 只管 `deepflow-etl`、
+`etl_xray` 只管 `xray`）。一条没有 source 的 dependency 边**没有任何源认领它**：
+永远不会被刷新，也不会被任何源的 reconcile 清理。
+
+与此前处理的 7 个孤儿 `LambdaFunction` 节点同类 —— 不是「资源没了」，
+而是「没人负责它了」。区别在于**节点侧有 `graph_gc` 拿 AWS 事实兜底，边侧没有等价机制**。
+
+### 逐类查清：235 条无 source 的边里只有 12 条本该有
+
+判据不主观：契约里每种边都声明了 `dependency`，再加「谁写它、写时带没带 source」这个事实。
+
+| label | 无 source / 总数 | 契约 `dependency` | 判定 |
+|---|--:|---|---|
+| `TriggeredBy` | 126/127 | false | ✅ 结构边，生命周期跟随端点 |
+| `TestedBy` | 64/64 | false | ✅ 结构边 |
+| `MentionsResource` | 16/16 | false | ✅ 结构边 |
+| `Involves` | 8/8 | false | ✅ 结构边 |
+| `LocatedIn` | 7/861 | false | ✅ 结构边 |
+| `HasSG` / `ForwardsTo` | 各 1 | false | ✅ 结构边 |
+| **`Calls`** | **11/20** | **true** | ❌ 本该有 |
+| **`AccessesData`** | **1/58** | **true** | ❌ 本该有 |
+
+**223 条结构边本来就不需要 source**，报进审计只是噪声 —— 所以审计函数按契约的
+`dependency` 标志筛选，而不是「所有没 source 的边」。
+
+### 处置：审计 + 清理 + 回填，三件不同的事
+
+**① 审计**（`graph_cleanup.audit_dependency_edges_without_source`，接入 `etl_aws` 每轮上报）
+
+一开始想往契约加一个 `dependency_edge_requires_source: true` —— **放弃了**，
+因为那个布尔值没有任何消费方，本身就是缺口 #40 的同类问题。
+声明一条谁都不读的不变量，与不声明的效果相同。真正的堵法是一个能对活图谱
+**查出违规条数**并被每轮上报的函数。
+
+**② 清理 11 条陈旧 `Calls` 边**（`infra/reap_sourceless_edges.py`，默认 dry-run）
+
+判据是三条同时成立，不是「没 source 就删」：
+
+    ① 没有 source                    没有任何源认领它
+    ② active=false                   已被 TTL 过期收敛判定过（不是脚本自己判的）
+    ③ last_seen 超 TTL 的 100 倍      远超「可能只是暂时没流量」
+
+缺一不可：只看 ① 会删掉刚创建还没写 source 的边；只看 ①② 会删掉昨天才失活、
+今天可能恢复的边。实测这 11 条是 **170~185 天**未观测，阈值只需 2.1 天，余量 80 倍。
+
+删掉的两个批次：3 条带完整 DeepFlow 指标（`updated_at=2026-08-28`，说明数据真来自
+DeepFlow，只是那轮代码没写 source），8 条更早的遗留（`artillery` / `awesomeshop` 系列
+—— `awesomeshop` 6 个 Deployment 副本数全为 0，`artillery` 就是 `nfm-deepflow-test`
+上那个压测工具，DeepFlow 采到它的流量后图里凭空多出一个叫 `artillery` 的「微服务」）。
+
+**没做成 ETL 常驻自动清理**：成因是历史性的，修完写入侧不会再产生新的。
+给一个不会复发的问题装长期运行的删除器才是危险的。
+
+**③ 回填最后 1 条 `AccessesData`**（`infra/backfill_edge_source_from_declared_in.py`）
+
+这一条推翻了我自己在审计日志里写下的判断。原话是「补不了 —— 事后无从推断当初是
+哪个源写的」，**它是这句话的反例**：
+
+    declared_in  = cfn                      ← 谁声明的，直接写在边上
+    stack_name   = NeptuneEtlStack          ← 只有 etl_cfn 会写
+    evidence     = env:ETL_FUNCTION_NAME    ← CFN 模板里的环境变量引用
+
+旁证：`declared_in='cfn'` 的 7 条边里有 4 条带 `source='cfn-etl'` —— 同批同法创建的
+兄弟边取值一致。所以 `cfn-etl` 是**读出来的**，不是猜的。
+
+反过来还得出一条：**`declared_in` 比 `source` 更可信** —— 它从来没被任何 ETL 覆盖过，
+而 `source` 在缺陷 #41 那个时代被改写过（2 条 `declared_in='cfn'` 的边至今
+写着 `source='aws-etl'`）。
+
+审计的告警文案已据此改写：**先查 `declared_in`/`stack_name`/`evidence` 能否读出创建者，
+读不出来才谈清理。**
+
+### 附带发现：被印证的孤儿边是不死的
+
+那条边为什么半年没被 TTL 清掉 —— 它的 `last_seen` 与 `xray_last_seen` **完全相等**，
+带 `xray_call_count=556`：**`etl_xray` 的印证路径每轮刷新它的 `last_seen` 却不写
+`source`**（xray 没有发现它，不冒领 source 这个行为本身是对的），
+而真正的创建者 `etl_cfn` 的 `last_scanned` 是 **148 天前**。
+
+于是形成一个死角：
+
+    清理判据要 active=false ← 要 TTL 过期 ← 要 last_seen 陈旧
+    而印证行为让 last_seen 永远新鲜
+
+**被别的源印证、却无人认领的边，TTL 永远兜不住。** 这是本审计存在的根本理由 ——
+不是「多一道检查」，而是这类边只能靠每轮点名才会被看见。
+
+### 结果
+
+全图 dependency 边缺 source **归零**。`etl_aws` 每轮返回体带
+`dep_edges_without_source`（当前 0）。
+
+---
+
+## 41. 写一次属性被无条件写，`etl_deepflow` 每轮覆盖 `source`（2026-09-06 已修）
+
+契约声明 `edge_write_once_attrs: ['source', 'dependency_kind', 'first_seen']`。
+实测 `neptune_etl_deepflow.py:1214` 的 `.property('source','deepflow-etl')`
+位于 `coalesce(...)` **闭合之外** —— 即**每轮无条件写**。
+
+**后果**：xray 先发现的 3 条 `Calls` 边（`source='xray'`），一旦 deepflow 也观测到
+就被改写成 `'deepflow-etl'`，**发现史被抹掉**。图谱由此无法回答「谁先看见了这条依赖」。
+
+### 门禁的缺口比 bug 本身更值得记
+
+`test_35::g08` 只断言**契约声明了**这三个属性是写一次的，**没有断言写入方遵守**。
+而 g08 自己的 docstring 里就记着 `etl_aws/neptune_client.py:161` 与
+`etl_cfn/neptune_etl_cfn.py:143` **犯过同一个错** —— 却没人去检查 `etl_deepflow`。
+
+**声明在、门禁不在。** 这与本文档反复出现的那条规律一致：
+**漂移量与有没有门禁相关，与声明得好不好无关。**
+
+### 修法选幂等写法，而不是挪进 addE 分支
+
+```python
+.property('source', __.coalesce(__.values('source'), __.constant('deepflow-etl')))
+```
+
+挪进 `addE` 分支看起来更「正确」，但会让**存量 11 条无 source 边永远补不上**
+（它们不会被重新创建）。幂等写法两头都顾，且与同文件 1201 行 `first_seen` 的处理一致。
+
+### 新门禁 `test_51::m03`，以及它自己的两次假阳性
+
+第一版把**注释里**引用的 `.property('first_seen', ts)` 报成违规
+（注释原文正是「不能放在 addE 分支之外裸写」）。已加跳过注释行。
+
+**守门测试的假阳性比没有测试更糟 —— 它训练人忽略告警。** 这条在 `m01` 上又犯了一次
+（见下）。
+
+### 另一条门禁 `test_51::m01` 的盲点
+
+`m01` 静态扫描「写 dependency 边的地方必须带 source」。为什么不用运行时断言：
+`assert_source()` 只在**被调用时**生效，而漏写 source 的路径压根不会调用它 ——
+运行时断言对「忘了写」结构性地无能为力（同 `test_35::g14` 用静态扫描抓标签拼错）。
+
+第一版只扫字面量 `addE('X')`，**漏掉通过 helper 写的边**：那条 `AccessesData`
+走的是 `upsert_edge(src, dst, edge_lbl, props)`，**标签是变量**，扫不到。
+扩展后又冒出 9 处假阳性 —— `etl_agentcore` 的 `_upsert_edge` **在自己函数体里**写死
+`property('source','{SOURCE}')`，调用方不必传。
+
+最终判据：**被调的 helper 自己保不保证写 source**，且只在同一个 ETL 目录内找定义
+（各 ETL 同名 helper 实现不同）。
+
+---
+
+## 42. 我发布共享层时以旧版本为基线，覆盖了并发会话的改动（2026-09-06 已修）
+
+**这条是我自己造成的事故，记下来是因为它会重复发生。**
+
+发布 `neptune-client-base` 层时我以 `:13` 为基线（上一轮记下的版本号），
+而并发会话在此期间发布了：
+
+- `:14` —— `DependsOn` 加 `Microservice -> AgentRuntime` 端点对（PetSite AI 问答声明边）
+- `:15` —— `sources` 注册 `appsignals-etl`
+
+我的 `:16` 因此把 `graph_contract_data.py` 从 585 行**退回 538 行，丢掉了这两处改动**。
+
+### 发现方式：编号跳跃
+
+预期发布出 `:14` 却拿到 `:16` —— **中间的编号说明有别人发布过**。
+若不核对就继续，两处契约改动会静默消失，且因为它们只影响新写入的边/新注册的源，
+不会立刻报错，只会让图谱慢慢偏离契约。
+
+已基于 `:15` 重建发布 `:17`，实测确认 `appsignals-etl` 与
+`Microservice -> AgentRuntime` 都在，五条 ETL 全切 `:17`。
+
+### 规则
+
+**往共享层叠加改动前必须先查当前最高版本号，不能沿用上一轮记下的基线。**
+共享层是跨会话共享的可变状态，与代码分支不同 —— 它没有 merge，后发布者直接覆盖。
