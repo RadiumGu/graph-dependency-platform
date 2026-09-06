@@ -23,7 +23,9 @@ _FIX_DIR = os.path.dirname(os.path.abspath(__file__))
 _DEMO_DIR = os.path.dirname(_FIX_DIR)
 _ROOT = os.path.dirname(_DEMO_DIR)
 
-for _p in (_ROOT, os.path.join(_ROOT, "rca")):
+# _DEMO_DIR 也要进 sys.path —— 证据链定义在 demo/_common.py，
+# 本脚本与 RCA 页面共用它（各抄一份必然漂移，见下方 rca_evidence 段的注释）。
+for _p in (_ROOT, os.path.join(_ROOT, "rca"), _DEMO_DIR):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
@@ -173,46 +175,31 @@ def main():
     # RCA 页的证据采集全是**纯图查询**（不需要 Bedrock），所以离线时
     # 可以展示真实证据，只有最后那段 LLM 叙述缺席。
     # 刻意不预置 AI 生成的报告文本——那是给 LLM 输出做录像。
+    #
+    # 证据链从 _common.RCA_EVIDENCE_CHAIN 取，不在这里抄第二份：
+    # 原先这里手写了一份 9 条的清单，与页面各自维护。页面加查询而这里没加，
+    # 离线模式下对应小节就是空的 —— 而这种缺失没有任何报错，只会让访客以为
+    # 「那部分没数据」。方向标注（q1/q3 谁是根因谁是影响面）也曾在两边都是旧的。
     try:
         from neptune.query_catalog import run_query  # type: ignore
+        import _common as C  # type: ignore
 
-        EVIDENCE_QUERIES = [
-            ("q9_service_infra_path", "基础设施路径 Service→Pod→EC2→AZ"),
-            ("q1_blast_radius", "下游影响面"),
-            ("q3_upstream_deps", "上游调用者（根因候选）"),
-            ("q6_pod_status", "Pod 状态与重启次数"),
-            ("q10_infra_root_cause", "基础设施侧反查"),
-            ("q19_topology_changes", "近期依赖变更"),
-            ("q17_incidents_by_resource", "同资源历史故障"),
-            ("q5_similar_incidents", "同服务历史故障"),
-            ("q22_edge_verification_verdicts", "该服务依赖边的注入验证判定"),
-        ]
-        PARAM_ALIASES = {
-            "q9_service_infra_path": {"service_name": None},
-            "q1_blast_radius": {"failed_node": None, "kind": "live"},
-            "q3_upstream_deps": {"failed_service": None, "kind": "live"},
-            "q6_pod_status": {"service_name": None},
-            "q10_infra_root_cause": {"affected_service": None},
-            "q19_topology_changes": {"service_name": None},
-            "q17_incidents_by_resource": {"resource_name": None},
-            "q5_similar_incidents": {"service_name": None, "limit": 3},
-            "q22_edge_verification_verdicts": {"service_name": None, "limit": 40},
-        }
         out: dict = {}
         for svc in ("petsite", "petsearch", "payforadoption"):
             per_svc: dict = {}
-            for qname, why in EVIDENCE_QUERIES:
-                kw = {}
-                for pname, pval in PARAM_ALIASES.get(qname, {}).items():
-                    kw[pname] = svc if pval is None else pval
+            for qname, why, pmap, stage in C.RCA_EVIDENCE_CHAIN:
+                kw = {k: (svc if v is None else v) for k, v in pmap.items()}
                 try:
                     r = run_query(qname, **kw)
                     rows = r.get("results", r) if isinstance(r, dict) else r
                     if isinstance(rows, list):
                         rows = rows[:40]
-                    per_svc[qname] = {"why": why, "params": kw, "data": rows}
+                    per_svc[qname] = {"why": why, "params": kw,
+                                      "stage": stage, "data": rows}
                 except Exception as exc:  # noqa: BLE001
-                    per_svc[qname] = {"why": why, "params": kw, "error": str(exc)[:150]}
+                    per_svc[qname] = {"why": why, "params": kw,
+                                      "stage": stage,
+                                      "error": str(exc)[:150]}
             out[svc] = per_svc
             print(f"  {svc}: {len(per_svc)} 条证据查询")
         _write("rca_evidence.json", {"by_service": out})

@@ -62,6 +62,64 @@ STATUS_META = {
 }
 
 
+# ── RCA 证据链（唯一定义处）──────────────────────────────────────────────────
+#
+# 放在这里而不是放在页面里，是因为它有**两个消费方**：
+#   · pages/6_Root_Cause_Analysis.py   在线现查
+#   · fixtures/refresh_fixtures.py     生成离线快照
+# 各抄一份必然漂移 —— 实测已经漂过：页面用 9 条查询、生成器也写了 9 条，
+# 但两边的说明文案不同，且 q1/q3 的方向标注都是旧的（那两个查询的遍历方向
+# 已于 2026-09-06 修正，见 tests/test_52_rca_query_direction.py）。
+# 快照缺哪条查询，离线模式下那一节就是空的，而这种缺失没有任何报错。
+#
+# 每项 = (查询名, 说明, 参数映射, 推理阶段)。参数值 None 表示填入所选服务名。
+RCA_STAGE_TITLE = {
+    "direction": "方向 —— RCA 的两半",
+    "trust": "依赖可信度",
+    "topology": "拓扑地位",
+    "infra": "基础设施与时间",
+    "history": "历史参照",
+}
+
+RCA_EVIDENCE_CHAIN = [
+    # ── 方向：RCA 的两半。契约里依赖边从依赖方指向被依赖方，所以
+    #        根因在出边、影响面在入边。搞反会把受害者当成嫌疑人。
+    ("q3_upstream_deps", "根因候选 —— 故障服务**依赖谁**（出边）",
+     {"failed_service": None, "kind": "live"}, "direction"),
+    ("q1_blast_radius", "影响面 —— **谁依赖**故障服务（入边）",
+     {"failed_node": None, "kind": "live"}, "direction"),
+    # ── 依赖可信度 ──
+    ("q22_edge_verification_verdicts", "每条依赖边的故障注入判定",
+     {"service_name": None, "limit": 100}, "trust"),
+    ("q20_dependency_verification", "观测层：这条边最近还有没有被看到",
+     {"service_name": None, "only_problematic": True, "limit": 50}, "trust"),
+    ("q21_observation_source_coverage", "观测源覆盖：哪些边只被单源看到",
+     {"service_name": None, "limit": 50}, "trust"),
+    ("q23_verification_coverage", "全图验证覆盖率 —— 报告置信度的上限",
+     {}, "trust"),
+    # ── 拓扑地位：告警级别应该有图上的依据 ──
+    ("q16_single_point_of_failure", "该服务是否单点故障", {}, "topology"),
+    ("q15_critical_path", "关键路径", {}, "topology"),
+    ("q12_service_dependency_tree", "服务维度依赖树",
+     {"service_name": None}, "topology"),
+    # ── 基础设施与时间 ──
+    ("q9_service_infra_path", "基础设施路径 Service→Pod→EC2→AZ",
+     {"service_name": None}, "infra"),
+    ("q6_pod_status", "Pod 状态与重启次数", {"service_name": None}, "infra"),
+    ("q10_infra_root_cause", "基础设施侧反查（非 running 的 EC2）",
+     {"affected_service": None}, "infra"),
+    ("q19_topology_changes", "近期依赖变更（CloudTrail 看不见依赖消失）",
+     {"service_name": None}, "infra"),
+    # ── 历史参照（不是依赖推理的主线）──
+    ("q5_similar_incidents", "同服务历史已解决故障",
+     {"service_name": None, "limit": 3}, "history"),
+    ("q17_incidents_by_resource", "同资源历史 Incident",
+     {"resource_name": None}, "history"),
+    ("q18_chaos_history", "该服务的混沌实验历史",
+     {"service_name": None, "limit": 5}, "history"),
+]
+
+
 # ── 契约（唯一真相源）────────────────────────────────────────────────────────
 #: 契约加载失败原因。非空表示界面上所有「现算」数字都不可用——必须显式告警，
 #: 绝不能静默降级成 0：显示「0 种节点类型」比报错更糟，因为那是在撒谎。
