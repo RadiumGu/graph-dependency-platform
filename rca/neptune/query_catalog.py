@@ -123,7 +123,8 @@ def load_module(kind: str):
 QUERY_CATALOG = {
     "q1_blast_radius": {
         "mod": "queries", "fn": "q1_blast_radius",
-        "desc": "影响面：故障节点的下游服务与受影响业务能力",
+        "desc": ("影响面：**谁依赖**该节点（入边），它挂了谁跟着挂。"
+                 "边类型取契约里全部 dependency 边，不只 Calls/DependsOn"),
         "params": {"failed_node": "str，必填", "kind": "static|dynamic|live，可选"},
         "required": ["failed_node"],
     },
@@ -134,7 +135,8 @@ QUERY_CATALOG = {
     },
     "q3_upstream_deps": {
         "mod": "queries", "fn": "q3_upstream_deps",
-        "desc": "根因候选：直接依赖故障服务的上游节点。建议 kind='live'",
+        "desc": ("根因候选：故障服务**依赖的**节点（出边），它们挂了它才会挂。"
+                 "建议 kind='live'。返回带 edge_type / dependency_kind / verify_status"),
         "params": {"failed_service": "str，必填", "kind": "static|dynamic|live，可选"},
         "required": ["failed_service"],
     },

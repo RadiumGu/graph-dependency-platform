@@ -169,6 +169,12 @@ class TopologyCorrelator:
         策略：若告警 A 的服务出现在告警 B 服务的 blast_radius 中，
         则 A 可能是 B 的根因，将 B 合并到 A 的 EventGroup。
 
+        ⚠️ 这个策略要求 `blast_radius(X)` = 「谁依赖 X」（入边）。
+        在 2026-09-06 之前 `q1_blast_radius` 走的是**出边**（X 依赖谁），
+        于是本函数把根因与症状**整体对调**了：它会把受害者当成 root_candidate。
+        本函数的代码一直没错，错在它依赖的查询方向；查询修好后这段逻辑才成立。
+        方向由 tests/test_52_rca_query_direction.py 钉住，不许再翻回去。
+
         Args:
             alerts: UnifiedAlertEvent 列表
             topology_map: _build_topology_map 返回值

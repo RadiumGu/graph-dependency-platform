@@ -74,8 +74,8 @@ SERVER_INSTRUCTIONS = """\
 
 1. `q23_verification_coverage` —— 先看整体有多少依赖经过验证
 2. `q22_edge_verification_verdicts` —— 弄清具体哪些依赖可信
-3. `q3_upstream_deps` —— 找上游调用者（根因候选）
-4. `q1_blast_radius` —— 算下游影响面
+3. `q3_upstream_deps` —— 找**故障服务依赖的**节点（根因候选，出边方向）
+4. `q1_blast_radius` —— 算**依赖故障服务的**节点（影响面，入边方向）
 5. `q9_service_infra_path` / `q10_infra_root_cause` —— 落到基础设施层
 6. `q16_single_point_of_failure` —— 图算法给出的单点故障
 7. `q17_incidents_by_resource` / `q18_chaos_history` / `q5_similar_incidents` —— 历史
