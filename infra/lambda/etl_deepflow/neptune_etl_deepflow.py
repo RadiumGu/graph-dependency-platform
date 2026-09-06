@@ -1211,8 +1211,21 @@ def batch_upsert_edges(edges: list):
             # 与 etl_aws / etl_cfn 「声明」出来的静态依赖相对。
             # 此前 Calls 边**没有任何溯源标记**（实测 18 条边带 source 的 0 条），
             # 只能靠端点节点的 source='deepflow' 间接猜，无法在图上直接判定其性质。
-            f".property('source','deepflow-etl')"
-            f".property('dependency_kind','dynamic')"
+            #
+            # ⚠️ 2026-09-06 改成幂等写法。此前是裸写 .property('source','deepflow-etl')，
+            # 而它位于 coalesce 闭合之后 —— 即**每轮无条件覆盖**，违反契约声明的
+            # edge_write_once_attrs。后果：xray 先发现的 3 条 Calls 边一旦被 deepflow
+            # 也观测到，source='xray' 就被改写成 'deepflow-etl'，**发现史被抹掉**。
+            # test_35::g08 的 docstring 自己记着 etl_aws 与 etl_cfn 犯过同一个错，
+            # 却没人检查本文件 —— 声明在、门禁不在。
+            #
+            # 为什么不是简单挪进 addE 分支：那样存量的 11 条无 source 边永远补不上
+            # （它们不会被重新创建）。幂等写法两头都顾：已有值保留、缺失才补，
+            # 与本函数上面 first_seen 的处理完全一致。
+            f".property('source', __.coalesce(__.values('source'),"
+            f" __.constant('deepflow-etl')))"
+            f".property('dependency_kind', __.coalesce(__.values('dependency_kind'),"
+            f" __.constant('dynamic')))"
             f".property('active',true)"
             f".property('last_seen',{ts})"
         )

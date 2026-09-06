@@ -1311,6 +1311,19 @@ def run_etl():
     except Exception as e:
         logger.warning(f"inference drift marking failed (non-fatal): {e}")
 
+    # 溯源审计：dependency 边必须能追溯到发现它的源，否则没有任何源的 reconcile
+    # 会认领它 —— 永远不刷新、也不清理。只读上报，不自动修（事后无从推断当初
+    # 是哪个源写的，猜一个填进去比留空更糟）。详见 graph_cleanup 里该函数的注释。
+    try:
+        from graph_cleanup import audit_dependency_edges_without_source
+        _aud = audit_dependency_edges_without_source(neptune_query)
+        stats['dep_edges_without_source'] = _aud['total']
+        if _aud['total']:
+            stats['dep_edges_without_source_per_label'] = {
+                k: v for k, v in _aud['per_label'].items() if v}
+    except Exception as e:
+        logger.warning(f"source audit failed (non-fatal): {e}")
+
     # ── 节点过期收敛（2026-09-04 新增）─────────────────────────────────────
     #
     # 补的是契约里一句悬空的话：结构边的 `expires_seconds: None` 注解写着

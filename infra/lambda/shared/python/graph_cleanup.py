@@ -297,6 +297,62 @@ def _mark_fresh_query(label: str, cutoff: int, round_ts: int) -> str:
             f".iterate()")
 
 
+def audit_dependency_edges_without_source(neptune_query) -> dict:
+    """查出**没有 `source` 的 dependency 边**并逐类上报。只读，不改图。
+
+    ## 为什么需要它
+
+    `source` 不是装饰属性 —— 每个 ETL 的按源对账只管自己那个 source
+    （`etl_deepflow` 只管 `deepflow-etl`、`etl_xray` 只管 `xray`）。
+    一条没有 source 的 dependency 边**没有任何源认领它**：永远不会被刷新，
+    也不会被任何源的 reconcile 清理，只能靠 TTL 置 `active=false` 后永久留在图里。
+    这与节点侧那 7 个孤儿 LambdaFunction 同类 —— 不是「资源没了」，
+    而是「没人负责它了」。
+
+    ## 为什么是审计而不是自动修
+
+    补不了。`source` 记录的是「谁首先发现了这条依赖」，事后没有任何依据能推断出
+    当初是哪个源写的 —— 猜一个填进去比留空更糟，那会让虚构的溯源看起来像真的。
+    能做的只有让它**可见**。
+
+    ## 实测缘起（2026-09-06）
+
+    全图 235 条边无 source，其中 **12 条是 dependency 边**（`Calls` 11 +
+    `AccessesData` 1），其余 223 条是结构边（`dependency: false`，
+    生命周期跟随端点，本来就不需要 source）。这 12 条零告警地躺了半年，
+    直到有人在 UI 上看见「数据源」列是空的才发现 ——
+    契约有 `sources` 词表、代码有 `assert_source()`，但两者只校验
+    「**写进去的** source 必须在词表里」，从不校验「**必须有** source」。
+    **「写了没人读」的反面：没写也没人查。**
+
+    Returns:
+        {'total': int, 'per_label': {label: int}}
+    """
+    result = {'total': 0, 'per_label': {}}
+    for label, spec in sorted(EDGE_TYPES.items()):
+        if spec.get('dependency') is not True:
+            continue        # 结构边不必有 source，报进去只是噪声
+        try:
+            resp = neptune_query(
+                f"g.E().hasLabel('{label}').hasNot('source').count()")
+            vals = (resp or {}).get('result', {}).get('data', {}).get('@value', [])
+            raw = vals[0] if vals else 0
+            n = int((raw.get('@value', raw) if isinstance(raw, dict) else raw) or 0)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("source-audit: 统计 %s 失败（非致命）: %s", label, e)
+            continue
+        result['per_label'][label] = n
+        result['total'] += n
+    if result['total']:
+        offenders = {k: v for k, v in result['per_label'].items() if v}
+        logger.warning(
+            "source-audit: %d 条 dependency 边没有 source %s —— "
+            "这些边不被任何源的 reconcile 认领，永远不会被刷新或清理。"
+            "补不了（事后无从推断当初是哪个源写的），只能清理或接受。",
+            result['total'], offenders)
+    return result
+
+
 def mark_stale_inference_edges(neptune_query, round_ts: int,
                                only_labels=None) -> dict:
     """把陈旧的 `dependency_kind='inference'` 边标记为观测静默，**不置 active=false**。
