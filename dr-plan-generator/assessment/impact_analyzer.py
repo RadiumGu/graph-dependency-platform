@@ -25,6 +25,7 @@ class ImpactAnalyzer:
         subgraph: Dict[str, Any],
         scope: str,
         source: str,
+        offline: bool = False,
     ) -> ImpactReport:
         """Generate an ImpactReport for a given failure scenario.
 
@@ -32,6 +33,7 @@ class ImpactAnalyzer:
             subgraph: Dict with ``nodes`` and ``edges`` keys.
             scope: One of ``region``, ``az``, ``service``.
             source: Failure source identifier.
+            offline: When True, no Neptune query is issued (disaster-time path).
 
         Returns:
             Populated ImpactReport.
@@ -53,7 +55,7 @@ class ImpactAnalyzer:
         capabilities = [n for n in nodes if n.get("type") == "BusinessCapability"]
 
         # SPOF detection
-        spof = SPOFDetector().detect(subgraph)
+        spof = SPOFDetector().detect(subgraph, offline=offline)
 
         # RTO/RPO estimation
         rto = RTOEstimator().estimate_from_subgraph(subgraph)
@@ -75,25 +77,34 @@ class ImpactAnalyzer:
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _estimate_rpo(self, nodes: List[Dict[str, Any]]) -> int:
-        """Estimate RPO in minutes based on data layer node types.
+    def _estimate_rpo(self, nodes: List[Dict[str, Any]]) -> Optional[int]:
+        """按实际复制拓扑推导 RPO（分钟）。
+
+        原实现是与 ``plan_generator._estimate_rpo`` 同源的硬编码表
+        （RDS=5 / DynamoDB=0 / S3=60），与实际配置无关，审计答不上来。
+        现改为委托 ``RPOEstimator``。
+
+        **不可推定时返回 ``None``，绝不返回 0。** 早期版本因为
+        ``ImpectReport.estimated_rpo_minutes`` 是 ``int`` 而在推不出时返回 0，
+        于是报告里渲染成「Estimated RPO | 0 min」—— 容灾语境下 0 是
+        **零数据丢失**，最令人安心的那个值，真实含义却是「不知道」。
+        字段已改为 ``Optional[int]``，渲染侧对 None 显式输出「不可推定」。
 
         Args:
-            nodes: All affected nodes.
+            nodes: 受影响节点。
 
         Returns:
-            Estimated RPO in minutes.
+            RPO 分钟数；不可推定时为 ``None``。
         """
-        max_rpo = 0
-        for node in nodes:
-            rtype = node.get("type", "")
-            if rtype in ("RDSCluster", "RDSInstance"):
-                max_rpo = max(max_rpo, 5)
-            elif rtype == "DynamoDBTable":
-                max_rpo = max(max_rpo, 0)
-            elif rtype in ("S3Bucket",):
-                max_rpo = max(max_rpo, 60)
-        return max_rpo
+        from assessment.rpo_estimator import RPOEstimator
+
+        try:
+            from dr_profile import get_active_profile
+
+            profile = get_active_profile()
+        except Exception:  # noqa: BLE001
+            profile = None
+        return RPOEstimator(profile=profile).assess(nodes).minutes
 
     def _build_risk_matrix(
         self,

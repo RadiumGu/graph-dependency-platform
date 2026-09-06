@@ -330,6 +330,7 @@ def test_s7_06_dr_plan_generated_from_graph_data(neptune_rca):
         from planner.plan_generator import PlanGenerator
         from planner.step_builder import StepBuilder
         from registry.registry_loader import get_registry
+        from dr_profile import set_active_profile
         import graph.neptune_client as _gnc
     except ImportError as exc:
         pytest.fail(f"S7-06: Import failed — {exc}")
@@ -341,6 +342,12 @@ def test_s7_06_dr_plan_generated_from_graph_data(neptune_rca):
         "NEPTUNE_ENDPOINT",
         "petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com",
     )
+
+    # dr-plan-generator 自 2026-09-05 起**刻意没有默认 workload profile**：
+    # 猜错 profile 会生成一份指向错误域名/SSM 键/命名空间的计划，看起来对、
+    # 执行时才炸。本用例跑的是**真实 petsite 图**，所以用真实 profile
+    # （不是 dr-plan-generator/tests 里那份虚构的 acme-shop fixture）。
+    set_active_profile(os.path.join(PROJECT_ROOT, "profiles", "petsite.yaml"))
 
     try:
         registry = get_registry()
@@ -358,6 +365,8 @@ def test_s7_06_dr_plan_generated_from_graph_data(neptune_rca):
             f"S7-06: DR plan generation failed. "
             f"Check Neptune connectivity and graph_analyzer. Error: {exc}"
         )
+    finally:
+        set_active_profile(None)
 
     assert plan is not None, "S7-06: generate_plan() 返回 None"
     assert plan.plan_id, f"S7-06: DRPlan.plan_id 不应为空，实际: {plan.plan_id!r}"

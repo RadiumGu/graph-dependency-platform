@@ -46,8 +46,10 @@ class _FakeLogs:
         self._groups = list(groups)
         self._rows = rows or []
         self._pages = pages
+        self.probe_rows: list = []
         self.described_prefix = None
         self.queried_groups = None
+        self._last_query = ''
 
     def describe_log_groups(self, **kw):
         self.described_prefix = kw.get('logGroupNamePrefix')
@@ -55,15 +57,21 @@ class _FakeLogs:
 
     def start_query(self, **kw):
         self.queried_groups = kw.get('logGroupNames')
+        self._last_query = kw.get('queryString', '')
         assert 'logGroupName' not in kw, (
             'start_query 必须用 logGroupNames（复数）—— 单个日志组装不下按 runtime '
             '分散的 span')
         return {'queryId': 'q-1'}
 
     def get_query_results(self, queryId):  # noqa: N803
+        # 靠 @logStream 区分：只有对照探针会按日志流筛选。
+        # 第一版用「含 stats」区分，第三版的探针也用了 stats，判别失效 ——
+        # 用一个「碰巧现在能区分」的特征做判别，改一次实现就坏一次。
+        is_probe = '@logStream' in self._last_query
+        data = self.probe_rows if is_probe else self._rows
         return {'status': 'Complete',
                 'results': [[{'field': k, 'value': v} for k, v in r.items()]
-                            for r in self._rows]}
+                            for r in data]}
 
     def stop_query(self, queryId):  # noqa: N803
         return {}
@@ -96,25 +104,41 @@ def test_m03_超过Insights上限要截断并且不静默(etl, caplog):
         f'静默截断会让部分 agent 的依赖边凭空消失，必须告警。实际日志: {msgs}')
 
 
-def test_m04_有runtime有日志组却零命中判为矛盾而非空(etl, monkeypatch):
-    """本测试是这个文件存在的理由。
+def test_m04_零命中的三态判据(etl, monkeypatch):
+    """本测试是这个文件存在的理由，判据改过两次，两次都因为同一个错误。
 
-    `empty` 表达「问对了地方、确实没有」；这里的情形是「有 6 个 runtime、
-    有 7 个日志组、查询成功、却一条都没有」—— 那是自相矛盾，必须当失败上报，
-    否则同类 bug 会再次静默。
+      第一版：有 runtime + 零命中 → 矛盾。
+        打脸：窗口 08:00–14:00，最后一次 agent 调用在 07:48，零 span 是真实的空。
+      第二版：日志组有任何日志 + 零命中 → 矛盾。
+        还是错：那些日志是 [runtime-logs] 应用输出，不是 span，探针问错了对象。
+
+    第三版用 `cloud.resource_id` 作判别 —— 它是**资源**属性，实测 400/400 条 span
+    都有、与操作类型无关。三态：
+
+      spans == 0              → EMPTY   没人调用或没埋点
+      spans > 0, with_rid == 0 → 矛盾    span 在但身份字段名变了（真回归）
+      spans > 0, with_rid > 0  → EMPTY   埋点正常，只是窗口内无 gen_ai 操作
     """
     groups = [f'/aws/bedrock-agentcore/runtimes/A{i}-DEFAULT' for i in range(7)]
-    fake = _FakeLogs(groups, rows=[])
-    monkeypatch.setattr(etl.boto3, 'client', lambda *a, **k: fake)
 
-    st, rows = etl.collect_spans(runtime_count=6)
-    assert st == etl._probe_status.CONTRADICTORY, (
-        f'应判 contradictory，实际 {st} —— empty 不进 failed_collections，会静默')
-    assert rows == []
+    def probe(spans, with_rid):
+        f = _FakeLogs(groups, rows=[])
+        f.probe_rows = [{'spans': str(spans), 'with_rid': str(with_rid)}]
+        monkeypatch.setattr(etl.boto3, 'client', lambda *a, **k: f)
+        return etl.collect_spans(runtime_count=6)[0]
 
-    # runtime_count=0（真的没部署 agent）时，空就是空，不该谎报矛盾
-    st0, _ = etl.collect_spans(runtime_count=0)
-    assert st0 == etl._probe_status.EMPTY
+    assert probe(0, 0) == etl._probe_status.EMPTY, \
+        'spans 流零记录 = 没人调用 agent，空就是空'
+    assert probe(526, 0) == etl._probe_status.CONTRADICTORY, \
+        'span 在但没有一条带身份字段 → 字段名变了，是真回归'
+    assert probe(526, 526) == etl._probe_status.EMPTY, (
+        '埋点与字段名都正常、只是窗口内无 gen_ai 操作 —— 这是真实的空，'
+        '报矛盾就是假警报（agent 调用稀疏突发是常态）')
+
+    # runtime_count=0（真没部署 agent）→ 连探针都不必跑
+    f0 = _FakeLogs(groups, rows=[])
+    monkeypatch.setattr(etl.boto3, 'client', lambda *a, **k: f0)
+    assert etl.collect_spans(runtime_count=0)[0] == etl._probe_status.EMPTY
 
 
 def test_m05_矛盾状态必须计入failed_collections(etl):

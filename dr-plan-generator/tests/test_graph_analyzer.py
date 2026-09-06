@@ -84,14 +84,57 @@ class TestTopologicalSort(unittest.TestCase):
         self.assertEqual(set(result), {"a", "b"})
 
     def test_dependency_respects_order(self) -> None:
-        # b depends on a (a→b edge), so a must come before b
+        # Contract semantics: a -[DependsOn]-> b means *a depends on b*,
+        # so b must be recovered BEFORE a.
         nodes = [
             {"name": "a", "type": "RDSCluster", "tier": "Tier1"},
             {"name": "b", "type": "RDSInstance", "tier": "Tier1"},
         ]
         edges = [{"from": "a", "to": "b", "type": "DependsOn"}]
         result = self.analyzer.topological_sort_within_layer(nodes, edges)
-        self.assertLess(result.index("a"), result.index("b"))
+        self.assertLess(result.index("b"), result.index("a"))
+
+    def test_callee_recovered_before_caller(self) -> None:
+        """petsite calls payforadoption, so payforadoption must start first.
+
+        Regression test: the sort previously emitted the caller first, which
+        would bring up the frontend while its downstream was still unavailable.
+        """
+        nodes = [
+            {"name": "petsite", "type": "Microservice", "tier": "Tier0"},
+            {"name": "payforadoption", "type": "Microservice", "tier": "Tier1"},
+        ]
+        edges = [{"from": "petsite", "to": "payforadoption", "type": "Calls"}]
+        result = self.analyzer.topological_sort_within_layer(nodes, edges)
+        self.assertLess(result.index("payforadoption"), result.index("petsite"))
+
+    def test_dependency_order_beats_tier_priority(self) -> None:
+        """A Tier0 caller must still wait for its Tier2 dependency.
+
+        Tier is only a tie-breaker among nodes that are already free to start;
+        it must never override a real dependency edge.
+        """
+        nodes = [
+            {"name": "petsite", "type": "Microservice", "tier": "Tier0"},
+            {"name": "petfood", "type": "Microservice", "tier": "Tier2"},
+        ]
+        edges = [{"from": "petsite", "to": "petfood", "type": "Calls"}]
+        result = self.analyzer.topological_sort_within_layer(nodes, edges)
+        self.assertLess(result.index("petfood"), result.index("petsite"))
+
+    def test_transitive_chain_order(self) -> None:
+        """petsite → petsearch → petsearch-db recovers in reverse chain order."""
+        nodes = [
+            {"name": "petsite", "type": "Microservice", "tier": "Tier0"},
+            {"name": "petsearch", "type": "Microservice", "tier": "Tier0"},
+            {"name": "petsearch-db", "type": "Microservice", "tier": "Tier0"},
+        ]
+        edges = [
+            {"from": "petsite", "to": "petsearch", "type": "Calls"},
+            {"from": "petsearch", "to": "petsearch-db", "type": "AccessesData"},
+        ]
+        result = self.analyzer.topological_sort_within_layer(nodes, edges)
+        self.assertEqual(result, ["petsearch-db", "petsearch", "petsite"])
 
     def test_tier0_sorted_before_tier1(self) -> None:
         nodes = [
@@ -193,13 +236,26 @@ class TestParallelGroups(unittest.TestCase):
         self.assertEqual(total_in_groups, 3)
 
     def test_dependent_nodes_in_separate_groups(self) -> None:
-        sorted_nodes = ["a", "b"]
-        edges = [{"from": "a", "to": "b", "type": "DependsOn"}]
+        # Recovery order puts the dependency first: petfood before petsite.
+        # petsite depends on petfood, so they must NOT share a parallel group.
+        sorted_nodes = ["petfood", "petsite"]
+        edges = [{"from": "petsite", "to": "petfood", "type": "Calls"}]
         groups = self.analyzer.detect_parallel_groups(sorted_nodes, edges)
-        # b depends on a → separate groups
-        all_nodes = [n for _, grp in groups for n in grp]
-        self.assertIn("a", all_nodes)
-        self.assertIn("b", all_nodes)
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(groups[0][1], ["petfood"])
+        self.assertEqual(groups[1][1], ["petsite"])
+
+    def test_siblings_share_a_group_but_caller_is_separate(self) -> None:
+        """Two independent backends run in parallel; their caller waits."""
+        sorted_nodes = ["petsearch", "payforadoption", "petsite"]
+        edges = [
+            {"from": "petsite", "to": "petsearch", "type": "Calls"},
+            {"from": "petsite", "to": "payforadoption", "type": "Calls"},
+        ]
+        groups = self.analyzer.detect_parallel_groups(sorted_nodes, edges)
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(set(groups[0][1]), {"petsearch", "payforadoption"})
+        self.assertEqual(groups[1][1], ["petsite"])
 
     def test_returns_group_ids(self) -> None:
         sorted_nodes = ["x", "y"]

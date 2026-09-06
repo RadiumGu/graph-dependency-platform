@@ -43,6 +43,7 @@ from graph_contract import (  # noqa: E402
     assert_node_type,
     assert_source,
     identity_prop_for,
+    is_dependency_edge,
 )
 
 logger = logging.getLogger()
@@ -336,6 +337,27 @@ def _discover_span_log_groups(logs) -> list:
     return sorted(out)[:MAX_INSIGHTS_LOG_GROUPS]
 
 
+def _run_insights(logs, groups: list, now: int, query: str) -> list:
+    """跑一次 Logs Insights 并等结果。超时不当成空 —— 抛出交给调用方记为失败。"""
+    qid = logs.start_query(
+        logGroupNames=groups,
+        startTime=now - SPAN_LOOKBACK_SECONDS,
+        endTime=now,
+        queryString=query,
+    )['queryId']
+    deadline = time.time() + INSIGHTS_TIMEOUT_SECONDS
+    while time.time() < deadline:
+        r = logs.get_query_results(queryId=qid)
+        status = r.get('status')
+        if status == 'Complete':
+            return [{c['field']: c['value'] for c in row} for row in r.get('results', [])]
+        if status in ('Failed', 'Cancelled', 'Timeout'):
+            raise RuntimeError(f'Logs Insights 查询 {status}')
+        time.sleep(1)
+    logs.stop_query(queryId=qid)
+    raise TimeoutError(f'Logs Insights 超过 {INSIGHTS_TIMEOUT_SECONDS}s 未完成')
+
+
 def collect_spans(runtime_count: int = 0) -> tuple:
     """从**各 runtime 自己的**日志组抽 agent 调用关系。
 
@@ -359,39 +381,71 @@ def collect_spans(runtime_count: int = 0) -> tuple:
     logger.info('span 采集覆盖 %d 个 runtime 日志组', len(groups))
 
     def _run():
-        q = logs.start_query(
-            logGroupNames=groups,
-            startTime=now - SPAN_LOOKBACK_SECONDS,
-            endTime=now,
-            queryString=SPAN_QUERY,
-        )
-        qid = q['queryId']
-        deadline = time.time() + INSIGHTS_TIMEOUT_SECONDS
-        while time.time() < deadline:
-            r = logs.get_query_results(queryId=qid)
-            status = r.get('status')
-            if status == 'Complete':
-                return [{c['field']: c['value'] for c in row} for row in r.get('results', [])]
-            if status in ('Failed', 'Cancelled', 'Timeout'):
-                raise RuntimeError(f'Logs Insights 查询 {status}')
-            time.sleep(1)
-        # 超时不当成空 —— 交给 _collect 记为 FAILED
-        logs.stop_query(queryId=qid)
-        raise TimeoutError(f'Logs Insights 超过 {INSIGHTS_TIMEOUT_SECONDS}s 未完成')
+        return _run_insights(logs, groups, now, SPAN_QUERY)
 
     st, rows = _collect(_run, f'{len(groups)} 个 runtime 日志组的 agent span')
 
-    # 矛盾检测：有 runtime、有日志组，却一条 span 都查不到。
+    # 矛盾检测：零命中到底是「没人调用 agent」还是「我的查询问错了」？
+    #
+    # ⚠️ 这个判据改了两次，两次都是因为**把「没有观测」当成「有问题」的证据** ——
+    # 本项目反复记录的同一个错误，我在同一天里犯了两遍。
+    #
+    #   第一版：有 runtime + 零命中 → 矛盾。
+    #     打脸：14:00 那轮窗口 08:00–14:00，最后一次 agent 调用在 07:48，
+    #     零 span 是真实的空。agent 调用稀疏突发（同一天 03:25 一批、07:47 一批，
+    #     中间四小时空白），「6 小时没人调用」是常态。
+    #   第二版：日志组有任何日志 + 零命中 → 矛盾。
+    #     还是错：那些日志是 `[runtime-logs]` 应用输出，不是 span。探针问错了对象。
+    #
+    # 第三版（当前）。实测数据让判据变得清楚：
+    #   `spans` 流有 526 条记录，其中 526 条带 resource.attributes.cloud.resource_id，
+    #   但**零条**带 attributes.gen_ai.operation.name —— 那些是 agent 进程的
+    #   SSM/boto3 客户端 span（实测 aws.remote.service=AWS::SSM 出现 34 次）。
+    #
+    # 于是「没人调用」与「gen_ai 字段名变了」用 gen_ai 字段本身**无法区分**，都是 0。
+    # 能区分的是 `cloud.resource_id` —— 它是**资源**属性，实测 400/400 条 span 都有，
+    # 与操作类型无关。三态判据：
+    #
+    #   spans == 0                → EMPTY   没有 span，没人调用或没埋点
+    #   spans > 0, with_rid == 0   → 矛盾    span 在，但**身份字段名变了**（真回归）
+    #   spans > 0, with_rid > 0    → EMPTY   span 与身份字段都在，只是窗口内
+    #                                        没有 gen_ai 操作 = 没人调用 agent
+    #
+    # 剩下一个诚实的局限：`gen_ai.operation.name` 本身若被改名，表现与「没人调用」
+    # 完全一致，这里查不出来。那要靠 scripts/probe_agent_span_attrs.py 定期实测，
+    # 而不是假装门禁能覆盖。
     if st == _probe_status.EMPTY and runtime_count > 0:
-        logger.error(
-            '❌ span 零命中，但存在 %d 个 AgentRuntime 与 %d 个日志组 —— '
-            '这是矛盾而不是「空」。可能原因：查询字段名与实际 span 属性不符'
-            '（实测 attributes.gen_ai.* 会随 ADOT 版本变，用 '
-            'scripts/probe_agent_span_attrs.py 重新实测）、Transaction Search 被关闭、'
-            '或回看窗口 %ds 内确实无人调用 agent。'
-            '**不要当成 empty 放过** —— 这个 bug 曾以 empty 的形式静默了一整天。',
-            runtime_count, len(groups), SPAN_LOOKBACK_SECONDS)
-        return _probe_status.CONTRADICTORY, []
+        try:
+            probe = _run_insights(
+                logs, groups, now,
+                "fields @timestamp | filter @logStream = 'spans' "
+                "| stats count(*) as spans, "
+                "count(resource.attributes.cloud.resource_id) as with_rid")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning('对照探针失败，无法区分「真空」与「查错」，保守记为 empty: %r', exc)
+            return _probe_status.EMPTY, []
+        n_spans = int((probe[0].get('spans') if probe else 0) or 0)
+        n_rid = int((probe[0].get('with_rid') if probe else 0) or 0)
+        if n_spans == 0:
+            logger.info(
+                'span 零命中，且 %d 个 runtime 日志组的 spans 流在同一 %ds 窗口内也零记录 —— '
+                '没人调用 agent。agent 调用稀疏突发，空是常态而非故障。',
+                len(groups), SPAN_LOOKBACK_SECONDS)
+            return _probe_status.EMPTY, []
+        if n_rid == 0:
+            logger.error(
+                '❌ 矛盾：窗口内有 %d 条 span，但**没有一条**带 '
+                'resource.attributes.cloud.resource_id。该字段是资源属性、'
+                '与操作类型无关，实测应 100%% 覆盖 —— 它全缺说明**字段名变了**'
+                '（ADOT 版本升级会改属性名）。用 scripts/probe_agent_span_attrs.py '
+                '重新实测属性名。**不要当成 empty 放过** —— 读错日志组那个 bug '
+                '曾以 empty 的形式静默一整天。', n_spans)
+            return _probe_status.CONTRADICTORY, []
+        logger.info(
+            'span 零命中，但窗口内有 %d 条 span 且 %d 条带身份字段 —— '
+            '说明埋点与字段名都正常，只是窗口内没有 gen_ai 操作，即没人调用 agent。'
+            '这是真实的空。', n_spans, n_rid)
+        return _probe_status.EMPTY, []
     return st, rows
 
 
@@ -440,16 +494,62 @@ def _lit(v) -> str:
 
 def _upsert_edge(label: str, src_label: str, src_id: str,
                  dst_label: str, dst_id: str, round_ts: int,
-                 props: dict | None = None) -> None:
+                 props: dict | None = None,
+                 dependency_kind: str = 'inference') -> None:
     """按契约声明的端点约束 upsert 一条边。
 
     **source / dependency_kind / first_seen 只在新建时写** —— 它们是契约声明的
     写一次属性（edge_write_once_attrs），记录「谁首先发现了这条依赖」。
     被后写的源覆盖等于抹掉发现史；etl_aws 与 etl_cfn 都犯过这个错（无条件
     .property('source',...)），见 test_35::g08。
+
+    ## dependency_kind 为什么默认 'inference' 而不是 'dynamic'（2026-09-05 修）
+
+    本项目 `dependency_kind` 的语义：
+        static    = 配置/模板声明了这条依赖，但不代表当前有流量
+        dynamic   = **持续**观测到流量
+        inference = LLM 在运行时按 query 决定的调用 —— 既不是配置写死的，
+                    也不是持续存在的
+
+    agent 的工具调用**不满足 dynamic 的定义**。实测调用形态是稀疏突发：
+    同一天里 03:25 一批、07:47 一批，中间四个小时完全空白；8 个工具中有 7 个
+    最后一次调用都在 03:26，到 09:26 之后就再也落不进任何 6h 采集窗口。
+
+    把它们标成 `dynamic` 的代价是可观测的：`deactivate_stale_dynamic_edges`
+    用 `has('dependency_kind','dynamic')` 挑边，于是 `Retrieves -> nutrition-kb`
+    在 2026-09-05 被置 `active=false` —— 而那个知识库客观存在（控制面
+    list_knowledge_bases 就返回它），nutrition agent 也确实依赖它，
+    只是几个小时没人问营养问题。**图谱因此给出了一个错误陈述，而不是过期陈述。**
+
+    这正是本项目最核心那条不变量禁止的事：
+        零流量与健康在指标上无法区分 → 一律 inconclusive，绝不判 refuted
+    对 `petsite -> petsearch`（300s 内 25,042 次）来说「30 分钟没调用」确实说明
+    变了；对一天被调 35 次的 agent 工具，「6 小时没调用」什么也不说明。
+
+    `inference` 这个取值是 `todo/agentobv/02-agent可观测性方案` 4.2 节提议的，
+    理由与这里完全一致（「一条低频 query 才触发的边不该因为没出现就被判失效」）。
+    我在 2026-09-05 的对账里判它「不需要落地，窗口=TTL 已解决」—— **那个判断是错的**，
+    本轮 Retrieves 翻 false 就是它要防的那个故障。
+
+    调用方需要显式传 `dependency_kind='static'` 的场景：**控制面**能独立证明
+    存在的边（如 Gateway 的 target 列表），它们与流量无关。
     """
     assert_edge_type(label, src_label, dst_label)
     assert_source(SOURCE, f'_upsert_edge({src_label}-[{label}]->{dst_label})')
+
+    # 非依赖边不得携带 dependency_kind —— 契约的 `dependency` 标志是权威。
+    #
+    # 2026-09-05 实测：本函数此前**无条件**写 dependency_kind，于是 5 条
+    # AgentGateway-[RoutesTo]->AgentTool 带上了 `dependency_kind: static`，
+    # 而 RoutesTo 声明为 `dependency: false`。etl_aws 与 etl_cfn 的同名函数
+    # 一直有这道门禁，本函数是三个 ETL 里唯一漏掉的那个。
+    #
+    # 为什么 RoutesTo 不该改成依赖边：这个标签同时用在 ALB/TargetGroup 的转发上，
+    # 改判会把那些结构边一起误标成依赖。若确实要表达「网关依赖工具」，
+    # 应另立标签 —— 与 InvokesTool 当初刻意不复用 Invokes 是同一个判断
+    # （见契约里 InvokesTool 的 note）。
+    dep_kind_frag = (f".property('dependency_kind','{dependency_kind}')"
+                     if is_dependency_edge(label) else '')
 
     s_key = identity_prop_for(src_label)
     d_key = identity_prop_for(dst_label)
@@ -464,7 +564,7 @@ def _upsert_edge(label: str, src_label: str, src_id: str,
         f"  __.inE('{label}').where(__.outV().has('{s_key}','{safe_str(src_id)}')),"
         f"  __.addE('{label}').from('s')"
         f"   .property('source','{SOURCE}')"
-        f"   .property('dependency_kind','dynamic')"
+        f"{dep_kind_frag}"
         f"   .property('first_seen',{round_ts})"
         f")"
         f"{upd}"
@@ -553,14 +653,20 @@ def write_control_plane(cp: dict, gw_targets: dict, round_ts: int) -> dict:
                 'backend_kind': _backend_kind(t),
             }, round_ts)
             n['AgentTool'] += 1
+            # 这两条边来自**控制面**（Gateway 的 target 列表），与流量无关 ——
+            # 所以是 static（配置声明）而不是 inference（LLM 运行时决定的调用）。
+            # 区分的实际后果：static 边不该因为没观测到就被判失效，那是
+            # drift_status 的 declared_not_observed 要表达的信息。
             _upsert_edge('RoutesTo', 'AgentGateway', gw_arn,
-                         'AgentTool', tool_key, round_ts)
+                         'AgentTool', tool_key, round_ts,
+                         dependency_kind='static')
             n['RoutesTo'] += 1
 
             back_label, back_id = _backend_ref(t)
             if back_label:
                 _upsert_edge('DependsOn', 'AgentTool', tool_key,
-                             back_label, back_id, round_ts)
+                             back_label, back_id, round_ts,
+                             dependency_kind='static')
                 n['DependsOn'] += 1
     return dict(n)
 

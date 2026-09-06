@@ -10,10 +10,14 @@ import logging
 from collections import deque
 from typing import Any, Dict, List, Optional, Tuple
 
-from graph import queries
 from registry.registry_loader import ServiceTypeRegistry, get_registry
 
 logger = logging.getLogger(__name__)
+
+# NOTE: ``graph.queries`` (and through it ``graph.neptune_client``, boto3 and the
+# SigV4 machinery) is imported **lazily** inside the online-only methods below.
+# The offline path (``plan --offline <snapshot.json>``) must not be forced to load
+# a client that points at the very Region it is recovering from.
 
 
 class GraphAnalyzer:
@@ -47,6 +51,8 @@ class GraphAnalyzer:
             Dict with keys ``nodes`` (list of node dicts) and
             ``edges`` (list of edge dicts with ``from``, ``to``, ``type``).
         """
+        from graph import queries  # lazy: online-only path
+
         if scope == "az":
             nodes = queries.q12_az_dependency_tree(source)
         elif scope == "region":
@@ -81,6 +87,8 @@ class GraphAnalyzer:
         Returns:
             Dict with ``nodes`` and ``edges``.
         """
+        from graph import queries  # lazy: online-only path
+
         node_names = [n["name"] for n in nodes if n.get("name")]
         try:
             edges = queries.q_edges_for_subgraph(node_names)
@@ -111,15 +119,24 @@ class GraphAnalyzer:
     ) -> List[str]:
         """Sort nodes within a layer using Kahn's algorithm.
 
-        Nodes with no intra-layer dependencies come first (they should be
-        switched first). Ties are broken by Tier (Tier0 before Tier1/2).
+        Ordering is a **recovery/startup order**: a node that others depend on
+        must be brought up before its dependents.
+
+        Per the graph contract, dependency edges are written *dependent → dependency*
+        (``src`` depends on ``dst``): ``petsite -[Calls]-> payforadoption`` means
+        petsite calls, and therefore depends on, payforadoption. Kahn's algorithm is
+        therefore run over the **reversed** graph so that ``dst`` is emitted before
+        ``src``. Emitting the caller first would bring up a frontend that immediately
+        fails because its downstream is not ready yet.
+
+        Ties are broken by Tier (Tier0 before Tier1/2).
 
         Args:
             layer_nodes: Nodes belonging to this layer.
             edges: All edges in the subgraph (only same-layer edges are used).
 
         Returns:
-            Ordered list of node names.
+            Ordered list of node names, dependencies first.
         """
         node_map = {n["name"]: n for n in layer_nodes}
         node_names = set(node_map.keys())
@@ -131,8 +148,9 @@ class GraphAnalyzer:
             src = edge.get("from", "")
             dst = edge.get("to", "")
             if src in node_names and dst in node_names:
-                adj[src].append(dst)
-                in_degree[dst] += 1
+                # Reversed on purpose: src depends on dst, so dst must come first.
+                adj[dst].append(src)
+                in_degree[src] += 1
 
         queue: List[str] = [n for n, deg in in_degree.items() if deg == 0]
         result: List[str] = []
@@ -175,7 +193,9 @@ class GraphAnalyzer:
         Returns:
             List of ``(group_id, [node_names])`` tuples.
         """
-        # Build a set of (from→to) dependency pairs among sorted_nodes
+        # Build a set of (dependent, dependency) pairs among sorted_nodes.
+        # Contract semantics: src -[Calls|DependsOn|AccessesData]-> dst means
+        # src depends on dst.
         node_set = set(sorted_nodes)
         dep_pairs: set = set()
         for edge in edges:
@@ -184,23 +204,18 @@ class GraphAnalyzer:
             if src in node_set and dst in node_set:
                 dep_pairs.add((src, dst))
 
-        # Walk in topological order; each node starts a new group only if
-        # it depends on a node in the current group.
+        # Walk in recovery order; a node closes the current group when it depends
+        # on a member of that group, because it must wait for that member.
         groups: List[List[str]] = []
         current_group: List[str] = []
         current_set: set = set()
 
         for node in sorted_nodes:
-            # Check if this node has a dependency on anything in current_group
-            has_dep_in_group = any((dep, node) in dep_pairs for dep in current_set)
-            if has_dep_in_group or not current_group:
-                if has_dep_in_group:
-                    groups.append(current_group)
-                    current_group = [node]
-                    current_set = {node}
-                else:
-                    current_group.append(node)
-                    current_set.add(node)
+            has_dep_in_group = any((node, dep) in dep_pairs for dep in current_set)
+            if has_dep_in_group and current_group:
+                groups.append(current_group)
+                current_group = [node]
+                current_set = {node}
             else:
                 current_group.append(node)
                 current_set.add(node)

@@ -33,8 +33,26 @@ ghost 边，而影响面分析会把它们与真实依赖等权对待。
    声明式失效的正确判据是「本轮采集里模板/配置不再声明它」，
    即 Cartography 的 update_tag 模式，属于各 ETL 自己的 reconcile 职责。
 
-**把两者混在一起会静默删掉真实的架构声明**，所以这里用
-`has('dependency_kind','dynamic')` 显式限定。
+3. **稀疏观测边：标记陈旧但不失效（本模块，2026-09-05 新增）** ——
+   `dependency_kind='inference'` 的边（LLM 在运行时按 query 决定的调用）。
+   它们和 `dynamic` 一样是观测得来、不是配置声明的，但**观测是稀疏突发的**，
+   所以「窗口内没看到」不足以推断依赖消失。
+
+   实测代价：agent 工具调用形态是同一天 03:25 一批、07:47 一批，中间四小时空白；
+   8 个工具里 7 个最后一次调用都在 03:26，09:26 之后就落不进任何 6h 窗口。
+   把它们当 `dynamic` 扫，`Retrieves -> nutrition-kb` 就被置了 `active=false` ——
+   而那个知识库客观存在、agent 也确实依赖它，只是几小时没人问营养问题。
+   **图谱因此给出了一个错误陈述，而不是过期陈述。**
+
+   这违反本项目最核心的不变量：
+       零流量与健康在指标上无法区分 → 一律 inconclusive，绝不判 refuted
+   所以这类边只写 `drift_status='observed_then_silent'` + `unobserved_seconds`，
+   **绝不碰 `active`**。消费方要判断可信度时读 drift_status，
+   而不是被一个布尔量误导。
+
+**把三者混在一起会静默删掉真实的架构声明或真实的稀疏依赖**，所以
+`deactivate_stale_dynamic_edges` 用 `has('dependency_kind','dynamic')` 显式限定 ——
+`static` 与 `inference` 都不在它的作用域内。
 
 ## 安全姿态
 
@@ -69,11 +87,54 @@ def node_expiry_enabled() -> bool:
     return (os.environ.get('GRAPH_NODE_EXPIRY_ENABLED') or '').strip().lower() == 'true'
 
 
+# 由 etl_aws/graph_gc.py 拿**真实 AWS 状态**比对过的节点类型，TTL 过期收敛**不得**碰。
+#
+# ## 为什么（2026-09-05 实测，不是原则性顾虑）
+#
+# 两个机制对同一批节点会给出相反结论，而 GC 那个是对的：
+#
+#   graph_gc      列出 AWS 里真实存在的资源 → 图里不在这个集合的才删。比对的是**事实**。
+#   TTL 过期收敛  「超过 expires_seconds 没被刷新」→ 判过期。只知道**有没有被写过**。
+#
+# 实测冲突点：7 个 `ServicesEks2-awscdkawseks-*` 的 LambdaFunction 节点已 177 天
+# 未刷新（`aws-etl` 采集范围收窄后留下的孤儿），但逐个 `lambda get-function` 核验
+# **7/7 仍存在于 AWS**。GC 判「该留」——对；TTL 会判「该失活」——错。
+# 把活着的资源标成 active=false 是**错误陈述**，不是过期陈述。
+#
+# 这与边侧 `dependency_kind='inference'` 那条规则同源：
+# **「没有观测到」不等于「不存在」**。区别只在于节点侧已经有一个拿事实比对的
+# 机制（GC），所以这里不需要新增状态，只需要让 TTL 让位。
+#
+# ## 为什么不硬编码成 only_labels={'Pod'}
+#
+# 那样能得到同样的结果，但把**判据**换成了**结论**。判据是「有没有权威比对」，
+# Pod 只是筛完剩下的残余（GC 用 AWS API，看不到 EKS 里的 Pod，所以 Pod 只能靠 TTL）。
+# 硬编码会让下一个给 graph_gc 新增类型的人无从得知要同步改这里 ——
+# tests/test_50 用解析 graph_gc.py 源码的方式钉住两者一致，正是为了防这个漂移。
+#
+# 实测覆盖效果：排除后仍能收敛 520/527（Pod 511 + 已核验消失的 SecurityGroup 8
+# + Subnet 1），零误判。
+#
+# ⚠️ 这份清单**不要手抄** —— 我第一版就是用 grep 抄的，漏了 EC2Instance 与 S3Bucket，
+# 被 tests/test_50::m01 当场抓住。那条测试从 graph_gc.py 源码解析真相，
+# 增删 GC 类型时它会失败并告诉你要同步改这里。
+GC_RECONCILED_LABELS = frozenset({
+    'DynamoDBTable', 'EC2Instance', 'ECRRepository', 'EKSCluster',
+    'LambdaFunction', 'LoadBalancer', 'NeptuneCluster', 'NeptuneInstance',
+    'RDSCluster', 'RDSInstance', 'S3Bucket', 'SNSTopic', 'SQSQueue',
+    'StepFunction',
+})
+
+
 def expiring_node_labels() -> list[tuple[str, int]]:
-    """返回 [(节点类型, expires_seconds)]，只含声明了 TTL 的类型。"""
+    """返回 [(节点类型, expires_seconds)]，只含声明了 TTL 的类型。
+
+    **排除 GC_RECONCILED_LABELS** —— 见该常量的说明。
+    """
     return sorted((lb, spec['expires_seconds'])
                   for lb, spec in NODE_TYPES.items()
-                  if spec.get('expires_seconds'))
+                  if spec.get('expires_seconds')
+                  and lb not in GC_RECONCILED_LABELS)
 
 
 def _node_count_query(label: str, cutoff: int) -> str:
@@ -196,6 +257,93 @@ def _deactivate_query(label: str, cutoff: int) -> str:
             f".property('active', false)"
             f".property('deactivated_at', {cutoff})"
             f".iterate()")
+
+
+def _mark_query(label: str, cutoff: int, round_ts: int) -> str:
+    """把陈旧的 inference 边标成 observed_then_silent，**不碰 active**。
+
+    与 `_deactivate_query` 的唯一区别就是这一点，而这一点是全部要义：
+    `active=false` 断言「这条依赖不存在」，而我们能证明的只是「窗口内没观测到」。
+    稀疏调用的 agent 工具上，后者推不出前者。
+    """
+    return (f"g.E().hasLabel('{label}')"
+            f".has('dependency_kind','inference')"
+            f".has('{TIMESTAMP_FIELD}', lt({cutoff}))"
+            f".property('drift_status','observed_then_silent')"
+            f".property('unobserved_since',{cutoff})"
+            f".property('last_drift_check',{round_ts})"
+            f".iterate()")
+
+
+def _mark_count_query(label: str, cutoff: int) -> str:
+    return (f"g.E().hasLabel('{label}')"
+            f".has('dependency_kind','inference')"
+            f".has('{TIMESTAMP_FIELD}', lt({cutoff}))"
+            f".count()")
+
+
+def _mark_fresh_query(label: str, cutoff: int, round_ts: int) -> str:
+    """重新被观测到的 inference 边要把 drift_status 翻回 ok。
+
+    少了这一步，一条边被标 silent 之后即使 agent 又开始调用它，
+    图谱也会一直说它 silent —— 那是另一种形式的「判定正确但不可见」。
+    """
+    return (f"g.E().hasLabel('{label}')"
+            f".has('dependency_kind','inference')"
+            f".has('drift_status','observed_then_silent')"
+            f".has('{TIMESTAMP_FIELD}', gte({cutoff}))"
+            f".property('drift_status','ok')"
+            f".property('last_drift_check',{round_ts})"
+            f".iterate()")
+
+
+def mark_stale_inference_edges(neptune_query, round_ts: int,
+                               only_labels=None) -> dict:
+    """把陈旧的 `dependency_kind='inference'` 边标记为观测静默，**不置 active=false**。
+
+    为什么单独一个函数而不是给 deactivate_stale_dynamic_edges 加参数：
+    两者的**结论类型不同**。前者输出一个否定断言（依赖不存在了），
+    后者输出一个不确定性标记（我这段时间没看到）。把它们塞进同一个函数、
+    用一个布尔开关切换，下一个读代码的人会以为只是「软一点的删除」。
+
+    与 dynamic 那条路径共用同一个开关（GRAPH_EDGE_EXPIRY_ENABLED）：
+    这里只写诊断属性、不改变边的可用性，风险远低于置 false，但仍受同一开关约束 ——
+    「部署代码不等于立刻开始改图」这条姿态对所有写路径一致。
+
+    Returns:
+        {'enabled': bool, 'per_label': {label: {'expires': int,
+                                                'silent': int, 'marked': int,
+                                                'refreshed': int}}}
+    """
+    enabled = expiry_enabled()
+    result = {'enabled': enabled, 'per_label': {}}
+    for label, expires in expiring_edge_labels():
+        if only_labels and label not in only_labels:
+            continue
+        cutoff = round_ts - expires
+        try:
+            resp = neptune_query(_mark_count_query(label, cutoff))
+            vals = (resp or {}).get('result', {}).get('data', {}).get('@value', [])
+            raw = vals[0] if vals else 0
+            silent = raw.get('@value', raw) if isinstance(raw, dict) else raw
+        except Exception as e:  # 单个类型失败不该中断整轮
+            logger.warning("inference-drift: 统计 %s 失败（非致命）: %s", label, e)
+            continue
+        entry = {'expires': expires, 'silent': int(silent or 0),
+                 'marked': 0, 'refreshed': 0}
+        if enabled:
+            if entry['silent']:
+                try:
+                    neptune_query(_mark_query(label, cutoff, round_ts))
+                    entry['marked'] = entry['silent']
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("inference-drift: 标记 %s 失败（非致命）: %s", label, e)
+            try:
+                neptune_query(_mark_fresh_query(label, cutoff, round_ts))
+            except Exception as e:  # noqa: BLE001
+                logger.warning("inference-drift: 复位 %s 失败（非致命）: %s", label, e)
+        result['per_label'][label] = entry
+    return result
 
 
 def deactivate_stale_dynamic_edges(neptune_query, round_ts: int,

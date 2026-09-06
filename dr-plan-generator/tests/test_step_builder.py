@@ -60,9 +60,17 @@ class TestRDSClusterStep(unittest.TestCase):
         step = self.builder.build_step(_make_node("pet-db", "RDSCluster"), SOURCE, TARGET)
         self.assertGreater(step.estimated_time, 0)
 
-    def test_action_is_promote_read_replica(self) -> None:
+    def test_action_reflects_cross_region_promotion(self) -> None:
+        """默认 mode=drill，且 fixture profile 声明 aurora topology=global_database。
+
+        原断言期望 ``promote_read_replica``，配的命令是 ``failover-db-cluster``
+        ——那是**集群内 AZ 级**切换，跨区无效。正确的跨区 API 是
+        switchover-global-cluster（计划内）/ failover-global-cluster（非计划）。
+        """
         step = self.builder.build_step(_make_node("pet-db", "RDSCluster"), SOURCE, TARGET)
-        self.assertEqual(step.action, "promote_read_replica")
+        self.assertEqual(step.action, "switchover_global_cluster")
+        self.assertIn("switchover-global-cluster", step.command)
+        self.assertNotIn("failover-db-cluster", step.command)
 
 
 class TestDynamoDBTableStep(unittest.TestCase):
@@ -78,17 +86,24 @@ class TestDynamoDBTableStep(unittest.TestCase):
         step = self.builder.build_step(_make_node("pets-table", "DynamoDBTable"), SOURCE, TARGET)
         self.assertIn(TARGET, step.command)
 
-    def test_rollback_command_references_source(self) -> None:
+    def test_rollback_is_a_noop_for_verification_step(self) -> None:
+        """这一步已从「改应用配置」降级为「校验副本」，因此没有可回滚的变更。
+
+        原实现生成 ``ssm put-parameter`` 改区域参数，回滚再改回去——但那假设
+        应用会读那个参数，而图谱不可能知道。参数名对了应用不读它，命令照样成功、
+        切换却没生效。Global Tables 的正确用法是应用连本区端点。
+        """
         step = self.builder.build_step(_make_node("pets-table", "DynamoDBTable"), SOURCE, TARGET)
-        self.assertIn(SOURCE, step.rollback_command)
+        self.assertNotIn("put-parameter", step.command)
+        self.assertIn("无需回滚", step.rollback_command)
 
     def test_expected_result_is_active(self) -> None:
         step = self.builder.build_step(_make_node("pets-table", "DynamoDBTable"), SOURCE, TARGET)
         self.assertEqual(step.expected_result, "ACTIVE")
 
-    def test_action_is_switch_global_table(self) -> None:
+    def test_action_is_verify_replica(self) -> None:
         step = self.builder.build_step(_make_node("pets-table", "DynamoDBTable"), SOURCE, TARGET)
-        self.assertEqual(step.action, "switch_global_table_region")
+        self.assertEqual(step.action, "verify_global_table_replica")
 
 
 class TestMicroserviceStep(unittest.TestCase):

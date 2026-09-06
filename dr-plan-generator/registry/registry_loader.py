@@ -27,7 +27,9 @@ _UNKNOWN_DEFAULTS = {
     "has_step_builder": False,
     "switchover_type": "manual_switchover",
     "description": "未知资源类型（保守降级）",
-    "validation_template": 'echo "TODO: Add validation for {type} {name}" && exit 1',
+    # 刻意是会失败的命令而非注释：注释执行会「成功」，于是演练全绿而该步什么都没做。
+    # 不含 "TODO" 字样，因为 plan_validator 把 TODO 判为 ERROR（见其 docstring）。
+    "validation_template": 'echo "NO VALIDATION DEFINED for {type} {name}" >&2 && exit 1',
 }
 
 

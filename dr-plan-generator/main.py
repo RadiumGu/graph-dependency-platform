@@ -45,14 +45,59 @@ def cmd_plan(args: argparse.Namespace) -> None:
 
     registry = get_registry(custom_path=getattr(args, "custom_registry", None))
     analyzer = GraphAnalyzer(registry=registry)
-    builder = StepBuilder()
+
+    # Strategy: CLI wins over the profile, but one of the two must supply it —
+    # the compute-layer steps differ materially and there is no safe default.
+    strategy = getattr(args, "strategy", None)
+    if not strategy:
+        from dr_profile import ProfileError, get_active_profile
+
+        try:
+            strategy = get_active_profile().dr_strategy
+        except ProfileError as exc:
+            print(
+                f"ERROR: no DR strategy available ({exc}). "
+                "Pass --strategy pilot_light|warm_standby or set dr.strategy "
+                "in the profile.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+    print(f"[strategy] {strategy}", file=sys.stderr)
+
+    builder = StepBuilder(strategy=strategy, mode=getattr(args, "mode", "drill"))
     generator = PlanGenerator(analyzer, builder)
+
+    snapshot = None
+    offline_path = getattr(args, "offline", None)
+    if offline_path:
+        import config
+        from graph.snapshot import load_snapshot
+
+        snapshot = load_snapshot(
+            offline_path, max_age_seconds=config.SNAPSHOT_MAX_AGE_SECONDS
+        )
+        age = snapshot.get("age_seconds")
+        age_txt = f"{age / 3600.0:.1f}h" if age is not None else "unknown"
+        print(
+            f"[offline] Using snapshot {offline_path} "
+            f"(captured {snapshot.get('created_at')}, age {age_txt}, "
+            f"{snapshot.get('node_count')} nodes) — Neptune will not be contacted.",
+            file=sys.stderr,
+        )
+        if snapshot.get("stale"):
+            print(
+                "[offline] WARNING: snapshot exceeds the freshness threshold. "
+                "Proceeding — verify the plan against reality before executing.",
+                file=sys.stderr,
+            )
 
     plan = generator.generate_plan(
         scope=args.scope,
         source=args.source,
         target=args.target,
         exclude=args.exclude.split(",") if args.exclude else None,
+        snapshot=snapshot,
+        mode=getattr(args, "mode", "drill"),
     )
 
     # Attach rollback phases automatically
@@ -118,6 +163,46 @@ def cmd_validate(args: argparse.Namespace) -> None:
         print(f"  [{issue.severity}] {issue.message}")
 
     sys.exit(0 if report.valid else 1)
+
+
+def cmd_snapshot(args: argparse.Namespace) -> None:
+    """Export a graph snapshot for later offline plan generation.
+
+    Run this on a schedule **while the primary Region is healthy**. Store the
+    output outside the primary Region so it stays readable during a disaster.
+
+    Args:
+        args: Parsed CLI arguments.
+    """
+    import config
+    from graph.graph_analyzer import GraphAnalyzer
+    from graph.snapshot import export_snapshot
+    from registry.registry_loader import get_registry
+
+    registry = get_registry(custom_path=getattr(args, "custom_registry", None))
+    analyzer = GraphAnalyzer(registry=registry)
+
+    snapshot = export_snapshot(
+        scope=args.scope,
+        source=args.source,
+        path=args.output,
+        analyzer=analyzer,
+        region=config.REGION,
+    )
+
+    print(
+        f"Snapshot written: {args.output}\n"
+        f"  scope/source: {snapshot['scope']}/{snapshot['source']}\n"
+        f"  captured at:  {snapshot['created_at']}\n"
+        f"  nodes/edges:  {snapshot['node_count']}/{snapshot['edge_count']}",
+        file=sys.stderr,
+    )
+    if not config.PLAN_ARTIFACT_BUCKET:
+        print(
+            "  WARNING: PLAN_ARTIFACT_BUCKET is unset. A snapshot that lives only "
+            "in the primary Region is unreadable during the outage it exists for.",
+            file=sys.stderr,
+        )
 
 
 def cmd_rollback(args: argparse.Namespace) -> None:
@@ -233,6 +318,22 @@ def _output(
 # Argument parser
 # ---------------------------------------------------------------------------
 
+def _add_profile_arg(p: argparse.ArgumentParser) -> None:
+    """给子命令加 ``--profile``。
+
+    刻意不给默认值：一个错误的 profile 会生成指向错误域名、错误 SSM 键、
+    错误命名空间的**看起来正常**的计划，直到执行才暴露。未指定时由
+    ``dr_profile.get_active_profile()`` 抛出可读错误（也接受 ``DR_PROFILE``
+    环境变量）。
+    """
+    p.add_argument(
+        "--profile",
+        default=None,
+        metavar="PROFILE_YAML",
+        help="Workload profile YAML. No default — set this or the DR_PROFILE env var.",
+    )
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Build and return the CLI argument parser.
 
@@ -253,6 +354,28 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--source", required=True, help="Failure source (region/az/service name)")
     p.add_argument("--target", required=True, help="DR target (region/az)")
     p.add_argument("--exclude", help="Comma-separated services to exclude")
+    p.add_argument(
+        "--offline",
+        default=None,
+        metavar="SNAPSHOT_JSON",
+        help="Generate from a graph snapshot instead of querying Neptune. "
+             "Required path when the primary Region is unreachable.",
+    )
+    p.add_argument(
+        "--mode",
+        default="drill",
+        choices=["drill", "failover"],
+        help="drill = planned exercise (prefer data-loss-free operations); "
+             "failover = unplanned, primary already lost. Data-layer steps differ.",
+    )
+    p.add_argument(
+        "--strategy",
+        default=None,
+        choices=["pilot_light", "warm_standby"],
+        help="Override the profile's dr.strategy. pilot_light additionally "
+             "scales node capacity and waits for nodes Ready before scaling "
+             "Deployments; warm_standby only scales Deployments.",
+    )
     p.add_argument("--format", default="markdown", choices=["markdown", "json"])
     p.add_argument("--output-dir", default="plans", dest="output_dir")
     p.add_argument("--non-interactive", action="store_true")
@@ -280,6 +403,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Path to custom_types.yaml (overrides bundled service_types.yaml entries)",
     )
 
+    # snapshot
+    s = sub.add_parser(
+        "snapshot",
+        help="Export a graph snapshot for offline (disaster-time) plan generation",
+    )
+    s.add_argument(
+        "--scope", required=True, choices=["region", "az", "service"],
+        help="Scope to capture",
+    )
+    s.add_argument("--source", required=True, help="Region/AZ/service identifier to capture")
+    s.add_argument("--output", required=True, help="Snapshot JSON output path")
+    s.add_argument(
+        "--custom-registry",
+        default=None,
+        dest="custom_registry",
+        metavar="PATH",
+        help="Path to custom_types.yaml",
+    )
+
     # validate
     v = sub.add_parser("validate", help="Validate an existing plan JSON")
     v.add_argument("--plan", required=True, help="Path to plan JSON file")
@@ -300,6 +442,9 @@ def _build_parser() -> argparse.ArgumentParser:
     x.add_argument("--dry-run", action="store_true", default=True, help="Dry-run mode (default)")
     x.add_argument("--no-dry-run", action="store_true", help="Disable dry-run (real execution)")
 
+    for _sp in (p, s, a, v, r, e, x):
+        _add_profile_arg(_sp)
+
     return parser
 
 
@@ -312,15 +457,39 @@ def main() -> None:
         parser.print_help()
         sys.exit(1)
 
+    # Activate the workload profile before any handler reads profile values.
+    profile_path = getattr(args, "profile", None)
+    if profile_path:
+        from dr_profile import ProfileError, set_active_profile
+
+        try:
+            active = set_active_profile(profile_path)
+            print(f"[profile] {active.name} ({profile_path})", file=sys.stderr)
+        except ProfileError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(2)
+
     cmd_map = {
         "plan": cmd_plan,
+        "snapshot": cmd_snapshot,
         "assess": cmd_assess,
         "validate": cmd_validate,
         "rollback": cmd_rollback,
         "export-chaos": cmd_export_chaos,
         "execute": cmd_execute,
     }
-    cmd_map[args.command](args)
+    try:
+        cmd_map[args.command](args)
+    except Exception as exc:  # noqa: BLE001
+        # A missing profile is a configuration error, not a crash: report it
+        # readably and exit 2 rather than dumping a traceback at an operator
+        # who may be running this during an outage.
+        from dr_profile import ProfileError
+
+        if isinstance(exc, ProfileError):
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(2)
+        raise
 
 
 if __name__ == "__main__":

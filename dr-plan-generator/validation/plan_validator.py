@@ -105,12 +105,29 @@ class PlanValidator:
     # ------------------------------------------------------------------
 
     def _check_validation_quality(self, plan: DRPlan) -> List[Issue]:
-        """Check that every step has a meaningful validation command.
+        """Check that every step has a meaningful, executable command.
 
         Flags:
         - Empty validation → ERROR
+        - **命令没有任何可执行内容**（全是注释/空行）→ ERROR
+        - 可执行行里出现 ``TODO`` 占位 → ERROR
         - ``echo $?`` → WARNING (meaningless in independent step execution)
-        - Comment-only (``# ...``) → WARNING (not executable)
+        - Comment-only (``# ...``) validation → WARNING (not executable)
+        - Unbound shell variable in a command → WARNING
+
+        为什么「无可执行内容」是 ERROR，而不是只查 TODO 字样
+        --------------------------------------------------
+        原来的坑长这样::
+
+            # TODO: Manual switchover required for NeptuneCluster 'x'
+            # Add the appropriate AWS CLI command here.
+
+        注释是合法的空命令，执行会「成功」，于是**演练全绿而那一步什么都没做**。
+        这比命令写错危险得多：写错会报错，什么都没做不会。
+
+        判据刻意是「有没有可执行行」而不是「有没有 TODO 这个词」：
+        一句解释性注释里提到 TODO 不构成问题，而一个措辞里不含 TODO 的
+        纯注释步骤同样是空转。抓行为，不抓关键词。
 
         Args:
             plan: The DRPlan to check.
@@ -122,7 +139,23 @@ class PlanValidator:
         for phase in plan.phases:
             for step in phase.steps:
                 v = (step.validation or "").strip()
+                cmd = (step.command or "").strip()
                 step_label = f"{phase.phase_id}/{step.step_id}"
+
+                cmd_code = self._executable_lines(cmd)
+                if cmd and not cmd_code:
+                    issues.append(Issue(
+                        "ERROR",
+                        f"Step {step_label} has no executable command — it is only "
+                        "comments, which 'succeed' while doing nothing, so a "
+                        "rehearsal would pass with this step silently skipped",
+                    ))
+                elif any("TODO" in line for line in cmd_code):
+                    issues.append(Issue(
+                        "ERROR",
+                        f"Step {step_label} has a TODO placeholder inside an "
+                        "executable line",
+                    ))
 
                 if not v:
                     issues.append(Issue(
@@ -140,7 +173,60 @@ class PlanValidator:
                         "WARNING",
                         f"Step {step_label} validation is a comment, not an executable command",
                     ))
+
+                # 未绑定的 shell 变量：展开成空串后参数解析错位，报的错离根因很远。
+                # 原 DNS 步骤的 $ZONE_ID / $TG_ARN 正是这个形态。
+                for var in self._unbound_shell_vars(cmd):
+                    issues.append(Issue(
+                        "WARNING",
+                        f"Step {step_label} references shell variable ${var} that the "
+                        "step never assigns — it expands to an empty string and "
+                        "misaligns the following arguments",
+                    ))
         return issues
+
+    @staticmethod
+    def _executable_lines(command: str) -> List[str]:
+        """返回命令里真正会执行的行（去掉空行与注释行）。
+
+        Args:
+            command: 步骤命令（可能多行）。
+
+        Returns:
+            可执行行列表。
+        """
+        if not command:
+            return []
+        return [
+            ln for ln in command.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        ]
+
+    @staticmethod
+    def _unbound_shell_vars(command: str) -> List[str]:
+        """找出命令里引用了但从未赋值的 shell 变量。
+
+        只看同一步骤内：``VAR=$(...)`` 形式的赋值算已绑定。
+
+        Args:
+            command: 步骤命令（可能多行）。
+
+        Returns:
+            未绑定的变量名列表。
+        """
+        import re
+
+        if not command:
+            return []
+        assigned = set(re.findall(r"^\s*([A-Z_][A-Z0-9_]*)=", command, re.M))
+        referenced = set(re.findall(r'\$\{?([A-Z_][A-Z0-9_]*)\}?', command))
+        # 注释行里的引用不算——那是说明文字。
+        code_lines = [
+            ln for ln in command.splitlines() if ln.strip() and not ln.strip().startswith("#")
+        ]
+        code = "\n".join(code_lines)
+        referenced_in_code = set(re.findall(r'\$\{?([A-Z_][A-Z0-9_]*)\}?', code))
+        return sorted(referenced_in_code - assigned)
 
     def _check_cycles(self, plan: DRPlan) -> List[List[str]]:
         """Detect dependency cycles across all plan steps.

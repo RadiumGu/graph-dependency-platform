@@ -50,7 +50,9 @@
 | 34 | AgentTool 违反「非 name 身份也必须带 name」约定 | 桥接边显示为 `? -> petsearch` | ✅ 已修 |
 | 35 | 高并发主动探测的 RuntimeClientError 与依赖失败同形 | 误读成注入效果 | ✅ 已识别 |
 | 36 | span 读错日志组，以 `empty` 形式静默一整天 | agent 边全空、桥接边被置失活 | ✅ 已修 |
-| 37 | 部署的层 `:9` 里烧的是旧契约（33 类） | 契约扩展从未生效于任何 Lambda | ⚠️ 仅 agentcore 已切 `:10` |
+| 37 | 部署的层 `:9` 里烧的是旧契约（33 类） | 契约扩展从未生效于任何 Lambda | ✅ 已修（全部切 `:11`） |
+| 38 | agent 边被标 `dynamic`，稀疏调用被判「依赖不存在」 | 图谱给出**错误陈述**而非过期陈述 | ✅ 已修 |
+| 39 | 我加的 `CONTRADICTORY` 门禁自己就在「拿无观测当故障证据」 | 假警报，同一天犯两遍同一个错 | ✅ 已修（三态判据） |
 
 其中 **#7 / #8 / #10 是 08:30–09:00 为了拿到第一条边的判定而查出的**，
 **#11 – #14 是 10:10–11:12 扩大验证覆盖面时查出的**，都不在最初报给用户的 6 条里。
@@ -1250,6 +1252,88 @@ GraphContractError: 未声明的节点类型 'AgentRuntime'（契约 v1 共 33 �
 遗留债务（已记录未处理）：4 条 ETL 仍跑在 33 类契约上。它们不写 agent 类型所以
 不会报错，但**契约作为「单一事实源」的承诺在部署面上是打折的**。
 
+> ✅ **2026-09-05 13:35 已还：4 条 ETL 全部切到 `:10`，五条 ETL 统一认 39 类契约。**
+>
+> ### 切之前做的三项尽调（结论决定了这件事能做）
+>
+> **① 层里不只有契约。** `:10` 是用仓库当前的 5 个共享模块整体覆盖 `:9`，
+> 所以切层会一次性把这些模块的改动全送进生产。实测只有 **2 个**模块有差异：
+> `graph_contract_data.py`（451→538 行，契约 33→39）与
+> `graph_confidence.py`（141→**491** 行）。其余 3 个
+> （`graph_contract.py` / `graph_cleanup.py` / `neptune_client_base.py`）**字节相同**。
+>
+> **② 那 350 行 `graph_confidence` 在 ETL 里是惰性的。** 全仓检索
+> `import graph_confidence`：5 个 ETL **零引用**（只有 chaos runner 用）。
+>
+> **③ 契约变化纯粹是新增，零收紧。** 这是最关键的一条 —— 风险从来不在「多了 6 类
+> 节点」（新增只会让原本被拒的写入被接受），而在**旧的 33 类有没有哪条声明被改严**。
+> 逐类比对结果：
+>
+> ```
+> 新增节点 6：AgentGateway/AgentMemory/AgentRuntime/AgentTool/Guardrail/KnowledgeBase
+> 新增边   3：Delegates/InvokesTool/Retrieves
+> 删除     ：节点 0、边 0
+> 既有类型的声明变化 4 个，全部形如 +[...] -[]（只往 src/dst/pairs 里加，零移除）：
+>   AccessesData   src +AgentRuntime, dst +AgentMemory
+>   DependsOn      src +AgentTool,    dst +LambdaFunction/Microservice
+>   ProtectsAccess src +Guardrail,    dst +AgentRuntime
+>   RoutesTo       src +AgentGateway, dst +AgentTool
+> 没有任何既有类型的 expires_seconds / identity 被改动
+> ```
+>
+> 所以切层**不可能让生产原本合法的写入变非法**。这条尽调没做之前，
+> 「切个层而已」和「给 5 个生产函数换掉底层库」是同一个动作。
+>
+> ### 执行与验证
+>
+> 一次一条、逐条实测调用，回滚只需 `--layers ...neptune-client-base:9`：
+>
+> | ETL | 频率 | 实测结果 |
+> |---|---|---|
+> | xray | 1h | 50 节点 / 45 边，零报错 |
+> | cfn | 1d | `total_deps: 6` |
+> | aws | 15min | 331 节点 / 498 边，78s |
+> | deepflow | 5min | 2 节点 / 3 边，7.7s |
+>
+> 切层前后图谱计数快照：**节点 1333 → 1333、边 2625 → 2625，零清零、零骤降。**
+>
+> ### 这一步纠正了我先前的一个错误结论
+>
+> 我曾判断「边过期收敛在生产是 dry-run，因为 CDK 里没有 `GRAPH_EDGE_EXPIRY_ENABLED`」。
+> `etl_aws` 的日志直接打脸：**`edge-expiry: enabled=True`** ——
+> 部署的函数里那个变量**是开的**（CDK 里没有，属部署漂移）。
+> 这也正是桥接边 09-04 20:11 被收敛掉的原因。
+> **又一次「查了声明就以为知道了运行时」** —— 与本文件 #36 末尾记的同一个毛病。
+>
+> ### 切层达到了目的，也让一个此前被掩盖的问题浮出水面
+>
+> `expiring_edge_labels()` 现在返回 **8** 种带 TTL 的边类型，**包含
+> `Delegates` / `InvokesTool` / `Retrieves`** —— `:9` 下这 3 类未声明，
+> 过期收敛对它们完全不可见。这就是这笔债的具体危害，现在修好了。
+>
+> 但代价立刻显现：`Retrieves` 边**已被置 `active=false`**。
+> 它 `last_seen` 停在 09-04 20:10，因为 `retrieve_nutrition_guidance` 的最后一次调用
+> 是 09-05 03:26 —— 而 6h 采集窗口从 09:26 起就再也覆盖不到它。
+>
+> ```
+> agentcore-etl 边的活跃状态（2026-09-05 13:36）
+>   InvokesTool   active=8/8     ← search_available_pets 被我 07:47 探测过，在窗口内
+>   Delegates     active=2/2
+>   Retrieves     active=0/1     ← 稀疏调用 + 6h 窗口的必然结果
+>   DependsOn     active=1/1     ← 那条 confirmed/hard 桥接边，5min 前刚刷新
+>   RoutesTo      active=5/5     ← dependency=false，不参与收敛
+> ```
+>
+> **这不是切层引入的 bug，是切层让一个既存缺陷变得可见。** 在 `:9` 下这条边会
+> 永远停在 `active=true` 且永远陈旧 —— 既不刷新也不收敛，图谱说它活着但没有任何
+> 证据支持。现在它诚实地变成了 `false`。
+>
+> 真正待决的是那个耦合问题：**agent 调用稀疏突发**（实测 03:25 一批、07:47 一批，
+> 中间四小时空白），而代码注释要求「span 采集窗口必须等于边 TTL」。
+> 于是任何超过 6 小时没被调用的工具，它的边必然翻 `active=false`。
+> 要么两个一起拉长（如 24h），要么接受「agent 边只反映最近 6 小时的行为」——
+> 但必须显式选一个，因为现在的行为是后者而文档里没写。
+
 ---
 
 ## 部署方式的选择：为什么没有用 cdk deploy
@@ -1280,6 +1364,138 @@ span 采集窗口是 6h（**刻意等于边的 `expires_seconds`**，理由见�
 而 Logs Insights 按扫描量计费，每轮要扫 7 个日志组的 6h 窗口——
 5 分钟一次是 288 轮/天，15 分钟是 96 轮/天，覆盖效果相同。
 与 `neptune-etl-from-aws` 的 15 分钟对齐。
+
+---
+
+## 38. agent 边被标 `dynamic`，于是稀疏调用被判成「依赖不存在」（2026-09-05 已修）
+
+切层让 `Delegates`/`InvokesTool`/`Retrieves` 进入过期收敛视野后，
+`Retrieves -> waggle-ai-nutrition-kb` 立刻被置 `active=false`。
+
+**这是个错误陈述，不是过期陈述。** 那个知识库客观存在（控制面
+`list_knowledge_bases` 就返回它）、nutrition agent 也确实依赖它 ——
+只是几个小时没人问营养问题。
+
+### 违反的是本项目最核心的那条不变量
+
+> 零流量与健康在指标上无法区分 → 一律 inconclusive，**绝不判 refuted**
+
+过期收敛做的恰恰是它禁止的事：拿「窗口内无观测」写出一个确定的否定结论。
+对 `petsite -> petsearch`（300 秒 25,042 次调用）来说「30 分钟没调用」确实说明变了；
+对一天被调 35 次、还是突发的 agent 工具，「6 小时没调用」什么也不说明。
+
+实测的调用形态（同一天）：
+
+```
+03:25–03:26  8 个工具各被调 10–35 次
+07:47–07:48  只有 search_available_pets（我做主动探测）
+中间四小时    完全空白
+→ 6h 窗口从 09:26 起就再也覆盖不到 03:26 那批
+```
+
+### 两个「显而易见」的修法都是错的
+
+**① 把 6h 窗口写进文档。** 这是最弱的修复，而本项目**自己实测过它无效**：
+
+> 同一份 YAML 里**被 `assert_edge_type` 检查**的节点/边类型 —— **零漂移**。
+> 漂移量与「有没有门禁」相关，与「声明得好不好」无关。
+
+注释到不了消费方。消费方是实打实的：`infra/simulate_edge_impact.py`、
+`dr-plan-generator`、demo 页面，以及任何 `has('active', true)` 的查询 ——
+它们读字段名 `active`，不读 YAML 里的中文。
+
+**② 把窗口拉长到 24h。** 只是把阈值往后挪。一个一周被调一次的工具照样翻 `false`。
+窗口方案隐含假设「存在一个特征调用间隔」，而 agent 工具调用由用户提问驱动，
+**没有这种间隔**。加长窗口只降低给出错误答案的频率，不让答案变对。
+
+### 真正的修法：原设计文档是对的，是我把它否掉了
+
+`dependency_kind` 在本项目的语义：
+
+```
+static     配置/模板声明了这条依赖，不代表当前有流量
+dynamic    **持续**观测到流量
+inference  LLM 在运行时按 query 决定的调用（既非配置写死，也非持续存在）
+```
+
+**agent 的工具调用不满足 `dynamic` 的定义。** 而 `inference` 这个取值正是
+`todo/agentobv/02-agent可观测性方案` 4.2 节提议的，理由与此处完全一致
+（「一条低频 query 才触发的边不该因为没出现就被判失效」）。
+我在同日的对账里判它「不需要落地，窗口=TTL 已解决」—— **那个判断是错的**，
+本轮 `Retrieves` 翻 `false` 就是它要防的那个具体故障。
+
+改动：
+
+| 项 | 内容 |
+|---|---|
+| `_upsert_edge` 默认 kind | `dynamic` → **`inference`** |
+| 控制面来源的边 | 显式传 `static`（`RoutesTo` / gateway 侧 `DependsOn`，与流量无关） |
+| 新增 `mark_stale_inference_edges` | 写 `drift_status='observed_then_silent'` + `unobserved_since`，**绝不碰 `active`** |
+| 复位路径 | 重新被观测到就把 `drift_status` 翻回 `ok`（少了它，边一旦被标 silent 就永远 silent） |
+| `drift_status` 第四个取值 | `observed_then_silent` |
+| 回填 | `infra/backfill_agent_edge_kind.py` —— `dependency_kind` 是 `edge_write_once_attrs`，改代码不会更新既有边 |
+
+**为什么不复用 `declared_not_observed`**：agent 的进程内工具**没有任何声明** ——
+实测 13 个 `AgentTool` 里 **8 个只能从 span 发现**，控制面看不到它们
+（代码注释早写明「进程内注册的 tool 控制面看不到」）。
+说「声明了但没观测到」是事实错误。用一个语义邻近但不同的值会静默误导 ——
+与 #36 里 `empty` / `contradictory` 的区分是同一个道理。
+
+### 修后状态
+
+```
+RoutesTo    ×5  kind=static     active=True  drift=-
+DependsOn   ×1  kind=static     active=True  drift=-
+InvokesTool ×8  kind=inference  active=True  drift=-
+Delegates   ×2  kind=inference  active=True  drift=-
+Retrieves   ×1  kind=inference  active=True  drift=observed_then_silent  （1079min 未观测）
+```
+
+`Retrieves` 陈旧 18 小时，但它说的是「我这段时间没看到」而不是「它不存在」。
+不变量核对：agentcore 边里 `active=false` **0** 条、`kind=dynamic` **0** 条。
+
+---
+
+## 39. 我加的 `CONTRADICTORY` 门禁自己就在犯「拿无观测当故障证据」（2026-09-05 已修）
+
+判据改了两次才对，**两次都是同一个错误，而且和 #38 是同一天犯的同一个错**。
+
+**第一版**：有 runtime + span 零命中 → 矛盾。
+打脸：14:00 那轮窗口 08:00–14:00，最后一次 agent 调用在 07:48，
+零 span 是**真实的空**，门禁报了假警报。
+
+**第二版**：日志组有任何日志 + 零命中 → 矛盾。
+还是错：那些日志是 `[runtime-logs]` 应用输出，不是 span。**探针问错了对象。**
+
+**第三版**（当前）。实测数据让判据变清楚：
+
+```
+spans 流有 526 条记录
+其中 526 条带 resource.attributes.cloud.resource_id
+但 0 条带 attributes.gen_ai.operation.name
+→ 那些是 agent 进程的 SSM/boto3 客户端 span
+  （实测 aws.remote.service=AWS::SSM 出现 34 次）
+```
+
+所以「没人调用」与「gen_ai 字段名变了」用 gen_ai 字段本身**无法区分**，都是 0。
+能区分的是 `cloud.resource_id` —— 它是**资源**属性，实测 400/400 条 span 都有、
+与操作类型无关：
+
+| spans | with_rid | 判定 | 含义 |
+|--:|--:|---|---|
+| 0 | 0 | `EMPTY` | 没有 span，没人调用或没埋点 |
+| >0 | 0 | **矛盾** | span 在，但**身份字段名变了**（真回归） |
+| >0 | >0 | `EMPTY` | 埋点与字段名都正常，窗口内无 gen_ai 操作 = 没人调用 |
+
+**一个诚实的局限**：`gen_ai.operation.name` 本身若被改名，表现与「没人调用」
+完全一致，门禁查不出来。那要靠 `scripts/probe_agent_span_attrs.py` 定期实测，
+而不是假装门禁能覆盖。
+
+### 附带教训：不要用「碰巧能区分」的特征做判别
+
+测试里的假 CloudWatch 客户端原本用「查询含不含 `stats`」区分主查询与对照探针。
+第三版探针也用了 `stats`，判别当场失效。改用 `@logStream`（只有探针按日志流筛选）。
+**用一个碰巧现在能区分的特征做判别，改一次实现就坏一次。**
 
 ---
 

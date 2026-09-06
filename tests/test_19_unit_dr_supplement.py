@@ -28,12 +28,35 @@ try:
     from validation.plan_validator import PlanValidator
     from planner.rollback_generator import RollbackGenerator
     from models import DRPlan, DRPhase, DRStep, Issue, ValidationReport
+    from dr_profile import set_active_profile
 
     _DR_AVAILABLE = True
     _DR_IMPORT_ERROR = ""
 except ImportError as _e:
     _DR_AVAILABLE = False
     _DR_IMPORT_ERROR = str(_e)
+
+# dr-plan-generator 自 2026-09-05 起**刻意没有默认 workload profile**：
+# 猜错 profile 会静默生成一份指向错误域名/SSM 键/命名空间的计划，
+# 看起来对、执行时才炸。它自己的 tests/conftest.py 统一注入下面这份 fixture；
+# 父仓库这组用例此前没有注入，于是 S5-10 撞上 ProfileNotConfigured。
+DR_TEST_PROFILE = os.path.join(
+    DR_PLAN_DIR, "tests", "fixtures", "test_profile.yaml"
+)
+
+
+@pytest.fixture()
+def dr_profile_active():
+    """在用例期间激活测试 profile，退出时恢复未配置态。
+
+    不做成 autouse 是刻意的：这组里将来可能有用例要验证「未配置就抛错」，
+    全局注入会让那种用例失去意义。
+    """
+    set_active_profile(DR_TEST_PROFILE)
+    try:
+        yield DR_TEST_PROFILE
+    finally:
+        set_active_profile(None)
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -162,7 +185,16 @@ def test_s5_07_rto_estimator():
         ]
     }
     rto = estimator.estimate_from_subgraph(subgraph)
-    assert rto == 8  # (300+120+60)=480 s // 60 = 8 min
+    # RTOEstimator 默认策略是 warm_standby，其基线表里
+    # DynamoDBTable = 30 s（Global Table 只需校验副本，不需要恢复）。
+    # 2026-09-05 之前只有一张通用 DEFAULT_TIMES、DynamoDB 记 60 s，
+    # 那时这里期望 8；改成分策略查表后正确值是 7。
+    assert rto == 7  # (300+120+30)=450 s // 60 = 7 min
+
+    # 同一张子图在 pilot_light 下必须**更慢** —— 冷启动那一段是两种策略的实质差别，
+    # 这条断言防的是「分了策略但两张表其实一样」。
+    pilot = RTOEstimator(strategy="pilot_light")
+    assert pilot.estimate_from_subgraph(subgraph) > rto
 
     # Empty subgraph → minimum 1
     assert estimator.estimate_from_subgraph({"nodes": []}) == 1
@@ -267,8 +299,19 @@ def test_s5_08_impact_analyzer():
     # SPOF list forwarded from mock
     assert len(report.single_points_of_failure) == 1
 
-    # RPO: RDSCluster → 5 min
-    assert report.estimated_rpo_minutes == 5
+    # RPO：**不可推定时是 None，不是 0**。
+    #
+    # 旧实现按硬编码表把 RDSCluster 记作 5 min，与该集群的实际复制配置无关，
+    # 审计问「凭什么是 5 分钟」答不上来。现在改为 RPOEstimator 按真实拓扑推导：
+    # 本用例没有配 profile、也没有复制关系可依据，所以结论是「推不出」。
+    #
+    # 早期改造版本在推不出时返回 0，那更糟 —— 容灾报告里 0 min 读作
+    # 「零数据丢失」，是最令人安心的值。现在字段是 Optional[int]，
+    # 渲染侧对 None 显式输出「不可推定」。
+    assert report.estimated_rpo_minutes is None, (
+        "推不出 RPO 时必须是 None。返回 0 会被读成「零数据丢失」，"
+        "是本项目最核心那条不变量禁止的事：无法区分时必须显式说无法区分。"
+    )
 
     # Risk matrix: Tier0 + SPOF → HIGH
     assert report.risk_matrix["severity"] == "HIGH"
@@ -386,8 +429,12 @@ def test_s5_09_plan_validator():
 # ─── S5-10 ───────────────────────────────────────────────────────────────────
 
 
-def test_s5_10_rollback_generator():
-    """S5-10: rollback_generator — rollback steps generation."""
+def test_s5_10_rollback_generator(dr_profile_active):
+    """S5-10: rollback_generator — rollback steps generation.
+
+    需要 ``dr_profile_active``：回滚步骤要用到 workload 的域名 / SSM 键 /
+    命名空间，而 dr-plan-generator 刻意不提供默认 profile。
+    """
     if not _DR_AVAILABLE:
         pytest.skip(f"DR plan modules not available: {_DR_IMPORT_ERROR}")
 

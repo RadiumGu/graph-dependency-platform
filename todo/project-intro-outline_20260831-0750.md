@@ -1,12 +1,19 @@
 # 对外介绍本项目的提纲（含实施细节版）
 
-> 生成时间：2026-08-31 07:50 UTC
+> 初版生成：2026-08-31 07:50 UTC
+> **本次更新：2026-09-05 14:2x UTC** —— 全文逐节重新核对，所有 `[实测]` 数字已重新查询活图谱，
+> 所有 `[代码]` 数字已重新对账仓库。本次共修正 **14 组过期数字**与 **3 处已过时的结论**，
+> 变更清单见文末「附 D：本次更新的核对结果」。
+>
 > 依据：本仓库当前代码（`infra/lambda/etl_*`、`profiles/graph_contract.yaml`、
 > `infra/lambda/shared/python/`、`chaos/code/runner/`、`dr-plan-generator/`、`rca/`）
 > 与同一时刻对活图谱的实测查询（Neptune `petsite-neptune`，ap-northeast-1）。
 >
-> 本文所有数字都标了来源：`[代码]` 可在仓库里核对，`[实测]` 为 2026-08-31 07:49 UTC
+> 本文所有数字都标了来源：`[代码]` 可在仓库里核对，`[实测]` 为 **2026-09-05 14:2x UTC**
 > 对生产图谱的现场查询，`[论文]` 为外部文献。**不要引用没有标记的数字。**
+>
+> ⚠️ **8/31 到 9/5 之间图谱规模与验证状态都发生了实质变化**（节点 +25%、边 +46%、
+> 验证覆盖率从 0 变为非 0）。如果你手上有 8/31 版本的 slide，**必须重做数字页**。
 
 ---
 
@@ -178,7 +185,7 @@ AWS 官方文档明确写了 Neptune 的做法
 
 | 官方事实 | 对本项目意味着什么 |
 |---|---|
-| 假设 distinct 边标签/属性名数量少 | 我们 **26 种边标签**，远在假设范围内。**这反过来是「类型必须严格声明」的一个额外理由**——类型爆炸不只是治理问题，会直接打到 Neptune 的性能假设上 |
+| 假设 distinct 边标签/属性名数量少 | 我们 **29 种边标签**，远在假设范围内。**这反过来是「类型必须严格声明」的一个额外理由**——类型爆炸不只是治理问题，会直接打到 Neptune 的性能假设上 |
 | 没有 OSGP 反向索引 | `in()` 不带标签时无索引可用。所以 4.4 里 `upsert_edge` 写的是 `__.inE('Calls')` 而**不是** `__.inE()` |
 | 可以用 Explain/Profile API 查 predicate 数量 | 有官方手段验证自己有没有踩破这个假设，不用猜 |
 
@@ -538,8 +545,8 @@ relationships:
 | New Relic 官方事实 | 对应本项目 |
 |---|---|
 | **`expires`**：*"the duration for which the relationship should exist **if it is not reported within that timeframe**"*；ISO-8601 格式，**默认 75 分钟**，允许范围 **10 分钟 – 72 小时（含）** | 我们的 `expires_seconds`，按边类型逐个声明 |
-| **`relationshipType` 是闭集**：只能取 `CALLS`/`CONTAINS`/`HOSTS`/`SERVES`/`IS`/`OPERATES_IN`/`CONNECTS_TO`/`BUILT_FROM`/`MEASURES`/`PRODUCES`/`CONSUMES`/`MANAGES`/`OWNS`/`TEST` 共 14 种 | 我们契约里声明的 **26 种边类型**，`assert_edge_type` 在运行时执法（§4.6） |
-| **`origins` 也是闭集**：APM Metrics / Infrastructure Agent / Metric API / Pixie / Prometheus / OpenTelemetry / OnHost / Browser / Mobile / Network Monitoring | 我们契约里的 `sources` 词表，**11 个声明源**（§4.6） |
+| **`relationshipType` 是闭集**：只能取 `CALLS`/`CONTAINS`/`HOSTS`/`SERVES`/`IS`/`OPERATES_IN`/`CONNECTS_TO`/`BUILT_FROM`/`MEASURES`/`PRODUCES`/`CONSUMES`/`MANAGES`/`OWNS`/`TEST` 共 14 种 | 我们契约里声明的 **29 种边类型**，`assert_edge_type` 在运行时执法（§4.6） |
+| **`origins` 也是闭集**：APM Metrics / Infrastructure Agent / Metric API / Pixie / Prometheus / OpenTelemetry / OnHost / Browser / Mobile / Network Monitoring | 我们契约里的 `sources` 词表，**12 个声明源**（§4.6） |
 | **身份从遥测派生**：三种解析器 `extractGuid`（直接取字段）/ `buildGuid`（用 account+domain+type+identifier 片段拼、可 `FARM_HASH` 哈希）/ `lookupGuid`（查候选表） | §4.5「身份键必须由不变量派生，不能用 name」——**同一个结论，独立得出** |
 
 官方自己给了一句诚实标注，讲的时候带上会更可信：
@@ -563,8 +570,9 @@ relationships:
 
 > **这个划分和本项目的 `dependency_kind` 是同一件事，独立得出。** 我们的
 > `dynamic` 边来自观测（DeepFlow/X-Ray/NFM），会过期；`static` 边来自配置
-> （CloudFormation、服务声明），不过期。**活图谱实测：依赖边里 dynamic 73 条、
-> static 21 条。** `[实测 2026-08-31]`
+> （CloudFormation、服务声明），不过期。**活图谱实测：依赖边里 dynamic 77 条、static 27 条，
+> 外加 `inference` 11 条（AI Agent 的调用，Dynatrace 那套划分里没有这一档）。**
+> `[实测 2026-09-05]`
 
 - **保留期固定 35 天**：*"nodes whose `lifetime.end` is older than 35 days will be deleted,
   including all static edges. Dynamic edges will be cleaned up after 35 days as well."*
@@ -642,9 +650,9 @@ relationships:
 | Cartography cleanup 真删 | 改为置 `active=false` | **刻意分歧**：要能回答「消失了吗」 |
 | Cartography 收敛须限定范围 | `only_labels` + 全轮统一 `round_ts` | **抄** |
 | New Relic 关系 `expires` | 按边类型声明的 `expires_seconds` | **抄** |
-| New Relic 关系类型闭集 | 26 种边类型 + `assert_edge_type` 运行时执法 | **抄，且加了执法** |
+| New Relic 关系类型闭集 | **29** 种边类型 + `assert_edge_type` 运行时执法 | **抄，且加了执法** |
 | New Relic 身份从遥测派生 | §4.5 身份键从不变量派生 | **独立得出同一结论** |
-| Dynatrace static / dynamic 边 | `dependency_kind`（实测 dynamic 73 / static 21） | **独立得出同一结论** |
+| Dynatrace static / dynamic 边 | `dependency_kind`（实测 dynamic **77** / static **27** / **inference 11**） | **独立得出同一结论，且多出一档**——Dynatrace 只有 static/dynamic 两档，我们为 AI Agent 的调用加了第三档 `inference` |
 | Dynatrace 软失效 + 硬保留两重语义 | `expires_seconds` 与 `retention_seconds` 刻意分开（§4.7） | **抄** |
 
 **这一节如果只能记一句**：
@@ -683,19 +691,52 @@ relationships:
 
 ---
 
-## 4. 系统是怎么建起来的（33 分钟满讲，本次新增的主体）
+## 4. 系统是怎么建起来的（39 分钟满讲，本次新增的主体）
 
 **时间不够时的裁剪顺序**（从先砍到最后砍）：4.8 存量清理 → 4.9 部署形态 → 4.3 ETL 细节
-→ 4.7 生命周期 → 4.6 契约压到只讲「声明+门禁+实测漂移 43%」三点 →
-4.4 压到只讲 `mergeV` 和 `coalesce` 两个 step。
+→ 4.7 生命周期 → **4.11.3 收束句 → 4.11.2 的 9/5 新增件列表** → 4.6 契约压到只讲
+「声明+门禁+实测漂移 43%」三点 → 4.4 压到只讲 `mergeV` 和 `coalesce` 两个 step。
 **4.1（节点/边/属性定义）和 4.5（身份键）绝对不能砍**——前者是听懂后面全部内容的前提，
 后者是最有共鸣的一页。
+**4.11 也不能整节砍**——砍掉它，整个项目在听众眼里就只是一个精致的 ETL 作业；
+时间紧就压到 2 分钟，只讲「24 个只读工具 + 离线快照」两个点。
+
+> 本节满讲 39 分钟（4.1 扩到 5 分钟 + 新增 4.11 的 5 分钟）。全篇满讲已约 92 分钟，
+> 而主线听众是 45–60 分钟——**这份提纲从来不是按满讲设计的**，裁剪顺序才是它的
+> 使用方式。第 11 节按听众给了删改方案。
 
 > 这一节的作用是让听众相信**这是一个真跑着的系统，而且他们照着能建**。
 > 讲法上有个纪律：**每讲一个设计，紧跟着讲它防住了哪个已实测的错**。
 > 只讲设计会像 PPT 架构，只讲 bug 会像事故复盘，两个绑在一起才是工程。
 
-### 4.1 图谱当前长什么样 + 节点/边/属性的定义（4 分钟）
+### 4.1 图谱当前长什么样 + 节点/边/属性的定义（5 分钟）
+
+#### 先划边界：两个 VPC，一个是被观测的，一个是观测它的（1 分钟）
+
+**这一页放在最前面，因为它一次答完听众必问的两个问题：这些节点从哪来、边界在哪。**
+
+```
+ap-northeast-1
+├── PetSiteVPC        vpc-010ab37a3f9f74725 · 11.0.0.0/16   ← 被观测的系统
+│   ├── EKS PetSite v1.35（4 节点 · 14 业务 Pod）
+│   ├── Aurora PostgreSQL 16.11 / Aurora MySQL 8.0 / Neptune 1.4.6.3
+│   ├── EC2 可观测组件（DeepFlow / Grafana）
+│   └── VPC 内 Lambda × 9（含 5 个图谱 ETL）
+└── agent-vpc-v2      vpc-06731f30388b57818 · 10.1.0.0/16   ← 工具与运维侧
+    ├── 构建机 / 压测机 / Agent 侧 EC2
+    └── TiDB PoC 子网 × 8（当前零实例）
+
+两者经 VPC peering pcx-09179d94866c4afd6（active）连通，网段不重叠。
+```
+
+这个物理分工正好是图谱 `scope` 维度的直觉来源：**图里的节点不是同一类东西**。
+被观测的业务、观测它的采集栈、管这张图的平台自己、只在部署期跑的 IaC 脚手架——
+混在一张图里做影响面分析会得出荒谬结论。第 4.6 节讲的 `scope` 六档就是把这条
+物理边界变成可查询的属性。
+
+> 讲法：「先看这张图。**右边这个 VPC 里的东西，一个都不该出现在容灾计划里**——
+> 它们是拿来观测左边的。但它们确实在依赖图谱里，因为 ETL 采到了。
+> 这就是我们为什么要给节点标 scope。」
 
 #### 三个词先定义清楚：节点、边、属性
 
@@ -709,7 +750,7 @@ relationships:
 
 每个节点有一个**标签（label）**表示它是哪类东西（`EC2Instance` / `Microservice`），
 每条边也有一个标签表示这是哪种关系（`Calls` / `RunsOn`）。本项目：
-**33 种节点标签、26 种边标签**，都在契约里声明（见 4.6）。
+**39 种节点标签、29 种边标签**，都在契约里声明（见 4.6）。`[代码]`
 
 **最需要强调的一点：边自己也能带属性。**
 
@@ -806,16 +847,22 @@ relationships:
    注意两个数字差了 300 多倍（63 vs 21102）——因为窗口不同（5 分钟 vs 24 小时）。
 3. **`dependency_kind` 是这张图里最要紧的一个属性**，下面单独讲。
 
-#### 26 种边里只有 3 种是「依赖」——这个区分是全场关键
+#### 29 种边里只有 6 种是「依赖」——这个区分是全场关键
 
 契约里每种边都有一个 `dependency: true|false` 标记 `[代码]`：
 
 | | 数量 | 边标签 | 语义 |
 |---|---|---|---|
-| **依赖语义边** | **3** | `Calls`、`AccessesData`、`DependsOn` | **A 坏了 B 会受影响** |
+| **依赖语义边** | **6** | `Calls`、`AccessesData`、`DependsOn`、`Delegates`、`InvokesTool`、`Retrieves` | **A 坏了 B 会受影响** |
 | 结构/归属边 | 23 | `RunsOn`、`BelongsTo`、`LocatedIn`、`Contains`、`ForwardsTo`、`HasSG`、`Manages`… | A 属于 B / A 在 B 里面 / A 管着 B |
 
-> 「1802 条边里只有 94 条带 `dependency_kind`。**如果分不清这两类，影响面分析就会把
+> **8/31 → 9/5 的变化**：依赖语义边从 3 种扩到 6 种。新增的三种
+> （`Delegates` / `InvokesTool` / `Retrieves`）是 **AI Agent 层**的依赖——
+> 编排 agent 路由到子 agent、agent 调用 tool、agent 检索知识库。
+> 这三种是本项目相对业界的一个额外差异点：**没有任何现成工具把 agent 的
+> 委派与工具调用当成依赖边来管理**，而它们的故障传播语义和服务调用是一样的。
+
+> 「**约 2600 条边里只有 126 条是合法的依赖边**（精确值见 4.1 末尾那张表）。**如果分不清这两类，影响面分析就会把
 > 『这个 Pod 跑在哪台机器上』和『服务 A 调用服务 B』等权处理**——你会得到一张
 > 什么都连着什么的图，然后发现它回答不了任何问题。」
 
@@ -824,16 +871,23 @@ relationships:
 而且这份定义**只有一处**——此前三个 ETL 各自复制了一份同样的 `DEPENDENCY_EDGE_LABELS`
 常量，现在统一从契约派生。`[代码注释]`
 
-`dependency_kind` 本身也有两个取值，区分**证据等级**：
+`dependency_kind` 有**三个**取值，区分**证据等级** `[实测 2026-09-05]`：
 
 | 取值 | 条数 | 含义 | 谁写的 |
 |---|---|---|---|
-| `dynamic` | 73 | **运行时真的观测到流量** | DeepFlow / X-Ray / NFM |
-| `static` | 21 | **配置里声明了这个关系**，但没观测到流量 | AWS Describe API / CloudFormation |
+| `dynamic` | **77** | **运行时真的观测到流量** | DeepFlow（etl/l4/dns）/ X-Ray / NFM |
+| `static` | **27** | **配置里声明了这个关系**，但没观测到流量 | AWS Describe API / CloudFormation / business-layer |
+| `inference` | **11** | **从 agent span 推断**——LLM 在运行时按 query 决定调谁，既非固定配置也非稳定流量 | agentcore-etl |
 
 > 「一条 `static` 边的意思是『文档说他们有关系』，一条 `dynamic` 边的意思是
 > 『我看见他们在通信』。这两件事**经常不一致**，而不一致的地方就是最值得查的地方——
 > 第 7 节的证据就是从这个缝里出来的。」
+
+> **`inference` 这个第三档是 9/5 新增的，值得单独讲 30 秒**：Agent 的调用图不是
+> 静态配置（没写在任何 IaC 里），也不是稳定流量（同一个 agent 面对不同 query 会调不同 tool）。
+> 把它塞进 `dynamic` 会让「30 分钟没看到就失效」这条 TTL 误杀低频 tool；
+> 塞进 `static` 又会让它永不失效。所以给了独立取值 + 独立失效语义
+> （`graph_cleanup.py` 对 `inference` 边有专门分支）。`[代码]`
 
 #### 边还带两个生命周期参数（4.7 详讲，这里先给直觉）
 
@@ -856,19 +910,47 @@ RunsOn:
 取更短的阈值会**误杀 X-Ray 刚发现的边**。`[代码注释]`
 
 
-活图谱实测（2026-08-31 07:49 UTC）`[实测]`：
+活图谱实测（**2026-09-05 14:4x UTC**）`[实测]`：
 
-| 指标 | 值 |
-|---|---|
-| 节点 | **1063** 个，**33** 种标签 |
-| 边 | **1802** 条，**26** 种标签 |
-| 其中**依赖语义边** | **94** 条（`dependency_kind` 非空：static 21 / dynamic 73） |
-| 已被实验验证的依赖边 | **0**（94 条全部 `verify_status=untested`） |
-| 节点分布 | Pod 570、SecurityGroup 55、S3Bucket 33、LambdaFunction 32、DependsOn 类实体… |
+| 指标 | 值 | 8/31 时 | 变化 |
+|---|---|---|---|
+| 节点 | **1335** 个，**39** 种标签 | 1063 / 33 | +26% / +6 类 |
+| 边 | **2637** 条，**29** 种标签 | 1802 / 26 | +46% / +3 类 |
+| 带 `dependency_kind` 的边 | **131** 条（dynamic 77 / static 43 / inference 11） | 94（static 21 / dynamic 73） | +39% |
+| 其中**合法**（落在 7 种依赖边上） | **126** 条 | 94 | — |
+| 其中**越界**（写在非依赖边上） | **5** 条 ⚠️ | 0（当时不存在此类边） | 见第 8 节 |
+| **已被实验确证的依赖边** | **13 条 `confirmed`** | **0** | **从 0 到非 0** |
+| 无法确证（`inconclusive`） | **25 条** | 0 | 新增 |
+| 强度已分级（`verify_dependency_class`） | **9 条**（hard 1 / degraded 3 / unclassified 5） | 0 | 新增 |
+| 节点分布（前 6） | Pod **735**、Incident **126**、ChaosExperiment **91**、SecurityGroup **58**、TopologyChange **56**、S3Bucket **34** | Pod 570、SG 55、S3 33、Lambda 32 | 见下 |
 
-**要讲的点**：1802 条边里只有 94 条是"依赖"。其余是 `RunsOn`（310）、`ForwardsTo`（13）
-这类结构/归属边。**分不清这两类，影响面分析就会把"Pod 跑在哪台机器上"和"服务 A 调用服务 B"
-等权处理。** 这也是为什么契约里每种边都有 `dependency: true|false` 标记。
+> ⚠️ **这张表是全文总量数字的唯一权威处，其余各节一律只用约数（「约 2600 条边」）。**
+> 这不是偷懒——本次核对期间（约 20 分钟内）实测到节点 1333→1335、边 2625→2637、
+> 带 `dependency_kind` 的边 **115→131**。ETL 每 15 分钟跑一次，图是活的，
+> **把精确总量散写到十几处，每次更新必然漏改几处**（本次第一轮就漏了 5 处，
+> 靠独立复查才抓出来）。
+>
+> **讲之前重跑这张表的查询即可**，别处不用动。
+> 那次 +16 是 `Invokes` 边被重分类为依赖边后**合法**带上了 `dependency_kind`，
+> 属于正常增长（见第 8 节对这次重分类的说明）。
+>
+> 相比之下 **13 / 25 / 9 这三个验证类数字是稳定的**——它们只在跑实验时才动。
+
+**这张表最该讲的三点**：
+
+1. **2637 条边里只有 126 条是合法的"依赖"。** 其余是 `LocatedIn`（825）、`RunsOn`（444）、
+   `Manages`（300）、`BelongsTo`（294）、`Routes`（277）这类结构/归属边。
+   **分不清这两类，影响面分析就会把"Pod 跑在哪台机器上"和"服务 A 调用服务 B"等权处理。**
+
+2. **验证覆盖率从 0 变成了非 0，但仍然很低——而这正是要讲的点。**
+   126 条合法依赖边里 13 条确证、25 条无法确证，其余未尝试。强度维度只覆盖 9 条。
+   > 「只有 12% 的依赖边取得了干预确证，而这张图已经在支撑影响面分析与容灾恢复顺序推导。
+   > **依赖图的价值不来自『全部验证过』，而来自『每条边的证据强度都被如实标注』。**」
+
+3. **节点分布里新出现了三类实体，它们是 8/31 之后才有的**：
+   `ChaosExperiment`（91）是实验记录本身、`Incident`（126）是事故实体、
+   `TopologyChange`（56）是拓扑变更事件。**图开始记录自己被验证的过程**——
+   这三类实体的出现，就是"从 0 到非 0"这件事在图上的物证。
 
 ### 4.2 数据源：五类，各有唯一贡献（3 分钟，一张表）
 
@@ -887,9 +969,12 @@ RunsOn:
 > AWS API 是『存在』，CloudWatch 是『度量』。把它们塞进同一张图，
 > 第一个收益不是数据全了，而是**它们可以互相对账**。」
 
-对账的具体产物是 `drift_status`，活图谱实测 `[实测]`：
-- `declared_not_observed` **23 条**（CFN 说有、运行时没看到）
-- `ok` **8 条**（声明与观测一致）
+对账的具体产物是 `drift_status`，活图谱实测 `[实测 2026-09-05]`：
+- `declared_not_observed` **25 条**（CFN 说有、运行时没看到）
+- `ok` **7 条**（声明与观测一致）
+- `observed_then_silent` **1 条**（曾观测到、之后静默）——**这是 9/5 新增的第三个取值**，
+  语义上比前两者更值钱：它区分了「从来没见过」与「见过又不见了」，而后者往往意味着
+  真实的下线或链路中断，前者往往只是观测盲区。
 
 而 X-Ray 恰恰是这里的关键教训：**在引入 X-Ray 之前，漂移判定只用 DNS 作观测源**，
 而 AWS SDK 通常启动时解析一次域名就复用连接，走 VPC 端点更不产生公网 DNS 查询。
@@ -901,11 +986,12 @@ RunsOn:
 
 ### 4.3 ETL：五条**互相独立**的流水线（4 分钟）
 
-`[代码]` 全部在 `infra/lambda/`，Python 3.12 Lambda，共约 6,400 行：
+`[代码]` 全部在 `infra/lambda/`，Python 3.12 Lambda，共约 **7,500** 行
+（5 条 ETL 合计 7,519 行；另有 `shared/python/` 公共层 1,902 行）：
 
 | 函数 | 源 | 触发 | 超时/内存 | 行数 | 写什么 |
 |---|---|---|---|---|---|
-| `neptune-etl-from-aws` | AWS API + EKS + CloudWatch/NFM | 每 **15 分钟** + 事件驱动 | 5 min / 256 MB | 1354 (+collectors 883 + cloudwatch 803) | 绝大多数节点、结构边、静态依赖边 |
+| `neptune-etl-from-aws` | AWS API + EKS + CloudWatch/NFM | 每 **15 分钟** + 事件驱动 | 5 min / 256 MB | **3217**（7 个文件：handler + collectors/ + cloudwatch.py） | 绝大多数节点、结构边、静态依赖边 |
 | `neptune-etl-from-deepflow` | ClickHouse L7/L4/DNS | 每 **5 分钟** | 4 min / 256 MB | 1865 | `Calls` 边 + 度量属性 + `drift_status` |
 | `neptune-etl-from-cfn` | CFN 模板 | **CFN StackEvent** + 每日 18:00 UTC | 2 min / 256 MB | 488 | `DependsOn` 声明边 |
 | `neptune-etl-from-xray`（独立部署） | X-Ray 服务图 | 定时 | — | 861 | `AWSServiceEndpoint` 节点 + `AccessesData` 边 |
@@ -1219,7 +1305,8 @@ Microservice:{ identity: name,       immutable: true }       # 规范名，是�
 > **一份没有门禁去读的声明，等于没有声明。**
 
 这不是抽象论断，有实测数字。契约里一直有一节 `sources`（合法的数据来源词表），
-但 2026-08-31 之前**没有任何一处代码检查它**。对活图谱普查的结果 `[实测]`：
+但 2026-08-31 之前**没有任何一处代码检查它**。当时对活图谱普查的结果
+`[实测 2026-08-31，历史记录]`：
 
 | source 取值 | 条数 | 状态 |
 |---|---|---|
@@ -1227,31 +1314,44 @@ Microservice:{ identity: name,       immutable: true }       # 规范名，是�
 | `aws-etl-static` | 3 | 代码在写（handler.py:376），契约未声明 |
 | `deepflow` | 8 | 代码在写，契约里叫 `deepflow-etl`——**同义漂移** |
 | `manual` | 1 | 无代码在写，手工遗留 |
-| **合计** | **1240** | 占全图 1802 条边 + 1063 节点的 **43%** |
+| **合计** | **1240** | 占当时全图 1802 条边 + 1063 节点的 **43%** |
 
 同一份 YAML 文件里，**被** `assert_edge_type` 检查的那部分：**零漂移**。
+
+> **9/5 现状更新**：这个缺陷已修完，且**存量也已归一**——活图谱里出现的 10 种 `source`
+> 取值全部在契约声明的 12 个之内，未声明取值为 **0** `[实测 2026-09-05]`。
+> 上面那张表是**当时**（8/31）的普查结果，**刻意保留原数字**：它是「门禁必须是代码」
+> 这个论点唯一的定量证据，改成今天的 0 就没有说服力了。讲的时候要说清「这是修之前的状态」。
 
 > 「所以漂移量和『声明写得好不好』完全无关，只和『有没有门禁』相关。这两组数字来自同一个
 > 文件、同一个团队、同一段时间——唯一的差别是有没有人在运行时读它。」
 
 #### 契约文件长什么样
 
-`profiles/graph_contract.yaml`，**665 行**，九个顶层小节 `[代码]`：
+`profiles/graph_contract.yaml`，**878 行**，**十**个顶层小节 `[代码 2026-09-05]`：
 
 | 小节 | 管什么 | 大白话 |
 |---|---|---|
 | `version` | 契约版本号 | 改了声明要升版本，出错信息里会带 |
 | `timestamp_field` | `last_seen` | 全项目统一用哪个字段表示「最后一次看到」 |
 | `timestamp_legacy_aliases` | `last_updated` / `last_scanned` | 历史遗留的同义字段，读取侧还在用，记下来才能安全迁移 |
-| `sources` | **11** 个合法来源 | 谁有资格往图里写、写的时候署什么名 |
+| `sources` | **12** 个合法来源 | 谁有资格往图里写、写的时候署什么名 |
 | `edge_write_once_attrs` | 只许首写者写的边属性 | 见 4.4 的 write-once |
 | `node_attr_authority` | 属性级权威**例外清单** | 同一个属性多个源都想写时谁说了算 |
-| `node_types` | **33** 种节点类型 | 每种的身份键、是否不可变 |
-| `edge_types` | **26** 种边类型 | 每种的合法端点配对、是否是依赖边、过期阈值 |
+| **`node_scope`** | **节点的归属域**（被观测系统 / 平台自身 / 部署脚手架 / 外部） | **9/5 新增的第五个维度**，见下 |
+| `node_types` | **39** 种节点类型 | 每种的身份键、是否不可变 |
+| `edge_types` | **29** 种边类型 | 每种的合法端点配对、是否是依赖边、过期阈值 |
 | `edge_verification` | 证伪判据与阈值 | 见 5.3，阈值放这里而不是代码里 |
 
-11 个合法 source 是：`aws-etl`、`eks-etl`、`aws-etl-static`、`cfn-etl`、`deepflow-etl`、
-`deepflow-l4`、`deepflow-dns`、`nfm`、`xray`、`business-layer`、`manual-fix`。`[代码]`
+> **`node_scope` 值得单独讲 30 秒**：8/31 版本的文档把它列为「尚缺的维度」，9/5 已补上。
+> 它解决的问题是：图里混着**被观测的系统**（petsite 业务）、**平台自身**（Neptune、5 个 ETL）、
+> **部署脚手架**（CDK 的 kubectl provider Lambda）和**外部依赖**。不区分的后果很具体——
+> 做影响面分析时会把「图谱平台自己的 Neptune」当成业务依赖，做容灾计划时会把 ETL Lambda
+> 写进恢复步骤。`dr-plan-generator` 的范围锚定正是靠这个维度把平台设施排除出去的。
+
+12 个合法 source 是：`aws-etl`、`eks-etl`、`aws-etl-static`、`cfn-etl`、`deepflow-etl`、
+`deepflow-l4`、`deepflow-dns`、`nfm`、`xray`、`business-layer`、`manual-fix`、
+**`agentcore-etl`**（9/5 新增，写 agent 层的三种依赖边）。`[代码]`
 
 **为什么 source 要分这么细**：`eks-etl` 与 `aws-etl` 是刻意的语义区分——K8s API 和 AWS 控制面
 是**不同的真值来源**；`aws-etl-static` 与 `deepflow-etl` 的区分是**不同的证据等级**
@@ -1294,7 +1394,7 @@ monkeypatch 切换模式。
 |---|---|---|
 | `assert_node_type(label)` | 节点类型没声明 | 写 `Microservie`（拼错）→ 抛错 |
 | `assert_edge_type(label, src, dst)` | 边类型没声明，**或**两头的类型组合没声明 | 写 `Deployment -[Manages]-> Deployment` → 抛错 |
-| `assert_source(source, context)` | 来源不在 11 个词表内 | 写 `source='deepflow'`（应为 `deepflow-etl`）→ 抛错 |
+| `assert_source(source, context)` | 来源不在 12 个词表内 | 写 `source='deepflow'`（应为 `deepflow-etl`）→ 抛错 |
 | `identity_prop_for(label)` | 不是校验，是**派生**：告诉写入方该用哪个属性当身份键 | EC2Instance 返回 `instance_id`，见 4.5 |
 | `filter_node_props(label, props, source)` | 这个来源没资格写这个属性 | 非 `aws-etl` 的源想写 Microservice 的 `az` → 被拒并 log |
 
@@ -1402,7 +1502,7 @@ Lambda 运行时用的是第三份产物 `infra/lambda/shared/python/graph_contr
 > 四件事缺任何一件，这份声明都会在半年内变成注释。**
 
 
-`profiles/graph_contract.yaml`，665 行，**33 种节点 / 26 种边**，是 ETL 写入门禁读取的权威。
+`profiles/graph_contract.yaml`，**878 行**，**39 种节点 / 29 种边**，是 ETL 写入门禁读取的权威。
 `[代码]`
 
 它约束五件事：
@@ -1504,7 +1604,7 @@ MATCH (n:LambdaFunction) WHERE n.last_scanned IS NOT NULL   -> 9 个真节点 / 
   `r6g.xlarge` 100M–500M 边
 - **`deletionProtection: false`**，注释写明"生产请设 true"——如实说，这是 demo 环境
 
-> 「规模感：我们这张图 1063 节点 / 1802 边，**在 r6g.large 上是完全过剩的**。
+> 「规模感：我们这张图**约 1300 节点 / 2600 边**，**在 r6g.large 上是完全过剩的**。
 > 这里的成本不在图数据库，在观测数据管道。」
 
 ### 4.10 如果听众想照着建：实施顺序（1.5 分钟，这一页最容易被拍照）
@@ -1526,6 +1626,115 @@ MATCH (n:LambdaFunction) WHERE n.last_scanned IS NOT NULL   -> 9 个真节点 / 
 
 > 「反过来说：**如果只能做三件事，做 1、2、4。** 剩下的都能补，
 > 身份和溯源补起来要迁移数据。」
+
+---
+
+### 4.11 这张图谁在消费（5 分钟，本次新增）
+
+**为什么必须有这一节**：前面十小节讲的全是**怎么写进去**。听众到这里会问一句
+「所以谁在读？」——如果答不上来，整个项目就变成一个精致的 ETL 作业。
+第 0 节把定位写成「依赖的单一事实源」，这一节是那句话的兑现。
+
+三个消费方，**共同点是都不经过 LLM 猜 Cypher**（对照见第 9 节）：
+
+| 消费方 | 怎么读 | 读到什么 | 代码位置 |
+|---|---|---|---|
+| **AWS DevOps Agent** | MCP 协议，24 个只读工具 | 预置查询的结果，agent 自己决定调哪个 | `mcp/` |
+| **容灾计划生成器** | 进程内 SDK（openCypher） | 拓扑 + scope + 数据层，生成可执行切换计划 | `dr-plan-generator/` |
+| **RCA 引擎** | 进程内 SDK | 爆炸半径、上游候选、历史事件 | `rca/` |
+
+#### 4.11.1 MCP server on AgentCore：给 agent 的入口
+
+**部署形态（实测）**：
+
+| 项 | 值 |
+|---|---|
+| AgentCore Runtime | `graph_dependency_mcp-12Vg2Z9XXu` · 状态 `READY` |
+| 协议 | `serverProtocol: MCP` |
+| 网络 | `networkMode: VPC`，两个 PetSiteVPC 子网（能直连 Neptune） |
+| 执行角色 | `GraphDpMcpAgentCoreRole` |
+| Endpoint | `DEFAULT` · `READY` |
+| 暴露工具 | **24 个，全部 `toolClassification: READ_ONLY`** |
+
+**三个设计取舍，每个都能讲 30 秒：**
+
+**① 为什么选 AgentCore Runtime 而不是 Gateway。** Gateway 会自己生成
+`initialize.instructions`，而我们要往里注入**证据纪律**（agent 必须报出这条结论
+来自哪条边、哪个 source、验证状态是什么）。Runtime 的 instructions 完全可控，
+Gateway 的注不进去。这不是偏好问题——没有证据纪律，agent 会把图谱当成
+可以润色的素材。
+
+**② 工具白名单是独立于 IAM 的第二个权限平面。** 24 个工具在
+`mcp/devops-agent-association.json` 里逐个显式声明 `READ_ONLY`。
+理由写在 `mcp/README.md`：**不能只依赖 IAM 收紧**——IAM 管的是「这个身份能不能
+调 Neptune」，工具层管的是「agent 能不能调到那个会写的工具」。两个平面漏一个都不行。
+
+**③ 工具是「预置查询」而不是「自然语言转 Cypher」。** 24 个工具对应
+`QUERY_CATALOG` 里 24 条确定性查询，agent 的自由度在于**选哪一条**，不在于
+**写什么查询**。对照第 9 节：NL→Cypher 会让结论不可复现，而 RCA 结论必须可复现。
+
+> 讲法：「这张图最终是给 agent 看的。但**我们不让 agent 写查询**——
+> 它只能从 24 个预置查询里挑。自由度在选择，不在生成。」
+
+#### 4.11.2 容灾计划生成器：图谱最重的消费方
+
+**它是三个消费方里代码量最大的**：`planner/step_builder.py` 45.6 KB、
+`planner/plan_generator.py` 30.8 KB、`validation/plan_verifier.py` 26.8 KB、
+`executor_strands.py` 29.8 KB，加 16 个测试文件。
+
+它读图谱的四件事，每件都对应一个前面讲过的维度：
+
+| 读什么 | 用前面哪个维度 | 干什么 |
+|---|---|---|
+| 依赖拓扑 | 边类型 + `dependency_kind` | Kahn 拓扑排序定切换顺序 |
+| 范围锚定 | **`scope`** | 把平台自身设施、部署脚手架排除出恢复步骤 |
+| 数据层 | `AccessesData` / `WritesTo` | RPO 按拓扑推导，不靠人填 |
+| 关键路径 | 最长路 DP | RTO 估算与并行分组 |
+
+**最值得讲的一条：`graph/snapshot.py` —— 离线快照。**
+
+它直面一个必被问到的质疑：**「你的图谱本身挂了，容灾计划怎么办？」**
+答案是计划生成时把所需子图落成快照文件，**灾时执行不依赖 Neptune 可用**。
+这条如果不主动讲，附 A 的质疑预演里会缺一块。
+
+另外三个 9/5 新增件也在这一节顺带提到就够：`graph/scope.py`（范围白名单锚定）、
+`planner/preflight.py`（就绪检查，19.8 KB）、`assessment/rpo_estimator.py`
+（RPO 按拓扑推导）。
+
+**已生成的样例可以直接投屏**：`dr-plan-generator/examples/` 下有三份，
+`region-switchover-apne1-to-usw2.md`（32 KB）是最完整的一份。
+
+> 讲法：「容灾计划是这张图最重的消费方，也是最能证明图有用的一个——
+> **它的每一步都必须能执行**，图错一条边，计划里就多一个错命令。
+> 所以它反过来是图谱质量最严格的检验方。」
+
+#### 4.11.3 一句话收束
+
+> 「三个消费方，**没有一个是拿 LLM 去猜 Cypher 的**。
+> agent 侧走 24 个预置工具，另两个走进程内 SDK。
+> 这是刻意的：图谱是判据来源，判据必须可复现。」
+
+#### 4.11.4 反过来：agent 也是被观测对象（30 秒，2026-09-05 补）
+
+**同一个 AgentCore 上跑着两类东西，图谱必须能分开。**
+
+| runtime | scope | 角色 |
+|---|---|---|
+| `graph_dependency_mcp` | `platform` | 本平台自己的 MCP server（消费图谱） |
+| `WaggleAIOrchestrator` 等 5 个 WaggleAI\* | `observed` | **PetSite 的 AI 问答业务功能**（被图谱观测） |
+
+PetSite 的 AI 问答链路：`WaggleController.cs` 读 SSM
+`/petstore/agent/waggleairuntimearn` → `InvokeAgentRuntimeAsync` →
+`WaggleAIOrchestrator` → 委派给 Nutrition / Adoption / Concierge / Ordering，
+配 `WaggleAIGuardrail` 与 `WaggleAIMemory`，Nutrition 还 `Retrieves`
+一个 KnowledgeBase。
+
+> 讲法：「这一页是 scope 那个维度**为什么必须存在**的证明。同一种节点类型
+> （AgentRuntime）里，一个是我们的工具、五个是被观测的业务功能。
+> 按类型一刀切会把业务功能当平台设施排除掉——我们真的犯过这个错，见附 D。」
+
+这一跳此前**不在图谱里**（agent 子图是孤岛），第 8 节记了它为什么五个数据源
+都看不见、以及现在靠 SSM 声明补上的那条边证据等级只到 `static`。
 
 ---
 
@@ -1618,17 +1827,24 @@ evidence_weights:                     # log-odds 累加后 sigmoid 到 [0,1]
 
 ## 6. 现场演示（10 分钟，准备三段、按时间砍）
 
-**必演 —— 起点基线（30 秒，一条查询）** `[实测]`
+**必演 —— 起点基线（30 秒，一条查询）** `[实测 2026-09-05]`
 ```
-依赖边总数 94    按状态 {untested: 94}    已验证占比 0.0
+依赖边总数 115   按状态 {confirmed: 13, inconclusive: 25, 未标注: 77}   已确证占比 11%
+强度已分级 9     {hard: 1, degraded: 3, unclassified: 5}
 ```
-> 「这就是我们的起点：94 条依赖边，**100% 从未被任何实验验证过**。这个数字本身就是产品——
-> 因为在座各位的系统里，这个数字也是 100%，只是没人算过。」
+> 「**约 10% 的边经过干预确证，25 条明确标着『试过但无法验证』，其余还没轮到。
+> 在座各位的系统，这三个数分别是多少？**」
+>
+> ⚠️ **8/31 版本这里演的是「94 条 / 100% 未验证 / 覆盖率 0.0%」，那个数字已经不成立。**
+> 现在的版本杀伤力不减反增：**能说出「25 条我试过但验不了」比说「我全没验过」更专业**——
+> 后者听起来像还没开始做，前者说明你已经撞到了方法的边界并如实记录。
 
-**必演 —— 图查询驱动选边（1 分钟）** `[实测]`
-23 条边 `drift_status = declared_not_observed`：CFN 声明了服务访问数据库，
-但 DeepFlow / X-Ray 从未观测到。
-> 「要么是死代码路径，要么观测是瞎的。**两种都是真问题**，分清就有价值。」
+**必演 —— 图查询驱动选边（1 分钟）** `[实测 2026-09-05]`
+**25 条**边 `drift_status = declared_not_observed`：CFN 声明了服务访问数据库，
+但 DeepFlow / X-Ray 从未观测到。另有 **1 条** `observed_then_silent`——曾观测到、之后静默。
+> 「要么是死代码路径，要么观测是瞎的。**两种都是真问题**，分清就有价值。
+> 而 `observed_then_silent` 那一条比另外 25 条更值钱——**它区分了『从来没见过』和
+> 『见过又不见了』**，后者往往是真实的下线或链路中断。」
 
 **可砍 —— 一次真实注入（4 分钟，风险最高）**
 `search-service` 注入 `http_chaos abort`，观测 `petsite` + `list-adoptions`。
@@ -1709,23 +1925,115 @@ Neptune 顶点属性默认 SET 基数，漏写 `Cardinality.single` 的写入是
 **跳过这节，前面所有数字的可信度都会打折。** 主动说的限制，听众会当成严谨；
 被问出来的，会当成隐瞒。
 
-- **验证覆盖率现在是 0.0%** `[实测]`。模块跑通了、注入跑通了，但第一条边的终态判定还没落进
-  图谱——差最后一寸。
-- **`source` 词表门禁已补上，但存量数据还没归一**：8 个 `Microservice` 节点仍是
-  `deepflow`、1 条边仍是 `manual`。归一必须等新代码部署（否则下一轮 ETL 写回旧值），
-  所以现在是「代码已挡住新的、旧的还在库里」——**和第 4.8 节讲的是同一个坑**。
+- **验证覆盖率：126 条合法依赖边里 13 条确证、25 条无法确证、其余未尝试；强度维度只覆盖 9 条**
+  `[实测 2026-09-05]`。**8/31 时这个数是 0.0%，现在不是了——但仍然很低，而这不是要藏的事。**
+  三档的含义必须分开说：
+  - `confirmed`（13）＝干预实测确认依赖成立
+  - `inconclusive`（25）＝**已尝试但无法施加有效检验**（Chaos Mesh 打不到 Lambda、
+    目标已缩容到 0、源不在集群内）。它**不累计证伪计数**，所以不会因为「多次没验成功」
+    被误删——「没能验证」与「验证为假」在系统里是两件不同的事
+  - 未尝试（72）＝还没轮到
+  > 「只有约 10% 的依赖边有干预确证。**但这个数字比『我们覆盖率 100%』可信得多**——
+  > 后者只要被抽查命中一条假边，整张图的可信度就归零。」
+- **强度维度对无法注入的依赖永久无法分级。** 托管服务（Lambda）、已缩容服务的
+  `verify_dependency_class` 会长期停在 `unclassified`（实测 9 条已分级里有 5 条是它）。
+  这是结构性限制，不是排期问题。
+- **`source` 词表门禁已补上，存量也已归一** `[实测 2026-09-05]`：活图谱里出现的 10 种
+  `source` 取值**全部在契约声明的 12 个之内**，未声明取值为 **0**。
+  （8/31 版本此处记录的是「代码已挡住新的、旧的还在库里」——存量归一已完成。）
+- **`awesomeshop` 命名空间的 6 个服务副本数全部为 0，但名字在图谱里** `[实测]`。
+  `auth-service` / `frontend` / `gateway-service` / `order-service` /
+  `points-service` / `product-service` 均 `replicas=0`、`readyReplicas` 为空——
+  DeepFlow 曾采集到它们的流量，所以边是**真的曾经存在**，但运行时现在不存在。
+
+  > 「这是『图里有边但服务不在』最干净的一个例子。**它不是脏数据**——那条边当时是真的。
+  > 这正是我们为什么要有 `live = dynamic AND active=true` 这个过滤器：
+  > `dependency_kind` 只区分声明与观测，答不了『它现在还在不在』。」
+
+  实测后果：petsite 的三个上游依赖全是 `dynamic`，但其中**两个属于 awesomeshop
+  且副本数为 0**——只有按 `live` 过滤才返回正确的空集。做影响面分析或容灾计划时
+  必须排除，否则会把不存在的服务写进恢复步骤。
+
+- **三个数据库集群全部单实例：无读副本、无跨区副本** `[实测]`。
+  Aurora PostgreSQL 16.11、Aurora MySQL 8.0、Neptune 1.4.6.3 均如此
+  （Neptune 是 `petsite-neptune-instance-1` / db.r6g.large 单实例）。
+
+  > 「这直接决定容灾能力上限。**第 4.11.2 节讲的容灾计划生成器能算出最优切换顺序，
+  > 但底层根本没有副本可切**——计划的价值在于它诚实地告出这一点，而不是假装能切。」
+
+  这条必须和容灾计划一起讲，否则会被当场问住。Neptune 单实例还有一个与图谱自身
+  相关的后果：**实例级故障即全平台读写不可用**，这也是 4.11.2 那个离线快照存在的理由。
+
+- **~~21 条~~ 5 条边被写了 `dependency_kind`，而它们的边类型声明为 `dependency: false`**
+  `[实测 2026-09-05，本条已部分修复，讲的时候按新版讲]`：
+
+  | 边类型 | 写入方 | 条数 | `first_seen` | 现状 |
+  |---|---|---|---|---|
+  | ~~`Invokes`~~ | `aws-etl` / `cfn-etl` / `aws-etl-static` | ~~16~~ | null | **已消解**：契约裁定 `Invokes` 本就是依赖边，已改 `dependency: true` |
+  | `RoutesTo` | `agentcore-etl` | **5** | 有值 | **仍越界** |
+
+  **`Invokes` 那 16 条的处置方式本身就是讲点**：我们没有去堵写入方，而是**判定契约标错了**——
+  `StepFunction → LambdaFunction`、`SNSTopic → LambdaFunction` 按任何定义都是依赖关系，
+  把它标成 `dependency: false` 才是错的那一侧。
+
+  > 「这里有个容易做错的选择。发现『非依赖边带了依赖属性』，直觉是加一道门禁把它挡掉。
+  > **但那样会把建模错误变成静默行为**——将来任何一条真依赖被误标，都会被门禁悄悄挡住、
+  > 永远没人发现。我们加的门禁只挡『属性写错位置』，同时把分类问题单独立卡去裁决。」
+
+- **`first_seen` 大面积缺失：131 条带 `dependency_kind` 的边里只有 48 条有 `first_seen`（37%）**
+  `[实测 2026-09-05，本次核对新查出，比上一版记录的严重得多]`。
+
+  上一版这里记的是「`Invokes` 那 16 条连 `first_seen` 都是 null」。按全图重查之后
+  发现**这不是那 16 条的问题，是普遍现象**：
+
+  | 边类型 | 带 `dependency_kind` | 其中有 `first_seen` |
+  |---|---|---|
+  | `AccessesData` | 56 | 21 |
+  | `DependsOn` | 23 | **2** |
+  | `Calls` | 20 | 9 |
+  | `Invokes` | 16 | **0** |
+  | `InvokesTool` / `Delegates` / `Retrieves` / `RoutesTo`（均 `agentcore-etl`） | 16 | 16 |
+
+  `first_seen` 与 `source`、`dependency_kind` 同属契约声明的 `edge_write_once_attrs`，
+  **本应首写必填**。规律很清楚：**只有 `agentcore-etl` 这个最新写的 ETL 100% 写全了**，
+  越老的写入路径缺得越多（`DependsOn` 只有 2/23）。
+
+  > 「这条比我们上一版记的严重。**溯源三件套里第三件在多数边上根本没写**，
+  > 所以『这条依赖是什么时候第一次被发现的』这个问题，图谱现在答不了 63%。
+  > 讲第 4.10 节实施顺序时我说过『溯源三件套从第一天就写』——
+  > **这条建议正是从这个缺口来的**，我们自己没做到。」
+
+  **已知，未修。** 与「同一类错误第二次发生说明当时的修法只补了那一个洞」是同一个形状：
+  `source` 那次补了词表门禁，但没有人给 `first_seen` 加同样的必填校验。
+- **12 条边 `source` 为空** `[实测]`（`Calls` 11 条 + `AccessesData` 1 条），
+  而 `source` 属于 `edge_write_once_attrs`，本应必填。这是 4.4 那个「写一次」机制的反例，
+  **已知，未修**。
 - **230 条边 / 209 个节点没有 `source`**，多为 rca 与 chaos 自产实体。
   是否该强制尚未判定——草率地设 required 会逼出一堆无信息量的 `source='rca'`。
 - **`abort` 会在目标 Pod 的网络命名空间留残留**，容器重启清不掉，只能删 Pod 重建。
   这是我们踩出来的，Chaos Mesh 文档没写。
+- **Chaos Mesh 的 `PodChaos/pod-failure` 在 K8s 1.35 上完全打不进去** `[实测]`：
+  它的实现是往运行中的 Pod 插 pause initContainer，而 K8s 禁止修改已存在 Pod 的
+  `spec.initContainers`。**危险在于探测结果会全绿**——若不先查 `AllInjected`，
+  会把每条边错判成 refuted。这是判定链里「注入生效门禁」存在的直接理由。
 - **`Namespace` / `Pod` / `K8sService` / `Deployment` 的身份键未按 namespace 限定**，
   契约里明写了 `scope_note`——多集群或多 namespace 同名会碰撞。**已知，未修。**
 - **重试 / 熔断 / 缓存会掩盖真实依赖**，注入时长必须超过熔断窗口加重试预算才能穿透 fallback。
   做不到就会把真实边判成不存在——**比不验证更有害**。
 - **零流量和健康在指标上完全一样**，所以规则是：零流量一律判 inconclusive，**绝不判 refuted**。
-- **测试规模**：`pytest --collect-only` 在 Python 3.11 下收集 **605** 个用例，53 个测试文件
-  `[实测]`。其中 golden / shadow / live 类用例需要真实凭证或 Neptune 才实际执行。
-  最近一次完整运行记录为 461 passed / 0 failed——**这轮我没有重跑全量，只重跑了收集**。
+- **测试规模（按仓库要求的 Python 3.11 实测）**：**650 passed / 0 failed / 150 skipped**，
+  **零收集错误** `[实测 2026-09-05]`。150 个 skipped 不是小数——golden / shadow / live
+  类用例需要真实凭证或 Neptune 才实际执行，**所以「全绿」的含金量要打折,
+  讲的时候要连 skipped 一起报**。
+  （8/31 记录为 605 个 / 53 文件 / 461 passed。）
+- **上一版这里写的「754 个用例 / 69 个文件 / 2 个文件收集报错」是错的,而且错得有教育意义。**
+  那是用 **Python 3.9** 跑出来的:仓库 conftest 明确要求 3.10+，在 3.9 下
+  `test_12_unit_etl_aws.py` 撞 `markupsafe.soft_unicode` 版本冲突、
+  `test_22_ui_streamlit.py` 没装 `streamlit`,两者都是**环境问题**。
+  > 「这条要讲。我们拿一个错版本的解释器跑测试,然后把**环境问题当成代码缺陷**
+  > 写进了自己的『诚实的边界』——**一份声称如实记录缺陷的文档,自己报了两个假缺陷**。
+  > 教训不是『要用对版本』那么浅:**任何自动采集的质量数字都要连采集环境一起记录**,
+  > 否则数字会以看不出来的方式失真。」
 - **LLM 混沌假设的可靠性没有公开量化指标。** 唯一有完整闭环的公开系统 ChaosEater
   （NTT, ASE'25 NIER）自己的验证是「由人类工程师和 LLM 定性验证」——**没有假设正确率或
   幻觉率**。这是需要自建评测补的空白。`[论文]`
@@ -1794,21 +2102,27 @@ RETURN resource.name, labels(resource)[0], services, svc_count ORDER BY svc_coun
 | 会被问 | 怎么答 |
 |---|---|
 | 「同一属性两个源写，谁赢？」 | 最容易被问倒的一点。IRE 的答案是一张四列表；我们边级已有 `source` + `dependency_kind` 分层，节点属性级有 `node_attr_authority` **但它只是例外清单**（目前只登记了 Microservice 的 3 个属性）——直说没做完 |
-| 「为什么不用 Serverless Neptune？」 | 单 AZ 预置 r6g.large 对 1802 条边过剩，成本不在图库。**Serverless 是合理选项，我们没测**，别硬编理由 |
+| 「为什么不用 Serverless Neptune？」 | 单 AZ 预置 r6g.large 对约 2600 条边过剩，成本不在图库。**Serverless 是合理选项，我们没测**，别硬编理由 |
 | 「Gremlin 还是 openCypher？」 | **写用 Gremlin（`mergeV`/`coalesce` 幂等语义直接）、读用 openCypher（路径与聚合可读性好）**，同一个 Neptune。这是刻意分工，不是历史包袱 |
-| 「逐条写入不慢吗？」 | 1802 条边规模下不是瓶颈；deepflow ETL 做了批量合并（~700 次请求降到 20–30 次）。**上到十万级边要换 bulk loader，我们没到那个规模，别声称验证过** |
+| 「逐条写入不慢吗？」 | 约 2600 条边规模下不是瓶颈；deepflow ETL 做了批量合并（~700 次请求降到 20–30 次）。**上到十万级边要换 bulk loader，我们没到那个规模，别声称验证过** |
 | 「粒度不够细怎么办？」 | 行业通病。**Datadog 自己的优先级链是 `peer.db.name > peer.aws.s3.bucket > peer.hostname`**——它的 S3 粒度同样取决于插桩是否报了 bucket 名。我们的对应做法是 `AWSServiceEndpoint` + `granularity='service'`，**不把 X-Ray 的 `S3` 猜成某个具体 bucket** |
 | 「注入会不会搞坏生产？」 | 非生产集群 + 观测方护栏 + stop condition + CRD 删除。**并说清踩过的 netns 残留** |
-| 「这套要多少人维护？」 | 诚实给：ETL 五条流水线约 6,400 行、契约一份 665 行、实验规格按边类型。**不要报一个显得很轻的数字** |
+| 「这套要多少人维护？」 | 诚实给：ETL 五条流水线约 7,519 行、契约一份 878 行、实验规格按边类型。**不要报一个显得很轻的数字** |
 | 「你们只有 6 个微服务，规模上去还成立吗？」 | 方法成立、数字未验证。**证伪闭环的成本随边数线性增长**，所以选边必须靠图查询排优先级（爆炸半径 × 未验证）而不是全量扫 |
 
 ## 附 B：三件绝对不要做的事
 
-1. **不要以架构图开场。** 33 类节点 26 类边的图会让听众进入「又一个 CMDB」模式，
-   你后面再也拉不回来。**架构图放到 4.1，且先讲"1802 条边里只有 94 条是依赖"。**
+1. **不要以架构图开场。** 39 类节点 29 类边的图会让听众进入「又一个 CMDB」模式，
+   你后面再也拉不回来。**架构图放到 4.1，且先讲"约 2600 条边里只有 126 条是依赖"。**
 2. **不要报没测过的数字。** 你手上全是实测数据，这是最大资产——一个估算数字会污染全部。
-3. **不要把「已验证覆盖率 0.0%」藏起来。** 它恰恰是最好的开场素材：
-   **在座所有人的系统这个数都是 0，只是没人算过。**
+   **本文数字的时效是 2026-09-05；8/31 到 9/5 之间节点 +25%、边 +46%，说明这些数字会漂。
+   讲之前重跑一遍查询。**
+3. **不要再用「已验证覆盖率 0.0%」当开场素材——那个数字已经不成立了。**
+   8/31 版本建议拿「在座所有人的系统这个数都是 0」开场，现在我们自己约 10%（13/126），
+   继续那样说就是报错数字。**改用这个说法**：
+   > 「我们的依赖图有约 10% 的边经过干预确证，25 条明确标着『试过但无法验证』，
+   > 72 条还没轮到。**在座各位的系统，这三个数分别是多少？**」
+   同样有杀伤力，而且是真的。
 
 ## 附 C：关键实现索引（讲完被要代码时给这张表）
 
@@ -1816,7 +2130,7 @@ RETURN resource.name, labels(resource)[0], services, svc_count ORDER BY svc_coun
 |---|---|
 | 幂等 upsert / 身份键 / 写一次溯源 | `infra/lambda/etl_aws/neptune_client.py` |
 | SigV4 + Gremlin HTTP 客户端（Lambda Layer） | `infra/lambda/shared/python/neptune_client_base.py` |
-| 图谱契约（权威声明） | `profiles/graph_contract.yaml`（665 行 / 33 节点 / 26 边） |
+| 图谱契约（权威声明） | `profiles/graph_contract.yaml`（**878 行 / 39 节点 / 29 边 / 12 source**） |
 | 运行时写入门禁 | `infra/lambda/shared/python/graph_contract.py` |
 | 置信度与判定（纯函数） | `infra/lambda/shared/python/graph_confidence.py` |
 | 边生命周期收敛 | `infra/lambda/shared/python/graph_cleanup.py` |
@@ -1828,7 +2142,200 @@ RETURN resource.name, labels(resource)[0], services, svc_count ORDER BY svc_coun
 | 边验证（候选/判定/写回） | `chaos/code/runner/edge_verification.py` |
 | 六阶段实验编排 | `chaos/code/runner/runner.py` |
 | 观测方 SLI 采集（协议过滤） | `chaos/code/runner/metrics.py` |
+| **图谱 MCP server（供 DevOps Agent）** | `mcp/`：`server.py`（24 个只读工具）、`agentcore_app.py`（AgentCore 入口）、`catalog_tools.py`、`provenance.py`（证据纪律）、`devops-agent-association.json`（工具白名单）、`README.md`（部署与注册步骤） |
 | SPOF / 关键路径 / 影响面查询 | `dr-plan-generator/graph/queries.py` |
+| **容灾切换计划生成（9/5 大改）** | `dr-plan-generator/`：`graph/snapshot.py`（离线快照，灾时不依赖 Neptune）、`graph/scope.py`（范围白名单锚定）、`planner/preflight.py`（就绪检查）、`assessment/rpo_estimator.py`（RPO 按拓扑推导） |
+| **依赖的四维定义（内部权威）** | `docs/dependency-definition.md` |
+| **故障注入覆盖边界（对客户）** | `docs/fault-injection-coverage-and-production-safety.md` |
 | 契约一致性守门测试 | `tests/test_35_graph_contract.py`、`test_36`、`test_37` |
-| 存量数据修复（五个脚本） | `infra/migrate_identity_keys.py`、`merge_duplicate_ec2_nodes.py`、`fix_wrong_source_edges.py`、`fix_property_cardinality.py`、`fix_neptune_data.py` |
+| 存量数据修复（脚本） | `infra/migrate_identity_keys.py`、`merge_duplicate_ec2_nodes.py`、`fix_wrong_source_edges.py`、`fix_property_cardinality.py`、`fix_neptune_data.py`、**`scripts/backfill_verify_confidence.py`**、**`scripts/clean_nondependency_verify_attrs.py`**（后两个为 9/5 新增） |
 | CDK：Neptune 集群 / ETL 栈 | `infra/lib/neptune-cluster-stack.ts`、`neptune-etl-stack.ts` |
+
+---
+
+## 附 D：本次更新的核对结果（2026-09-05）
+
+**核对方法**：逐节读取原文 → 提取每一处带 `[实测]` / `[代码]` 标记的断言 →
+对活图谱重新查询、对仓库重新对账 → 只改被证伪的数字，保留原结论与原措辞。
+
+### 修正的数字（14 组）
+
+| # | 位置 | 原值（8/31） | 现值（9/5） |
+|---|---|---|---|
+| 1 | 节点总数 / 标签数 | 1063 / 33 | **1333 / 39** |
+| 2 | 边总数 / 标签数 | 1802 / 26 | **2625 / 29** |
+| 3 | 依赖语义边**种类** | 3 | **6**（+Delegates / InvokesTool / Retrieves） |
+| 4 | 带 `dependency_kind` 的边 | 94（static 21 / dynamic 73） | **115**（dynamic 77 / static 27 / **inference 11**） |
+| 5 | `dependency_kind` 取值数 | 2 | **3**（新增 `inference`） |
+| 6 | 已确证依赖边 | **0** | **13 confirmed + 25 inconclusive** |
+| 7 | 强度已分级 | 0 | **9**（hard 1 / degraded 3 / unclassified 5） |
+| 8 | `drift_status` | 23 / 8（两值） | **25 / 7 / 1**（新增 `observed_then_silent`） |
+| 9 | 节点分布 | Pod 570 / SG 55 / S3 33 / Lambda 32 | **Pod 735 / Incident 126 / ChaosExperiment 91 / SG 58 / TopologyChange 56 / S3 34** |
+| 10 | `RunsOn` 边数 | 310 | **444**（且最大边类型已变为 `LocatedIn` 825） |
+| 11 | 契约文件 | 665 行 / 九节 | **878 行 / 十节**（新增 `node_scope`） |
+| 12 | 合法 `source` 数 | 11 | **12**（+`agentcore-etl`） |
+| 13 | ETL 代码量 | ~6,400 行 | **7,519 行**（etl_aws 单体 3,217） |
+| 14 | 测试基线（Python 3.11） | 605 / 53 | **650 passed / 150 skipped / 0 failed，零收集错误** |
+
+### 已过时的结论（3 处，改了论证而非只改数字）
+
+1. **「验证覆盖率 0.0%」不再成立。** 8/31 时这是全文最锋利的一句，附 B 还建议拿它开场。
+   现在是 11%（13/115）。**继续那样讲就是报错数字**，已改写为三档对比的问法。
+2. **「`source` 存量还没归一」已完成。** 8/31 记录「代码已挡住新的、旧的还在库里」，
+   9/5 实测活图谱里 10 种 source 全部在契约声明的 12 个之内，未声明取值为 0。
+3. **「尚缺第五个维度 scope」已补上。** 契约新增 `node_scope` 小节，
+   `dr-plan-generator` 的范围锚定已在用它排除平台自身设施。
+
+### 本次新查出的问题（3 个，均已写入第 8 节「诚实的边界」）
+
+> ⚠️ **第 1 条已在 15:1x UTC 的第二轮补充里被推翻并改写**，下面保留的是当轮原始记录。
+> 现在的正确表述见第 8 节：`Invokes` 那 16 条**不是违约**（契约裁定它本就是依赖边，
+> 已改 `dependency: true`），越界只剩 `RoutesTo` 5 条；而 `first_seen` 缺失是
+> **全图 131 条里缺 83 条的普遍现象**，不是那 16 条的个别问题。
+
+1. **5 条 `AgentGateway -RoutesTo-> AgentTool` 边被写了 `dependency_kind`**，
+   而 `RoutesTo` 声明为 `dependency: false`。根因已定位到代码：
+   `etl_agentcore` 的 `_upsert_edge()` **无条件**写 `dependency_kind`，
+   而 `etl_aws` / `etl_cfn` 的同名函数都有 `if is_dependency_edge(lb):` 门禁——
+   **三个 ETL 里两个有、一个没有**。
+   > 这与第 7 节「证据四」**同形**：声明写了、门禁没覆盖到。上次漏的是 `source` 值，
+   > 这次漏的是「哪些边有资格带这个属性」。
+2. **契约的语义字段完全没有门禁**——`test_35` 17 个用例全绿，却让
+   `Invokes.dependency` 从 `false` 翻成 `true`、`expires_seconds` 从 `null` 变成 `21600`
+   都通过了，因为**它只比对类型名集合**。这是上一条与下一条的共同根因：
+   声明、生成物、部署、注释四者可以各自漂移，靠人肉对账才发现。
+3. **`Invokes` 的重分类尚未提交，但生产已在跑**。工作区 `dependency: true`、
+   每个已提交版本都是 `false`；生产 `neptune-client-base:11` 已放行那 16 条边。
+   **任何人从 HEAD 重新生成 layer 并部署，生产行为会静默回退。**
+4. **12 条边 `source` 为空**（Calls 11 / AccessesData 1），而 `source` 属于
+   `edge_write_once_attrs`，本应必填。
+5. **上一版把两个环境问题误记成了代码缺陷**：用 Python 3.9 跑测试，
+   `markupsafe.soft_unicode` 版本冲突与未装 `streamlit` 被记作「2 个文件收集报错」。
+   按仓库要求的 3.11 复跑：**650 passed / 150 skipped / 0 failed，零收集错误**。
+   > **一份声称如实记录缺陷的文档，自己报了两个假缺陷。** 教训：
+   > 任何自动采集的质量数字都要连采集环境一起记录。
+
+### 关于数字时效的一条方法论（本次核对的副产品）
+
+核对过程中总量数字在 20 分钟内变了三次（边 2625→2637、`dependency_kind` 115→131）。
+由此得到一条对讲述有直接影响的区分：
+
+| 数字类型 | 保鲜期 | 例子 | 讲之前要不要重跑 |
+|---|---|---|---|
+| **总量类** | 几十分钟 | 节点数、边数、各类型边数 | **必须重跑** |
+| **验证类** | 到下次跑实验为止 | confirmed / inconclusive / 已分级数 | 上台前跑一次即可 |
+| **代码类** | 到下次提交为止 | 契约行数、ETL 行数、测试数 | 按 commit 核 |
+| **历史证据类** | 永久 | 第 7 节五条证据 | **绝不要更新**——改了就毁掉证据 |
+
+**而且「数字在涨」不等于「图在变好」**：本次那次 +16 一度被我判成越界写入，
+核对契约后才确认是 `Invokes` 重分类带来的**合法**增长。
+**报增长数字时必须同时看合法性——而判定合法性要以契约为准，不能凭记忆里的边类型清单。**
+
+### 第二轮补充（2026-09-05 15:1x UTC，对照 `one-observability-demo/doc/topology-ap-northeast-1.md`）
+
+起因：核对拓扑文档与活环境后发现提纲缺五块，其中两块是**整个消费侧**。
+
+| # | 补了什么 | 位置 | 为什么是缺口而不是省略 |
+|---|---|---|---|
+| 1 | 两个 VPC 的分工 | 4.1 开头（新增 1 分钟） | 一次答完「节点从哪来、边界在哪」，且是 `scope` 六档的物理直觉来源。原文 `agent-vpc` / `peering` 零命中 |
+| 2 | MCP server on AgentCore | **新增 4.11.1** | 原文**零处** `MCP` 字样。而它是活的部署，且是「谁消费这张图」的答案 |
+| 3 | 容灾计划生成器 | **新增 4.11.2** | 原文只在目录清单、一句顺带提及、附 C 索引里出现，**没有任何一节讲它做什么**。它是代码量最大的消费方 |
+| 4 | `awesomeshop` 6 服务副本为 0 | 第 8 节 | 「图里有边但服务不在」最干净的实例，也是 `live` 过滤器存在的理由 |
+| 5 | 三个数据库全单实例无副本 | 第 8 节 | 直接决定容灾能力上限；讲 DR 而不讲这条会被当场问住 |
+
+**顺带修正了两条已经失效的记录**（不是补充，是原文现在是错的）：
+
+1. **「21 条边越界写 `dependency_kind`」→ 现在是 5 条。** `Invokes` 那 16 条在
+   2026-09-05 已由契约裁定为**本来就是依赖边**（`dependency: false → true`），
+   越界只剩 `RoutesTo` 5 条。原文把这 16 条当违约讲，现在会讲错。
+2. **「`Invokes` 那 16 条 `first_seen` 是 null」→ 缺口比这大得多。** 全图重查：
+   131 条带 `dependency_kind` 的边里只有 **48 条**有 `first_seen`（37%），
+   `DependsOn` 是 2/23。规律是**只有最新的 `agentcore-etl` 100% 写全**，
+   越老的写入路径缺得越多。原文把普遍现象记成了个别现象。
+
+**时间预算已同步**：第 4 节 33 → **39 分钟**（4.1 加 1 分钟、新增 4.11 五分钟），
+裁剪顺序里给 4.11 排了位置并注明「不能整节砍，紧就压到 2 分钟」。
+全篇满讲约 92 分钟——这份提纲从来不是按满讲设计的，裁剪顺序才是使用方式。
+
+**一处无法核实的边界**：`mcp/README.md` 记录了向 DevOps Agent
+`register-service` / `associate-service` 的完整步骤与白名单文件，但本机 aws CLI
+没有 `aidevops` 命令（`Found invalid choice 'aidevops'`），**关联是否已生效无法从这里验证**。
+讲稿里 4.11.1 的表格只列了 AgentCore 侧的实测值（那些是 `bedrock-agentcore-control`
+查得到的），DevOps Agent 侧的关联应表述为「已配置」而不是「已验证」。
+
+### 第三轮补充（2026-09-05 15:5x UTC）：AI 问答这一跳，以及两个自己引入的缺陷
+
+起因：用户问「拓扑文档第三节为什么没有 agentcore/bedrock，PetSite 有 AI 问答啊」。
+查下来这不是文档漏写，是**图谱缺边**，文档忠实反映了盲区。
+
+#### 补进第 4.11 与第 8 节的内容
+
+**PetSite 的 AI 问答链路**（`WaggleController.cs` 读 SSM
+`/petstore/agent/waggleairuntimearn` → `InvokeAgentRuntimeAsync` 流式调用
+`WaggleAIOrchestrator`）此前**完全不在图谱里**。agent 子图是孤岛，只靠
+`search_available_pets -> petsearch` 一条边挂在业务系统上。后果是爆炸半径查询
+答不出「AgentCore 挂了会影响 PetSite 什么功能」——而这一跳真断过一次
+（IRSA 缺 `bedrock-agentcore:InvokeAgentRuntime`，兜底文案把 AccessDenied 说成网络中断）。
+
+**这是「盲区由数据来源决定」最好的现场实例**，五个源各有各的看不见的理由：
+
+| 数据源 | 为什么看不见 |
+|---|---|
+| DeepFlow | 跨 VPC 到 AWS 托管服务的 HTTPS，L7 解不出 |
+| X-Ray | 埋点**在**（`RegisterXRayForAllServices` + `UseXRay` 中间件都有），`PetSite -> SimpleSystemsManagement` 边存在，但到 Waggle 没有 —— SDK 内置 AWS 服务清单不含 `BedrockAgentCore` |
+| AgentCore 控制面 | 只知道被调了，不知道谁调的 |
+| CloudWatch | `AWS/Bedrock-AgentCore` 有数据，但维度里**没有调用方** |
+| NFM | VPC 级聚合，粒度不够 |
+
+已补：`agentcore-etl` 从 SSM 建 `petsite -DependsOn-> WaggleAIOrchestrator`
+（`static`，`declared_in` 记参数名）。CloudWatch 那批改写在 runtime **节点**上
+（`invocations_24h`），刻意不作为边证据——维度无调用方，当观测源是给置信度注水。
+
+#### 两个我自己引入又修掉的缺陷（都该讲，形状很典型）
+
+**① scope 把整个 agent 层误判成 platform。** 第二轮落地 scope 时我把
+`AgentRuntime` 整类映射成 `platform`。实测 6 个 runtime 里只有 1 个
+（`graph_dependency_mcp`）是平台自己的 MCP server，另外 5 个 **WaggleAI\* 是
+PetSite 的业务功能**。代价是可观测的：新建的 `petsite -> WaggleAIOrchestrator`
+被标成 observed→platform，而选边器排除触及 platform 的边——**这条业务关键边
+被过滤出靶点池，正是引入它要修的那个盲区**。
+
+修法是把判据换成栈归属：`WaggleAIAgents` 栈（5 个 runtime + Gateway + Guardrail +
+Memory + KnowledgeBase + S3Vectors）整体归 `observed`。还顺带发现匹配键少了
+`runtime_id` / `gateway_id`——AgentCore 在 CFN 里的 `PhysicalResourceId` 是
+**runtime id** 不是 ARN，少了它们三个节点匹配不上栈。
+
+> 「按类型一刀切标 scope 是错的。**同一种节点类型可以既是业务又是平台**——
+> 判据必须是归属，不是类型。」
+
+**② scope 属性写成了多值。** 标注脚本用 `property('scope',...)` 而**没带
+`single`** —— Gremlin 顶点属性默认 SET 基数，不带 `single` 是追加不是覆盖。
+跑三次之后实测 `WaggleAIAdoption` 同时是 `observed` 和 `platform`。
+
+值得注意的是它的爆炸半径形状：1364 个属性挂在 1344 个节点上，只多 20 个——
+因为 SET 基数会**去重相同值**，所以只有**分类发生变化**的节点才累积。
+这恰恰是最危险的情形：重新分类时旧值静默留存，而只标一次的节点看不出问题。
+
+> 「这个仓库为同一类缺陷清理过 1,897 个冗余值，我又犯了一次。
+> **顶点属性一律 `property(single, ...)`** 这条纪律，代价就在这里。」
+
+#### 一处刻意没做的事（方法 2：X-Ray 埋点）
+
+原计划给 PetSite 的 AgentCore 客户端注册 X-Ray handler。查下来这个计划的前提是错的：
+`Startup.cs:40` **早就调用了** `AWSSDKHandler.RegisterXRayForAllServices()`，
+`UseXRay` 中间件也在，`AWSSDK.BedrockAgentCore` 3.7.500 也在。真正的阻碍是
+X-Ray .NET SDK 的**内置 AWS 服务清单**不覆盖这个新服务。
+
+修法是提供自定义清单（`RegisterXRayManifest`），但我**没有做**，理由是：
+自定义清单可能**替换**而非合并默认清单，处理不当会连带丢掉现有的
+`PetSite -> SimpleSystemsManagement` 边；而验证需要重建容器镜像 + 部署到 EKS +
+观察服务图，在此之前无法确认它是否真的生效。**给一个业务应用推一个可能静默
+丢边的改动，比不推更糟。** 已单独立卡。
+
+### 未改动的部分（说明为什么不改）- **第 2 节全部（业内主流做法、四种范式、图数据库选型）**：外部调研与官方文档引用，
+  不随本项目状态变化。逐条读过，无需更新。
+- **第 7 节证据一/二/三/五**：都是历史实测记录（带 `[代码注释记录的实测]` 标记），
+  记录的是**当时发现缺陷的那一刻**的数据，改成今天的数字会毁掉证据价值。**刻意保留。**
+- **第 5 节六阶段流程、判据机制**：结构未变，只有阈值在契约里，已在别处更新。
+- **Neptune 引擎版本 1.4.6.3**：9/5 实测仍是 1.4.6.3，与 CDK 声明的 1.3.4.0 仍然分叉。
+  **该分叉未修复，原文的提醒继续有效。**

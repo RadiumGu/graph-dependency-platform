@@ -162,6 +162,63 @@ kubernetes:
   context_target: "${K8S_CONTEXT_TARGET}"
 
 # =====================================================
+# 7b. 容灾（DR）配置
+#
+# ⚠️ 数据层的 topology 全部如实填 "none"。这不是待填的 TODO，而是 2026-09-05
+#    核对 CDK 后的**实测结论**：
+#      PetAdoptions/cdk/pet_stack/lib/services-eks.ts:150
+#        rds.DatabaseCluster(...auroraPostgres...)  ← 无 GlobalCluster
+#      同文件 :795 / :849  ddb.Table(...)          ← 无 replicationRegions
+#      同文件 :68        s3.Bucket(...)            ← 无复制配置
+#
+#    AWS Well-Architected REL13-BP02 对 pilot light 与 warm standby 的定义
+#    **都要求**数据已复制到恢复区。当前状态下两档的数据层前提均不成立，
+#    真实档位是 backup & restore（RPO 数小时）。
+#
+#    这里如实声明，是为了让 dr_profile.strategy_feasibility() 能把这个落差
+#    报出来，而不是生成一份标称「RPO 秒级」的计划——那种计划在演练里可能
+#    因为事前手工补过数据而侥幸通过，在真灾里必然失守。
+#
+#    要真正达到所声明的档位，需先在 CDK 里补上跨区复制，再把 topology 改掉。
+# =====================================================
+dr:
+  target_region: "${DR_TARGET_REGION}"
+  # 计算层按此生成步骤；数据层前提是否成立由 strategy_feasibility() 单独判定。
+  strategy: "pilot_light"
+
+  data:
+    aurora:
+      topology: "none"          # global_database | cross_region_replica | snapshot_copy | none
+      cluster_identifier: "${AURORA_CLUSTER_ID}"
+      global_cluster_identifier: "${AURORA_GLOBAL_CLUSTER_ID}"
+    dynamodb:
+      topology: "none"          # global_tables | none
+      tables: []                # 由图谱提供实例清单，此处只声明拓扑
+    s3:
+      topology: "none"          # crr | crr_rtc | none
+      buckets: []
+    sqs:
+      # 结构性事实，不是配置疏漏：SQS 没有跨区复制能力。
+      # 切换瞬间源队列里 visible + in-flight 的消息即业务数据丢失。
+      replicable: false
+
+  eks:
+    target_cluster: "${DR_EKS_CLUSTER_NAME}"
+    # pilot light 下这些节点组常态 desired=0，切换时必须先扩容并等节点 Ready。
+    nodegroups: []
+    # ECR 是区域级服务；arm64 镜像未复制过去则一律 ImagePullBackOff。
+    ecr_replication_required: true
+
+  # 显式排除，且**必须带 reason**：审计要能看出是有意排除而非漏了。
+  excluded:
+    - pattern: "etl_*"
+      reason: "platform_infrastructure：图谱 ETL，非 PetAdoptions 业务负载"
+    - type: "NeptuneCluster"
+      reason: "platform_infrastructure：图谱自身存储，非 PetAdoptions 业务数据"
+    - namespace: "awesomeshop"
+      reason: "data_pollution：DeepFlow 注入的虚构服务，副本数全 0，实际不存在"
+
+# =====================================================
 # 8. Neptune 配置
 # =====================================================
 neptune:
@@ -304,7 +361,15 @@ neptune:
     运行时观测有**两个源，OR 关系**（盲区不重叠：DNS 漏「连接复用」，X-Ray 漏「未插桩」）：
       · DeepFlow DNS —— 域名解析行为
       · AWS X-Ray  —— 服务到 AWS 托管服务的实际调用
-    - drift_status: ok | declared_not_observed | observed_not_declared
+    - drift_status: ok | declared_not_observed | observed_not_declared | observed_then_silent
+        `observed_then_silent` 是 2026-09-05 新增的第四个取值，只出现在
+        `dependency_kind='inference'` 的边上：曾被观测到、当前窗口内没有观测。
+        它与前三个的区别在于**前三个都是对「声明与观测是否一致」的判断，
+        而这一个是对「观测本身够不够近」的判断**。
+        为什么不复用 declared_not_observed：agent 的进程内工具**没有任何声明**
+        （控制面看不到它们，实测 13 个 AgentTool 里 8 个只能从 span 发现），
+        说「声明了但没观测到」是事实错误。用一个语义邻近但不同的值会静默误导 ——
+        与 etl_agentcore 里 empty/contradictory 的区分是同一个道理。
     - runtime_verified(bool): 是否被任一运行时源观测到
     - verified_by: dns | xray | dns+xray | none
         为什么必须有这个属性：双源验证下，X-Ray 若静默失效（权限丢失、服务未插桩、
