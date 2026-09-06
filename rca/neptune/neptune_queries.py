@@ -122,6 +122,23 @@ def q3_upstream_deps(failed_service: str, kind: str = None) -> list:
     `kind='live'` 仍然必要，理由不变：`dependency_kind` 只区分「声明 vs 观测」，
     不区分「观测过 vs 现在还在」。已下线服务的历史边不构成现在的依赖。
 
+    ## ⚠️ 函数名里的 `upstream` 与本仓库 NL 层的术语相反
+
+    `schema_prompt.FEW_SHOT_EXAMPLES` 教给模型的约定是：
+
+        「下游依赖」  = 出边  (s)-[:Calls|AccessesData|...]->(d)   它依赖谁
+        「上游调用者」= 入边  (caller)-[:Calls]->(s)               谁依赖它
+
+    也就是说本函数返回的东西，NL 层叫**下游依赖**，而函数名叫 `upstream`。
+    两套读法都存在于工程实践里 —— 依赖流看，你的依赖在你「上游」；
+    请求流看，调用你的人在你「上游」。**这种歧义正是本函数方向搞反的根源。**
+
+    没有改名，是因为调用面包括 `mcp/devops-agent-association.json`
+    （已部署 agent 的工具白名单）、4 个测试文件与 fixtures，改名影响面大而无
+    语义收益。取而代之的是：docstring 与目录 desc 显式写明出边/入边，
+    机器消费方由 `tests/test_52_rca_query_direction.py` 钉住。
+    **判断方向请只看「出边/入边」，不要看 upstream/downstream 这两个词。**
+
     ## 边类型：从契约派生，不硬编码（2026-09-06 修）
 
     见 `q1_blast_radius` 的同名段落。只看 `Calls|DependsOn` 会让根因候选里
