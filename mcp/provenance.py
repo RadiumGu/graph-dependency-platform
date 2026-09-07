@@ -3,10 +3,45 @@ provenance.py — 给每个工具响应附上出处，并把证据纪律交给 a
 
 为什么这个模块存在（不是可选的装饰）：
 
-2026-09-01 在 SAP 系统上做盲发现验证时，AWS DevOps Agent 独立从 CloudTrail
-挖出了 FIS 实验与发起者——这部分很好——但它同时**编造了 CWAgent 的指标值**，
-并用一个**虚构的 iowait 数字**排除了存储瓶颈。为此在 AGENTS.md v2 里加了
-最高优先级的 Evidence integrity 规则。
+## 承重证据：12 次真实调用（2026-09-07，可复现）
+
+同一个问题问 AWS DevOps Agent 12 次，图谱已作 MCP server 关联在 agent space
+`petsite-devops` 上、24 条只读查询全部可用：
+
+    不提图谱时会去查图谱的比例    2/8   = 25%
+    问题里点名要求查图谱          4/4   = 100%
+
+**工具可用 ≠ 工具会被用。** 没查的那些调用一样成功返回、排版精美、语气自信，
+依据是「FIS 实验模板存在」—— 而模板是**意图**，不是**结果**。
+查了的那些引用真实实验 ID 与退化幅度，并在证据不足时主动拒绝下结论。
+
+逐字全文、每次的 executionId、耗时与判别信号在
+`demo/fixtures/agent_unaided_answer.json`，可用
+`aws devops-agent list-pending-messages` 按 executionId 逐条取回核对。
+门禁 `tests/test_57_rca_agent_tab.py`。
+
+## 一条未能核实的旧记录（保留，但不作为论据）
+
+此前本文件与 `README.md` 都写着：2026-09-01 在 SAP 系统上做盲发现验证时，
+AWS DevOps Agent 从 CloudTrail 挖出了 FIS 实验与发起者（这部分很好），
+但同时编造了 CWAgent 的指标值、用一个虚构的 iowait 数字排除了存储瓶颈；
+为此在 AGENTS.md v2 里加了最高优先级的 Evidence integrity 规则。
+
+**2026-09-07 复核：这条记录在本仓库无法核实。** 它 2026-09-05 随 `59f41b5`
+以散文形式进入仓库，没有随附对话记录、executionId、指标名或那个 iowait 数值；
+它引用的 `AGENTS.md v2` 既不在本仓库，`petsite-devops` 里也没有 `agents_md`
+资产；`todo/` 下最早的记录是 09-04，没有 09-01 的任何痕迹。它发生在另一个
+系统、另一个 agent space。
+
+它可能是真的 —— 但按本项目自己的判据，**一条无法被第三方核对的论断不能放在
+承重位置**，那正是本模块要求 agent 不要做的事。所以它降级为标注过的轶事：
+说明这套设计的动机从哪来，不用来证明任何结论。
+
+（对照：agent space 里的 `components/neptune-graph-platform` memory 带着
+`claim / evidence / source` 结构和 `devopsagent:execution` ID —— 这个标准是
+存在且可达的，这条旧记录只是没达到。）
+
+## 本 server 的责任
 
 LLM agent 被问「什么依赖 X」时一定会给出答案，因为它不会说「我不知道」。
 所以本 server 的责任不只是「提供数据」，而是：
@@ -15,6 +50,12 @@ LLM agent 被问「什么依赖 X」时一定会给出答案，因为它不会�
   3. 在 MCP initialize 的 instructions 里把纪律写死，让它进模型上下文
 
 否则 agent 会把图谱事实与自己的推断混在一起输出——换个地方犯同一个错。
+
+⚠️ 但要清楚第 3 条的**实测有效性有限**：instructions 与工具描述里都已经写着
+「讨论任何依赖关系之前先调它」，自发查询率仍只有 25%。这个 agent 是 skill 优先
+架构（每次调用都有 `load_skill`），而 agent space 里 7 个 skill 没有一个讲依赖
+图谱。所以纪律要真正生效，得进它**实际会先读的那一层**（skill / agents_md
+资产），不能只靠 MCP 协议字段。见 `todo/demo-site-rebuild/PLAN.md` T13。
 """
 from __future__ import annotations
 

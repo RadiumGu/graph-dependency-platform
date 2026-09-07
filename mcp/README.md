@@ -6,11 +6,6 @@
 
 ## 为什么要做这件事
 
-2026-09-01 在 SAP 系统上做盲发现验证时，AWS DevOps Agent 独立从 CloudTrail 挖出了
-FIS 实验与发起者——这部分做得很好——但它同时**编造了 CWAgent 的指标值**，并用一个
-**虚构的 iowait 数字**排除了存储瓶颈。为此在 AGENTS.md v2 里加了最高优先级的
-Evidence integrity 规则。
-
 LLM agent 被问「什么依赖 X」时一定会给出答案，因为它不会说「我不知道」。
 这张图能真的回答，而且能回答别人回答不了的部分：
 
@@ -21,6 +16,49 @@ LLM agent 被问「什么依赖 X」时一定会给出答案，因为它不会�
 
 所以本 server 的责任不只是提供数据，还包括把**证据纪律**交给 agent。
 这段纪律写在 MCP `initialize` 的 `instructions` 字段里，客户端会把它交给模型。
+
+### 实测：这件事确实有用，但「有用」不等于「会被用上」
+
+2026-09-07，同一个问题问 AWS DevOps Agent 12 次（本 server 已关联在 agent space
+`petsite-devops`，24 条查询全部可用）：
+
+| 提问方式 | 会去查图谱 | 比例 |
+|---|---|---|
+| 不提图谱 | 2/8 | **25%** |
+| 点名要求查图谱 | 4/4 | **100%** |
+
+查了的那些引用真实实验 ID（`exp-pay-for-adoption-http-chaos-20260905`）与真实退化
+幅度（0.4%），并在证据不足时**主动拒绝下结论**——原话是「无法区分『依赖不传导』
+与『注入根本没打到』，不能证伪，故不下结论」。这正是本 server 想要的行为。
+
+没查的那些依据是「FIS 实验模板存在」。**模板是意图，不是结果**：它说明有人打算测，
+不说明测过了。这些回答一样成功返回、排版精美、语气自信。
+
+**结论：`instructions` 字段不是可靠通道。** 该字段和工具描述里都已经写着「讨论任何
+依赖关系之前先调它」，自发查询率仍只有 25%——这个 agent 是 skill 优先架构（每次调用
+都有 `load_skill`），而 agent space 里 7 个 skill 没有一个讲依赖图谱。要让纪律真正
+生效得进它先读的那一层。待办见 `todo/demo-site-rebuild/PLAN.md` T13。
+
+逐字全文、每次的 executionId、耗时与判别信号在
+`demo/fixtures/agent_unaided_answer.json`，可用
+`aws devops-agent list-pending-messages` 按 executionId 逐条取回核对。
+展示页是 RCA 的第五个 Tab，门禁 `tests/test_57_rca_agent_tab.py`。
+
+### 一条未能核实的旧记录（保留，但不作为论据）
+
+本文件此前开头写着：2026-09-01 在 SAP 系统上做盲发现验证时，AWS DevOps Agent 从
+CloudTrail 挖出了 FIS 实验与发起者（这部分做得很好），但同时**编造了 CWAgent 的
+指标值**、用一个**虚构的 iowait 数字**排除了存储瓶颈；为此在 AGENTS.md v2 里加了
+最高优先级的 Evidence integrity 规则。
+
+**2026-09-07 复核：这条记录在本仓库无法核实。** 它 2026-09-05 随 `59f41b5` 以散文
+形式进入仓库，没有随附对话记录、executionId、指标名或那个 iowait 数值；引用的
+`AGENTS.md v2` 既不在本仓库，`petsite-devops` 里也没有 `agents_md` 资产；`todo/`
+下最早的记录是 09-04。它发生在另一个系统、另一个 agent space。
+
+它可能是真的——但按本项目自己的判据，**一条无法被第三方核对的论断不能放在承重
+位置**，那正是本 server 要求 agent 不要做的事。所以它降级为标注过的轶事：说明设计
+动机从哪来，不用来证明任何结论。上面那 12 次采样才是承重证据。
 
 ---
 

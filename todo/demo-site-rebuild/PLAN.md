@@ -365,29 +365,91 @@
 
   ⚠️ m02 上线前就抓到一处真实问题:我把 25% 写死在第 6 节文案里了。
 
-- [ ] **T13(新)把自发查询率从 25% 提上去 —— 这是我们的问题**
+- [ ] **T13 把自发查询率从 25% 提上去 —— 这是我们的问题**（已诊断,待你批准写入）
 
-  本项目把证据纪律写在 MCP `initialize` 的 `instructions` 字段里(见
-  `mcp/README.md`),指望客户端交给模型。**25% 说明这套纪律没有可靠传达到。**
+  ### 诊断:两条我们控制的通道都已经写对了,仍然只有 25%
 
-  现在有了度量手段(`tests/test_57` 的信号表 + 采样脚本),这从一句抱怨变成
-  可优化、可验收的工程问题:改 MCP 工具描述与 agent space 指令,
-  再跑同一批采样,看比例升不升。
+  | 通道 | 现状 | 实测有效性 |
+  |---|---|---|
+  | MCP `initialize.instructions` | 规则 2 明确写着「**依赖关系必须先查再说**」 | ❌ 25% |
+  | 工具描述 | `q22` 描述里写着「**讨论任何依赖关系之前先调它**」 | ❌ 25% |
 
-  待查的一条线索:`aws` 那条 association 有 `"status": "valid"`,
-  **图谱 MCP 这条没有 status 字段**。但它能用(12 次里 6 次成功查到),
-  所以不是坏了 —— 需要弄清这个字段缺失是否影响工具被发现的优先级。
+  **所以问题不是话说得不够狠,是话没进到它会读的那一层。**
 
-- [ ] **T14(新)用 v3 判据复核本项目自己的「agent 编造」论断**
+  ### 根因:这个 agent 是 skill 优先架构
 
-  `mcp/README.md` 记着 2026-09-01 那次:DevOps Agent 编造了 CWAgent 指标值、
-  用虚构的 iowait 数字排除了存储瓶颈。**这个论断是整个项目动机的核心论据。**
+  12 轮采样里**每一轮都有 `load_skill` 块**。查 agent space 的资产:
 
-  但本会话我在同一类判别上错了三次(`tool_use` 恒零、`exp-` 前缀漏两次、
-  写死百分比的判据误报)。**所以这条历史论断也该用 v3 级别的判据复核一遍** ——
-  如果它建立在同样脆弱的观察上,那项目的核心叙事需要修正而不是继续引用。
+      skill 7 个 / memory_store 5 个 / memory 27 个 / artifact 1 个
+      agents_md 0 个   ← 论断里说的「AGENTS.md v2」不在这里
 
-  这不是自我怀疑,是同一条纪律:**拿证据说话的项目,自己的证据也要能被证伪。**
+  **7 个 skill 没有一个讲依赖图谱。** 实际加载的是
+  `understanding-agent-space`(v10)、`chat-tool-use-best-practices`(v8)、
+  `tool-use-best-practices` —— 这些赢过了 MCP 协议字段。
+
+  唯一提到 Neptune 的是 memory `components/neptune-graph-platform`(v1,09-02),
+  但**解压后确证**它把 Neptune 描述成**基础设施清单**(集群、ETL Lambda、
+  事件管道),完全没提故障注入验证、`verify_status`、q22/q23 或 MCP 工具。
+
+  ⚠️ 这里我又差点踩坑:第一次的关键词检查是对 **zip 压缩字节**做的,
+  当然全是 False。**必须解压后再判。**(本会话第七次同族测量错误。)
+
+  ### 杠杆:注册一个 skill 资产
+
+  `ListAssetTypes` 里 `skill` 的定义是
+  「Reusable instructions that extend agent capabilities」——
+  **这正是它先读的那一层。**
+
+  内容已写好并入库(可评审、可版本控制):
+  `mcp/agent_skill/dependency-verification-graph.md`
+
+  七条规程:先查再说 / 判定四态含义 / 零退化≠依赖不成立 /
+  不编造图谱没返回的数值 / 观测层与干预层不混用 / 单一观测源降权 / 边方向。
+  并明确写上「**不要用 FIS 模板的存在推断验证状态**」——那是实测到的具体失败模式。
+
+  ### ⚠️ 但这一步是对共享资源的写操作,需要你批准
+
+      aws devops-agent create-asset \
+        --agent-space-id 60c2f48f-b6e3-4dce-a0a3-4144228b2051 \
+        --asset-type skill --content <上面那份 md>
+
+  `petsite-devops` 里已有 40 个资产、5 个 AgentCore runtime 在用它
+  (`WaggleAI*` 那几个)。加一个 skill 是**新增、可逆**(`DeleteAsset`),
+  但它会改变所有人用这个 agent space 时的行为,所以我不擅自做。
+
+  批准后的验收方式(已有度量手段):注册 → 用**原问题**(不提图谱)重跑 8 次 →
+  与 25% 基线对比。升不升一目了然。
+
+- [x] **T14 用 v3 判据复核本项目自己的「agent 编造」论断** ✅ 2026-09-07
+
+  ### 结论:这条论断在本仓库无法核实,已从承重位置降级
+
+  | 核查项 | 结果 |
+  |---|---|
+  | 进入仓库时间 | **2026-09-05**(`59f41b5`),散文形式,**未随附任何原始证据** |
+  | 引用的「AGENTS.md v2」 | 仓库里没有;`petsite-devops` 里**也没有 `agents_md` 资产** |
+  | 2026-09-01 的记录 | `todo/` 最早是 09-04,**没有** |
+  | 对话记录 / executionId / 指标名 / iowait 数值 | **全无** |
+  | 发生地 | 另一个系统(SAP)、另一个 agent space |
+
+  按项目自己的标准,这是**一条不可证伪的论断被放在承重位置**。
+  讽刺很精确:`mcp/provenance.py` 一边告诉 agent「不要编造本 server 没有返回的
+  数值」,一边用一个没人能核对的数字论证这条规则。
+
+  **对比说明这个标准是可达的**:agent space 里的
+  `components/neptune-graph-platform` memory 带着 `claim / evidence / source`
+  结构和 `devopsagent:execution` ID。这条旧记录只是没达到。
+
+  ### 修法:降级为标注过的轶事,承重位置换成可核实的数据
+
+  改了两个**随代码发布、会喂给 agent 的活文档**:
+  `mcp/provenance.py` 与 `mcp/README.md` —— 承重证据换成 2026-09-07 那 12 次采样
+  (带 executionId、可用 `list-pending-messages` 逐条取回),旧记录保留但明确标注
+  「无法核实,不作为论据」。
+
+  `todo/` 下另外 4 处引用是**带日期的历史快照**,按纪律不改写。
+
+  它可能是真的 —— 但**拿证据说话的项目,自己的证据也要能被证伪。**
 
 - [ ] T3 修 `3_Graph_Explorer` 分层布局(用户截图:节点挤成两排、标签截断)
 - [ ] T4 改 `4_Smart_Query` 布局:输入框置顶或固定,答案紧随其后
