@@ -876,6 +876,26 @@ def run_drift_detection(service_names: list, ip_map: dict):
                         f".property('drift_status','observed_not_declared')"
                         f".property('verified_by','{verified_by}')"
                         f".property('last_drift_check',{ts})"
+                        # ── last_seen 是承重的，不是装饰（2026-09-07 补）────────────
+                        # 影子边**只有本函数一个写入方** —— 没有别的 ETL 会刷新它。
+                        # 此前不写契约的 TIMESTAMP_FIELD，后果是这批边对任何过期/
+                        # 收敛机制都隐形：实测 22 条 deepflow-dns 边**零条**有
+                        # last_seen，于是一次几个月前的 DNS 解析会永久断言一条活依赖。
+                        #
+                        # 这对 DNS 源尤其致命，因为 DNS 是个**不对称的弱信号**：
+                        # 有查询只说明「想连」，没查询什么都不能证明。本仓库实测过
+                        # grafana-aurora-mysql 有 360 次/24h DNS 查询（grafana 会重连），
+                        # 而 serviceseks2-database 零次（pod 持连接池）——
+                        # 可见性纯由连接行为决定，与依赖是否存在无关。
+                        # 所以这类边必须能随观测消失而过期，否则只会单调累积。
+                        # 契约的 TIMESTAMP_FIELD 是 'last_seen'。这里写字面量而不
+                        # import 常量，是跟随本仓库既有 ETL 的一致写法
+                        # （etl_xray:756/772 同样直接写 'last_seen'）。
+                        f".property('last_seen',{ts})"
+                        # 证据机制显式记下来，与 aws-etl 的 evidence='cdk-stack' 同一约定。
+                        # 消费方靠它 + verified_by 判断证据强度，无需改 runtime_verified
+                        # 的语义（RCA 与 MCP 都已按 verified_by 区分 dns / xray / dns+xray）。
+                        f".property('evidence','{'dns-resolution' if has_dns else 'xray-dependency'}')"
                     )
                     drift_summary['observed_not_declared'] += 1
                     if verified_by in source_summary:

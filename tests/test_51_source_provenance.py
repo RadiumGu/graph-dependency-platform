@@ -205,6 +205,79 @@ def test_m02_图级审计能查出缺source的dependency边(contract):
             f'结构边 {lb} 不该进审计'
 
 
+# ── m04：新建 dependency 边必须带 last_seen（否则永不过期）────────────────────
+
+def test_m04_新建dependency边必须带last_seen(contract):
+    """静态扫描：`addE(<dependency 边>)` 的那条 Gremlin 链必须写 last_seen。
+
+    为什么这条门禁必要 —— 2026-09-07 实测的两次同类事故：
+
+      · `deepflow-dns` 的 22 条边**零条**有 last_seen。写入方是 etl_deepflow 的
+        「影子依赖」分支，而那是这批边的**唯一**写入方，没有别的 ETL 会刷新它们。
+        后果：一次几个月前的 DNS 解析永久断言一条活依赖，且对任何过期/收敛
+        机制隐形，只会单调累积。
+      · `business_layer.py` 四处只写 last_updated（legacy 别名）、从不写
+        TIMESTAMP_FIELD，于是 6 条早已失效的假边在图上活了下来 —— 其中两条
+        把 Grafana 自己的数据库变成了 priority=1 的故障注入靶点。
+
+    共同点：**边被创建时就没有可过期的时间戳，于是清理机制永远看不到它。**
+    source 回答「谁发现的」，last_seen 回答「还成立吗」——缺后者的边只能靠人
+    发现，而人是靠事故发现的。
+
+    判据刻意也接受 legacy 别名：契约把 last_updated / last_scanned 声明为
+    TIMESTAMP_LEGACY_ALIASES，收敛逻辑会做别名回退，不能把合规写法判成违规。
+    """
+    ts_names = {'last_seen'} | set(contract.get('timestamp_legacy_aliases') or ())
+    assert 'last_seen' in ts_names, '契约的 timestamp_field 应为 last_seen'
+
+    dep_labels = _dependency_labels(contract)
+    assert dep_labels, '契约里应有 dependency 边；扫不到说明测试自身失效'
+
+    def _chain_after(text: str, start: int) -> str:
+        """从 addE 处取出**整条 Gremlin 链**，而不是固定长度的窗口。
+
+        m01 用的是「之后 1200 字符」。那个口径在这里会假阳性：本测试刚上线时
+        就把 etl_deepflow 两处**已经合规**的写入判成违规 —— 它们确实写了
+        last_seen，只是与 addE 相距 1547 / 1975 字符（中间是解释判据的注释）。
+        固定窗口把「注释写得长」和「忘了写属性」混为一谈。
+
+        链的边界判据：连续的 f-string 拼接行（以引号或 f 前缀开头，或注释），
+        遇到不属于该表达式的行就停。比字符数稳，也不会因为加注释而失效。
+        """
+        lines = text[start:].split('\n')
+        out = [lines[0]]
+        for ln in lines[1:]:
+            s = ln.strip()
+            if not s:
+                continue
+            # 注释、f-string 片段、续行的收尾括号都算链内
+            if s.startswith('#') or s.startswith('f"') or s.startswith("f'") \
+                    or s.startswith('"') or s.startswith("'") or s.startswith(')'):
+                out.append(ln)
+                if s.startswith(')'):
+                    break
+                continue
+            break
+        return '\n'.join(out)
+
+    missing = []
+    for path, src in _etl_sources():
+        for lb in dep_labels:
+            for m in re.finditer(rf"addE\(\s*['\"]{lb}['\"]", src):
+                seg = _chain_after(src, m.start())
+                if any(f"property('{n}'" in seg or f'property("{n}"' in seg
+                       for n in ts_names):
+                    continue
+                line = src[:m.start()].count('\n') + 1
+                missing.append(
+                    f"{path.parent.name}/{path.name}:{line} 写 {lb} 未带时间戳")
+
+    assert not missing, (
+        "以下位置新建 dependency 边但没写 last_seen —— 这些边将永不过期：\n  "
+        + "\n  ".join(missing)
+        + "\n\n没有时间戳的边，清理机制看不到它，只能靠人在事故里发现。")
+
+
 # ── m03：写一次属性必须真的写一次 ─────────────────────────────────────────
 
 def test_m03_写一次属性不得被无条件写(contract):
