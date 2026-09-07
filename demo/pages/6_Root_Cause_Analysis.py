@@ -294,8 +294,23 @@ if svc_meta:
     tiers = {r.get("tier") for r in svc_meta if r.get("tier")}
     azs = [r.get("az") for r in svc_meta if r.get("az")]
     head[1].metric("Tier", "/".join(sorted(tiers)) if tiers else "—")
-    head[2].metric("AZ 分布", len(azs))
-    head[3].metric("图节点数", len(svc_meta))
+    # AZ 数要去重：svc_rows 每行是一个 (服务, az, tier) 组合，
+    # 同一个 AZ 可能出现多行，len(azs) 会把它数成多个 AZ。
+    head[2].metric("AZ 分布", len(set(azs)), "个可用区", delta_color="off")
+    # 这里原来是 `head[3].metric("图节点数", len(svc_meta))` —— **标签是错的**。
+    # len(svc_meta) 是服务清单里匹配到的行数（az/tier 组合数），不是图节点数，
+    # 而且它和左边的「AZ 分布」基本是同一个数换算法数两遍。
+    # 后果是首屏经常显示「图节点数 1」，让人以为图里是空的 —— 对一个
+    # 主张「这张图是真的」的站点，这种误导比少一个指标糟得多。
+    # 换成真正有意义的:该服务的依赖出边数（根因就在出边）。
+    _brk = dependency_breakdown(selected_service)
+    if _brk:
+        # 返回结构是 {"total": int, "live": [...], "static": [...], ...} ——
+        # 直接取 total，不要对 values() 求 len（total 是 int，会 TypeError）。
+        head[3].metric("依赖出边", _brk.get("total", 0),
+                       f"live {len(_brk.get('live', []))}", delta_color="off")
+    else:
+        head[3].metric("依赖出边", "—", "离线不可查", delta_color="off")
 C.mode_badge(ev_mode if ev else "none", "证据数据")
 
 if not ev:
@@ -305,12 +320,18 @@ if not ev:
                    C.fixture("rca_evidence").get("by_service", {})) + "。")
     st.stop()
 
+# Tab 标签必须短。
+#
+# 2026-09-07 部署后截图发现:五个标签带括号说明后总宽超出容器，
+# 第五个 Tab 被挤到横向滚动箭头后面 —— 整站最有价值的一屏等于没做。
+# 括号里的说明挪进各 Tab 内部的首行 caption（放那里更有用，
+# 因为读到它的时候人已经在看对应内容了）。
 tab_dir, tab_trust, tab_ctx, tab_report, tab_agent = st.tabs([
-    "🧭 因果链（依赖如何定位根因）",
-    "⚖️ 依赖可信度（这次推理的地基）",
-    "🏗️ 基础设施与历史",
-    "📝 RCA 报告（需要 Bedrock）",
-    "🤖 交给 Agent（工具可用 ≠ 工具会被用）",
+    "🧭 因果链",
+    "⚖️ 依赖可信度",
+    "🏗️ 基础设施",
+    "📝 RCA 报告",
+    "🤖 交给 Agent",
 ])
 
 # ══ Tab 1：因果链 ═════════════════════════════════════════════════════════════
@@ -539,6 +560,10 @@ with tab_trust:
 
 # ══ Tab 3：基础设施与历史 ═════════════════════════════════════════════════════
 with tab_ctx:
+    st.caption(
+        "这一 Tab 是**基础设施与历史**：服务落在哪条基础设施路径上、Pod 现状、"
+        "基础设施层根因候选、以及最近的拓扑变更。"
+        "拓扑变更那一段常常是「什么时候开始坏的」最短的答案。")
     for qname in ("q9_service_infra_path", "q6_pod_status",
                   "q10_infra_root_cause", "q19_topology_changes"):
         item = ev.get(qname)
