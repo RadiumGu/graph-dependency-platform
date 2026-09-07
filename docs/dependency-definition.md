@@ -16,11 +16,11 @@
 
 ## ① 语义维度：哪些边类型算依赖
 
-契约里 29 种边类型，只有 **6 种**带 `dependency: true`：
+契约里 29 种边类型，只有 **7 种**带 `dependency: true`：
 
-`AccessesData`、`Calls`、`Delegates`、`DependsOn`、`InvokesTool`、`Retrieves`
+`AccessesData`、`Calls`、`Delegates`、`DependsOn`、`Invokes`、`InvokesTool`、`Retrieves`
 
-其余 23 种是结构边、归属边、事件边，不参与依赖分析。判据只有一个入口：
+其余 22 种是结构边、归属边、事件边，不参与依赖分析。判据只有一个入口：
 
 ```python
 from graph_contract import is_dependency_edge, dependency_edge_labels
@@ -40,11 +40,29 @@ from graph_contract import is_dependency_edge, dependency_edge_labels
 
 | 取值 | 含义 | 谁写 |
 |---|---|---|
-| `static` | **声明**的依赖 | `aws-etl`、`cfn-etl`、`business-layer`、`manual-fix` |
-| `dynamic` | **运行时观测**到的依赖 | `Calls`；以及 `source` 以 `deepflow` 开头的 `DependsOn` / `AccessesData` |
+| `static` | **声明**的依赖 | `aws-etl`、`cfn-etl`、`business-layer`、`manual-fix`、`agentcore-etl`（SSM 声明的 service→runtime 边） |
+| `dynamic` | **运行时观测**到的依赖 | `Calls`；`source` 以 `deepflow` 开头的 `DependsOn` / `AccessesData`；以及 `appsignals-etl` 写的全部边 |
 | `live` | 查询层合成，**不落盘** | = `dynamic AND active = true` |
 
 分界线是**声明 vs 观测**，不是「配置 vs 流量」。
+
+### 数据源全表（契约 `sources`，共 13 个）
+
+| source | 类别 | 说明 |
+|---|---|---|
+| `aws-etl` / `aws-etl-static` | 声明 | AWS 控制面 describe，资源级 |
+| `cfn-etl` | 声明 | CloudFormation 栈归属与资源关系 |
+| `eks-etl` | 声明 | K8s 对象 |
+| `agentcore-etl` | 声明 + 观测 | AgentCore 控制面 + aws/spans；SSM 参数声明的 service→runtime 边 |
+| `business-layer` | 声明 | 业务能力层人工建模 |
+| `manual-fix` | 声明 | 人工修正，需留痕 |
+| `xray` | 观测 | X-Ray `GetServiceGraph`，服务级 |
+| `deepflow-etl` / `deepflow-l4` / `deepflow-dns` | 观测 | eBPF，L7 / L4 / DNS 三个粒度 |
+| `nfm` | 观测 | Network Flow Monitor，VPC 级聚合 |
+| **`appsignals-etl`** | **观测（窗口聚合）** | **CloudWatch Application Signals `ListServiceDependencies`。2026-09-06 接入。粒度比 X-Ray 细：同一个 petsite，X-Ray 的 `GetServiceGraph` 给 1 个下游，本源给 10 个且带操作名。但对 AWS 托管服务只到服务级（拿不到"调的是哪个 runtime/topic"），需与声明边合并才有资源级身份。见 ⑤** |
+
+> `appsignals-etl` 是唯一的**窗口聚合型**源，它的每条边都带
+> `observation_window_seconds` —— 其余观测源都是点时刻语义。
 
 `live` 为什么必须存在（`rca/neptune/neptune_queries.py:75` 的注释）：`dependency_kind` 单独不够——缩容到 0 副本的服务，它的边仍然是 `dynamic`，按 `dynamic` 过滤会把已经不存在的依赖返回出来。实测过的例子是 petsite 的三个上游全是 `dynamic`，但其中两个属于 awesomeshop 且副本数为 0，只有按 `live` 过滤才返回正确的空集。
 
@@ -95,11 +113,58 @@ from graph_contract import is_dependency_edge, dependency_edge_labels
 - **0.0 需要 log-odds ≤ −9.9，即至少 3 次证伪。** 所以「`verify_confidence` 恰为 0.0 而 `verify_refute_count` 为 0 或缺失」的边，其置信度不可能是 `confidence()` 算出来的。
 - **1.0 是可以合法达到的**（log-odds ≥ 9.9），不要当越界残留处理。实测 petsite→petsearch：3 次确证 12.0 + 观测封顶 1.5 = 13.5 → 1.0。
 
-已实测的取值集合（2026-09-05 活图谱，54 条带 confidence 的边）：`0.6225`(=σ0.5) / `0.7311`(=σ1.0) / `0.8808`(=σ2.0) / `0.982`(=σ4.0) / `0.989`(=σ4.5) / `0.9933`(=σ5.0) / `0.9959`(=σ5.5) / `0.9975` / `0.9998` / `0.9999` / `1.0`，全部吻合权重体系；外加 **33 条 0.0 属于历史违约**（见文末）。
+已实测的取值集合（2026-09-06 活图谱，27 条带 confidence 的边）：`0.5` / `0.6225`(=σ0.5) / `0.7311`(=σ1.0) / `0.8808`(=σ2.0) / `0.982`(=σ4.0) / `0.989`(=σ4.5) / `0.9933`(=σ5.0) / `0.9959`(=σ5.5) / `0.9975` / `0.9998` / `0.9999` / `1.0`，全部吻合权重体系。历史上那 33 条 0.0 违约值已清理完毕（见文末）。
+
+> ⚠️ **属性名是 `verify_status`，不是 `verify_verdict`。** 契约
+> `edge_verification.attrs` 声明的六个属性是
+> `verify_status` / `verify_confidence` / `verify_last` / `verify_by` /
+> `verify_experiment` / `verify_degradation`。
+>
+> 2026-09-06 有人（我）凭记忆按 `verify_verdict` 去查图谱，得到全 0，
+> 据此报了一次「验证数据全部丢失、平台招牌成果没有数据支撑」的假警报。
+> **查一个不存在的属性，Gremlin 不会报错，只会安静地返回 0。**
+> 这是「无声的空结果」最典型的一种：它长得和「真的没有」一模一样。
+> 查任何 `verify_*` 属性前，先对一眼契约的 `attrs` 列表。
 
 ---
 
-## ④ 强度维度：`verify_dependency_class`
+## ⑤ 观测时效：窗口聚合型数据源与 `observation_window_seconds`
+
+前四个维度隐含一个假设：**观测证据是点时刻的**——「刚刚看到一次调用」。
+`AccessesData` / `Calls` 的 TTL（21600s / 1800s）也是按这个假设设的。
+
+**Application Signals（`appsignals-etl`，2026-09-06 接入）打破了这个假设。**
+它的 `ListServiceDependencies` 返回的是**窗口内聚合**，拿不到每次调用的时间戳。
+所以一条 20 小时前发生、之后再没发生过的调用，仍会出现在 24 小时窗口里。
+
+若照点时刻语义写入，它会被写成 `last_seen = now` 的"新鲜"边，
+而且**每轮 ETL 都会再刷新一次** —— `Calls` 的 30 分钟 TTL 因此根本没机会生效，
+**依赖消失的检测要滞后整个窗口长度（最坏 24 小时）**。
+
+处置：这类源在每条边上写 `observation_window_seconds`，
+显式声明这条证据的含义是**「窗口内至少发生过一次」而不是「刚刚发生」**。
+
+```
+petsite -[AccessesData]-> ssm            observation_window_seconds = 86400
+petsite -[Calls]->        petfood        observation_window_seconds = 86400
+petsite -[DependsOn]->    WaggleAIOrchestrator  observation_window_seconds = 86400
+```
+
+**刻意不把采集窗口缩短到与 TTL 对齐。** 实测 6 小时窗口就已经漏掉 petsite 的
+5 条应用边（那些调用频率低于合成流量），30 分钟几乎采不到东西。
+**宁可标注粒度，不可制造假阴性。**
+
+> 这条维度是被四次同类事故逼出来的：6 小时窗口下 `WaggleAIAdoption` 从
+> Application Signals 消失（被误判成"未接入可观测性"）；6 小时窗口漏掉 5 条应用边；
+> 24 小时窗口让旧观测冒充新鲜；以及 CloudWatch 的 24 小时聚合把一小时的错误突发
+> 呈现成"26% 长期错误率"。
+>
+> **观测源的"没有"永远有两种解释：真的没有，和这个窗口里没有。**
+> 聚合窗口的边界必须显式带出来，否则消费方一定会误读。
+
+---
+
+## ⑥ 强度维度：`verify_dependency_class`
 
 `hard` / `degraded` / `soft` / `unclassified`。**与存在性正交**：存在性回答边是不是真的，强度回答它有多要紧。影响面分析、容量规划、故障预算用的是这一维。
 
@@ -157,7 +222,7 @@ Google SRE 从未把这三级定义为图里的边属性，它始终是 SLO 与�
 | # | 表现 | 为什么漏网 | 状态 |
 |---|---|---|---|
 | 1 | 11 条 `verify_confidence` = ±4.0 | 越界，被值域门禁抓到 | 已修（`test_i05` 把守） |
-| 2 | 33 条 `verify_confidence` = 0.0 | **落在 [0,1] 内**，值域门禁放行 | 17 条依赖边已回填（`test_i06` 把守）；16 条见下 |
+| 2 | 33 条 `verify_confidence` = 0.0 | **落在 [0,1] 内**，值域门禁放行 | 已清理完毕：17 条依赖边回填（`test_i06` 把守）+ 16 条非依赖边清空（见下）。2026-09-06 复查：全图 27 条带 confidence 的边全部吻合权重体系，无 0.0 残留 |
 | 3 | 16 条非依赖边带整套 `verify_*` | 不校验能写到哪种边 | 已清除（`test_i07` 把守，删前落盘留存） |
 
 第 2 条有连带影响：靶点选择按 `verify_confidence` 升序排（越低越不确定 → 信息增益越大，`chaos/code/runner/edge_verification.py:453`），所以这批边会永久霸占队列头部——而它们恰恰是**已判明无法用现有手段注入**的边。回填只修了「数值撒谎」，「不可注入的边反复被选中」是独立缺口（T-305）。
@@ -166,7 +231,7 @@ Google SRE 从未把这三级定义为图里的边属性，它始终是 SLO 与�
 
 ### 第五个维度：scope（T-306，已落地）
 
-**状态**：契约已声明（`node_scope`）、标注脚本已落地（`scripts/label_node_scope.py`）、全图 1333 个节点已标注、选边器已接入过滤。剩余未做的只有把 `Invokes` 的 `dependency` 标记改对。
+**状态**：契约已声明（`node_scope`）、标注脚本已落地（`scripts/label_node_scope.py`）、全图 1390 个节点已标注、选边器已接入过滤。`Invokes` 的 `dependency` 标记已于 2026-09-05 改对（6 种 → 7 种）。
 
 起因是上表第 3 条暴露的不是门禁漏洞，而是**缺一个维度**：16/16 全部 `Invokes` 边都被靶点选择器当依赖边选中过——16/16 而非零星几条，说明是两个组件对「什么算依赖」给出了相反答案。
 
@@ -215,9 +280,9 @@ describe-stacks → ParentId 非空 ⇒ 嵌套栈 ⇒ scaffolding
 
 最后一行是硬要求，与「不分级时写 `unclassified` 而非留空」同一条教训：属性缺失与「判过但判不出」在查询上无法区分。
 
-#### 覆盖率（实测，1333 个节点）
+#### 覆盖率（实测，2026-09-06：1390 个节点）
 
-标注结果（`scripts/label_node_scope.py --apply`，1333/1333 写入成功）：
+标注结果（`scripts/label_node_scope.py --apply`，1390/1390 写入成功）：
 
 | scope | 节点数 |
 |---|---|
@@ -229,17 +294,17 @@ describe-stacks → ParentId 非空 ⇒ 嵌套栈 ⇒ scaffolding
 | `external` | 57 |
 | `scaffolding` | 10 |
 
-可解析 1202/1333 = **90.2%**。剩余 131 条 `unknown` = 26 个 `default` namespace 混放 + 105 个不属任何 CloudFormation 栈的手工创建资源（图里 `managedBy=manual` 就有 79 个）。
+可解析 1257/1390 = **90.4%**。剩余 133 条 `unknown` = 26 个 `default` namespace 混放 + 105 个不属任何 CloudFormation 栈的手工创建资源（图里 `managedBy=manual` 就有 79 个）。
 
 把「不属任何栈」直接判 `external` 能凑到 100%，但会误判手工创建却属于被观测系统的资源（`petsite-ops-alerts` 就是 `managedBy=manual`），所以按设计显式写 `unknown`——没有为了数字好看而破例。
 
 #### 选边器如何消费 scope
 
-排除的是**触及** `platform` / `scaffolding` / `observability` / `cluster-infra` 的边，而**不是**要求两端都是 `observed`。差别很实在：110 条依赖边里只有 50 条两端都是 `observed`，另有 34 条一端是 `unknown`——要求两端 `observed` 会连带丢掉这 34 条，那是把「解析不出」当成「不该打」。
+排除的是**触及** `platform` / `scaffolding` / `observability` / `cluster-infra` 的边，而**不是**要求两端都是 `observed`。差别很实在：119 条依赖边里只有 50 条两端都是 `observed`，另有 34 条一端是 `unknown`——要求两端 `observed` 会连带丢掉这 34 条，那是把「解析不出」当成「不该打」。
 
 `platform` 那一档是**安全问题**不只是噪声：12 条 `platform → platform` 边是本平台自己的 ETL/RCA 链，往那里注入可能打断记录本次实验判定的那条管道——`neptune-etl-*` 挂了，这次实验的结论就写不回图。
 
-实测选边结果（110 条依赖边全账）：
+实测选边结果（依赖边全账，2026-09-05 当时 110 条；2026-09-06 已增至 119 条）：
 
 | 归类 | 条数 |
 |---|---|

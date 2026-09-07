@@ -797,6 +797,34 @@ fis:
     tier: [Tier0]
     recommended_for: [multi-az]
 
+  # ── 编排原语：不注入故障，只推进时间 ──────────────────────────────────────
+  # `aws:fis:wait` 是 FIS 的空动作，靠 startAfter 串在别的动作前后来编排时序。
+  # 它本身不产生任何故障，所以不该被选边器当成靶点（category: orchestration，
+  # 与其它五类刻意区分开）。
+  #
+  # 为什么需要它：`injectability.py` 把 `image-repo-dependency` 判为
+  # NEEDS_COMPOUND，理由写着「需复合实验：切断 + 触发重启，**当前 runner 未实现**」。
+  # 实测有 7 条 `微服务 -DependsOn-> ECRRepository` 靶点卡在这里 ——
+  # 镜像仓库依赖在稳态下没有可观测退化（镜像早拉下来了），
+  # 必须「先切断 ECR 通路 → 等一段 → 删 Pod 触发重拉」才能观测到。
+  # 那个「等一段」就是本条目。
+  #
+  # 来源：fis-template-library/aurora-postgres-cluster-loadtest-failover
+  # 用它在负载压上来之后再 failover —— 这也解释了为什么 2026-08-31 那次
+  # fis_rds_reboot 得到 inconclusive：注入时没有负载在驱动依赖。
+  - type: fis_wait
+    backend: fis
+    category: orchestration
+    description: FIS 空动作，只消耗时间。用 startAfter 串在其它动作之间做时序编排（复合实验的原语，本身不注入故障）
+    fis_action_id: "aws:fis:wait"
+    default_params:
+      duration: "2m"
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    template_source: fis-template-library
+    doc_url: "https://docs.aws.amazon.com/fis/latest/userguide/fis-actions-reference.html"
+    recommended_for: [compound]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FIS Scenario Library 复合场景（4 种）

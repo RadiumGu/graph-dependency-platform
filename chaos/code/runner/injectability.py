@@ -137,9 +137,17 @@ def build_matrix() -> dict:
     }
 
     # FIS：requires 为空的是 aws:eks:pod-*（Pod 语义）；其余按 ARN 种类映射
+    #
+    # ⚠️ 先滤掉 category: orchestration —— 那类条目（aws:fis:wait）不注入故障、
+    #    也不作用于任何资源，它的 requires 天然为空。若不滤掉，下面「requires
+    #    为空 ⇒ Pod 语义」这条推断会把一个空动作当成「FIS 能打到 Pod」的证据。
+    #    `actions` 计数同样只算真正能注入的动作，否则可注入性判断会被虚高的
+    #    数字带偏。
+    fis_all = [it for it in (cat.get('fis') or [])
+               if it.get('category') != 'orchestration']
     fis_callee: set = set()
     unmapped: set = set()
-    for it in (cat.get('fis') or []):
+    for it in fis_all:
         req = tuple(it.get('requires') or ())
         if not req:
             fis_callee |= set(POD_BACKED_LABELS)
@@ -154,7 +162,8 @@ def build_matrix() -> dict:
         # FIS 的 disrupt-connectivity 按子网限定，等效于源侧切断，但它要求源在该子网内，
         # 判定比 Chaos Mesh 的 externalTargets 复杂，保守起见不计入源侧能力。
         'caller_side': False,
-        'actions': len(cat.get('fis') or []),
+        # 只算能注入的动作（已滤掉 orchestration），不是目录条目总数。
+        'actions': len(fis_all),
         'unmapped_requires': unmapped,
     }
     _matrix_cache = matrix

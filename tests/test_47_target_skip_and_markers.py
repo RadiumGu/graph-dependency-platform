@@ -137,7 +137,25 @@ def test_t305b_01_matrix_comes_from_catalog_not_hardcoded(inj):
     m = inj.build_matrix()
     assert set(m) == {'chaosmesh', 'fis'}
     assert m['chaosmesh']['actions'] == 19
+    # 36 = 可注入动作数，**不是**目录条目总数（37，见 test_41 的 f04）。
+    # 差的那一条是 fis_wait（category: orchestration）—— 它不作用于任何资源，
+    # build_matrix 刻意把 orchestration 滤掉：否则它的 requires 为空会命中
+    # 「requires 空 ⇒ Pod 语义」那条推断，让一个空动作充当「FIS 能打到 Pod」的证据。
     assert m['fis']['actions'] == 36
+
+
+def test_t305b_01b_orchestration_actions_excluded_from_matrix(inj):
+    """编排原语不得进入可注入性矩阵 —— 它不注入故障，不能充当可达性证据。"""
+    import yaml
+    import pathlib
+    cat = yaml.safe_load(
+        (pathlib.Path(inj.__file__).parent / 'fault_catalog.yaml').read_text(encoding='utf-8'))
+    orch = [f['type'] for f in cat['fis'] if f.get('category') == 'orchestration']
+    assert orch, '目录里应至少有一个编排原语（fis_wait），否则本断言失去意义'
+    m = inj.build_matrix()
+    assert m['fis']['actions'] == len(cat['fis']) - len(orch), (
+        f"矩阵的 actions 应等于目录条目数减去编排原语数；"
+        f"目录 {len(cat['fis'])} 条、编排 {len(orch)} 条、矩阵报 {m['fis']['actions']}")
 
 
 def test_t305b_02_fis_can_reach_lambda_so_it_is_not_unverifiable(inj):

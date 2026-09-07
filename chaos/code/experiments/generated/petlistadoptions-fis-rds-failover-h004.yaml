@@ -3,6 +3,20 @@
 # 故障域: data | 后端: fis
 # FIS Action: aws:rds:failover-db-cluster
 # 注意: extra_params 中 ${PLACEHOLDER} 需要替换为实际值
+#
+# ⚠️ 2026-09-06 更正：cluster_arn 原为 `grafana-aurora-mysql` —— 那是 Grafana
+#    自己的 Aurora MySQL，与 petlistadoptions 毫无关系。本文件 name 带的日期
+#    (20260402) 与实验记录
+#    `exp-petlistadoptions-fis-rds-failover-20260402-073237` 同日，
+#    而那次记录是 `result=passed / degradation_rate=0.0 / recovery=1s`。
+#    **「passed」很可能是因为切了不相干的库**，业务侧自然毫无降级。
+#    FIS 侧的实验历史只保留到 2026-05-14，4 月那次的实际靶标已无法证实。
+#    因此：这条结论不可采信，需重跑；ARN 已改为业务实际依赖的 Aurora
+#    PostgreSQL（`serviceseks2-databaseb269d8bb-efjeyzicx2ak`，DB=adoptions）。
+#
+#    误匹配根因是按类型选靶（账号里有 3 个 RDS 集群）。
+#    `chaos/code/runner/target_resolver.py` 已加 EXCLUDE=("grafana","neptune")，
+#    但已生成的文件当时没有回头重新生成。
 
 name: petlistadoptions-fis-rds-failover-h004-20260402
 description: "petlistadoptions Tier1 列表服务：RDS Failover 重试验证（修复历史 ERROR）"
@@ -16,7 +30,7 @@ fault:
   type: fis_rds_failover
   duration: "3m"
   extra_params:
-    cluster_arn: "arn:aws:rds:ap-northeast-1:926093770964:cluster:grafana-aurora-mysql"
+    cluster_arn: "arn:aws:rds:ap-northeast-1:926093770964:cluster:serviceseks2-databaseb269d8bb-efjeyzicx2ak"
 
 steady_state:
   before:

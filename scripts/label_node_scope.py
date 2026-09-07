@@ -74,20 +74,38 @@ NS_SCOPE = dict(_NS['namespace_map'])
 STACK_SCOPE = dict(_NS['stack_map'])
 NESTED_STACK_SCOPE = _NS['nested_stack_scope']
 
-# ── 节点类型 → scope（不是 CloudFormation 资源，也不在 K8s 里）───────────────
-# 平台自己产出的分析件：按构造即 platform，无需查任何外部系统。
-LABEL_SCOPE = {
-    'Incident': 'platform',
-    'ChaosExperiment': 'platform',
-    'TopologyChange': 'platform',
-    'NeptuneCluster': 'platform',
-    'NeptuneInstance': 'platform',
-    # 逻辑声明节点：业务能力是对被观测系统的抽象
-    'BusinessCapability': 'observed',
-    # AWS 全局事实，不属任何栈也不属任何系统
-    'Region': 'external',
-    'AvailabilityZone': 'external',
-}
+# ── 节点类型 → scope（node-type resolver 的词表）─────────────────────────────
+# 从契约读，**不在本脚本里再抄一份** —— 这个项目已经因为「同一判据两份互相
+# 分歧的实现」踩过一次（verify_confidence 的 ±4.0 / 0.0）。
+# 这张表此前恰恰是本文件顶部那条纪律的例外（硬编码在脚本里），2026-09-06 归位。
+#
+# 表里只放「按构造即可判定」的类型，判据与取舍写在契约 node_scope.type_map 上方。
+LABEL_SCOPE = dict(_NS.get('type_map') or {})
+if not LABEL_SCOPE:
+    print("契约 node_scope.type_map 为空 —— node-type resolver 会全部失效，"
+          "而 resolvers 里声明了它。拒绝在词表缺失的情况下静默降级。",
+          file=sys.stderr)
+    raise SystemExit(2)
+_bad = sorted(set(LABEL_SCOPE.values()) - set(SCOPE_VALUES))
+if _bad:
+    print(f"契约 node_scope.type_map 出现未声明的 scope 取值：{_bad}", file=sys.stderr)
+    raise SystemExit(2)
+
+# default namespace 里混放的已知工作负载 → scope（同样从契约读）
+WORKLOAD_SCOPE = dict(_NS.get('workload_map') or {})
+_bad_wl = sorted(set(WORKLOAD_SCOPE.values()) - set(SCOPE_VALUES))
+if _bad_wl:
+    print(f"契约 node_scope.workload_map 出现未声明的 scope 取值：{_bad_wl}",
+          file=sys.stderr)
+    raise SystemExit(2)
+
+# 平台独占的命名前缀 → scope（同样从契约读）
+NAME_PREFIX_SCOPE = dict(_NS.get('name_prefix_map') or {})
+_bad_pfx = sorted(set(NAME_PREFIX_SCOPE.values()) - set(SCOPE_VALUES))
+if _bad_pfx:
+    print(f"契约 node_scope.name_prefix_map 出现未声明的 scope 取值：{_bad_pfx}",
+          file=sys.stderr)
+    raise SystemExit(2)
 
 # ── agent 层的 scope 不能按类型一刀切（2026-09-05 修）────────────────────────
 #
@@ -208,6 +226,24 @@ def _load_profile_declared() -> set:
     for v in (aws.get('s3_buckets') or {}).values():
         if v:
             out.add(str(v))
+
+    # ── `services` 段（2026-09-06 补）────────────────────────────────────────
+    # 此前只读 aws_resources，把 profile 里**最权威的那份服务清单**漏掉了。
+    # 代价实测可见：pethistory / petstatusupdater 这些 PetSite 业务服务都躺在
+    # unknown 里，而它们在 profile 的 services 段写得明明白白。
+    #
+    # 只收 ≥6 字符的片段：片段匹配是子串匹配，太短会误命中无关资源。
+    # 实测这 6 个服务的 15 个片段最短 6 字符（`petsite`），无一触线。
+    for skey, sval in (d.get('services') or {}).items():
+        sval = sval or {}
+        cands = {str(skey)}
+        for f in ('neptune_name', 'k8s_label', 'k8s_deployment'):
+            if sval.get(f):
+                cands.add(str(sval[f]))
+        for a in (sval.get('aliases') or []):
+            if a:
+                cands.add(str(a))
+        out |= {c for c in cands if len(c) >= 6}
     return out
 
 
@@ -239,6 +275,56 @@ def _agent_layer_observed() -> set:
     return _AGENT_OBSERVED
 
 
+def _prefix_match(name) -> str:
+    """名字命中哪个平台独占前缀；没命中返回空串。
+
+    与 _workload_match 分开：那个只在 default namespace 里用于可观测性 agent，
+    这个用于不属任何 CloudFormation 栈的平台自有资源。
+    """
+    nm = str(name or '')
+    if not nm:
+        return ''
+    # 长前缀优先，避免 'neptune-etl-trigger' 被 'neptune-etl-' 之类抢先
+    for pfx in sorted(NAME_PREFIX_SCOPE, key=len, reverse=True):
+        if nm.startswith(pfx):
+            return pfx
+    return ''
+
+
+def _workload_match(name) -> str:
+    """名字命中哪个已知工作负载（xray-daemon 等）；没命中返回空串。
+
+    只用于 default namespace 里混放的可观测性 agent —— 它们是 DaemonSet，
+    名字形如 `xray-daemon-26dwt`，前缀即工作负载名。
+    """
+    nm = str(name or '')
+    if not nm:
+        return ''
+    for wl in WORKLOAD_SCOPE:
+        if nm.startswith(wl):
+            return wl
+    return ''
+
+
+def _profile_match(name) -> str:
+    """名字命中 profile 声明的哪个片段；没命中返回空串。
+
+    抽成函数是因为它现在有两个调用点：namespace=default 的逐个判，
+    以及末尾的兜底。此前只在末尾有一处，而 default 分支提前 return
+    把它short-circuit 掉了。
+    """
+    global _PROFILE_DECLARED
+    nm = str(name or '')
+    if not nm:
+        return ''
+    if _PROFILE_DECLARED is None:
+        _PROFILE_DECLARED = _load_profile_declared()
+    for frag in _PROFILE_DECLARED:
+        if frag and frag in nm:
+            return frag
+    return ''
+
+
 def resolve_scope(node: dict, phys: dict) -> tuple[str, str]:
     """返回 (scope, 依据)。解析不出返回 ('unknown', 原因)。
 
@@ -261,8 +347,20 @@ def resolve_scope(node: dict, phys: dict) -> tuple[str, str]:
         if nm in NS_SCOPE:
             return NS_SCOPE[nm], f"Namespace 节点名={nm}"
 
+    # namespace=default 是混放的（业务服务和无关项目都往里扔），所以不能按
+    # namespace 判。但**不能就此 return unknown** —— profile 声明恰恰是为
+    # 「逐个判」准备的那个判据，提前 return 会让它永远轮不到。
+    # 实测代价：petsite 的 pethistory / petstatusupdater / trafficgenerator
+    # 三个业务服务都躺在 unknown 里，而 profiles/petsite.yaml 明明声明了它们。
     if ns == 'default':
-        return UNRESOLVED, "namespace=default 需逐个判（混放）"
+        hit = _profile_match(p.get('name'))
+        if hit:
+            return 'observed', f"namespace=default，但 profile 声明片段匹配（{hit}）"
+        # default 里混放的可观测性 agent（xray-daemon 等），身份按定义确定
+        wl = _workload_match(p.get('name'))
+        if wl:
+            return WORKLOAD_SCOPE[wl], f"namespace=default 里的已知工作负载（{wl}）"
+        return UNRESOLVED, "namespace=default 且 profile 未声明，需逐个判（混放）"
 
     for key in PHYSICAL_ID_KEYS:
         val = p.get(key)
@@ -271,6 +369,12 @@ def resolve_scope(node: dict, phys: dict) -> tuple[str, str]:
 
     if lbl in LABEL_SCOPE:
         return LABEL_SCOPE[lbl], f"节点类型={lbl}"
+
+    # 平台独占的命名前缀。刻意放在**栈归属之后** —— 有栈归属的以栈为准，
+    # 这里只兜住手工创建、不属任何栈的平台资源（见契约 name_prefix_map 上方注释）。
+    pfx = _prefix_match(p.get('name'))
+    if pfx:
+        return NAME_PREFIX_SCOPE[pfx], f"平台独占命名前缀（{pfx}）"
 
     # agent 层：按声明可达性判，不按类型一刀切（见 AGENT_LAYER_LABELS 上方注释）
     if lbl in AGENT_LAYER_LABELS:
@@ -284,13 +388,9 @@ def resolve_scope(node: dict, phys: dict) -> tuple[str, str]:
             f'判不出，刻意不默认 platform（那会让它被选边器排除）')
 
     # 兜底：profile 声明。只对不属任何栈的资源生效（上面已 return 掉有栈归属的）。
-    if _PROFILE_DECLARED is None:
-        _PROFILE_DECLARED = _load_profile_declared()
-    nm = str(p.get('name') or '')
-    if nm:
-        for frag in _PROFILE_DECLARED:
-            if frag and frag in nm:
-                return 'observed', f"profile 声明片段匹配（{frag}）"
+    hit = _profile_match(p.get('name'))
+    if hit:
+        return 'observed', f"profile 声明片段匹配（{hit}）"
 
     if ns:
         return UNRESOLVED, f"namespace={ns} 未登记"

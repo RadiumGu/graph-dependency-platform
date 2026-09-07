@@ -120,6 +120,51 @@ ALL_NODE_TYPES = sorted((C.contract().get("node_types") or {}).keys())
 DEP_EDGES = sorted(C.dependency_edge_labels())
 STRUCT_EDGES = sorted(set((C.contract().get("edge_types") or {}).keys()) - set(DEP_EDGES))
 
+# ── scope → 横轴簇 ───────────────────────────────────────────────────────────
+# 维度不是新造的：契约 `node_scope` 就是为「区分被观测的业务系统 vs 平台自身
+# 与可观测性设施」而建，全图已标注，选边器一直用它排除 platform/observability。
+# 本页此前完全没用它，于是业务节点和监控设施混在同一条扁行里——这就是排版难看
+# 且「业务与运维分不开」的根因。
+#
+# ⚠️ 节点上的属性名是 `scope`，不是 `node_scope`（契约 `node_scope.attr: scope`）。
+#
+# 顺序即从左到右的簇顺序：业务在最左（主角），越往右越偏基础设施。
+SCOPE_BANDS: tuple = (
+    ("observed",      "业务系统"),
+    ("external",      "外部服务"),
+    ("observability", "可观测性"),
+    ("platform",      "平台自身"),
+    ("cluster-infra", "集群底座"),
+    ("scaffolding",   "脚手架"),
+    ("unknown",       "未分类"),
+)
+_BAND_ORDER = {s: i for i, (s, _) in enumerate(SCOPE_BANDS)}
+_BAND_TITLE = dict(SCOPE_BANDS)
+
+# 图上还有一批节点没被 scope-labeler 覆盖到，其中 AWSServiceEndpoint
+# （sns / sts / ssm / stepfunctions）恰恰是 petsite 依赖的 AWS 托管服务。
+# 让它们掉进「未分类」簇会把真实的业务依赖藏进垃圾堆，所以这里按节点类型
+# 做**仅展示层**的兜底推断。
+#
+# 这不写回图谱：scope 的权威写入方是 `scope-labeler`（契约 authority），
+# 展示层猜的值不能冒充它的结论。真正的修复是让 labeler 覆盖这些类型。
+_LABEL_SCOPE_FALLBACK = {
+    "AWSServiceEndpoint": "external",
+    "SaaSEndpoint": "external",
+}
+
+
+def band_of(scope: str, node_label: str) -> str:
+    """节点归哪个横轴簇。scope 优先，缺失时按节点类型兜底，最后才是 unknown。"""
+    sc = (scope or "").strip()
+    if sc in _BAND_ORDER:
+        return sc
+    guess = _LABEL_SCOPE_FALLBACK.get(node_label)
+    if guess in _BAND_ORDER:
+        return guess
+    return "unknown"
+
+
 online = C.neptune_online()
 
 st.title("🕸️ 依赖图谱")
@@ -224,6 +269,26 @@ with st.sidebar:
     layered = st.toggle("分层布局", value=True,
                         help="关掉就退回力导向——可以直接对比两者差别")
     show_labels = st.toggle("显示节点名", value=True)
+
+    # ── scope 筛选：把业务视图和运维设施分开看 ────────────────────────────
+    # 默认只留「业务系统 + 外部服务」：这两类构成一次业务影响面分析真正要看的
+    # 东西。可观测性 / 平台自身 / 集群底座加起来 761 个节点，混进来会把 40 个
+    # 节点的预算吃光，业务依赖反而被挤掉。
+    #
+    # 外部服务默认**开着**：sns / sqs / dynamodb / ssm 这些 AWSServiceEndpoint
+    # 是 petsite 真实的下游依赖，藏掉它们等于让业务视图缺一块。
+    st.markdown("### 范围（scope）")
+    _DEFAULT_BANDS = ["observed", "external"]
+    visible_bands = st.multiselect(
+        "显示哪些簇",
+        options=[b for b, _ in SCOPE_BANDS],
+        default=_DEFAULT_BANDS,
+        format_func=lambda b: f"{_BAND_TITLE.get(b, b)}（{b}）",
+        help="业务系统=被观测的 petsite 及其依赖；外部服务=AWS 托管服务端点"
+             "（sns/sqs/dynamodb…）；其余为可观测性与平台自身设施。",
+    )
+    if set(visible_bands) != set(_DEFAULT_BANDS):
+        st.caption("⚠️ 已偏离默认范围，图上的节点不再等于「业务影响面」。")
     height = st.slider("画布高度 (px)", 400, 1000, 640, 20)
 
 
@@ -260,6 +325,8 @@ def fetch_neighborhood(anchor_name: str, ets: tuple, n_hops: int, cap: int) -> d
             "labels(startNode(r))[0] AS source_label, type(r) AS edge_type, "
             "coalesce(endNode(r).name, endNode(r).tool_key, endNode(r).arn) AS target, "
             "labels(endNode(r))[0] AS target_label, "
+            "coalesce(startNode(r).scope,'') AS source_scope, "
+            "coalesce(endNode(r).scope,'') AS target_scope, "
             "coalesce(r.verify_status,'') AS verify_status, "
             "coalesce(r.source,'') AS edge_source "
             f"LIMIT {int(cap) * 6}"
@@ -291,6 +358,7 @@ def fetch_all(ets: tuple, cap: int) -> dict:
         "RETURN coalesce(a.name,a.tool_key,a.arn) AS source, labels(a)[0] AS source_label, "
         "type(r) AS edge_type, coalesce(b.name,b.tool_key,b.arn) AS target, "
         "labels(b)[0] AS target_label, coalesce(r.verify_status,'') AS verify_status, "
+        "coalesce(a.scope,'') AS source_scope, coalesce(b.scope,'') AS target_scope, "
         "coalesce(r.source,'') AS edge_source "
         f"LIMIT {int(cap) * 3}"
     )
@@ -335,10 +403,34 @@ C.mode_badge(data_mode, "拓扑数据")
 # 节点由边推导（第一轮修复：保证每条边都画得出来）
 nodes: dict = {}
 for e in edges:
-    for nm, lb in ((e.get("source"), e.get("source_label")),
-                   (e.get("target"), e.get("target_label"))):
+    for nm, lb, sc in ((e.get("source"), e.get("source_label"), e.get("source_scope")),
+                       (e.get("target"), e.get("target_label"), e.get("target_scope"))):
         if nm:
-            nodes[(lb, nm)] = {"label": lb, "name": nm}
+            prev = nodes.get((lb, nm))
+            # 同一节点可能在多条边里出现；scope 取第一个非空值，避免被
+            # 后来一条没带 scope 的边（快照数据就没有这个字段）擦成空。
+            keep_sc = (prev or {}).get("scope") or sc or ""
+            nodes[(lb, nm)] = {"label": lb, "name": nm, "scope": keep_sc,
+                               "band": band_of(keep_sc, lb)}
+
+# ── 按 scope 筛掉不看的簇 ─────────────────────────────────────────────────────
+# **必须在节点上限裁剪之前**做：否则可观测性/平台那 761 个节点会先把 node_cap
+# 的预算吃掉，真正要看的业务依赖反而被裁掉 —— 那正是这个筛选器要解决的问题。
+# 边也要一起筛：留下指向已隐藏节点的边，vis 会为它凭空建出一个无属性的孤点。
+hidden_bands = 0
+if visible_bands:
+    _allow = set(visible_bands)
+    keep_keys = {
+        k for k, m in nodes.items()
+        # 锚点永不隐藏：它的簇被关掉时整张图就没有意义了
+        if m.get("band") in _allow or (anchor is not None and m["name"] == anchor)
+    }
+    hidden_bands = len(nodes) - len(keep_keys)
+    if hidden_bands:
+        keep_names = {nm for (_lb, nm) in keep_keys}
+        nodes = {k: v for k, v in nodes.items() if k in keep_keys}
+        edges = [e for e in edges
+                 if e.get("source") in keep_names and e.get("target") in keep_names]
 
 if not edges:
     st.warning(
@@ -443,6 +535,83 @@ def compute_levels(edge_list: list, anchor_name) -> dict:
 
 levels = compute_levels(edges, anchor)
 
+
+# ── 二维坐标：纵轴 = 依赖方向，横轴 = scope 簇 ────────────────────────────────
+def compute_positions(node_map: dict, level_map: dict) -> tuple:
+    """
+    返回 ({(label,name): (x, y)}, [(簇名, 簇标题, 簇中心x, 表头y)])。
+
+    为什么自己算坐标、不用 vis 的 hierarchical：
+      1. hierarchical 只有一个排序维度，塞不进「方向 × scope」两个维度；
+      2. 它会在每个节点上写死 fixed.y（UD 时）来防止节点离开自己那层，
+         导致节点只能左右拖不能上下拖 —— 自己算坐标就没有这个锁，
+         四个方向天然都能拖。
+    """
+    X_GAP = 165          # 同层节点间距：要容得下标签宽度，否则标签互相糊
+    BAND_PAD = 130       # 簇间留白：这段空白就是「业务 / 运维」的视觉分界
+    MAX_PER_ROW = 6      # 一行最多几个，超了折行
+    SUB_Y_GAP = 80       # 折行后子行的行距（小于层距，读起来仍是同一层）
+                         # 不能再小：标签渲染在图标正下方，锚点半径就有 32，
+                         # 60 出头会让标签与下一子行的图标糊在一起。
+    LEVEL_PAD = 150      # 层与层之间额外留白
+
+    # 先按 (簇, 层) 归组
+    grid: dict = {}
+    for key, meta in node_map.items():
+        band = meta.get("band", "unknown")
+        lv = level_map.get(key, 9)
+        grid.setdefault(band, {}).setdefault(lv, []).append(key)
+
+    # 簇内同层的节点排序要稳定，否则每次刷新节点位置乱跳，看着像图变了
+    for rows in grid.values():
+        for keys in rows.values():
+            keys.sort(key=lambda k: (str(k[0]), str(k[1])))
+
+    def sub_rows(n: int) -> int:
+        return max(1, -(-n // MAX_PER_ROW))     # 上取整
+
+    # ── 纵轴：逐层累加，层高按该层最多需要几个子行决定 ──
+    # 不能给所有层同一个固定层距：某一层折成 3 行时会撞进下一层。
+    all_lv = sorted({lv for rows in grid.values() for lv in rows})
+    level_y: dict = {}
+    run = 0.0
+    for lv in all_lv:
+        level_y[lv] = run
+        need = max(sub_rows(len(grid[b][lv])) for b in grid if lv in grid[b])
+        run += (need - 1) * SUB_Y_GAP + LEVEL_PAD + SUB_Y_GAP
+
+    # ── 横轴：簇宽由该簇最宽的一行决定（已折行，所以不超过 MAX_PER_ROW）──
+    present = [b for b, _ in SCOPE_BANDS if b in grid]
+    widths = {
+        b: max(min(len(v), MAX_PER_ROW) for v in grid[b].values()) * X_GAP
+        for b in present
+    }
+
+    pos: dict = {}
+    centers: dict = {}
+    cursor = 0.0
+    for b in present:
+        w = widths[b]
+        center = cursor + w / 2.0
+        centers[b] = center
+        for lv, keys in grid[b].items():
+            base_y = level_y[lv]
+            for r in range(sub_rows(len(keys))):
+                chunk = keys[r * MAX_PER_ROW:(r + 1) * MAX_PER_ROW]
+                n = len(chunk)
+                start = center - (n - 1) * X_GAP / 2.0
+                for i, key in enumerate(chunk):
+                    pos[key] = (start + i * X_GAP, base_y + r * SUB_Y_GAP)
+        cursor += w + BAND_PAD
+
+    # 表头统一在全图最顶端之上同一高度 —— 各簇用自己的顶层会让表头高低不齐。
+    header_y = (min(level_y.values()) if level_y else 0.0) - LEVEL_PAD * 0.9
+    bands_meta = [(b, _BAND_TITLE.get(b, b), centers[b], header_y) for b in present]
+    return pos, bands_meta
+
+
+positions, bands_meta = compute_positions(nodes, levels)
+
 level_width: dict = {}
 for key in nodes:
     lv = levels.get(key, 9)
@@ -460,6 +629,17 @@ m[0].metric("关系", len(edges))
 m[1].metric("节点", len(nodes), "⚠️ 超认知预算" if over else "在预算内")
 m[2].metric("节点类型", len({n["label"] for n in nodes.values()}))
 m[3].metric("关系类型", len({e["edge_type"] for e in edges}))
+
+if hidden_bands:
+    _hidden_titles = "、".join(
+        _BAND_TITLE.get(b, b) for b, _ in SCOPE_BANDS if b not in set(visible_bands)
+    )
+    st.caption(
+        f"🔍 按 scope 隐藏了 {hidden_bands} 个节点（{_hidden_titles}）。"
+        "筛选发生在节点上限裁剪**之前**，所以这 "
+        f"{node_cap} 个节点的预算全花在你选中的簇上。"
+        "在左侧「范围（scope）」里可以把它们放回来。"
+    )
 
 if trimmed:
     st.caption(
@@ -484,7 +664,7 @@ if layered and widest > 12:
 # ── 渲染 ──────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def build_html(nodes_t: tuple, edges_t: tuple, h: int, use_layered: bool,
-               labels: bool, anchor_name) -> str:
+               labels: bool, anchor_name, bands_t: tuple = ()) -> str:
     import json
 
     from pyvis.network import Network
@@ -492,16 +672,34 @@ def build_html(nodes_t: tuple, edges_t: tuple, h: int, use_layered: bool,
     net = Network(height=f"{h}px", width="100%", bgcolor="#ffffff",
                   font_color="#222222", directed=True)
 
+    # 簇标题：用 shape='text' 的哑节点当作泳道表头。
+    # 没有它，横向的留白只是留白；有了它，留白才读得出「左边是业务、右边是设施」。
+    if use_layered:
+        for band, title, cx, cy in bands_t:
+            net.add_node(
+                f"__band__::{band}", label=f"{title}",
+                shape="text", x=float(cx), y=float(cy), physics=False,
+                font={"size": 20, "face": "sans-serif", "color": "#8a94a6",
+                      "strokeWidth": 4, "strokeColor": "#ffffff"},
+                title=f"scope = {band}",
+            )
+
     ids = set()
-    for label, name, lvl in nodes_t:
+    for label, name, lvl, band, px, py in nodes_t:
         nid = f"{label}::{name}"
         ids.add(nid)
         gname, color, shape = group_of(label)
         is_anchor = anchor_name is not None and name == anchor_name
+        extra = {}
+        if use_layered:
+            # 显式坐标 + physics 关：节点停在算好的位置，但没有 fixed 锁，
+            # 所以上下左右都能拖（拖完也不会被物理引擎弹回去）。
+            extra = {"x": float(px), "y": float(py), "physics": False}
         net.add_node(
             nid,
             label=(str(name)[:18] if labels else " "),
             title=f"{label}\n{name}\n分组：{gname}"
+                  f"\nscope：{band}"
                   + ("\n（锚点）" if is_anchor else ""),
             # 锚点用 AWS 品牌橙 + Squid Ink 描边：明确是「焦点」，
             # 不用红色——红在本页已经表示「已证伪」，两种含义不能撞。
@@ -513,6 +711,7 @@ def build_html(nodes_t: tuple, edges_t: tuple, h: int, use_layered: bool,
             size=32 if is_anchor else 16,
             borderWidth=3 if is_anchor else 1,
             level=int(lvl),
+            **extra,
         )
 
     # 边色 = AWS Cloudscape 图表状态色（status-positive / high / medium / neutral）
@@ -534,36 +733,27 @@ def build_html(nodes_t: tuple, edges_t: tuple, h: int, use_layered: bool,
                          title=f"{et} · 未验证", label="")
 
     if use_layered:
-        # 分层：sortMethod='directed' 用边方向定层；配合显式 level 避免环把层级算乱
+        # 坐标已在 Python 侧算好（纵轴=依赖方向，横轴=scope 簇），
+        # 所以**不启用 vis 的 hierarchical**：
+        #   1. 它只有一个排序维度，装不下「方向 × scope」；
+        #   2. 它会在节点上写死 fixed.y，害得节点只能左右拖 —— 不用它，
+        #      这个毛病就从根上不存在了。
         opts = {
-            "layout": {
-                "hierarchical": {
-                    "enabled": True,
-                    # UD 而非 LR：1 跳邻域只有 3 个层级、却有十几个兄弟节点。
-                    # LR 会把它们堆成一根很高的细柱，塞进宽画布后 fit 到极小、
-                    # 标签全丢（就是用户截图里的样子）。UD 让兄弟节点横向铺开，
-                    # 纵横比与画布一致，fit 后仍是可读比例。依赖方向 = 上→下。
-                    "direction": "UD",
-                    "sortMethod": "directed",
-                    "shakeTowards": "roots",
-                    "levelSeparation": 190,
-                    # 同层间距要容得下标签宽度，否则相邻标签会糊在一起
-                    "nodeSpacing": 165,
-                    "treeSpacing": 200,
-                    "blockShifting": True,
-                    "edgeMinimization": True,
-                    "parentCentralization": True,
-                }
-            },
+            "layout": {"hierarchical": {"enabled": False},
+                       # 关掉随机种子扰动，保证同样的数据画出同样的图
+                       "randomSeed": 7},
             "physics": {"enabled": False},
+            # 竖直贝塞尔：依赖方向是纵向的，边也顺着纵向走，读起来才连贯。
             "edges": {"smooth": {"enabled": True, "type": "cubicBezier",
                                  "forceDirection": "vertical", "roundness": 0.5},
                       "arrows": {"to": {"enabled": True, "scaleFactor": 0.6}},
                       "font": {"size": 11, "face": "sans-serif", "color": "#5f6b7a",
                                "strokeWidth": 3, "strokeColor": "#ffffff",
                                "align": "middle"}},
-            # dragView / zoomView 显式打开：默认虽为 true，但写明可避免被别处覆盖，
-            # 且这是「拖不动」的排查第一现场。
+            # dragView / zoomView 显式打开：默认虽为 true，但写明可避免被别处覆盖。
+            # ⚠️ 「节点拖不动」不要从这里查 —— dragNodes 只管交互层的总开关，
+            # 而分层布局是在每个节点上写 fixed.y/fixed.x 来锁轴的，这里配什么都
+            # 覆盖不了。本页已改为自算坐标，不再启用 hierarchical，故无此问题。
             "interaction": {"hover": True, "tooltipDelay": 200,
                             "navigationButtons": True, "keyboard": False,
                             "dragView": True, "zoomView": True,
@@ -635,15 +825,52 @@ def build_html(nodes_t: tuple, edges_t: tuple, h: int, use_layered: bool,
         }
       } catch (e) {}
     }
-    network.once('afterDrawing', fitReadable);
+    // ── 解开分层布局在节点上写死的轴锁 ─────────────────────────────
+    // vis-network 的 LayoutEngine 启用 hierarchical 时，会直接在每个节点上
+    // 写 fixed.y=true（direction UD/DU）或 fixed.x=true（LR/RL），
+    // 好让节点不脱离自己那一层。表现就是「只能左右拖，不能上下拖」。
+    //
+    // 这个锁 interaction.dragNodes 管不到 —— 它是布局引擎下在节点属性上的，
+    // 不是交互开关，所以调 interaction 那一段永远无效（曾在此排查过）。
+    //
+    // 做法：等布局把坐标算完，取下坐标 → 关掉 hierarchical（否则它会持续
+    // 重新加锁）→ 解开两个轴 → 把坐标显式写回。physics 本来就是关的，
+    // 所以节点不会飘：分层外观完整保留，而四个方向都能拖了。
+    function unlockNodeDragging() {
+      try {
+        if (typeof network === 'undefined') return;
+        var lay = (network.options && network.options.layout) || {};
+        var h = lay.hierarchical;
+        var layered = (h === true) || (h && h.enabled === true);
+        // 自由布局（physics 档）本来就四向可拖，别去碰它的 physics。
+        if (!layered) return;
+
+        var pos = network.getPositions();          // 分层算出的坐标
+        network.setOptions({layout: {hierarchical: {enabled: false}},
+                            physics: {enabled: false}});
+        // 用 network.body.data.nodes 而不是全局 nodes：后者的变量名随
+        // pyvis 模板版本变化，前者是 vis 自己持有的 DataSet，稳定。
+        var ds = network.body.data.nodes;
+        var upd = Object.keys(pos).map(function (id) {
+          return {id: id, x: pos[id].x, y: pos[id].y,
+                  fixed: {x: false, y: false}};
+        });
+        if (ds && upd.length) ds.update(upd);
+      } catch (e) {}
+    }
+
+    network.once('afterDrawing', function () {
+      unlockNodeDragging();   // 先解锁，再 fit：解锁不动坐标，fit 只调视野
+      fitReadable();
+    });
     // 分层布局下 physics 关闭，不触发 stabilized，故再兜底一次
-    setTimeout(fitReadable, 350);
+    setTimeout(function () { unlockNodeDragging(); fitReadable(); }, 350);
   });
 </script>
 """
     anchor_id = ""
     if anchor_name is not None:
-        for label, name, _lvl in nodes_t:
+        for label, name, *_rest in nodes_t:
             if name == anchor_name:
                 anchor_id = f"{label}::{name}"
                 break
@@ -653,18 +880,25 @@ def build_html(nodes_t: tuple, edges_t: tuple, h: int, use_layered: bool,
 
 
 html = build_html(
-    tuple((lb, nm, levels.get((lb, nm), 9)) for (lb, nm) in nodes),
+    tuple((lb, nm, levels.get((lb, nm), 9),
+           nodes[(lb, nm)].get("band", "unknown"),
+           positions.get((lb, nm), (0.0, 0.0))[0],
+           positions.get((lb, nm), (0.0, 0.0))[1]) for (lb, nm) in nodes),
     tuple((e["source"], e.get("source_label"), e["target"], e.get("target_label"),
            e["edge_type"], e.get("verify_status", "")) for e in edges),
     auto_height, layered, show_labels, anchor,
+    tuple(bands_meta),
 )
 C.embed_html(html, auto_height + 20)
 
 lc1, lc2 = st.columns([3, 2])
 lc1.caption(
     "🟢 绿粗线 = 故障注入**已确认**　🔴 红虚线 = 已**证伪**　🟠 橙线 = 未定　"
-    "⚫ 灰细线 = 未验证。★ 橙色星 = 锚点。左→右 = 依赖方向。"
-    "配色取自 AWS Cloudscape 图表令牌。滚轮缩放、空白处拖动平移。"
+    "⚫ 灰细线 = 未验证。★ 橙色星 = 锚点。"
+    "**上→下 = 依赖方向**（上游调用方在上、下游被依赖方在下）；"
+    "**横向分簇 = `scope`**（左起：业务系统 → 外部服务 → 可观测性 → 平台自身 → "
+    "集群底座），簇间留白就是业务与运维设施的分界。"
+    "配色取自 AWS Cloudscape 图表令牌。滚轮缩放、空白处拖动平移、节点可上下左右任意拖动。"
 )
 lc2.caption("拖拽可重排；右下角有缩放按钮；悬停看类型与分组。")
 

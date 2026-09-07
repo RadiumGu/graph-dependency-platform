@@ -46,6 +46,31 @@ def upsert_business_capabilities() -> dict:
             continue
         stats['created'] += 1
 
+        # ── 为什么整类跳过，别再把它打开 ────────────────────────────────────
+        # `depends_on_types` 是**按类型**展开：「这个能力依赖 RDSCluster」会被
+        # 展开成「依赖账号里每一个 RDSCluster」。同类资源多于一个时，它必然产生
+        # 假边，而且假得很有破坏力。实测残留（2026-09-06 清理掉 6 条）：
+        #
+        #   PetAdoptionFlow    -DependsOn-> grafana-aurora-mysql   ← Grafana 自己的库
+        #   AdoptionHistoryView-DependsOn-> grafana-aurora-mysql   ← 同上
+        #   PetAdoptionFlow    -DependsOn-> petsite-ops-alerts     ← 自己的告警 topic
+        #   PetAdoptionFlow    -DependsOn-> petsite-rca-alerts     ← 平台的 RCA 告警
+        #   PetAdoptionFlow    -DependsOn-> ...sqspetadoptiondlq   ← 死信队列
+        #   PetInventoryMgmt   -DependsOn-> ...sqspetadoptiondlq   ← 同上
+        #
+        # 后三类的**关系方向是反的**：告警 topic 和 DLQ 观测/承接这个能力，
+        # 不是它的依赖。而账号里有 3 个 RDSCluster，业务的是
+        # `serviceseks2-databaseb269d8bb`（aurora-postgresql，DB=adoptions），
+        # 类型展开却把 Grafana 的 aurora-mysql 也接上了。
+        #
+        # 代价不止是图脏：那两条假边让 grafana-aurora-mysql 成了 **priority=1
+        # 的故障注入靶点**，并已生成两个 `fis_rds_failover` 实验指向它
+        # （见 chaos/code/experiments/generated/*-fis-rds-failover-h00{2,4}.yaml
+        # 的更正说明）。`fis_rds_failover` 是真会切主备的动作。
+        #
+        # **加 scope 过滤不足以修好它** —— 告警 topic 和 DLQ 的 scope 都是
+        # `observed`，照样会被选中。类型这个粒度本身就不够，要正确表达就得在
+        # business_config.json 里按**资源名**声明，而不是按类型。
         SKIP_BC_INFRA_LABELS = {'RDSCluster', 'DynamoDBTable', 'SQSQueue', 'SNSTopic', 'StepFunction', 'S3Bucket'}
         INTERNAL_KEYWORDS = ('provider', 'waiter', 'framework', 'customresource',
                               'arn:aws:', 'iscompl', 'onevent', 'ontimeout')
@@ -83,7 +108,7 @@ def upsert_business_capabilities() -> dict:
                             f").property('source', __.coalesce(__.values('source'), __.constant('business-layer')))"
                             f".property('phase','runtime')"
                             f".property('strength','strong')"
-                            f".property('last_updated',{ts})"
+                            f".property('last_updated',{ts}).property('last_seen',{ts})"
                         )
                         stats['edges'] += 1
                     except Exception as e:
@@ -114,7 +139,7 @@ def upsert_business_capabilities() -> dict:
                     f".coalesce("
                     f"  __.inE('Implements').where(__.outV().hasId('{svc_vid}')),"
                     f"  __.addE('Implements').from('svc')"
-                    f").property('source', __.coalesce(__.values('source'), __.constant('business-layer'))).property('last_updated',{ts})"
+                    f").property('source', __.coalesce(__.values('source'), __.constant('business-layer'))).property('last_updated',{ts}).property('last_seen',{ts})"
                 )
                 stats['edges'] += 1
             except Exception as e:
@@ -129,7 +154,7 @@ def upsert_business_capabilities() -> dict:
                     f".coalesce("
                     f"  __.inE('Implements').where(__.outV().hasLabel('LambdaFunction').has('name',containing('{fp}'))),"
                     f"  __.addE('Implements').from('fn')"
-                    f").property('source', __.coalesce(__.values('source'), __.constant('business-layer'))).property('last_updated',{ts})"
+                    f").property('source', __.coalesce(__.values('source'), __.constant('business-layer'))).property('last_updated',{ts}).property('last_seen',{ts})"
                 )
                 stats['edges'] += 1
             except Exception as e:
@@ -239,7 +264,7 @@ def scan_ecr_startup_deps(eks_client, session) -> int:
                     f").property('source', __.coalesce(__.values('source'), __.constant('aws-etl')))"
                     f".property('phase','startup')"
                     f".property('strength','strong')"
-                    f".property('last_updated',{ts})"
+                    f".property('last_updated',{ts}).property('last_seen',{ts})"
                 )
                 count += 1
 

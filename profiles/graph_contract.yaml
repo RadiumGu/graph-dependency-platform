@@ -624,7 +624,62 @@ node_scope:
     NeptuneEtlStack: platform
     ServicesEks2: observed
     WaggleAIAgents: observed
+  # node-type resolver 的词表。只放「按构造即可判定、不需要查任何外部系统」的
+  # 类型；凡是同一类型可能属于不同系统的（SecurityGroup / Subnet / VPC /
+  # EC2Instance / S3Bucket …）一律不进这张表 —— 本账号里就混着 openclaw /
+  # kronos / grafana 等无关项目的同类资源，按类型一刀切会造出假归属。
+  #
+  # agent 层（AgentRuntime / AgentTool / KnowledgeBase / AgentMemory /
+  # Guardrail / AgentGateway）**刻意不在此表内**：它们按「被观测系统的配置是否
+  # 声明可达」判定，判不出就是 unknown。按类型映射成 platform 会让选边器把
+  # 业务关键的 agent 边排除掉，那正是 2026-09-05 修掉的 bug。
+  type_map:
+    # AWS 托管服务端点：按定义就是被观测系统之外的 AWS 服务，
+    # 不属任何栈、不在任何 K8s namespace 里。
+    AWSServiceEndpoint: external
+    SaaSEndpoint: external
+    # AWS 全局事实，不属任何栈也不属任何系统
+    AvailabilityZone: external
+    Region: external
+    # 逻辑声明节点：业务能力是对被观测系统的抽象
+    BusinessCapability: observed
+    # 平台自己产出的分析件：按构造即 platform，无需查任何外部系统
+    ChaosExperiment: platform
+    Incident: platform
+    NeptuneCluster: platform
+    NeptuneInstance: platform
+    TopologyChange: platform
   unresolved_value: unknown
+  # default namespace 是混放的，namespace_map 对它无能为力。但里面有一批
+  # **身份按定义就确定**的可观测性 agent（DaemonSet 形态、每个节点一个副本），
+  # 实测 14 个 xray-daemon-* Pod 因此躺在 unknown 里，污染业务视图。
+  #
+  # 只收这一类：名字即工作负载名、身份无歧义、且该工作负载整体属于某个 scope。
+  # 业务服务**不要**往这里加 —— 它们的权威声明在 profiles/petsite.yaml，
+  # 走 profile-declaration resolver，不要造第二个声明源。
+  workload_map:
+    aws-otel-collector: observability
+    cloudwatch-agent: observability
+    fluent-bit: observability
+    otel-collector: observability
+    xray-daemon: observability
+  # 平台自己拥有的命名前缀 → scope。只放**平台独占且无歧义**的前缀。
+  #
+  # 为什么需要这张表：`neptune-etl-from-aws` / `-deepflow` 在 NeptuneEtlStack 里，
+  # 靠栈归属就判成 platform；但 `-xray` / `-agentcore` / `-appsignals` 是手工
+  # `aws lambda create-function` 建出来的，不属任何栈，栈归属对它们无能为力，
+  # 于是落到 unknown。而 unknown **不在选边器的 EXCLUDED_SCOPES 里**，
+  # 结果平台会把自己的 ETL 选成故障注入靶点。
+  #
+  # ⚠️ 这里判不出 scope 只是**症状**，病因是三个生产 Lambda 绕过了基础设施即代码。
+  #    本表让症状消失，但不要让它把病因盖住 ——
+  #    见 todo/tech-debt-etl-lambdas-outside-cfn.md。
+  #
+  # 业务资源**不要**加进来：它们的权威声明在 profiles/petsite.yaml，
+  # 走 profile-declaration resolver，不要造第二个声明源。
+  name_prefix_map:
+    neptune-etl-from-: platform
+    neptune-etl-trigger: platform
   values:
   - observed
   - observability

@@ -76,6 +76,9 @@ FIS_TARGET_KEY_MAP: dict[str, str | None] = {
     "aws:elasticache:interrupt-cluster-az-power":        "ReplicationGroups",
     "aws:s3:bucket-pause-replication":                   "Buckets",
     "aws:network:route-table-disrupt-cross-region-connectivity": "RouteTables",
+    # 编排原语：aws:fis:wait 不作用于任何资源，故 target key 为 None。
+    # 下游第 240/244 行已按 `if target_key` 分支处理，会生成 "targets": {}。
+    "aws:fis:wait":                                      None,
 }
 
 # Actions that do NOT accept a 'duration' parameter

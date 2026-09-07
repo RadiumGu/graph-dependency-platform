@@ -205,11 +205,20 @@ def test_f04_declared_counts_match_body(catalog):
     这里把真值锚在文件自身。
     """
     assert len(catalog['chaosmesh']) == 19
-    # 36 而非 37：2026-08-31 删除了 fis_ec2_network_disrupt ——
-    # 它的 action id 在 AWS 侧不存在，描述的「实例级网络隔离」这个能力也不存在
-    # （唯一对应的真 action 目标是子网），改成真 action 后又与 fis_network_disrupt
-    # 完全重复。详见 fault_catalog.yaml 该位置的注释。
-    assert len(catalog['fis']) == 36
+    # 37 = 36 个可注入动作 + 1 个编排原语（fis_wait，category: orchestration）。
+    #
+    # 这两个数字要分开看，别再合成一个：
+    #   · 本断言数的是**目录条目总数** → 37
+    #   · test_47 的 test_t305b_01 数的是**可注入动作数** → 36
+    #     （`injectability.build_matrix()` 刻意滤掉 orchestration ——
+    #      aws:fis:wait 不作用于任何资源，把它算进可达性矩阵会虚高。）
+    #
+    # 历史：2026-08-31 曾从 37 删到 36，原因是 fis_ec2_network_disrupt 的
+    # action id 在 AWS 侧不存在、能力也不存在（唯一对应的真 action 目标是子网），
+    # 改成真 action 后又与 fis_network_disrupt 完全重复。
+    # 2026-09-07 加入 fis_wait 后重回 37，但**与那次删除无关** ——
+    # 别把这两件事的数字混为一谈。
+    assert len(catalog['fis']) == 37
     assert len(catalog['fis_scenarios']) == 4
 
 
