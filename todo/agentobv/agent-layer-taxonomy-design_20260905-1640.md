@@ -184,6 +184,38 @@ P2 要补的不是一条边，而是**两条语义不同的入边**：
 所以 `petsite → WaggleAIOrchestrator` 现在是 `static`（声明态），
 要把它推到 `dynamic`/`confirmed` 靠的是合成流量，不是加边。
 
+**2026-09-07 实测已证实这条路径,不再是推断** `[实测]`。
+orchestrator 的运行时日志里有持续的网关出站请求:
+
+```
+INFO [httpx] [trace_id=6a9ee56a0a3bfddf4a62a5c45db38423 span_id=5fe316a2b7fa457f
+     resource.service.name=WaggleAIOrchestrator.DEFAULT]
+  - HTTP Request: POST https://waggleaigateway-th4m2rp46p.gateway.bedrock-agentcore.ap-northeast-1.amazonaws…
+```
+
+查询窗口 09-04 → 09-07，命中数按天：**155 / 331 / 663 / 468**（09-07 未过完），
+频率约每 5 分钟一次，**从未中断**。日志组
+`/aws/bedrock-agentcore/runtimes/WaggleAIOrchestrator-K85tG867Xt-DEFAULT`。
+
+**这条证据改变两件事：**
+
+**① P2 从「疑似盲区」升级为「已确认的活体 SPOF」。**
+网关不是装饰性资源，它承载着全部 agent 间流量。它失效 ⇒ orchestrator
+到 4 个子 agent 全断 ⇒ 多 agent 系统整体失效。**而图对此完全沉默。**
+
+**② `dependency_kind` 应取 `dynamic`，不是 `static`。**
+本文初版写 `static`（因为当时只有控制面声明作依据）。既然已实测到
+**持续**流量（每 5 分钟、跨 4 天无中断），按本项目 `dependency_kind` 的定义
+（`dynamic` = 持续观测到流量）就该是 `dynamic`。
+这也让它落入 `deactivate_stale_dynamic_edges` 的失效管辖，
+而非 `inference` 那条「稀疏突发、不判失效」的通道 —— 对这条边是正确的，
+因为它的流量形态是稳态而非突发。
+
+> **顺带修正 §5 的 D3**：原问题是「是否等 span 证明了网关这一跳再写」，
+> 现在**已经证明了**，所以不存在「先写未验证的边」这个取舍。
+> 而且证据就在 orchestrator 自己的日志里带 `trace_id`/`span_id`，
+> **ETL 可以直接从这里派生这条边**，不需要新数据源。
+
 #### (b) Agent 间调用 → 网关 —— **仍然需要**
 
 ```
@@ -315,7 +347,7 @@ AgentRuntime -[RoutesVia]-> AgentGateway     dependency_kind: static
 |---|---|---|---|
 | **D1** | 那条 `Microservice -DependsOn-> AgentRuntime`（`petsite → WaggleAIOrchestrator`）怎么办 | (a) 改为指向 `AgentGateway`；(b) 保留 | **(b) 保留，不动。** 9-05 初版建议 (a)，**已推翻**——PetSite 直调 runtime，不经网关，见 §3.2(a)。这条边是对的，缺的是观测而非建模 |
 | **D2** | 新标签命名 | `RoutesToRuntime` / `Fronts` / 其他 | **`RoutesToRuntime`**，理由见 §3.3。不变 |
-| **D3** | `RoutesVia` 是否现在就写入 | (a) 现在写，`verify_status` 留空；(b) 等 span 证明了网关这一跳再写 | **(a)**。「声明存在但未验证」是本项目已有的合法状态。不变 |
+| **D3** | `RoutesVia` 是否现在就写入 | (a) 现在写，`verify_status` 留空；(b) 等 span 证明了网关这一跳再写 | **问题已消解（2026-09-07）**。日志已证明 orchestrator 持续向网关发 POST（4 天、每 5 分钟、无中断），所以不存在「写未验证的边」这个取舍。`dependency_kind` 取 **`dynamic`**（不是初版写的 `static`），见 §3.2(b) |
 | **D4** | orchestrator 那 4 条 `InvokesTool` 是否要重构 | (a) 保留；(b) 改为经网关两跳 | **(a)**。它们是观测到的事实，不该按推断改写。不变 |
 | **D5** | `graph_dependency_mcp` 这个 runtime（不在网关 target 里）是否要建模其入口 | — | 单独议；按 `node_scope` 应归 `platform` 而非 `observed`。不变 |
 
