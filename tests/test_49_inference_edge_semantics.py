@@ -197,3 +197,31 @@ def test_m08_稀疏源边只被标记不被失效(cleanup, monkeypatch):
     for q in rec_i.queries:
         assert "'active'" not in q, (
             f"稀疏源边的标记路径不得改写 active：{q[:200]}")
+
+
+def test_m09_标记路径的判据依赖时间戳_故稀疏边不得缺时间戳(cleanup, monkeypatch):
+    """稀疏源边缺 TIMESTAMP_FIELD 会同时逃出两条路径，成为永久墓碑。
+
+    这条不是重复 m08，而是补上 m08 覆盖不到的那一半：m08 保证「失效排除、
+    标记包含」，但**两条路径都以 `has(TIMESTAMP_FIELD, lt(cutoff))` 为判据**。
+    一条完全没有时间戳的边，`has(...)` 匹配不上 —— 于是既不失效也不标陈旧。
+
+    实测代价（2026-09-07）：22 条 deepflow-dns 边有 last_seen 的**零条**，
+    其中 4 条 last_drift_check 停在 172 天前。它们在图上以「无任何陈旧标记」
+    的姿态存在了半年，而 AccessesData 的 TTL 是 6 小时。
+    写入方已在 01974a8 补上 last_seen；存量由
+    infra/backfill_sparse_edge_timestamp.py 从 last_drift_check 回填。
+
+    本断言钉住的是**查询形状**：标记路径必须以时间戳为判据。
+    若将来有人把判据换成别的（例如直接按 source 无条件标记），
+    这条会失败并提醒他重新考虑「缺时间戳的边怎么办」。
+    """
+    monkeypatch.setattr(cleanup, 'expiry_enabled', lambda: True)
+    rec = _Recorder(n=1)
+    cleanup.mark_stale_inference_edges(rec, round_ts=1_000_000)
+    ts_field = cleanup.TIMESTAMP_FIELD
+    assert rec.queries, '标记路径应至少发出一条查询'
+    for q in rec.queries:
+        assert f"has('{ts_field}'" in q, (
+            f"标记路径必须以 {ts_field} 为判据 —— 否则缺时间戳的边逃出两条路径，"
+            f"成为既不失效也不标陈旧的永久墓碑：{q[:200]}")
