@@ -41,6 +41,29 @@ C.sidebar()
 try:
     from st_link_analysis import EdgeStyle, Event, NodeStyle, st_link_analysis
     HAVE_SLA = True
+
+    # 抑制 st-link-analysis 0.4.0 的一条**无条件**弃用警告。
+    #
+    # 上游 styles.py 里写的是 `if labeled is not None: warn(...)`，
+    # 而签名默认值是 `labeled: bool = False` —— `False is not None` 恒为真，
+    # 所以每构造一个 EdgeStyle 就报一条，无论调用方传不传这个参数。
+    # 实测：不传 / False / True 三种情形各报一条，caption 都不受影响。
+    #
+    # 这一页每次渲染要按关系类型构造 N 个 EdgeStyle，于是每次刷新往日志里
+    # 灌 N 条噪音 —— 噪音会埋掉真信号，所以按**具体警告类**过滤，
+    # 不是 `simplefilter("ignore")` 那种一刀切。
+    # 上游修好或删掉这个参数之后，这个过滤自动变成空操作。
+    import warnings  # noqa: E402
+
+    try:
+        from st_link_analysis.component.styles import (  # noqa: E402
+            LinkAnalysisDeprecationWarning,
+        )
+        warnings.filterwarnings(
+            "ignore", category=LinkAnalysisDeprecationWarning,
+            message=r".*labeled.*deprecated.*")
+    except Exception:  # noqa: BLE001
+        pass       # 上游改了模块结构就算了，噪音不值得为它抛错
 except Exception as _exc:  # noqa: BLE001
     HAVE_SLA = False
     _SLA_ERR = f"{type(_exc).__name__}: {_exc}"
@@ -280,9 +303,17 @@ elements = {"nodes": nodes_payload, "edges": edges_payload}
 present_groups = sorted({group_name(lb) for lb in node_map.values()})
 node_styles = [NodeStyle(g, GROUP_COLOR.get(g, "#B39DDB"), "name") for g in present_groups]
 present_vs = sorted({(e["data"]["label"]) for e in edges_payload})
+# 不要传 `labeled=` —— 它在这里是**死参数**。
+# 上游 styles.py 的逻辑是 `if labeled and not caption: self.caption = "label"`，
+# 而我们已经传了 caption="rel"，所以 labeled 不会改变任何行为。
+#
+# ⚠️ 而且它的弃用警告是**无条件触发**的：条件写成 `if labeled is not None`，
+# 但签名默认值是 `labeled: bool = False` —— `False is not None` 恒为真。
+# 实测三种情形（不传 / False / True）都各报一条警告，caption 都是 'rel'。
+# 所以警告不是我们调用错了，删掉参数也消不掉；见下方 filterwarnings。
 edge_styles = [
     EdgeStyle(vs, color=VS_STYLE.get(vs, ("#9E9E9E", ""))[0], caption="rel",
-              labeled=True, directed=True, curve_style="bezier")
+              directed=True, curve_style="bezier")
     for vs in present_vs
 ]
 

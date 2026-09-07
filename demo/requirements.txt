@@ -3,8 +3,23 @@
 #   pyyaml   —— 首页/各页面从 profiles/graph_contract.yaml 现算节点/边/来源数量
 #   pydantic —— profiles/schema.py 的 validate_profile 依赖它；缺失时
 #               Smart Query 的 few-shot 面板会降级（已加保护，不再整页崩溃）
-streamlit>=1.35.0
-pyvis>=0.3.2
+# ── 版本策略（门禁 tests/test_59_demo_requirements_importable.py）───────────
+#
+# **API 已证明不稳的钉死（==），其余给下限（>=）。**
+# 不是「钉死更安全」—— 对 boto3 钉死是更危险。
+#
+#   streamlit         用到 width="stretch" / st.tabs / AppTest 等版本敏感 API；
+#                     线上与本地必须同版本才谈得上复现（2026-09-06 为此把线上
+#                     从旧版升到 1.62.0）。
+#   pyvis             3_Graph_Explorer 自己算坐标、绕开 hierarchical，
+#                     强耦合到 build_html 的具体行为。
+#   st-link-analysis  0.4.0 正在弃用 EdgeStyle 的 labeled 参数（见下方）。
+#
+#   boto3             **刻意不钉**：必须保持新，否则拿不到新服务 ——
+#                     本项目用的 `aws devops-agent` 就需要较新的 botocore。
+#                     钉死它是主动制造故障。
+streamlit==1.62.0
+pyvis==0.3.2
 networkx>=3.0
 boto3>=1.34.0
 requests>=2.31.0
@@ -16,4 +31,10 @@ pydantic>=2.0
 #   pyvis 是单向的，拿不回选中事件，那套交互在它上面做不了。
 #   这是目前唯一还在维护的 Cytoscape 封装（v0.4.0 / 2025-09）；
 #   streamlit-cytoscapejs (2022) / st-cytoscape (2023) 均已废弃。
-st-link-analysis>=0.4.0
+#
+# 钉死版本，不用 >= ：2026-09-07 发现这个包**声明了但没装**，
+# 于是那一页在线上只显示一个错误框、零控件 —— 而且不报错、不告警，
+# 看起来就像「这页就是长这样」。开区间还会让某天的新版本静默改掉
+# EdgeStyle/NodeStyle 的参数（0.4.0 已经在弃用 labeled 了）。
+# 门禁 tests/test_59_demo_requirements_importable.py。
+st-link-analysis==0.4.0
