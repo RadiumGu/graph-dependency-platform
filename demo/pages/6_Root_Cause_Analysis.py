@@ -751,40 +751,72 @@ with tab_agent:
     else:
         plain = [r for r in runs if r.get("kind") == "plain"]
         expl = [r for r in runs if r.get("kind") == "explicit"]
+        after = [r for r in runs if r.get("kind") == "plain_after_skill"]
         pg = sum(1 for r in plain if r.get("used_graph"))
         eg = sum(1 for r in expl if r.get("used_graph"))
+        ag = sum(1 for r in after if r.get("used_graph"))
 
         st.markdown("#### 2　同一个问题，问了 %d 次" % len(runs))
         st.caption(
-            "同一个 agent space、同一段问题文本。唯一的变量是**有没有在问题里"
-            "点名要求查图谱**。")
+            "同一个 agent space、同一段问题文本。三组的差别只有两处："
+            "**问题里有没有点名要求查图谱**，以及"
+            "**agent space 里有没有注册那份 skill**。")
 
         # 比例进 label，不进 delta 位：delta 会渲染成箭头，
         # 「↑ 25%」读起来像「上升了 25%」，而这是一个占比。
-        m = st.columns(4)
+        m = st.columns(3)
         m[0].metric(
-            "不提图谱时会去查　%s" % (f"{100 * pg / len(plain):.0f}%" if plain else "—"),
+            "① 不提图谱　%s" % (f"{100 * pg / len(plain):.0f}%" if plain else "—"),
             f"{pg}/{len(plain)}",
-            help="问题里不点名图谱时，agent 自己决定要不要查。")
+            help="问题里不点名图谱，agent space 里也没有相关 skill —— "
+                 "agent 自己决定要不要查。这是基线。")
         m[1].metric(
-            "点名要求查图谱　%s" % (f"{100 * eg / len(expl):.0f}%" if expl else "—"),
+            "② 点名要求查图谱　%s" % (f"{100 * eg / len(expl):.0f}%" if expl else "—"),
             f"{eg}/{len(expl)}",
-            help="同一段问题后面加一句「请使用依赖图谱查询」。")
-        m[2].metric("单次耗时", "%.0f–%.0f 秒" % (
+            help="同一段问题后面加一句「请使用依赖图谱查询」。"
+                 "证明工具本身没问题 —— 一叫就到。")
+        if after:
+            m[2].metric(
+                "③ 注册 skill 后，仍不提图谱　%s" % f"{100 * ag / len(after):.0f}%",
+                f"{ag}/{len(after)}",
+                help="问题和 ① 完全一样。唯一变化是 agent space 里注册了一份 "
+                     "skill 资产，告诉 agent 遇到依赖验证问题先查图谱。")
+        else:
+            m[2].metric("③ 注册 skill 后", "—", help="尚未做这一组采样。")
+
+        if after and plain:
+            st.success(
+                f"**这不是抱怨，是一次改完并测过的修复。**\n\n"
+                f"① 基线 {100 * pg / len(plain):.0f}%"
+                f"（{pg}/{len(plain)}）→ "
+                f"③ 注册 skill 后 **{100 * ag / len(after):.0f}%**"
+                f"（{ag}/{len(after)}）。问题一个字没改。\n\n"
+                "而且「拿 FIS 模板存在推断验证状态」这个失败模式"
+                f"在第 ③ 组里**一次都没再出现**"
+                f"（{len(after)} 次调用引用 FIS 模板 ID 共 "
+                f"{sum((r.get('signals') or {}).get('fis_template_ids', 0) for r in after)} 次）。",
+                icon="✅")
+
+        st.info(
+            "**工具可用 ≠ 工具会被用。**\n\n"
+            "第 ② 组证明工具、关联、查询全都没问题 —— 一叫就到。"
+            "第 ① 组的低比例也不是配置坏了：那些调用一样成功返回、排版精美、"
+            "语气自信，只是**没想到要用它**。\n\n"
+            "差别在于纪律写在**哪一层**。本项目原先把它写在 MCP "
+            "`initialize` 的 `instructions` 与工具描述里 —— 两处都明确写着"
+            "「讨论任何依赖关系之前先调它」，仍然只有第 ① 组那个比例。"
+            "因为这个 agent 是 **skill 优先**架构：每次调用都先 `load_skill`，"
+            "而 agent space 里原有的 7 个 skill 没有一个讲依赖图谱。\n\n"
+            "**一个挂在那里的 MCP server，不等于它会被用上。**",
+            icon="🔑")
+
+        c1, c2 = st.columns(2)
+        c1.metric("单次耗时", "%.0f–%.0f 秒" % (
             min(r["elapsed_seconds"] for r in runs),
             max(r["elapsed_seconds"] for r in runs)),
             help="所以这一屏默认展示已抓取的记录，不做实时阻塞调用。")
-        m[3].metric("图谱查询耗时", "毫秒级",
-                    help="而且每次结果相同。这个不对称本身就是论据。")
-
-        st.info(
-            "**工具是好的，关联是好的，一调就准 —— 模型只是不主动去拿。**\n\n"
-            f"不提图谱时它只有 {100 * pg / len(plain):.0f}% 的调用会去查"
-            f"（{pg}/{len(plain)}）；点名要求就是 "
-            f"{100 * eg / len(expl):.0f}%（{eg}/{len(expl)}）。"
-            "这不是配置坏了 —— 没查的那些调用一样成功返回、排版精美、语气自信。"
-            "**一个挂在那里的 MCP server 不等于它会被用上。**",
-            icon="🔑")
+        c2.metric("图谱查询耗时", "毫秒级",
+                  help="而且每次结果相同。这个不对称本身就是论据。")
 
         # ── 判别方法：必须先说清楚，否则上面的比例只是我说了算 ──────────────
         st.markdown("#### 3　怎么判断它到底查了没有")
@@ -915,15 +947,36 @@ with tab_agent:
                 "在线时它会显示当前服务逐条依赖边的判定与观测来源。")
 
         # ── 这对我们自己意味着什么 ────────────────────────────────────────────
-        st.markdown("#### 6　这个结果指出了我们自己要修的东西")
-        st.caption(
-            f"{100 * pg / len(plain):.0f}% 的自发查询率"
-            "**不是 agent 的问题，是我们的问题**。"
-            "本项目把证据纪律写在 MCP `initialize` 的 `instructions` 字段里，"
-            "指望客户端把它交给模型 —— 而这批数据说明**这套纪律没有可靠地传达到**。"
-            "现在有了度量手段（上面那张信号表），这就从一句抱怨变成了"
-            "可优化、可验收的工程问题：改工具描述与 agent space 指令，"
-            "再跑同一批采样，看比例升不升。")
+        st.markdown("#### 6　这个缺口是我们自己的，已经修了")
+        if after and plain:
+            st.caption(
+                f"① 组那 {100 * pg / len(plain):.0f}% 的自发查询率"
+                "**不是 agent 的问题，是我们的问题**。"
+                "本项目原先把证据纪律写在 MCP `initialize` 的 `instructions` "
+                "与工具描述里，指望客户端交给模型 —— 两处都明确写着"
+                "「讨论任何依赖关系之前先调它」，比例仍然上不去。\n\n"
+                "**根因是纪律写错了层。** 这个 agent 每次调用都先 `load_skill`，"
+                "而 agent space 里原有的 7 个 skill 没有一个讲依赖图谱；"
+                "唯一提到 Neptune 的那条 memory 把它描述成**基础设施清单**"
+                "（集群、ETL Lambda、事件管道），完全没提验证判定。\n\n"
+                f"所以把规程做成一份 **skill 资产**注册进 agent space，"
+                f"再用**同一个问题**重跑：{100 * pg / len(plain):.0f}% → "
+                f"**{100 * ag / len(after):.0f}%**。"
+                "内容在 `mcp/agent_skill/dependency-verification-graph.md`，"
+                "七条规程：先查再说／判定四态含义／零退化≠依赖不成立／"
+                "不编造图谱没返回的数值／观测层与干预层不混用／单一观测源降权／"
+                "边方向。")
+            st.caption(
+                "⚠️ 这件事的通用教训比这个数字重要:**把 agent 该遵守的纪律放在"
+                "协议字段里,不等于它会读到。** 得放进那个 agent 实际先读的那一层 —— "
+                "对 AWS DevOps Agent 是 skill / agents_md 资产,"
+                "对别的宿主可能是别的地方。**先测,再改,再测。**")
+        else:
+            st.caption(
+                "① 组的自发查询率**不是 agent 的问题，是我们的问题**："
+                "证据纪律写在 MCP `initialize` 的 `instructions` 里，"
+                "而这个 agent 是 skill 优先架构。待办见 "
+                "`todo/demo-site-rebuild/PLAN.md` T13。")
 
         # ── 复现 ──────────────────────────────────────────────────────────────
         with st.expander("🔬 复现这批数据"):
