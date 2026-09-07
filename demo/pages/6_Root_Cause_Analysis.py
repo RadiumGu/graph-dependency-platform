@@ -305,11 +305,12 @@ if not ev:
                    C.fixture("rca_evidence").get("by_service", {})) + "。")
     st.stop()
 
-tab_dir, tab_trust, tab_ctx, tab_report = st.tabs([
+tab_dir, tab_trust, tab_ctx, tab_report, tab_agent = st.tabs([
     "🧭 因果链（依赖如何定位根因）",
     "⚖️ 依赖可信度（这次推理的地基）",
     "🏗️ 基础设施与历史",
     "📝 RCA 报告（需要 Bedrock）",
+    "🤖 交给 Agent（工具可用 ≠ 工具会被用）",
 ])
 
 # ══ Tab 1：因果链 ═════════════════════════════════════════════════════════════
@@ -672,3 +673,227 @@ with tab_report:
         st.caption(
             "⚠️ 模型输出请对照上表核验 —— 本项目的经验是：agent 在缺少某项数据时"
             "会倾向于**编一个看起来合理的数值**，而不是说「未获取」。")
+
+
+# ══ Tab 5：交给 Agent ═════════════════════════════════════════════════════════
+#
+# 这一屏回答的问题：**把这张图接给一个通用运维 agent，到底改变了什么？**
+#
+# 不是「比谁聪明」。任何 LLM 被问一个它没有事实依据的问题时都会给出答案，
+# 因为它不会说「我不知道」—— 包括本项目自己的引擎。区别只在于有没有
+# 经过验证的数据可查，以及**它会不会真的去查**。
+#
+# 数据是 12 次真实调用（AWS DevOps Agent，agent space petsite-devops，
+# 图谱以 MCP server 形式关联，24 条只读查询）。全部记录在
+# demo/fixtures/agent_unaided_answer.json：逐字原文、executionId、耗时、复现命令。
+with tab_agent:
+    rec = C.fixture("agent_unaided_answer")
+    runs = [r for r in (rec.get("runs") or []) if "error" not in r]
+
+    st.markdown("#### 1　这一屏在证明什么")
+    st.caption(
+        "**不是比谁聪明。** 任何 LLM 被问一个它没有事实依据的问题时都会给出答案，"
+        "因为它不会说「我不知道」—— 包括本项目自己的引擎。"
+        "AWS DevOps Agent 擅长的部分做得确实好（从 CloudTrail 挖出 FIS 实验与发起者），"
+        "而且**接上这张图之后表现很好**。\n\n"
+        "真正的发现更朴素也更要紧：**工具可用 ≠ 工具会被用。**"
+    )
+
+    if not runs:
+        st.warning(
+            "没有读到 agent 调用记录。这一屏依赖 "
+            "`demo/fixtures/agent_unaided_answer.json`，"
+            "它由真实调用生成（见本页最下方的复现命令），不是合成数据。")
+    else:
+        plain = [r for r in runs if r.get("kind") == "plain"]
+        expl = [r for r in runs if r.get("kind") == "explicit"]
+        pg = sum(1 for r in plain if r.get("used_graph"))
+        eg = sum(1 for r in expl if r.get("used_graph"))
+
+        st.markdown("#### 2　同一个问题，问了 %d 次" % len(runs))
+        st.caption(
+            "同一个 agent space、同一段问题文本。唯一的变量是**有没有在问题里"
+            "点名要求查图谱**。")
+
+        m = st.columns(4)
+        m[0].metric("不提图谱时会去查", f"{pg}/{len(plain)}",
+                    f"{100 * pg / len(plain):.0f}%" if plain else "—",
+                    delta_color="off")
+        m[1].metric("点名要求查图谱", f"{eg}/{len(expl)}",
+                    f"{100 * eg / len(expl):.0f}%" if expl else "—",
+                    delta_color="off")
+        m[2].metric("单次耗时", "%.0f–%.0f 秒" % (
+            min(r["elapsed_seconds"] for r in runs),
+            max(r["elapsed_seconds"] for r in runs)))
+        m[3].metric("图谱查询耗时", "毫秒级", "每次结果相同", delta_color="off")
+
+        st.info(
+            "**工具是好的，关联是好的，一调就准 —— 模型只是不主动去拿。**\n\n"
+            f"不提图谱时它只有 {100 * pg / len(plain):.0f}% 的调用会去查"
+            f"（{pg}/{len(plain)}）；点名要求就是 "
+            f"{100 * eg / len(expl):.0f}%（{eg}/{len(expl)}）。"
+            "这不是配置坏了 —— 没查的那些调用一样成功返回、排版精美、语气自信。"
+            "**一个挂在那里的 MCP server 不等于它会被用上。**",
+            icon="🔑")
+
+        # ── 判别方法：必须先说清楚，否则上面的比例只是我说了算 ──────────────
+        st.markdown("#### 3　怎么判断它到底查了没有")
+        st.caption(
+            "这一步不能含糊：如果判别方法不可靠，上面那两个比例就只是自说自话。")
+
+        sig_rows = []
+        for i, r in enumerate(runs, 1):
+            s = r.get("signals") or {}
+            sig_rows.append({
+                "#": i,
+                "提问方式": "点名要求查图谱" if r.get("kind") == "explicit" else "不提图谱",
+                "判定": "查了图谱" if r.get("used_graph") else "只用 FIS 模板",
+                "退化幅度数字": s.get("degradation_figures", 0),
+                "injection_confirmed": s.get("injection_confirmed_mentions", 0),
+                "FIS 模板 ID": s.get("fis_template_ids", 0),
+                "耗时（秒）": r.get("elapsed_seconds"),
+                "字数": r.get("answer_chars"),
+            })
+        show_table(sig_rows)
+
+        st.caption(
+            "**判据是「退化幅度数字」这一列，它是类别性分离的**："
+            "查了图谱的回答引用 20–36 个实测退化百分比，没查的**恰好 0 个** —— "
+            "因为 AWS 控制面里没有这个数。它只存在于故障注入实验的结果里，"
+            "而实验结果只存在于这张图上。`injection_confirmed` 同理，"
+            "那是**边上的属性名**，控制面看不到。")
+
+        with st.expander("⚠️ 我前两次的判据都是错的（记录在案）"):
+            st.markdown(
+                "这件事值得写下来，因为它和本项目要防的错误是同一类：\n\n"
+                "**第一次**：数 `contentBlockStart` 里 `tool_use` 类型的块。"
+                "该值**恒为 0** —— 真实工具调用体现在 `tool_summary` 块。"
+                "于是我得出「它从不查图谱」，写进了台账。\n\n"
+                "**第二次**：改用「引用 `exp-` 前缀实验 ID」。漏掉了两次调用 —— "
+                "它们把实验写成「HTTP chaos · 2026-09-05」而不是原始 ID，"
+                "于是被误判成没查图谱，比例算成 1/8 而不是 2/8。\n\n"
+                "**第三次（现用）**：退化幅度数字 + `injection_confirmed`，"
+                "两类样本零重叠、零残余歧义。\n\n"
+                "教训与本项目的核心判据一致：**判据必须对准现象独有的东西，"
+                "而不是它常见的书写形式。**")
+
+        # ── 两类回答对照 ──────────────────────────────────────────────────────
+        st.markdown("#### 4　两类回答长什么样")
+        g_run = next((r for r in runs if r.get("used_graph")), None)
+        f_run = next((r for r in runs if not r.get("used_graph")), None)
+
+        cmp_cols = st.columns(2)
+        with cmp_cols[0]:
+            st.markdown("##### ❌ 没查图谱")
+            if f_run:
+                st.caption(
+                    f"`{f_run['execution_id'][:8]}…`　"
+                    f"{f_run['captured_at'][:19]}　{f_run['elapsed_seconds']} 秒")
+                st.warning(
+                    "**依据是「FIS 实验模板存在」。** 模板是**意图**，不是**结果**："
+                    "它说明有人打算测，不说明测过了、更不说明测出了什么。",
+                    icon="⚠️")
+                st.caption("它的原话（逐字）：")
+                st.markdown(
+                    "> 5 个 FIS Aurora Reboot 模板（EXT3bF1…等），"
+                    "目标精确指向 writer 实例 …… 配置双重停止条件")
+                st.caption(
+                    "这段话每一个字都对 —— 模板确实存在、目标确实精确。"
+                    "问题在于它**不能支撑 `confirmed` 这个判定**。")
+            else:
+                st.caption("本批样本里没有这一类。")
+        with cmp_cols[1]:
+            st.markdown("##### ✅ 查了图谱")
+            if g_run:
+                st.caption(
+                    f"`{g_run['execution_id'][:8]}…`　"
+                    f"{g_run['captured_at'][:19]}　{g_run['elapsed_seconds']} 秒")
+                st.success(
+                    "**依据是实验结果。** 带实验 ID、退化幅度，"
+                    "而且在证据不足时**主动拒绝下结论**。", icon="✅")
+                st.caption("它的原话（逐字）：")
+                st.markdown(
+                    "> **payforadoption**｜退化仅 0.4%，且**注入生效性未知**"
+                    "（未提供 `injection_confirmed`）。无法区分「依赖不传导」与"
+                    "「注入根本没打到」，不能证伪，故不下结论。")
+                st.caption(
+                    "这正是本项目的判定纪律：**零退化与注入失败在指标上无法区分，"
+                    "所以一律 inconclusive，绝不判 refuted。** "
+                    "它不是被教会了这条规则，是**图上的数据本身逼出了这个结论**。")
+            else:
+                st.caption("本批样本里没有这一类。")
+
+        # ── 图谱这一侧：实时查 ────────────────────────────────────────────────
+        st.markdown("#### 5　图谱这一侧（实时查询，不是快照）")
+        st.caption(
+            f"上面 agent 的回答是**已抓取的记录**（非确定性、单次 45–205 秒）；"
+            f"下面这张表是**现在查的**。这个不对称本身就是论据："
+            f"图谱毫秒级返回、每次结果相同、每一行都能溯源到具体实验。")
+
+        labels = C.dependency_edge_labels()
+        if C.neptune_online() and labels:
+            L = ", ".join(f"'{x}'" for x in labels)
+            res = C.gquery(
+                f"MATCH (s)-[r]->(t) WHERE s.name='{selected_service}' "
+                f"AND type(r) IN [{L}] "
+                "RETURN type(r) AS 边类型, t.name AS 依赖目标, "
+                "coalesce(r.verify_status,'untested') AS 判定, "
+                "coalesce(r.source,'—') AS 观测来源 "
+                "ORDER BY 判定, 边类型")
+            rows = res.get("results", []) if isinstance(res, dict) else (res or [])
+            if rows:
+                from collections import Counter
+                dist = Counter(r.get("判定") for r in rows)
+                st.caption(
+                    f"`{selected_service}` 的 **{len(rows)}** 条依赖边："
+                    + "　".join(f"**{k}** {v}" for k, v in sorted(dist.items())))
+                show_table(rows)
+                st.caption(
+                    "判定存在边的 `verify_status` 属性上。"
+                    "`untested` 不是缺陷 —— 它是**诚实**："
+                    "这条边可以用于推理，但必须声明未经验证。"
+                    "业界所有依赖图这一列都是 100% untested，"
+                    "只是没人算过，因为没有持久化的边实体、也没有故障注入后端。")
+            else:
+                st.info(
+                    f"`{selected_service}` 在图上没有依赖边。"
+                    f"依赖边类型限于：{'、'.join(f'`{x}`' for x in labels)}；"
+                    "`RunsOn`、`TestedBy` 等**不算依赖边**。")
+        else:
+            st.info(
+                "离线模式：这一栏需要实时查 Neptune。"
+                "在线时它会显示当前服务逐条依赖边的判定与观测来源。")
+
+        # ── 这对我们自己意味着什么 ────────────────────────────────────────────
+        st.markdown("#### 6　这个结果指出了我们自己要修的东西")
+        st.caption(
+            f"{100 * pg / len(plain):.0f}% 的自发查询率"
+            "**不是 agent 的问题，是我们的问题**。"
+            "本项目把证据纪律写在 MCP `initialize` 的 `instructions` 字段里，"
+            "指望客户端把它交给模型 —— 而这批数据说明**这套纪律没有可靠地传达到**。"
+            "现在有了度量手段（上面那张信号表），这就从一句抱怨变成了"
+            "可优化、可验收的工程问题：改工具描述与 agent space 指令，"
+            "再跑同一批采样，看比例升不升。")
+
+        # ── 复现 ──────────────────────────────────────────────────────────────
+        with st.expander("🔬 复现这批数据"):
+            st.caption(
+                f"agent space `{rec.get('agent_space_name')}` "
+                f"(`{rec.get('agent_space_id')}`)，区域 "
+                f"`{rec.get('region')}`。`aws devops-agent` 是 AWS CLI 的一等服务，"
+                "调用闭环是 `CreateChat` → `SendMessage`（返回 **EventStream**，"
+                "流式，不是 dict）→ `ListPendingMessages`。")
+            st.markdown("**问题原文（不提图谱）**")
+            st.code(rec.get("question", ""), language="text")
+            if rec.get("question_explicit"):
+                st.markdown("**问题原文（点名要求查图谱）**")
+                st.code(rec["question_explicit"], language="text")
+            st.markdown("**全部 executionId**")
+            st.code("\n".join(
+                f"{r.get('kind','?'):9s} {r['execution_id']}  "
+                f"{'查了图谱' if r.get('used_graph') else '只用FIS模板'}"
+                for r in runs), language="text")
+            st.caption(
+                "每一条都可以用 `aws devops-agent list-pending-messages` "
+                "按 executionId 取回原始消息核对。"
+                "逐字全文在 `demo/fixtures/agent_unaided_answer.json`。")
