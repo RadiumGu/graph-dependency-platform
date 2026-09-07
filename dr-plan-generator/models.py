@@ -109,6 +109,20 @@ class DRPlan:
     #: 快照是否已超过新鲜度阈值。陈旧不阻断生成，但必须在产物里留痕。
     graph_snapshot_stale: bool = False
     affected_services: List[str] = field(default_factory=list)
+    #: **只在这一个 AZ 上有 pod 的服务** —— AZ 失守时它们整体不可用，
+    #: 而 affected_services 里其余的只是降级（pod 还在别的 AZ 上跑着）。
+    #:
+    #: 这个区分不是修饰。2026-09-07 实测 petsite 有 96 个 pod 在 1a、160 个在
+    #: 1c，1a 失守它是降级；trafficgenerator 只有 1 个 pod 且只在 1c，1c 失守
+    #: 它就没了。把两者混在一份「受影响服务」清单里，等于让运维在
+    #: 「7 个服务受影响」和「1 个服务彻底没了」之间自己猜。
+    #:
+    #: region 范围下**恒为空**：整个 region 失守时所有 pod 都在范围内，
+    #: 「跨 AZ 所以只是降级」这个概念不成立，标了反而误导。
+    fully_lost_services: List[str] = field(default_factory=list)
+    #: 逐服务的 AZ pod 分布：``{服务名: {AZ 名: pod 数}}``。
+    #: 上面那个判断的原始依据，留着让人能自己核对而不必信结论。
+    service_az_pods: Dict[str, Dict[str, int]] = field(default_factory=dict)
     affected_resources: List[str] = field(default_factory=list)
     phases: List[DRPhase] = field(default_factory=list)
     rollback_phases: List[DRPhase] = field(default_factory=list)

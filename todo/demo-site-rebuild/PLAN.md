@@ -515,7 +515,54 @@
 - [ ] T8 改写 `app.py` 首页导语,把「这张图是真的吗」这条论证线摆前面
 - [x] T9 每修一个都加守门测试 ✅ 2026-09-07 —— 本会话新增 test_54/55/56/57/58 共 25 条，**全部做过反向验证**
 - [x] T10 全量测试 + 部署 + 线上逐页复验 ✅ 2026-09-07 —— 8+2 个文件分三批部署，每批编译校验通过才重启；线上 md5 与本地 HEAD 逐一核对一致；十页 AppTest 全 0 异常，线上 journal 0 traceback、0 重启。**遗留 1 条测试失败不属于本线**：`test_s6_02` 报 `RoutesToRuntime`/`RoutesVia` 在 Neptune 不存在，那是并发会话的迁移期已知状态（`profiles/petsite.yaml:493` 自己写着「删除要等 ETL 部署+存量清理之后」），不要动它。
-- [ ] T11 `dr-plan-generator` 的 AZ scope 锚定在真实图谱上匹配不到任何服务
+- [x] **T11 AZ scope 算不出受影响服务 —— 图模型与查询差一跳** ✅ 2026-09-07
+
+  ### 根因
+
+  `Microservice` **从不**直接 `LocatedIn` 一个 AZ(实测 1 跳可达服务数 0)。
+  挂在 AZ 上的是 `Pod`(808 条边)、`Subnet`、`LoadBalancer`、`EC2Instance`、
+  `RDSInstance`、`NeptuneInstance`。真实路径是两跳:
+
+      AZ <-[:LocatedIn]- Pod <-[:RunsOn]- Microservice
+
+  所以老查询返回几百个锚点,而 `affected_services`
+  (按 `type in (Microservice, K8sService)` 过滤)什么都没拿到。
+  **一份说「受影响服务 0」的 AZ 计划比没有计划更糟** —— 它主动告诉运维
+  「这个 AZ 掉了不影响任何服务」,而且有计划 ID、有 RTO、有阶段,唯独没内容。
+
+  修后实测:`1a` → 6 个服务、`1c` → 7 个、`1d` → 0(那个 AZ 真的只有 2 个资源)。
+
+  ### 顺带做出「全停 vs 降级」的区分
+
+  服务不是「位于」某个 AZ,而是「部分在」:
+
+      petsite            1a 96 个 pod / 1c 160 个   → 降级
+      trafficgenerator   只有 1 个 pod、只在 1c      → ⛔ 全停
+
+  混在一份清单里等于让运维在「7 个服务受影响」和「1 个服务彻底没了」之间自己猜。
+  `DRPlan` 新增 `fully_lost_services` 与 `service_az_pods`(原始依据,可自行核对)。
+  region 范围恒空 —— 整个 region 失守时所有 pod 都在范围内,标 multi-az 会被
+  读成「只是降级」,那是错的。
+
+  ### 页面
+
+  DR 页的 AZ 预设改为**按承载服务数现算**(优先含单 AZ 服务的),
+  于是自动落在 `1c` —— 唯一能看出这个区分的场景。原来是 `_AZS[0]` 字母序取第一个,
+  永远落在 1a(全是跨 AZ,看不出能力)。目标 AZ 显式排除源自己
+  (原写 `_AZS[1:3]`,源不再是第一个后会切到正在失守的那个 AZ)。
+
+  并更正了 T2 时写的「AZ scope 算不出受影响服务」那段说明 —— 那话现在是错的。
+
+  ### 仍未修的老问题
+
+  `apne1-az1` 这套**虚构 AZ 名**仍贯穿 dr-plan-generator 的
+  examples / fixtures / tests / docs 且没有翻译层。本页 AZ 选项从图谱现取,
+  不受影响;但上游文档与样例仍会误导人。另立 T11b。
+
+  门禁 `tests/test_60_dr_az_scope_finds_services.py`(6 条,
+  **m03/m04/m05 已反向验证**)。
+
+- [ ] T11b 清掉 `dr-plan-generator` 里贯穿 examples/fixtures/tests/docs 的虚构 AZ 名(`apne1-az1` 等),图谱里是 `ap-northeast-1a/c/d`,且无翻译层
 
   **不是 demo 页的问题,单独立项。** 实测 `anchors=10, nodes=394` 但零匹配。
   两层原因:

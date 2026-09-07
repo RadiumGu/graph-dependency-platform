@@ -24,7 +24,7 @@ C.sidebar()
 #
 # ## 默认必须落在**真的能出计划**的那个场景上（2026-09-06 修）
 #
-# 实测三种 scope 在真实图谱上的结果：
+# 当时实测三种 scope 在真实图谱上的结果：
 #
 #     scope=az       source=apne1-az1（虚构名）      受影响服务 0
 #     scope=az       source=ap-northeast-1a（真实）  受影响服务 0   ← 锚点匹配不上
@@ -38,15 +38,30 @@ C.sidebar()
 #    连 `graph/queries.py` 的 docstring 都写着「e.g. apne1-az1」），**没有别名
 #    翻译层** —— 也就是说 AZ scope 从来只在合成 fixture 上验证过。
 #
-# ② 即使换成真实 AZ 名，AZ scope 的受影响服务仍是 0：锚点找不到
-#    （`anchors=10, nodes=394` 但一个都没匹配）。profile 声明的服务名里有
-#    `petadoptionshistory` / `pethistory-service` / `PetAdoptionStatusUpdater`
-#    这些图谱里不存在的名字，而 `Microservice` 节点也不直接挂在 AZ 上
-#    （路径是 Service→Pod→EC2→AZ）。这是 dr-plan-generator 侧的问题，
-#    已记入 todo/demo-site-rebuild/PLAN.md，不在本页范围内修。
+# ② 即使换成真实 AZ 名，AZ scope 的受影响服务仍是 0。
 #
-# 所以：默认场景改为 `scope=service, source=petsite`；AZ 场景保留但用**真实**
-# AZ 名，并在结果里如实说明它当前算不出受影响服务。
+# ## ② 已在 2026-09-07 修好（上游 dr-plan-generator）
+#
+# 根因是**图模型与查询差一跳**：`Microservice` 从不直接 `LocatedIn` 一个 AZ
+# （实测 1 跳可达服务数为 0）。挂在 AZ 上的是 `Pod`（808 条边）、`Subnet`、
+# `LoadBalancer`、`EC2Instance`、`RDSInstance`。真实路径是两跳：
+#
+#     AZ <-[:LocatedIn]- Pod <-[:RunsOn]- Microservice
+#
+# 补上这一跳之后实测：
+#
+#     ap-northeast-1a  受影响服务 6
+#     ap-northeast-1c  受影响服务 7   其中 trafficgenerator 是**单 AZ、全停**
+#     ap-northeast-1d  受影响服务 0   （那个 AZ 真的只有 2 个资源）
+#
+# 而且上游现在会分开报「全停」与「降级」：petsite 有 96 个 pod 在 1a、160 个在
+# 1c，掉一个 AZ 是降级；trafficgenerator 只有 1 个 pod 且只在 1c，1c 掉了它就
+# 没了。计划产物里多了 `fully_lost_services` 与 `service_az_pods` 两个字段。
+# 门禁 `tests/test_60_dr_az_scope_finds_services.py`。
+#
+# 所以本页的 AZ 场景现在是**可用**的。默认仍留在 `scope=service, source=petsite`
+# —— 那是最容易一眼看懂的场景（6 个受影响服务、61 分钟 RTO）；
+# AZ 场景用**真实** AZ 名，并在结果里把「全停 vs 降级」摆出来。
 def _graph_azs() -> list:
     """AZ 选项从图谱取，不硬编码 —— 硬编码就是上面 ① 那个问题的来源。"""
     try:
@@ -62,8 +77,47 @@ def _graph_azs() -> list:
 
 
 _AZS = _graph_azs()
-_AZ_SRC = _AZS[0] if _AZS else "ap-northeast-1a"
-_AZ_TGT = ",".join(_AZS[1:3]) if len(_AZS) > 1 else _AZ_SRC
+
+
+def _az_with_most_impact(azs: list) -> str:
+    """挑**承载服务最多、且最好含单 AZ 服务**的那个 AZ 作为预设源。
+
+    原来是 `_AZS[0]` —— 按字母序取第一个。图谱返回的顺序是
+    `ap-northeast-1a / 1c / 1d`，于是预设永远落在 1a。
+
+    但 1a 上所有服务都跨 AZ，掉它只是**降级**；`trafficgenerator` 只有 1 个 pod
+    且只在 **1c** —— 1c 才是唯一能看出「⛔ 全停 vs ⚠️ 降级」这个区分的场景。
+    而 1d 实测只有 2 个资源、0 个服务，选它会得到一份空计划。
+
+    展示站的默认值应该落在**能看出这个能力**的场景上。所以按图谱现算：
+    优先选「有单 AZ 服务」的，其次选服务数最多的。不写死 —— 图谱变了它自动跟。
+    """
+    best, best_key = (azs[0] if azs else "ap-northeast-1a"), (-1, -1)
+    try:
+        import _common as _c
+        r = _c.gquery(
+            "MATCH (s:Microservice)-[:RunsOn]->(p:Pod)-[:LocatedIn]->(z:AvailabilityZone) "
+            "RETURN s.name AS svc, z.name AS az, count(DISTINCT p) AS pods")
+        rows = r.get("results", []) if isinstance(r, dict) else (r or [])
+        spread: dict = {}
+        for x in rows:
+            spread.setdefault(x.get("svc"), {})[x.get("az")] = x.get("pods") or 0
+        for az in azs:
+            here = [s for s, m in spread.items() if m.get(az)]
+            single = [s for s in here
+                      if len([a for a, n in spread[s].items() if n]) == 1]
+            key = (len(single), len(here))     # 先看单 AZ 服务数，再看总数
+            if key > best_key:
+                best, best_key = az, key
+    except Exception:  # noqa: BLE001
+        pass                                   # 查不到就退回字母序第一个
+    return best
+
+
+_AZ_SRC = _az_with_most_impact(_AZS)
+# 目标是**除源之外**的 AZ —— 原来写 `_AZS[1:3]`，源正好是 _AZS[0] 时才对；
+# 现在源不再一定是第一个，得显式排除自己，否则会切到正在失守的那个 AZ。
+_AZ_TGT = ",".join([a for a in _AZS if a != _AZ_SRC][:2]) or _AZ_SRC
 
 PRESET_SCENARIOS = {
     f"服务故障：petsite（默认，实测可出计划）": {
@@ -182,6 +236,13 @@ def generate_dr_plan(scope: str, source: str, target: str, exclude: str) -> dict
             "estimated_rto": plan.estimated_rto,
             "estimated_rpo": plan.estimated_rpo,
             "affected_count": len(plan.affected_services),
+            # 「全停」与「降级」分开传 —— 只给一个总数等于让人自己猜。
+            # 上游 2026-09-07 起在 DRPlan 上给这两个字段（AZ 范围才有值；
+            # region 范围恒空，因为整个 region 失守时所有 pod 都在范围内）。
+            "fully_lost_services": list(
+                getattr(plan, "fully_lost_services", []) or []),
+            "service_az_pods": dict(
+                getattr(plan, "service_az_pods", {}) or {}),
         }
     except Exception as exc:
         return {"markdown": "", "json": {}, "error": str(exc), "validation_warnings": []}
@@ -370,24 +431,67 @@ else:
     meta_c3.metric("估算 RPO", f"{_rpo} 分钟")
 meta_c4.metric("受影响服务", result.get("affected_count", 0))
 
+# ── 全停 vs 降级：这是 AZ 场景最该摆出来的一行 ────────────────────────────────
+#
+# 服务不是「位于」某个 AZ，而是「部分在」。掉一个 AZ，多 AZ 服务是**降级**，
+# 单 AZ 服务才是**全停**。把两者混在一份「受影响服务」清单里，等于让运维在
+# 「7 个服务受影响」和「1 个服务彻底没了」之间自己猜。
+#
+# 上游 2026-09-07 起在计划里给出 fully_lost_services 与 service_az_pods
+# （见 dr-plan-generator/graph/queries.py 的 _services_hosted_in_az）。
+_lost = result.get("fully_lost_services") or []
+_pods = result.get("service_az_pods") or {}
+if _lost:
+    st.error(
+        "**⛔ 这些服务会整体不可用（pod 只在失守的这个 AZ 上）：** "
+        + "、".join(f"`{s}`" for s in _lost)
+        + "\n\n其余受影响服务是**降级**而不是全停 —— 它们在别的 AZ 还有 pod 在跑。",
+        icon="⛔",
+    )
+elif _pods:
+    st.success(
+        "**没有服务会整体不可用** —— 受影响的服务在别的 AZ 都还有 pod，"
+        "掉这个 AZ 是**降级**（少一部分容量），不是全停。",
+        icon="✅",
+    )
+if _pods:
+    with st.expander(f"逐服务的 AZ pod 分布（{len(_pods)} 个服务，判断依据）"):
+        st.caption(
+            "上面那个「全停 / 降级」的结论就是从这张表得出的 —— "
+            "摆出来让你能自己核对，而不必信结论。")
+        _azs = sorted({a for v in _pods.values() for a in v})
+        # 直接用 st.dataframe 是安全的：这张表每一列类型统一 ——
+        # 服务名与判定是 str，各 AZ 列是 int（缺失填 0，不填「—」）。
+        # 混类型列才会踩 pyarrow 的 ArrowInvalid，那种情况要用
+        # 6_Root_Cause_Analysis.py 里的 show_table()。
+        st.dataframe(
+            C.df([
+                {"服务": s, **{a: int(v.get(a, 0)) for a in _azs},
+                 "判定": "⛔ 全停（单 AZ）" if s in _lost else "⚠️ 降级（跨 AZ）"}
+                for s, v in sorted(_pods.items())
+            ]),
+            width="stretch", hide_index=True)
+
 # 0 个受影响服务时必须说清楚 —— 否则页面呈现的是一份「看起来生成成功」的空计划。
 # 这比报错更容易误导人：有计划 ID、有 RTO/RPO 数字、有阶段，唯独没有内容。
 if not result.get("_is_example") and not result.get("affected_count"):
     st.warning(
         "**这份计划的受影响服务是 0 —— 它算不出内容。**\n\n"
-        "原因是 scope 锚定没有匹配到图谱里的任何服务，生成器退回了未过滤的子图。"
-        "实测三种 scope 的结果：\n\n"
+        "AZ scope 曾经**总是**这样（2026-09-07 已修）：根因是图模型与查询差一跳，"
+        "`Microservice` 从不直接 `LocatedIn` 一个 AZ，真实路径是 "
+        "`AZ <-LocatedIn- Pod <-RunsOn- Microservice`。补上这一跳后实测：\n\n"
         "| scope | source | 受影响服务 |\n|---|---|--:|\n"
-        "| `az` | `apne1-az1`（虚构名） | 0 |\n"
-        "| `az` | `ap-northeast-1a`（真实名） | 0 |\n"
+        "| `az` | `ap-northeast-1a` | **6** |\n"
+        "| `az` | `ap-northeast-1c` | **7**（含 1 个单 AZ 全停）|\n"
+        "| `az` | `ap-northeast-1d` | 0 —— 那个 AZ 真的只有 2 个资源 |\n"
         "| `service` | `petsite` | **6** |\n\n"
-        "AZ scope 目前算不出来，有两层原因:`apne1-az1` 这套 AZ 名在图谱里不存在"
-        "（图谱是 `ap-northeast-1a/c/d`，而 dr-plan-generator 的 examples、"
-        "fixtures、tests、docs 全用虚构名且没有翻译层）；即使换成真实名，"
-        "profile 声明的服务锚点里有 `petadoptionshistory` / `pethistory-service` / "
-        "`PetAdoptionStatusUpdater` 这些图谱里不存在的名字，而 `Microservice` "
-        "节点也不直接挂在 AZ 上（路径是 Service→Pod→EC2→AZ）。\n\n"
-        "**换左侧的「服务故障：petsite」预设可以看到一份真实计划。**",
+        "所以现在看到 0，最可能是**这个范围里确实没有跑着服务**"
+        "（如 `ap-northeast-1d`），而不是查询坏了。"
+        "换 `ap-northeast-1a` / `1c`，或左侧的「服务故障：petsite」预设，"
+        "都能看到一份有内容的计划。\n\n"
+        "⚠️ 另一个仍未修的老问题：`apne1-az1` 这套**虚构 AZ 名**贯穿 "
+        "dr-plan-generator 的 examples / fixtures / tests / docs 且没有翻译层，"
+        "图谱里是 `ap-northeast-1a/c/d`。本页的 AZ 选项从图谱现取，不受它影响。",
         icon="⚠️",
     )
 

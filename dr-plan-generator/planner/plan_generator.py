@@ -224,6 +224,20 @@ class PlanGenerator:
                 for n in subgraph["nodes"]
                 if n.get("type") in ("Microservice", "K8sService")
             ],
+            # 「全停」与「降级」必须分开报。q12_az_dependency_tree 会给
+            # pod 只落在本 AZ 的服务打 az_exposure="single-az" ——
+            # 那些是 AZ 失守时真正消失的，其余只是掉一半容量。
+            # region 范围不产生这个标记（所有 pod 都在范围内），故自然为空。
+            fully_lost_services=[
+                n["name"]
+                for n in subgraph["nodes"]
+                if n.get("az_exposure") == "single-az"
+            ],
+            service_az_pods={
+                n["name"]: n["az_pod_counts"]
+                for n in subgraph["nodes"]
+                if n.get("az_pod_counts")
+            },
             affected_resources=[n["name"] for n in subgraph["nodes"]],
             phases=phases,
             rollback_phases=[],
