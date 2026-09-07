@@ -118,6 +118,56 @@ def node_expiry_enabled() -> bool:
 # ⚠️ 这份清单**不要手抄** —— 我第一版就是用 grep 抄的，漏了 EC2Instance 与 S3Bucket，
 # 被 tests/test_50::m01 当场抓住。那条测试从 graph_gc.py 源码解析真相，
 # 增删 GC 类型时它会失败并告诉你要同步改这里。
+def _sparse_sources() -> frozenset:
+    """观测节奏稀疏的 source 集合，从契约读。
+
+    这些源的边不得走 `active=false`，只能标 `observed_then_silent` ——
+    判据与理由写在契约 `sparse_observation_sources` 上方。
+
+    **不在本模块硬编码源名**：那会把判据（观测是否稀疏）换成结论
+    （恰好是 deepflow-dns），下一个新增稀疏源的人无从得知要同步改这里。
+    与 GC_RECONCILED_LABELS 上方那条注释是同一条纪律。
+    """
+    try:
+        from graph_contract_data import SPARSE_OBSERVATION_SOURCES as _S
+        return frozenset(_S or ())
+    except ImportError:
+        # 生成器是逐键显式导出的，新键必须同步改 gen_graph_contract.py。
+        # 这里**不静默返回空集就算了** —— 空集会让稀疏源边回落到 dynamic 处置、
+        # 被误置 active=false，而那正是本机制要防的事故。所以要出声。
+        logger.warning(
+            "契约未导出 SPARSE_OBSERVATION_SOURCES —— 稀疏源边将按 dynamic 处置，"
+            "可能被误判 active=false。请跑 scripts/gen_graph_contract.py --write。")
+        return frozenset()
+
+
+def _not_sparse_clause() -> str:
+    """Gremlin 片段：排除稀疏源。用于失效路径。
+
+    必须与 `_sparse_clause()` 互补 —— 两条路径都碰同一条边时，
+    失效那条会赢并写下 active=false，正是要防的那个 bug。
+    """
+    srcs = sorted(_sparse_sources())
+    if not srcs:
+        return ""
+    vals = ','.join(f"'{s}'" for s in srcs)
+    return f".not(__.has('source',within({vals})))"
+
+
+def _sparse_clause() -> str:
+    """Gremlin 片段：命中稀疏边 —— inference 语义 **或** 稀疏源。
+
+    两者是不同原因、同一处置：前者是 LLM 按 query 决定调用（突发），
+    后者是观测机制本身低频（DNS 解析取决于连接行为）。
+    """
+    srcs = sorted(_sparse_sources())
+    if not srcs:
+        return ".has('dependency_kind','inference')"
+    vals = ','.join(f"'{s}'" for s in srcs)
+    return (f".or(__.has('dependency_kind','inference'),"
+            f"__.has('source',within({vals})))")
+
+
 GC_RECONCILED_LABELS = frozenset({
     'DynamoDBTable', 'EC2Instance', 'ECRRepository', 'EKSCluster',
     'LambdaFunction', 'LoadBalancer', 'NeptuneCluster', 'NeptuneInstance',
@@ -242,8 +292,11 @@ def expiring_edge_labels() -> list[tuple[str, int]]:
 
 
 def _count_query(label: str, cutoff: int) -> str:
+    # 排除稀疏源：它们由 _mark_query 处置，两条路径不得同时碰同一条边 ——
+    # 否则失效那条会赢并写下 active=false。
     return (f"g.E().hasLabel('{label}')"
             f".has('dependency_kind','dynamic')"
+            f"{_not_sparse_clause()}"
             f".has('active', true)"
             f".has('{TIMESTAMP_FIELD}', lt({cutoff}))"
             f".count()")
@@ -252,6 +305,7 @@ def _count_query(label: str, cutoff: int) -> str:
 def _deactivate_query(label: str, cutoff: int) -> str:
     return (f"g.E().hasLabel('{label}')"
             f".has('dependency_kind','dynamic')"
+            f"{_not_sparse_clause()}"
             f".has('active', true)"
             f".has('{TIMESTAMP_FIELD}', lt({cutoff}))"
             f".property('active', false)"
@@ -267,7 +321,7 @@ def _mark_query(label: str, cutoff: int, round_ts: int) -> str:
     稀疏调用的 agent 工具上，后者推不出前者。
     """
     return (f"g.E().hasLabel('{label}')"
-            f".has('dependency_kind','inference')"
+            f"{_sparse_clause()}"
             f".has('{TIMESTAMP_FIELD}', lt({cutoff}))"
             f".property('drift_status','observed_then_silent')"
             f".property('unobserved_since',{cutoff})"
@@ -277,7 +331,7 @@ def _mark_query(label: str, cutoff: int, round_ts: int) -> str:
 
 def _mark_count_query(label: str, cutoff: int) -> str:
     return (f"g.E().hasLabel('{label}')"
-            f".has('dependency_kind','inference')"
+            f"{_sparse_clause()}"
             f".has('{TIMESTAMP_FIELD}', lt({cutoff}))"
             f".count()")
 
@@ -289,7 +343,7 @@ def _mark_fresh_query(label: str, cutoff: int, round_ts: int) -> str:
     图谱也会一直说它 silent —— 那是另一种形式的「判定正确但不可见」。
     """
     return (f"g.E().hasLabel('{label}')"
-            f".has('dependency_kind','inference')"
+            f"{_sparse_clause()}"
             f".has('drift_status','observed_then_silent')"
             f".has('{TIMESTAMP_FIELD}', gte({cutoff}))"
             f".property('drift_status','ok')"

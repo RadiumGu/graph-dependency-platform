@@ -149,3 +149,51 @@ def test_m07_三种kind的作用域互不重叠(cleanup, monkeypatch):
         assert "'static'" not in q, (
             f"static 边不该出现在任何观测式失效路径里 —— 那是 drift_status 的 "
             f"declared_not_observed 要表达的信息：{q[:160]}")
+
+
+def test_m08_稀疏源边只被标记不被失效(cleanup, monkeypatch):
+    """契约声明的 sparse_observation_sources 必须两条路径互补覆盖。
+
+    **互补性是整个机制的要害**：这些边的 `dependency_kind` 是 `dynamic`
+    （它们确实是运行时观测来的），所以失效路径天然会命中它们。如果只把它们
+    加进标记路径而忘了从失效路径排除，两条路径会同时碰同一条边，
+    而失效那条会写下 `active=false` —— 恰好是本机制要防的那个 bug，
+    且症状隐蔽（标记也做了，看起来像生效了）。
+
+    为什么 DNS 源需要这个待遇（2026-09-07 实测）：
+      · 22 条 deepflow-dns 边里 4 条的 last_drift_check 停在 172 天前、
+        12 条停在 9 天前，而 AccessesData 的 TTL 是 6 小时。
+      · 原因不是依赖消失，而是 DNS 可见性纯由**连接行为**决定 ——
+        持连接池的 pod 一次解析后长期不再查询，会重连的服务每天几百次。
+      · 按 dynamic 处置会把它们全判 active=false，即断言「依赖不存在」，
+        而能证明的只是「6 小时窗口内没解析」。
+
+    这与 2026-09-05 的 `Retrieves -> nutrition-kb` 事故同源：
+    图谱给出的是**错误陈述**，不是过期陈述。
+    """
+    srcs = sorted(cleanup._sparse_sources())
+    assert srcs, (
+        '契约应声明 sparse_observation_sources 且生成器要导出它。'
+        '为空说明 gen_graph_contract.py 没同步 —— 稀疏源边会回落到 dynamic 处置。')
+
+    monkeypatch.setattr(cleanup, 'expiry_enabled', lambda: True)
+    rec_d, rec_i = _Recorder(n=1), _Recorder(n=1)
+    cleanup.deactivate_stale_dynamic_edges(rec_d, round_ts=1_000_000)
+    cleanup.mark_stale_inference_edges(rec_i, round_ts=1_000_000)
+
+    for s in srcs:
+        # 失效路径必须**排除**它
+        for q in rec_d.queries:
+            assert f"not(__.has('source',within(" in q and s in q, (
+                f"失效路径未排除稀疏源 {s} —— 这些边的 dependency_kind 是 dynamic，"
+                f"不显式排除就会被置 active=false：{q[:200]}")
+        # 标记路径必须**包含**它
+        for q in rec_i.queries:
+            assert s in q, (
+                f"标记路径未覆盖稀疏源 {s}，它将得不到 observed_then_silent 标记，"
+                f"于是既不失效也不标陈旧 —— 变成永不过期的墓碑：{q[:200]}")
+
+    # 标记路径绝不能碰 active（与 m02 同一不变量，这里对稀疏源再钉一次）
+    for q in rec_i.queries:
+        assert "'active'" not in q, (
+            f"稀疏源边的标记路径不得改写 active：{q[:200]}")

@@ -77,6 +77,15 @@ def render(contract: dict) -> str:
             "# 靶点选择 / 爆炸半径 / DR 计划只该看 primary_query_scope。\n"
             f"NODE_SCOPE = {pp.pformat(contract['node_scope'])}\n"
         )
+    if contract.get('sparse_observation_sources'):
+        parts.append(
+            "\n# 观测节奏稀疏的 source：「窗口内没看到」推不出「依赖消失」。\n"
+            "# 这些源的边只能标 drift_status='observed_then_silent'，\n"
+            "# **不得**走 active=false —— 后者断言依赖不存在，而我们只能证明\n"
+            "# 窗口内没观测到。判据与理由见 profiles/graph_contract.yaml。\n"
+            f"SPARSE_OBSERVATION_SOURCES = "
+            f"{pp.pformat(contract['sparse_observation_sources'])}\n"
+        )
     return "\n".join(parts)
 
 

@@ -945,6 +945,24 @@ sources:
 - manual-fix
 - nfm
 - xray
+# 观测节奏稀疏的源：「窗口内没看到」**推不出**「依赖消失」。
+#
+# 这些源产出的边不得走 active=false 的失效路径，只能标 drift_status=
+# observed_then_silent + unobserved_since（与 dependency_kind='inference'
+# 同一处置）。判据从这里读，不在 graph_cleanup.py 里硬编码源名。
+#
+# 为什么 deepflow-dns 在列：DNS 是**不对称的弱信号**，可见性纯由连接行为
+# 决定 —— 持连接池的 pod 一次解析后半年不再查询，而会重连的服务每天几百次。
+# 实测 2026-09-07：22 条 deepflow-dns 边里 4 条的 last_drift_check 停在
+# 2026-03-19（172 天前）、12 条停在 9 天前，而 AccessesData 的 TTL 是 6 小时。
+# 按 dynamic 处置会把它们全判 active=false —— 那是断言「这条依赖不存在」，
+# 而我们能证明的只是「6 小时窗口内没解析」。
+#
+# 这与 2026-09-05 那次事故同源：agent 工具边按 dynamic 扫，
+# `Retrieves -> nutrition-kb` 被置 active=false，而知识库客观存在，
+# 只是几小时没人问营养问题 —— 图谱给出的是**错误陈述**，不是过期陈述。
+sparse_observation_sources:
+- deepflow-dns
 timestamp_field: last_seen
 timestamp_legacy_aliases:
 - last_updated
