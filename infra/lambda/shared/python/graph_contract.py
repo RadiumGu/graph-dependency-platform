@@ -356,6 +356,39 @@ def dependency_edge_labels() -> frozenset:
     return frozenset(lb for lb, s in EDGE_TYPES.items() if s.get('dependency'))
 
 
+def is_transitive_edge(label: str) -> bool:
+    """该边是否是**多跳路径的汇总**，而不是一次物理调用。
+
+    ## 为什么需要区分（2026-09-07）
+
+    `Delegates`（orchestrator → 子 agent）在物理上走的是两跳：
+        AgentRuntime -[RoutesVia]-> AgentGateway -[RoutesToRuntime]-> AgentRuntime
+    实测依据是 orchestrator 的 httpx CLIENT span（aws.remote.service 指向网关）。
+
+    把它压成一条直连边便于回答「orchestrator 依赖哪些 agent」，
+    **但会在可达性分析里制造一条物理上不存在的旁路** ——
+    割点分析检查「绕开网关是否还能到 adoption」时会命中这条 Delegates，
+    于是判定网关**不是**单点故障，而网关恰恰是那 4 条委派的唯一通路。
+
+    所以做**路径/可达性**推导时必须排除 transitive 边（见
+    `physical_dependency_edge_labels()`）；做「谁依赖谁」的语义查询应包含它。
+
+    ⚠️ 不要把 transitive 理解成「弱依赖」或「间接依赖」——
+    判据是「两端之间是否还存在别的、代表同一次调用的节点」。
+    """
+    spec = EDGE_TYPES.get(label)
+    return bool(spec and spec.get('transitive'))
+
+
+def physical_dependency_edge_labels() -> frozenset:
+    """依赖边里代表**一次物理调用**的那些 —— 可达性/割点分析应当只用这一组。
+
+    = dependency_edge_labels() - transitive 边。
+    """
+    return frozenset(lb for lb, s in EDGE_TYPES.items()
+                     if s.get('dependency') and not s.get('transitive'))
+
+
 # ── 多源权威 ──────────────────────────────────────────────────────────────
 
 def may_write_node_attr(label: str, attr: str, source: str) -> bool:

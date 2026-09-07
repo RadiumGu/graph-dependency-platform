@@ -483,6 +483,91 @@ ETL 实际写入。已补两条（`4280cc9`），本方案还需三条：
 > **G2 是这三条里最值钱的**：它把「有没有漏建模一条依赖」变成了一个
 > **可自动检测的图性质**，而不是靠人肉巡检。
 > 本次 P2 是我在追一个属性写错时**偶然**发现的——那不是一种可靠的发现机制。
+>
+> **G2 已实现**（2026-09-07，`tests/test_57_inbound_reachability.py`）。
+> 判据不是「零入边即告警」——实测否掉了那个朴素版本：`LoadBalancer` 5 个
+> 全部零入边（合法图根，上游是互联网），`AgentRuntime/graph_dependency_mcp`
+> 也零入边（`scope=platform`，调用方是 Kiro 而非被观测系统）。
+> 最终是三层判据：显式登记的类型 × `scope='observed'` × 减去 `KNOWN_GAPS`。
+
+---
+
+## 8. 光有边还不够：SPOF 判据对区域级托管服务是失明的
+
+**这一节是 2026-09-07 实施 M1–M6 时发现的，它决定了前面那些边有没有用。**
+
+### 问题
+
+`q16_single_point_of_failure` 的判据是
+「**只在单个 AZ**（`size([(r)-[:LocatedIn]->(az)]) = 1`）且被 ≥2 个服务依赖」。
+
+实测：**`AgentGateway` 与全部 6 个 `AgentRuntime` 的 `LocatedIn` 边都是 0**，
+所以那个条件恒为假 —— **无论加多少条边，网关都不会被 q16 命中。**
+
+这不是 q16 的 bug。它回答的是「一次 AZ 故障会打掉哪些被多方依赖的资源」，
+对区域级托管服务而言排除是**正确的**：AZ 挂了不影响一个 regional 服务。
+缺的是**第二种故障模型**。
+
+### 新增 `q_articulation_chokepoints`（`dr-plan-generator/graph/queries.py`）
+
+判据：对每个 (上游 u, 候选 n, 下游 d)，若**不经 n** 就没有任何 u→d 的路径
+（1..3 跳，只走**物理**依赖边），则 d 被 n 阻断。按阻断数排序。
+
+刻意**不合并进 q16**：两者是两种故障模型，
+q16 问「AZ 没了谁受影响」，本查询问「这个组件没了，谁就到不了它后面的东西」。
+合并会得出没人能解释的答案 —— 与 `RoutesTo` 一个标签两种语义是同类错误。
+
+实测输出（2026-09-07，`min_blocked=2`，共 **10 条**，规模可人工消费）：
+
+| 类型 | 咽喉点 | 阻断 | 上游 |
+|---|---|---|---|
+| Microservice | `payforadoption` | 8 | 1 |
+| Microservice | `petsearch` | 7 | 3 |
+| Microservice | `petlistadoptions` | 4 | 1 |
+| **AgentRuntime** | **`WaggleAIOrchestrator`** | **4** | 1 |
+| StepFunction | `StepFnStateMachine76D362E8-…` | 3 | 2 |
+| … | （其余 5 条阻断 2–3） | | |
+
+orchestrator 被正确识别（petsite → orchestrator → 4 个工具），是个好的自检。
+
+### 一个必须先解决的陷阱：`Delegates` 会把网关藏起来
+
+部署后 orchestrator→adoption 会**同时**存在两条表示：
+`Delegates` 直连边，和 `RoutesVia → AgentGateway → RoutesToRuntime` 两跳。
+
+于是任何「绕开网关是否还能到 adoption」的检查都会命中那条 `Delegates`，
+**判定网关不是咽喉点** —— 恰好把这套机制要找的东西藏起来。
+
+处置：契约给 `Delegates` 加 **`transitive: true`**，
+含义是「本边是一条多跳路径的汇总，不是一次物理调用」。
+新增访问器 `is_transitive_edge()` / `physical_dependency_edge_labels()`，
+可达性类查询只用物理边集合，语义类查询（「谁依赖谁」）仍包含 transitive 边。
+**两类查询要的是两种不同的图，这个标志就是那个开关。**
+
+> ⚠️ `transitive` 的判据是「两端之间是否还存在别的、代表同一次调用的节点」，
+> **不是**「弱依赖」或「间接依赖」。误加一条等于在图上凭空断开一条真实路径。
+> `tests/test_59_chokepoint_spof.py::t59_01` 锁住这个集合。
+>
+> 顺带一个没做的判断：`InvokesTool` 其实是**混合**的 ——
+> orchestrator 的 4 个工具经网关（逻辑），其余 runtime 的工具是进程内（物理）。
+> 那是**边实例属性而非类型属性**，用 `transitive` 这个类型级标志表达不了。
+> 目前不影响结论（工具节点与 runtime 节点是不同节点，不构成绕过网关的路径），
+> 但若将来要做更精细的路径推导，这里需要一个实例级的标注机制。
+
+### 已知局限（写在查询的 docstring 里，不要当成完整 SPOF 判定）
+
+- **不判冗余**：拓扑上唯一通路即被列出，「是不是真的只有一个副本」不回答。
+- **路径截断 3 跳**：更长的绕行不会被发现，因此可能**高估**阻断。
+- **不按 `upstream` 过滤**：`upstream=1` 的是单链瓶颈而非扇入型枢纽。
+  刻意不滤 —— **网关部署后 `fan_in` 恰好只有 1**（仅 orchestrator），
+  按扇入过滤会把最该找到的那个节点漏掉。这是设计这条判据时最反直觉的一点。
+
+### M7 的验收判据
+
+部署后首轮 ETL 跑完，`q_articulation_chokepoints` 应当出现
+`AgentGateway/WaggleAIGateway`，阻断数约等于经网关可达的子 agent 数。
+**在此之前它不会出现**，因为 `RoutesVia`/`RoutesToRuntime` 还没有实例
+（见 `tests/test_11_schema_consistency.py` 的 `PENDING_FIRST_EDGE`）。
 
 ---
 

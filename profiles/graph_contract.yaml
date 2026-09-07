@@ -128,6 +128,25 @@ edge_types:
     dst:
     - AgentRuntime
     expires_seconds: 21600
+    # ⚠️ transitive: 本边是一条**多跳路径的汇总**，不是一次物理调用。
+    #
+    # 2026-09-07 实测：orchestrator 委派子 agent 走的是
+    #   AgentRuntime -[RoutesVia]-> AgentGateway -[RoutesToRuntime]-> AgentRuntime
+    # 两跳（httpx CLIENT span 的 aws.remote.service 指向网关主机名）。
+    # Delegates 把这条路径压成一条直连边，便于回答「orchestrator 依赖哪些 agent」。
+    #
+    # **代价是它会在可达性分析里制造一条物理上不存在的旁路。**
+    # 具体后果：割点/咽喉点分析在检查「绕开网关是否还能到 adoption」时，
+    # 会命中这条 Delegates 边，于是判定网关**不是**单点故障 ——
+    # 而网关恰恰是那 4 条委派的唯一通路。
+    #
+    # 所以凡是做**路径/可达性**推导的查询（q_articulation_chokepoints）
+    # 必须排除 transitive 边；而做「谁依赖谁」的语义查询应当包含它。
+    # 两类查询要的是两种不同的图，这个标志就是区分它们的开关。
+    #
+    # 判据：**这条边的两端之间是否还存在别的、代表同一次调用的节点**。
+    # 是 → transitive。不要把它误用成「弱依赖」或「间接依赖」的意思。
+    transitive: true
     note: '编排 agent 路由到子 agent（本环境是 orchestrator_strands → nutrition/ordering/
 
       adoption/concierge 四个）。唯一写入源是 aws/spans —— 控制面 API 看不到
