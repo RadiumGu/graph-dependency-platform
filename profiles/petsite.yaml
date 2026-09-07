@@ -485,10 +485,12 @@ neptune:
     资源节点来自 bedrock-agentcore-control 控制面 API；调用边只能来自 aws/spans ——
     控制面看不到「谁调了谁」，那只存在于运行时 span 里。
     - (:AgentRuntime)-[:Delegates]->(:AgentRuntime)  // 编排 agent → 子 agent（orchestrator → nutrition/ordering/adoption/concierge）
-    - (:AgentRuntime)-[:InvokesTool]->(:AgentTool)  // 刻意不复用 Invokes：那个是 dependency:false 的结构边，agent→tool 是真依赖
+    - (:AgentRuntime)-[:InvokesTool]->(:AgentTool)  // 刻意不复用 Invokes：端点类型不同（那个目标是 LambdaFunction），且失效语义不同（本边 inference 走观测静默标记，Invokes 是 static）
     - (:AgentRuntime)-[:Retrieves]->(:KnowledgeBase)  // KB 检索。失败模式是「调用成功但结果为空」，判据看输出质量而非错误率
     - (:AgentRuntime)-[:AccessesData]->(:AgentMemory|:AWSServiceEndpoint)  // 读写 Memory；调 Bedrock 模型落 AWSServiceEndpoint
-    - (:AgentGateway)-[:RoutesTo]->(:AgentTool)  // Gateway 把多 target 聚合成单一虚拟 MCP server 后分发
+    - (:AgentRuntime)-[:RoutesVia]->(:AgentGateway)  // ★ agent 出站经网关。补的是已确认的活体 SPOF：网关挂 ⇒ 4 个子 agent 全断
+    - (:AgentGateway)-[:RoutesToRuntime]->(:AgentRuntime)  // 网关 target 的真实目标（控制面 targetType=AGENTCORE_RUNTIME）
+    - (:AgentGateway)-[:RoutesTo]->(:AgentTool)  // ⚠️ 迁移期遗留：目标类型写错了，正被 RoutesToRuntime 取代；删除要等 ETL 部署+存量清理之后
     - (:Guardrail)-[:ProtectsAccess]->(:AgentRuntime)  // 与 SecurityGroup→LambdaFunction 同构：一道策略保护一个执行体
     - (:AgentTool)-[:DependsOn]->(:LambdaFunction|:Microservice)  // ★ 把 agent 子图接回既有 PetSite 图的唯一通路
       - 最后那条是关键：缺了它，六个 agent 节点类型会在图里形成一座孤岛 ——

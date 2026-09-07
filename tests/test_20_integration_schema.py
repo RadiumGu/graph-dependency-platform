@@ -196,9 +196,24 @@ def test_s6_02_dynamic_edge_types_match_static_schema(neptune_rca):
     if extra_in_neptune:
         print(f"[EXTRA]   Neptune 有但静态未定义: {sorted(extra_in_neptune)}")
 
+    # 与本文件的节点用例（s6_01）对称：已声明但尚无首个实例的**边**类型走允许
+    # 名单。名单与理由集中在 tests/test_11_schema_consistency.py，不在此处复制。
+    #
+    # ⚠️ 2026-09-07 补：此前本用例**根本没有引用任何名单**，而节点那条有 ——
+    # 同一份 schema、同一种「已声明尚未产生实例」的合法中间态，节点放行、边报错。
+    # test_11 自己早就记下了这个不对称（见其 PENDING_FIRST_EDGE 上方注释：
+    # 「只给节点开口子等于要求新增边类型必须与写入它的 ETL 同一秒上线」），
+    # 但只修了 test_11，漏了这里。
+    from test_11_schema_consistency import PENDING_FIRST_EDGE
+    missing_in_neptune = missing_in_neptune - PENDING_FIRST_EDGE
+    if missing_in_neptune:
+        print(f"[MISSING-真] 扣除允许名单后仍缺: {sorted(missing_in_neptune)}")
+
     assert not missing_in_neptune, (
         f"schema_prompt.py 定义了以下边类型但 Neptune 中不存在: "
-        f"{sorted(missing_in_neptune)}"
+        f"{sorted(missing_in_neptune)}\n"
+        f"若是刚引入、尚未产生首个实例的新边类型，加进 "
+        f"test_11_schema_consistency.PENDING_FIRST_EDGE 并写明理由与销账条件。"
     )
     assert not extra_in_neptune, (
         f"Neptune 中存在以下边类型但 schema_prompt.py 未定义: "

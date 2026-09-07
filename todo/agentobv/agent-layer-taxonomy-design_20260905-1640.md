@@ -400,17 +400,51 @@ span: cloud.resource_id ─────────────────► �
 `edge_write_once_attrs`，而 ETL 每 15 分钟跑一次。**先清数据后改代码，
 15 分钟内就被写回**——这个坑本仓库已经踩过（见提纲 §4.8）。
 
-| 步 | 动作 | 前置 | 可回滚 |
-|---|---|---|---|
-| **M1** | 契约加 `RoutesToRuntime` / `RoutesVia`；`AgentGatewayTarget` **不加** | — | 是（仅声明） |
-| **M2** | `test_35::g18` 的 `DEPENDENCY_EDGES` 登记新标签（g18 会强制这一步） | M1 | 是 |
-| **M3** | `graph_schema_text` 同步（`g01/g02` 强制两侧类型名集合相同） | M1 | 是 |
-| **M4** | 重新生成 `graph_contract_data.py`（`g03` 强制） | M1–M3 | 是 |
-| **M5** | 改 `etl_agentcore`：target 的目标节点解析为 `AgentRuntime`（按 `targetConfiguration.…arn`），边改 `RoutesToRuntime`，target 元信息落边属性 | M4 | 是（代码） |
-| **M6** | 同 ETL 补写 `RoutesVia` 与 `Microservice → AgentGateway` | M5 | 是 |
-| **M7** | **部署新 layer + 新 ETL**，观察一轮（15 min）确认新边正确产出 | M6 | 是（回退 layer 版本） |
-| **M8** | 清理 5 个错误的 `AgentTool` 节点及其 `RoutesTo` 边，**带 JSON 留痕** | **M7 已生效** | 数据删除，靠留痕回滚 |
-| **M9** | 处置那条跳过网关的 `Microservice → AgentRuntime` 边（见 D1） | M8 + 裁决 | 同上 |
+| 步 | 动作 | 前置 | 可回滚 | 状态 |
+|---|---|---|---|---|
+| **M1** | 契约加 `RoutesToRuntime` / `RoutesVia`；`AgentGatewayTarget` **不加** | — | 是（仅声明） | ✅ 2026-09-07 |
+| **M2** | `test_35::g18` 的 `DEPENDENCY_EDGES` 登记新标签（g18 会强制这一步） | M1 | 是 | ✅ |
+| **M3** | `graph_schema_text` 同步（`g01/g02` 强制两侧类型名集合相同） | M1 | 是 | ✅ |
+| **M4** | 重新生成 `graph_contract_data.py`（`g03` 强制） | M1–M3 | 是 | ✅ 31 边类型 |
+| **M5** | 改 `etl_agentcore`：target 的目标节点解析为 `AgentRuntime`（按 `targetConfiguration.…arn`），边改 `RoutesToRuntime`，target 元信息落边属性 | M4 | 是（代码） | ✅ |
+| **M6** | 同 ETL 补写 `RoutesVia`，并把 `Delegates` 主路径改为网关 span 派生 | M5 | 是 | ✅ |
+| **M7** | **部署新 layer + 新 ETL**，观察一轮（15 min）确认新边正确产出 | M6 | 是（回退 layer 版本） | ⬜ 待部署 |
+| **M8** | 清理 5 个错误的 `AgentTool` 节点及其 `RoutesTo` 边，**带 JSON 留痕** | **M7 已生效** | 数据删除，靠留痕回滚 | ⬜ |
+| **M9** | 从契约 `RoutesTo` 的 pairs/src/dst 里删掉 `AgentGateway`/`AgentTool`（**必须最后做**，见下） | M8 | 是 | ⬜ |
+
+> ### M9 为什么必须排在最后（2026-09-07 实施时发现的部署危险）
+>
+> 本文初版把「拆 `RoutesTo`」笼统放在 M1。**那样做会打挂生产。**
+> 契约由已部署的 layer 提供，而 `assert_edge_type` 是运行时执法：
+> 如果 M1 就把 `[AgentGateway, AgentTool]` 从 pairs 里删掉，
+> 一旦 layer 更新而 ETL 代码还是旧的，`etl_agentcore` 每轮都会**拒写并抛错**。
+>
+> 所以 M1 只**新增**，`RoutesTo` 那一对错的 pair 要留到「ETL 改完 + 部署 +
+> 存量清理」三步都完成之后才能删。契约里已就地写了这条迁移期说明。
+
+### M1–M6 实施记录（2026-09-07）
+
+**顺带修掉的三处既有缺陷**（都是实施时才暴露的）：
+
+1. **`ListGatewayTargets` 不返回 `targetConfiguration`**，而 `_backend_kind()`
+   与 `_backend_ref()` 都在读它 —— 这两个函数对网关 target **一直在空转**。
+   实测证据：5 个 `owner_kind='gateway'` 的 `AgentTool` 全部
+   `backend_kind='unknown'`。已在 `_paged_targets()` 里补 `GetGatewayTarget`
+   逐个补齐（失败则降级保留摘要，不让一个坏 target 拖垮整轮）。
+2. **`test_20::s6_02` 根本没有引用任何允许名单**，而同文件的节点用例有。
+   同一份 schema、同一种「已声明尚未产生实例」的合法中间态，节点放行、边报错。
+   `test_11` 早就记下了这个不对称并为此建了 `PENDING_FIRST_EDGE`，
+   但只修了自己、漏了 `test_20`。已补。
+3. **`_dependency_edge_labels()` 的兜底清单有两份副本**
+   （`rca/neptune/` 与 `infra/lambda/rca_window_flush/neptune/`），
+   由 `test_52::m05` 钉住必须一致。两份都已同步到 9 类。
+
+**测试**：714 passed / 0 failed / 151 skipped（改动前 682 passed）。
+
+**`PENDING_FIRST_EDGE` 已登记两项**，销账条件写在
+`tests/test_11_schema_consistency.py`：部署后首轮 ETL 跑完、这两种边在活图谱里
+出现即移除。**留着等于放弃对它们的存在性检查** —— 而 `RoutesVia` 恰恰是唯一能让
+图谱说出「网关是单点故障」的那条边，静默为空是最坏情况。
 
 **M8 的留痕格式照既有先例**
 `todo/removed-verify-attrs-nondependency-edges_20260905-0959.json`

@@ -447,6 +447,8 @@ DEPENDENCY_EDGES = {
     'Invokes',
     'InvokesTool',
     'Retrieves',
+    'RoutesToRuntime',
+    'RoutesVia',
 }
 
 
@@ -465,6 +467,22 @@ def test_g18_dependency_edge_set_is_locked(contract):
     改判同时按 g07 补了 `expires_seconds: 21600`。
 
     ⚠️ 这次改判是**在没有任何测试拦阻的情况下**发生的，本用例就是补那个洞。
+
+    ## RoutesToRuntime / RoutesVia 为什么在清单里（2026-09-07）
+
+    两条都是 agent 层的真依赖，用控制面 API 与 span 实测确认后新增：
+
+    - `RoutesToRuntime`（AgentGateway → AgentRuntime）：GetGatewayTarget 显示
+      5 个 target 的 targetType 全是 AGENTCORE_RUNTIME、配置指向 runtime ARN。
+      此前 ETL 把目标写成了 AgentTool，是**目标节点类型错误**。
+    - `RoutesVia`（AgentRuntime → AgentGateway）：orchestrator 的 httpx CLIENT
+      span 证明 agent 间调用持续经过网关（09-04→09-07 四个子 agent 全覆盖、
+      约每 5 分钟一次、无中断）。**这条边补的是一个已确认的活体单点故障** ——
+      在它存在之前，图对「网关失效 ⇒ 多 agent 系统整体瓦解」完全沉默。
+
+    两者都**不复用** `RoutesTo`：那个标签同时用于 LoadBalancer → TargetGroup
+    且 dependency: false，而 dependency 是边类型级标志，一个标签无法同时取
+    两个值 —— 这正是 2026-09-05 那 5 条边越界携带 dependency_kind 的根因。
     """
     declared = {e for e, v in contract['edge_types'].items() if v.get('dependency')}
     assert declared == DEPENDENCY_EDGES, (

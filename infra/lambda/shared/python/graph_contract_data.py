@@ -499,8 +499,53 @@ EDGE_TYPES = {   'AccessesData': {   'dependency': True,
     'RoutesTo': {   'dependency': False,
                     'dst': ['AgentTool', 'TargetGroup'],
                     'expires_seconds': None,
+                    'note': '⚠️ **迁移期状态（2026-09-07）**：本标签正在被拆分。\n'
+                            '[AgentGateway, AgentTool] 这一对是**错的**，实测（bedrock-agentcore-control '
+                            '的 GetGatewayTarget）证明网关 target 的 targetType 全是 AGENTCORE_RUNTIME、 '
+                            '配置指向 runtime ARN —— 目标应是 AgentRuntime，且那是**真依赖**， 已另立 '
+                            'RoutesToRuntime。\n'
+                            '**这一对暂时保留不能删**：删了之后 assert_edge_type 会在生产里拒写并抛错， 因为已部署的 '
+                            'etl_agentcore 还在写这种边。删除必须排在 「ETL 改完 + 部署 + 存量清理」之后，顺序见 '
+                            'todo/agentobv/agent-layer-taxonomy-design_20260905-1640.md §4。\n'
+                            '保留的那一对 [LoadBalancer, TargetGroup] 是纯转发配置，dependency: false 正确。',
                     'pairs': [['AgentGateway', 'AgentTool'], ['LoadBalancer', 'TargetGroup']],
                     'src': ['AgentGateway', 'LoadBalancer']},
+    'RoutesToRuntime': {   'dependency': True,
+                           'dst': ['AgentRuntime'],
+                           'expires_seconds': 21600,
+                           'note': '网关到 agent runtime 的路由。真值来源是控制面 ListGatewayTargets + '
+                                   'GetGatewayTarget（targetConfiguration.http.agentcoreRuntime.arn）。\n'
+                                   '**刻意不复用 RoutesTo**：那个标签同时用于 LoadBalancer → TargetGroup 的转发 '
+                                   '配置且 dependency: false。本边是真依赖 —— runtime 不可用时网关这条路由就是 断的。而 '
+                                   'dependency 是**边类型级**的标志，一个标签无法同时取两个值 —— 这正是 2026-09-05 那 5 '
+                                   '条边越界携带 dependency_kind 的根因。\n'
+                                   'target 的元信息（target_id / target_name / target_type / '
+                                   'credential_provider / target_status）作为**边属性**承载， **不**单独建 '
+                                   'AgentGatewayTarget 节点 —— 那一层没有独立失效语义， '
+                                   '两端都已是节点，插一层只会让所有影响面查询多一跳。\n'
+                                   'dependency_kind 取 static：控制面声明，与流量无关。',
+                           'pairs': [['AgentGateway', 'AgentRuntime']],
+                           'src': ['AgentGateway']},
+    'RoutesVia': {   'dependency': True,
+                     'dst': ['AgentGateway'],
+                     'expires_seconds': 21600,
+                     'note': 'agent 的出站调用经由网关路由。**这条边补的是一个已确认的活体单点故障**。\n'
+                             '实测依据（2026-09-07，orchestrator 的运行时日志组）： '
+                             'scope=opentelemetry.instrumentation.httpx / name=POST / '
+                             'kind=CLIENT 的 span， attributes.aws.remote.service 指向网关主机名， '
+                             'attributes.aws.remote.operation 形如 "POST /adoption" 直接给出 target '
+                             '名。 窗口 09-04→09-07 四个子 agent 全部出现（adoption 145 / nutrition 61 / '
+                             'ordering 42 / concierge 17 次），全部 HTTP 200。\n'
+                             '**为什么必须单独建这条边**：网关承载全部 agent 间流量，它失效 ⇒ orchestrator 到 4 个子 agent '
+                             '全断 ⇒ 多 agent 系统整体失效。 在这条边存在之前，图对此完全沉默，影响面分析会给出偏乐观的错误答案。\n'
+                             '**为什么不复用 DependsOn**：本边断裂会让多 agent 协作整体瓦解， 而单 agent '
+                             '直调仍可用；两者失效影响面不同，合成一个标签就无法分别推导。\n'
+                             'dependency_kind 取 dynamic（**不是 static**）：已实测到持续流量 （跨 4 天、约每 5 '
+                             '分钟、无中断），按本项目定义 dynamic = 持续观测到流量。 这也让它落入 '
+                             'deactivate_stale_dynamic_edges 的失效管辖，而非 inference '
+                             '那条「稀疏突发、不判失效」通道 —— 对稳态流量是正确的选择。',
+                     'pairs': [['AgentRuntime', 'AgentGateway']],
+                     'src': ['AgentRuntime']},
     'RunsOn': {   'dependency': False,
                   'dst': ['EC2Instance', 'Pod'],
                   'expires_seconds': None,
@@ -599,3 +644,10 @@ NODE_SCOPE = {   'attr': 'scope',
                         'fluent-bit': 'observability',
                         'otel-collector': 'observability',
                         'xray-daemon': 'observability'}}
+
+
+# 观测节奏稀疏的 source：「窗口内没看到」推不出「依赖消失」。
+# 这些源的边只能标 drift_status='observed_then_silent'，
+# **不得**走 active=false —— 后者断言依赖不存在，而我们只能证明
+# 窗口内没观测到。判据与理由见 profiles/graph_contract.yaml。
+SPARSE_OBSERVATION_SOURCES = ['deepflow-dns']

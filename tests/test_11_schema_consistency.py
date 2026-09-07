@@ -72,7 +72,24 @@ PENDING_FIRST_INSTANCE = {
 #    若哪天改回上游默认的 local，五个 agent 会同容器、委派走进程内调用，
 #    这三种边会全部消失 —— 届时**不要**把它们加回本名单来「修」测试，
 #    那是在掩盖真实的观测能力退化。
-PENDING_FIRST_EDGE: set = set()
+#
+# ── 2026-09-07：新增两项，等 etl_agentcore 部署后按纪律移除 ──────────────────
+# RoutesToRuntime / RoutesVia 已在契约与 schema 声明，写入它们的 ETL 改动
+# 同批提交但**尚未部署**（layer 未重建），所以活图谱里还没有实例。
+#
+#   RoutesToRuntime  网关 → runtime。此前 ETL 把目标写成 AgentTool 是错的
+#                    （控制面 GetGatewayTarget 实测 targetType=AGENTCORE_RUNTIME）。
+#   RoutesVia        runtime → 网关。补的是一个**已确认的活体 SPOF**：
+#                    orchestrator 的 httpx CLIENT span 证明 agent 间调用持续
+#                    经过网关（09-04→09-07 四个子 agent 全覆盖、约每 5 分钟）。
+#
+# **销账条件**：部署后首轮 ETL 跑完，这两种边在活图谱里出现，即从本名单移除。
+# 留着等于放弃对它们的存在性检查 —— 而 RoutesVia 恰恰是唯一能让图谱说出
+# 「网关是单点故障」的那条边，静默为空是最坏情况。
+PENDING_FIRST_EDGE: set = {
+    'RoutesToRuntime',
+    'RoutesVia',
+}
 
 # ── Schema parse helpers ──────────────────────────────────────────────────────
 

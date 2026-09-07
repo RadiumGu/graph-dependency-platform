@@ -418,13 +418,49 @@ def collect_gateway_targets(gateways: list) -> dict:
 
 
 def _paged_targets(acc, gateway_id: str) -> list:
+    """列出网关的 target，并**逐个补齐 targetConfiguration**。
+
+    ## 为什么必须多打一次 GetGatewayTarget（2026-09-07 实测）
+
+    `ListGatewayTargets` 的 item **不含 `targetConfiguration`** —— 它只有
+    targetId / name / status / description / createdAt / updatedAt / targetType。
+    而 `_backend_kind()` 与 `_backend_ref()` 都在读 `target['targetConfiguration']`，
+    于是这两个函数对网关 target **一直在空转**：
+
+        实测活图谱：5 个 owner_kind='gateway' 的 AgentTool 全部 backend_kind='unknown'
+
+    后果不只是少一个展示属性 —— `_backend_ref()` 返回 (None, None) 意味着
+    「AgentTool → 真实后端」这条**把 agent 子图接回既有图的唯一通路**
+    对所有网关 target 都没建出来。
+
+    这次的主要目的是拿 `targetConfiguration.http.agentcoreRuntime.arn`
+    （AGENTCORE_RUNTIME 型 target 的真实目标），顺带把上面那个洞补了。
+
+    额外成本：每轮多 N 次 API 调用（N = target 数，本环境是 5）。
+    单个 target 取配置失败时**保留摘要继续**，不让一个坏 target 拖垮整轮 ——
+    降级后 targetType 仍在，至少还能判别类型。
+    """
     out, token = [], None
     while True:
         kwargs = {'gatewayIdentifier': gateway_id}
         if token:
             kwargs['nextToken'] = token
         resp = acc.list_gateway_targets(**kwargs)
-        out.extend(resp.get('items') or [])
+        for item in (resp.get('items') or []):
+            tid = item.get('targetId')
+            if tid:
+                try:
+                    detail = acc.get_gateway_target(
+                        gatewayIdentifier=gateway_id, targetId=tid)
+                    # 只并入摘要里没有的字段，不让 detail 覆盖摘要
+                    for k, v in detail.items():
+                        if k not in item and not k.startswith('ResponseMetadata'):
+                            item[k] = v
+                except Exception as exc:                       # noqa: BLE001
+                    logger.warning(
+                        'GetGatewayTarget(%s/%s) 失败，降级为仅摘要：%s',
+                        gateway_id, tid, exc)
+            out.append(item)
         token = resp.get('nextToken')
         if not token:
             return out
@@ -444,6 +480,51 @@ fields @timestamp, attributes.gen_ai.operation.name as op,
 | filter ispresent(op)
 | stats count(*) as calls, max(@timestamp) as last_ts
        by runtime_id, op, tool_name, peer_agent, model_id, kb_id
+| limit 2000
+"""
+
+# ── ②b 网关出站 span ────────────────────────────────────────────────────────
+#
+# ## 为什么必须是**独立**的一条查询，而不是放宽 SPAN_QUERY
+#
+# SPAN_QUERY 有 `| filter ispresent(op)`，其中 op = attributes.gen_ai.operation.name。
+# 网关这一跳是 httpx 的 HTTP CLIENT span，**没有任何 gen_ai.* 属性**，
+# 于是被那个过滤器整批排除 —— 这就是它至今没被采集到的原因。
+#
+# 但 SPAN_QUERY 的 `ispresent(op)` 是**刻意**的（见该处注释：gen_ai 属性只做筛选、
+# 不做身份键）。放宽它会把大量非 agent span 拉进同一个聚合，
+# 让 by 子句的基数爆掉。所以另起一条。
+#
+# ## 这条 span 长什么样（2026-09-07 实测）
+#
+#   scope.name = "opentelemetry.instrumentation.httpx"
+#   name = "POST"   kind = "CLIENT"
+#   resource.attributes.cloud.resource_id
+#       = arn:...:runtime/WaggleAIOrchestrator-K85tG867Xt/runtime-endpoint/DEFAULT:DEFAULT
+#   attributes.aws.remote.service  = waggleaigateway-th4m2rp46p.gateway.bedrock-agentcore.….amazonaws.com
+#   attributes.aws.remote.operation = "POST /adoption"      ← 直接给出网关 target 名
+#   attributes.http.status_code = 200
+#
+# 覆盖度实测（09-04→09-07，orchestrator 日志组）：四个子 agent 全部出现 ——
+#   /adoption 145 次、/nutrition 61、/ordering 42、/concierge 17，全部 200。
+#
+# ## 筛选条件为什么这么写
+#
+# 用 `aws.remote.service like /gateway\.bedrock-agentcore/` 而**不是**匹配具体
+# 网关主机名：网关 id 是部署产物，写死会在重建网关后静默失效
+# （「少一条边」与「本来没这个依赖」在图上无法区分，是本项目反复踩的坑）。
+# 同时要求 ispresent(runtime_id)，否则拿不到源端点。
+GATEWAY_SPAN_QUERY = """
+fields @timestamp,
+       resource.attributes.cloud.resource_id as runtime_id,
+       attributes.aws.remote.service as remote_service,
+       attributes.aws.remote.operation as remote_op,
+       attributes.http.status_code as status_code
+| filter ispresent(runtime_id)
+| filter ispresent(remote_service)
+| filter remote_service like /gateway\\.bedrock-agentcore/
+| stats count(*) as calls, max(@timestamp) as last_ts
+       by runtime_id, remote_service, remote_op, status_code
 | limit 2000
 """
 
@@ -801,15 +882,45 @@ def write_control_plane(cp: dict, gw_targets: dict, round_ts: int,
         }, round_ts)
         n['Guardrail'] += 1
 
-    # Gateway -[RoutesTo]-> AgentTool，以及 AgentTool -[DependsOn]-> 真实后端。
-    # 后者是把 agent 子图接回既有 PetSite 图的**唯一**通路 —— 缺了它，
-    # agent 节点在图里是一座孤岛，能查内部结构却回答不了
+    # Gateway 的 target 分两类，**目标节点类型不同**，见下面 _runtime_arn_from_target。
+    # AgentTool -[DependsOn]-> 真实后端 是把 agent 子图接回既有 PetSite 图的
+    # **唯一**通路 —— 缺了它，agent 节点在图里是一座孤岛，能查内部结构却回答不了
     # 「petsite 挂了会影响哪个 agent」。
     for gw_arn, targets in gw_targets.items():
         for t in targets:
             tname = t.get('name') or t.get('targetId')
             if not tname:
                 continue
+
+            # ── 分流：target 指向的是 runtime，还是一个真正的 tool？──────────
+            #
+            # 2026-09-07 用控制面实测：本环境 5 个 target 的 targetType 全是
+            # AGENTCORE_RUNTIME，targetConfiguration.http.agentcoreRuntime.arn
+            # 指向 runtime ARN。**而 ETL 此前一律建 AgentTool 节点** ——
+            # 于是图里多出 5 个不存在的「工具」（nutrition / orchestrator /
+            # ordering / concierge / adoption），它们其实是已建模的 AgentRuntime。
+            #
+            # 判据是「路由的另一端是否已经是图里的节点」：
+            #   AGENTCORE_RUNTIME → 是（AgentRuntime），直接连过去
+            #   mcp.lambda / openApiSchema / smithyModel → 那是真的 tool 端点
+            rt_arn = _runtime_arn_from_target(t)
+            if rt_arn:
+                # 不建 AgentTool 节点。target 的元信息作为**边属性**承载 ——
+                # target 本身没有独立的失效语义（它就是「网关声明了一条到某
+                # runtime 的路由」，两端都已是节点），建成节点只会多一跳。
+                _upsert_edge('RoutesToRuntime', 'AgentGateway', gw_arn,
+                             'AgentRuntime', rt_arn, round_ts,
+                             props={
+                                 'target_id': t.get('targetId'),
+                                 'target_name': tname,
+                                 'target_type': t.get('targetType'),
+                                 'target_status': t.get('status'),
+                                 'credential_provider': _credential_provider(t),
+                             },
+                             dependency_kind='static')
+                n['RoutesToRuntime'] += 1
+                continue
+
             tool_key = f'{gw_arn}#{tname}'
             _upsert_node('AgentTool', tool_key, {
                 # name 与 tool_name 同值：身份键是 tool_key，但**项目约定要求
@@ -841,6 +952,50 @@ def write_control_plane(cp: dict, gw_targets: dict, round_ts: int,
                              dependency_kind='static')
                 n['DependsOn'] += 1
     return dict(n)
+
+
+def _runtime_arn_from_target(target: dict):
+    """若 target 指向的是一个 AgentRuntime，返回该 runtime 的 ARN；否则 None。
+
+    ## 实测依据（2026-09-07，bedrock-agentcore-control）
+
+    5 个 target 的 `targetType` 全是 `AGENTCORE_RUNTIME`，配置形如：
+
+        targetConfiguration.http.agentcoreRuntime.arn
+          = arn:aws:bedrock-agentcore:ap-northeast-1:<acct>:runtime/WaggleAINutrition-2NEiCS7VJw
+
+    这与 `ListAgentRuntimes` 返回的 `agentRuntimeArn` **同形**，
+    所以能直接当 AgentRuntime 的身份键用（契约 identity='arn'）。
+
+    ⚠️ 与 span 里的 runtime_id **不同**：后者带 endpoint 后缀
+    （`/runtime-endpoint/DEFAULT:DEFAULT`，见 _runtime_id_from_span）。
+    这里仍然做一次剥离，防止将来控制面也开始返回带后缀的形式 ——
+    身份键不一致会造出重复节点，那是本项目踩过的坑。
+
+    **不靠 targetType 单独判定**：既要 targetType 命中，也要真的取到 arn。
+    只看 targetType 会在 GetGatewayTarget 降级（见 _paged_targets）时
+    拿不到 arn 却以为能建边，结果建出一条指向 None 的边。
+    """
+    if (target.get('targetType') or '').upper() != 'AGENTCORE_RUNTIME':
+        return None
+    cfg = ((target.get('targetConfiguration') or {}).get('http') or {})
+    arn = (cfg.get('agentcoreRuntime') or {}).get('arn')
+    if not arn:
+        return None
+    # 剥离可能的 endpoint 后缀，只留 .../runtime/<id>
+    return arn.split('/runtime-endpoint/', 1)[0]
+
+
+def _credential_provider(target: dict) -> str:
+    """target 用的凭据提供方 —— 权限类故障的排查线索。
+
+    实测本环境全部是 GATEWAY_IAM_ROLE。取第一个即可：多个提供方的场景
+    目前没有实例可核实，**不猜**（猜出来的枚举值会进图，比缺字段更难纠正）。
+    """
+    cps = target.get('credentialProviderConfigurations') or []
+    if not cps:
+        return 'unknown'
+    return cps[0].get('credentialProviderType') or 'unknown'
 
 
 def _backend_kind(target: dict) -> str:
@@ -1014,6 +1169,120 @@ def write_span_edges(rows: list, round_ts: int) -> dict:
     return dict(n)
 
 
+def collect_gateway_spans() -> tuple:
+    """采集 agent → 网关 的出站 CLIENT span。
+
+    与 `collect_spans()` 共用日志组与 Insights 执行器，只是换一条查询
+    （原因见 GATEWAY_SPAN_QUERY 上面那段：gen_ai 过滤器会把它整批排除）。
+
+    **零命中不判矛盾。** 这与 collect_spans 的矛盾检测刻意不同：
+    一个没有网关、或 agent 之间不互调的环境，这里本来就该是空的。
+    把「结构上没有」当成「采集出错」，正是本项目反复记录的那个错误。
+    """
+    logs = boto3.client('logs', region_name=REGION)
+    now = int(time.time())
+    groups = _discover_span_log_groups(logs)
+    if not groups:
+        return _probe_status.EMPTY, []
+
+    def _run():
+        return _run_insights(logs, groups, now, GATEWAY_SPAN_QUERY)
+
+    st, rows = _collect(_run, f'{len(groups)} 个 runtime 日志组的网关出站 span')
+    if st == _probe_status.OK and not rows:
+        logger.info('网关出站 span 零命中 —— 该环境可能没有经网关的 agent 间调用')
+        return _probe_status.EMPTY, []
+    return st, rows
+
+
+def _gateway_arn_from_remote_service(remote_service: str, gw_index: dict):
+    """把 span 里的网关主机名映射回 AgentGateway 的 ARN。
+
+    主机名形如 `waggleaigateway-th4m2rp46p.gateway.bedrock-agentcore.<region>.amazonaws.com`，
+    第一段就是 gatewayId。**用 id 匹配而不是名字**：id 在 ARN 里，
+    是控制面给的不变量；名字可改。这与契约「身份键必须由不变量派生」一致。
+    """
+    if not remote_service:
+        return None
+    gid = remote_service.split('.', 1)[0]
+    return gw_index.get(gid)
+
+
+def _target_name_from_remote_op(remote_op: str) -> str:
+    """从 `POST /adoption` 取出网关 target 名 `adoption`。"""
+    if not remote_op:
+        return ''
+    tail = remote_op.rsplit('/', 1)[-1].strip()
+    return tail.split('?', 1)[0]
+
+
+def write_gateway_span_edges(rows: list, round_ts: int,
+                             gw_index: dict, target_index: dict) -> dict:
+    """把网关出站 span 写成 `RoutesVia`，并据此补 `Delegates`。
+
+    ## 一条 span 能派生两条边
+
+        span.cloud.resource_id ──────────► 源 AgentRuntime
+        span.aws.remote.service ─────────► AgentGateway        ⇒ RoutesVia
+        span.aws.remote.operation "POST /x" ─► target "x"
+                                    └─[控制面 target 索引]──► 目标 AgentRuntime
+                                                              ⇒ Delegates
+
+    ## 为什么 Delegates 改走这条路
+
+    原实现依赖硬编码表 `_DELEGATION_TOOLS`（tool 名 → runtime 名）。
+    那张表 2026-09-06 才补上 `concierge_chat` / `food_ordering` ——
+    **漏一项就静默少一条依赖边**，而「少一条边」与「本来没有这个依赖」
+    在图上无法区分。实测代价：Concierge 与 Ordering 曾从 orchestrator 不可达。
+
+    网关 span 不需要这张表：target 名来自 span，target → runtime 来自控制面
+    （`ListGatewayTargets` + `GetGatewayTarget`，本 ETL 已在调）。
+    这把「靠人肉维护名字映射」换成「靠控制面的真值」，与契约
+    「身份键必须由不变量派生，不能用 name」是同一条原则。
+
+    `_DELEGATION_TOOLS` **保留**作为不经网关的直连委派的兜底，两条路互补。
+
+    ## dependency_kind 取 dynamic
+
+    实测这条链路是**持续**流量（跨 4 天、约每 5 分钟、无中断），
+    符合本项目 dynamic 的定义。因此它落入 `deactivate_stale_dynamic_edges`
+    的失效管辖，而不是 inference 那条「稀疏突发、不判失效」通道 ——
+    对稳态流量这是正确的：真的断了 6 小时，就该被标出来。
+    """
+    n = defaultdict(int)
+    for r in rows:
+        runtime_id = _runtime_id_from_span(r.get('runtime_id') or '')
+        src_arn = _runtime_index().get(runtime_id)
+        gw_arn = _gateway_arn_from_remote_service(r.get('remote_service') or '',
+                                                  gw_index)
+        if not (src_arn and gw_arn):
+            # 拿不到两端就不建边。**不猜**：一条端点错的边比缺一条边更难发现。
+            logger.warning('网关 span 端点解析失败，跳过: runtime_id=%s remote_service=%s',
+                           r.get('runtime_id'), r.get('remote_service'))
+            continue
+
+        props = {'observed_calls': r.get('calls'),
+                 'last_status_code': r.get('status_code')}
+        _upsert_edge('RoutesVia', 'AgentRuntime', src_arn,
+                     'AgentGateway', gw_arn, round_ts, props,
+                     dependency_kind='dynamic')
+        n['RoutesVia'] += 1
+
+        tname = _target_name_from_remote_op(r.get('remote_op') or '')
+        dst_arn = target_index.get((gw_arn, tname)) if tname else None
+        if dst_arn and dst_arn != src_arn:
+            # 目标 runtime 由控制面 target 索引给出，不经硬编码名字表。
+            _upsert_edge('Delegates', 'AgentRuntime', src_arn,
+                         'AgentRuntime', dst_arn, round_ts, props,
+                         dependency_kind='inference')
+            n['Delegates_via_gateway'] += 1
+        elif tname and not dst_arn:
+            # 有 target 名但索引里没有 —— 说明控制面与 span 不一致，
+            # 值得告警：可能是 target 刚被删、或 GetGatewayTarget 那轮降级了。
+            logger.warning('span 里的 target 名 %r 在控制面 target 索引中找不到', tname)
+    return dict(n)
+
+
 def _gmap(item) -> dict:
     """把 Gremlin 的 `g:Map` 解成 Python dict。
 
@@ -1101,10 +1370,33 @@ def lambda_handler(event=None, context=None):
     span_status, span_rows = collect_spans(runtime_count=len(cp['runtimes'][1]))
     edge_stats = write_span_edges(span_rows, round_ts)
 
+    # ── 网关出站 span → RoutesVia + Delegates ────────────────────────────────
+    # 放在 write_control_plane 之后：两个索引都要用控制面这一轮的结果，
+    # 而 Delegates 的目标 runtime 必须由控制面 target 列表解析（不用名字表）。
+    gw_index = {}
+    for gw in cp['gateways'][1]:
+        gid = gw.get('gatewayId') or gw.get('gatewayIdentifier')
+        garn = gw.get('gatewayArn') or gw.get('arn')
+        if gid and garn:
+            gw_index[gid] = garn
+    target_index = {}
+    for garn, targets in gw_targets.items():
+        for t in targets:
+            tname = t.get('name') or t.get('targetId')
+            rt_arn = _runtime_arn_from_target(t)
+            if tname and rt_arn:
+                target_index[(garn, tname)] = rt_arn
+
+    gw_span_status, gw_span_rows = collect_gateway_spans()
+    gw_edge_stats = write_gateway_span_edges(gw_span_rows, round_ts,
+                                             gw_index, target_index)
+    edge_stats.update(gw_edge_stats)
+
     # 采集状态逐项上报 —— 「全空」与「全失败」在计数上都是 0，
     # 不把状态带出来就无法区分「还没部署 agent」和「权限丢了」。
     statuses = {k: v[0] for k, v in cp.items()}
     statuses['spans'] = span_status
+    statuses['gateway_spans'] = gw_span_status
     # CONTRADICTORY 与 FAILED 同等对待：两者都意味着本轮结果不可信。
     # 区别只在诊断信息 —— FAILED 是调用没成功，CONTRADICTORY 是调用成功但结果自相矛盾。
     failed = [k for k, v in statuses.items()
