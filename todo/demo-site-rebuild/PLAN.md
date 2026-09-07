@@ -110,7 +110,66 @@
   不报红(注释里出现 `qc_select_box`)。已加 `_code_only()` 先剥注释与 docstring。
   这是本会话第三次踩这个坑。
 
-- [ ] T2 修 `8_DR_Plan` 生成不出计划
+- [x] **T2 修 `8_DR_Plan` 生成不出计划** ✅ 2026-09-06
+
+  **实测结论:三层原因,每一层都不报错、只是把内容变空。**
+
+  ① **没设 workload profile。** 报的是
+  `ProfileNotConfigured: No workload profile configured. Pass --profile
+  <profile.yaml> or set DR_PROFILE. There is deliberately no default: a wrong
+  profile silently produces a plan pointing at the wrong domain, SSM keys and
+  namespace, which looks correct until it is executed.`
+  上游**刻意不给默认值,这个设计是对的**,所以修法不是给上游加默认,
+  而是让页面做**显式**选择(`profiles/petsite.yaml`)。
+
+  ② **默认参数用虚构 AZ 名。** `apne1-az1` / `apne1-az2` / `apne1-az4` 在图谱里
+  不存在(图谱是 `ap-northeast-1a` / `ap-northeast-1c` / `ap-northeast-1d`)。
+  **这套虚构命名贯穿整个 `dr-plan-generator`** —— examples、fixtures、tests、
+  README、README_CN、SKILL.md、AGENT.md、docs/prd.md,连 `graph/queries.py` 的
+  docstring 都写着「e.g. `apne1-az1`」,而且**没有任何别名翻译层**。
+  也就是说 **AZ scope 从来只在合成 fixture 上验证过**。
+
+  ③ **即使换成真实 AZ 名,受影响服务仍是 0。** `anchors=10, nodes=394` 但零匹配 ——
+  profile 声明的服务锚点里有 `petadoptionshistory` / `pethistory-service` /
+  `PetAdoptionStatusUpdater` 这些图谱里不存在的名字,而 `Microservice` 节点也不
+  直接挂在 AZ 上(路径是 Service→Pod→EC2→AZ)。**这是 dr-plan-generator 侧的
+  锚定问题,不在本页范围内**,已另立 T11。
+
+  实测三种 scope:
+
+  | scope | source | 受影响服务 | 阶段 | RTO |
+  |---|---|--:|--:|--:|
+  | `az` | `apne1-az1`(虚构) | 0 | 2 | 6 |
+  | `az` | `ap-northeast-1a`(真实) | 0 | 5 | 803 |
+  | **`service`** | **`petsite`** | **6** | 4 | 61 分钟 |
+
+  **修后实测:默认预设改为「服务故障:petsite」,点一下得到真实计划** ——
+  计划 ID `dr-service-1788748447`、RTO 61 分钟、**受影响服务 6**
+  (petsite / pethistory / payforadoption / petlistadoptions / petsearch / petfood)、
+  零异常。
+
+  顺带三处:
+  - AZ 选项改为从图谱查 `MATCH (a:AvailabilityZone)`,不硬编码 ——
+    硬编码正是 ② 的来源。
+  - 受影响服务为 0 时**显式告知**并给出上面那张对照表。空计划有计划 ID、
+    有 RTO/RPO、有阶段,唯独没有内容 —— **比报错更容易误导人**。
+  - `估算 RPO` 原来渲染成 `None 分钟`。生成器返回 None 是**刻意**的
+    (`RPO cannot be derived from configuration (aurora, dynamodb, s3, sqs).
+    The plan will say so rather than print a number that cannot be justified.`),
+    渲染成 `None 分钟` 把这份诚实抹成了一个 bug。改为显示「无法推导」+ 解释。
+
+  门禁 `tests/test_55_dr_plan_usable.py`(7 条,**m01/m02/m04/m07 已反向验证**):
+  m01 必须显式设 workload profile / m02 默认参数不得是虚构 AZ 名 /
+  m03 AZ 选项必须从图谱取 / m04 默认预设必须是实测能出计划的那个 /
+  m05 受影响服务为零时必须明确告知 / m06 无法推导的 RPO 不得渲染成 None /
+  m07(需活图谱)默认场景真的出得来计划。
+
+  ⚠️ m02 第一版又是「断言匹配到自己的说明文字」—— 页面上解释「为什么 AZ scope
+  算不出来」的告警里必然引用 `apne1-az1`,而 `EXAMPLE_PLAN_PATH` 指向的示例产物
+  文件名也含它。改为只盯**参数赋值位置**(`default_source=` / `"source":` /
+  `value=`),不盯说明文字。**本会话第四次踩这个坑** —— 判据要对准语法位置,
+  不是对准字符串。
+
 - [ ] T3 修 `3_Graph_Explorer` 分层布局(用户截图:节点挤成两排、标签截断)
 - [ ] T4 改 `4_Smart_Query` 布局:输入框置顶或固定,答案紧随其后
 - [ ] T5 查 `9_Interactive_Explorer` 为何是空页(Cytoscape 组件未加载?)
@@ -119,6 +178,28 @@
 - [ ] T8 改写 `app.py` 首页导语,把「这张图是真的吗」这条论证线摆前面
 - [ ] T9 每修一个都加守门测试(本会话反复的教训:没有门禁的东西会漂回去)
 - [ ] T10 全量测试 + 部署 + 线上逐页复验
+- [ ] T11 `dr-plan-generator` 的 AZ scope 锚定在真实图谱上匹配不到任何服务
+
+  **不是 demo 页的问题,单独立项。** 实测 `anchors=10, nodes=394` 但零匹配。
+  两层原因:
+
+  ① `profiles/petsite.yaml` 声明的服务名里有图谱里不存在的:
+  `petadoptionshistory`(图谱是 `pethistory`)、`pethistory-service`、
+  `petadoptionstatusupdater` / `PetAdoptionStatusUpdater`(图谱是 `petstatusupdater`)。
+
+  ② `Microservice` 节点不直接挂在 `AvailabilityZone` 上 ——
+  路径是 `Service→Pod→EC2→AZ`。若锚定只查一跳,AZ 子图里根本没有 Microservice。
+
+  另外整个 `dr-plan-generator` 用的 `apne1-az1` 这套 AZ 名在图谱里不存在,
+  且无翻译层 —— 它的 examples / fixtures / tests / docs 全是这套名字,
+  **说明 AZ scope 从来没在真实图谱上跑过**。
+
+  ⚠️ 动 `profiles/petsite.yaml` 要小心:它是共享契约文件,并发会话可能在改。
+
+  顺带记录几条噪音(不影响结论但值得清):
+  `Unknown resource type 'Subnet'/'ECRRepository'/'AgentRuntime'/'AWSServiceEndpoint'`
+  —— registry 不认识这些类型,而它们在图谱契约里是有的;
+  `Cycle detected in layer during topological sort; 6 nodes not reachable`。
 
 ## 四、纪律(本会话已付学费)
 

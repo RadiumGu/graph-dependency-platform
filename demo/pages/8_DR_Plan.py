@@ -20,30 +20,66 @@ C.page_setup("DR 计划", icon="🛡️")
 C.sidebar()
 
 # ── 预设场景 ──────────────────────────────────────────────────────────────────
+# ── 预设场景 ──────────────────────────────────────────────────────────────────
+#
+# ## 默认必须落在**真的能出计划**的那个场景上（2026-09-06 修）
+#
+# 实测三种 scope 在真实图谱上的结果：
+#
+#     scope=az       source=apne1-az1（虚构名）      受影响服务 0
+#     scope=az       source=ap-northeast-1a（真实）  受影响服务 0   ← 锚点匹配不上
+#     scope=service  source=petsite                  受影响服务 6   ← 只有这个能用
+#
+# 两个独立问题：
+#
+# ① `apne1-az1` / `apne1-az2` / `apne1-az4` 是**虚构的 AZ 名**，图谱里是
+#    `ap-northeast-1a` / `ap-northeast-1c` / `ap-northeast-1d`。这套虚构命名贯穿
+#    整个 dr-plan-generator（examples / fixtures / tests / README / SKILL.md，
+#    连 `graph/queries.py` 的 docstring 都写着「e.g. apne1-az1」），**没有别名
+#    翻译层** —— 也就是说 AZ scope 从来只在合成 fixture 上验证过。
+#
+# ② 即使换成真实 AZ 名，AZ scope 的受影响服务仍是 0：锚点找不到
+#    （`anchors=10, nodes=394` 但一个都没匹配）。profile 声明的服务名里有
+#    `petadoptionshistory` / `pethistory-service` / `PetAdoptionStatusUpdater`
+#    这些图谱里不存在的名字，而 `Microservice` 节点也不直接挂在 AZ 上
+#    （路径是 Service→Pod→EC2→AZ）。这是 dr-plan-generator 侧的问题，
+#    已记入 todo/demo-site-rebuild/PLAN.md，不在本页范围内修。
+#
+# 所以：默认场景改为 `scope=service, source=petsite`；AZ 场景保留但用**真实**
+# AZ 名，并在结果里如实说明它当前算不出受影响服务。
+def _graph_azs() -> list:
+    """AZ 选项从图谱取，不硬编码 —— 硬编码就是上面 ① 那个问题的来源。"""
+    try:
+        import _common as _c
+        r = _c.gquery("MATCH (a:AvailabilityZone) RETURN a.name AS name ORDER BY name")
+        rows = (r or {}).get("results", r) if isinstance(r, dict) else r
+        azs = [x.get("name") for x in (rows or []) if isinstance(x, dict) and x.get("name")]
+        if azs:
+            return azs
+    except Exception:  # noqa: BLE001
+        pass
+    return ["ap-northeast-1a", "ap-northeast-1c", "ap-northeast-1d"]
+
+
+_AZS = _graph_azs()
+_AZ_SRC = _AZS[0] if _AZS else "ap-northeast-1a"
+_AZ_TGT = ",".join(_AZS[1:3]) if len(_AZS) > 1 else _AZ_SRC
+
 PRESET_SCENARIOS = {
-    "AZ 故障：apne1-az1 → apne1-az2": {
-        "scope": "az",
-        "source": "apne1-az1",
-        "target": "apne1-az2,apne1-az4",
-        "exclude": "",
+    f"服务故障：petsite（默认，实测可出计划）": {
+        "scope": "service",
+        "source": "petsite",
+        "target": os.environ.get("REGION", "ap-northeast-1"),
     },
-    "AZ 故障（排除 petfood）": {
+    f"AZ 故障：{_AZ_SRC} → {_AZ_TGT}": {
         "scope": "az",
-        "source": "apne1-az1",
-        "target": "apne1-az2",
-        "exclude": "petfood",
+        "source": _AZ_SRC,
+        "target": _AZ_TGT,
     },
-    "Region 故障：apne1 → usw2": {
+    "Region 故障：ap-northeast-1 → us-west-2": {
         "scope": "region",
         "source": "ap-northeast-1",
         "target": "us-west-2",
-        "exclude": "",
-    },
-    "服务故障：petsite": {
-        "scope": "service",
-        "source": "petsite",
-        "target": "ap-northeast-1",
-        "exclude": "",
     },
 }
 
@@ -76,10 +112,35 @@ def load_example_plan_json() -> dict:
 def generate_dr_plan(scope: str, source: str, target: str, exclude: str) -> dict:
     """调用 dr-plan-generator 生成 DR 计划。
 
+    ## 必须显式选定 workload profile（2026-09-06 修）
+
+    实测这一页的「🚀 生成 DR 计划」**一直生成不出计划**，报的是：
+
+        No workload profile configured. Pass --profile <profile.yaml> or set
+        DR_PROFILE. There is deliberately no default: a wrong profile silently
+        produces a plan pointing at the wrong domain, SSM keys and namespace,
+        which looks correct until it is executed.
+
+    `dr_profile.get_active_profile()` **刻意不提供默认值** —— 那个设计是对的：
+    错的 profile 会静默生成一个指向错误域名 / SSM 键 / 命名空间的计划，
+    看起来完全正常，直到真的去执行。所以修法**不是**给上游加默认，
+    而是让这一页做出**显式**选择。
+
+    这个展示站展示的是 petsite 这套负载，所以选 `profiles/petsite.yaml`。
+    页面上会把这个选择显示出来 —— 观众有权知道计划是按哪份 profile 生成的。
+
     Returns:
         {"markdown": str, "json": dict, "error": str | None}
     """
     try:
+        from dr_profile import set_active_profile
+
+        prof_path = os.path.join(C.PROJECT_ROOT, "profiles", "petsite.yaml")
+        if not os.path.exists(prof_path):
+            return {"markdown": "", "json": {}, "validation_warnings": [],
+                    "error": f"workload profile 不存在：{prof_path}"}
+        set_active_profile(prof_path)
+
         from graph.graph_analyzer import GraphAnalyzer
         from output.json_renderer import JSONRenderer
         from output.markdown_renderer import MarkdownRenderer
@@ -137,9 +198,18 @@ with st.sidebar:
     st.header("生成配置")
 
     # 预设场景
+    #
+    # 默认**不再**是「自定义」+ 虚构 AZ 名。原实现的自定义分支硬编码
+    # `apne1-az1` / `apne1-az2`，那两个名字在图谱里不存在（见文件顶部的说明），
+    # 所以一打开点「生成」必然得到 0 个受影响服务 —— 页面看起来生成成功了，
+    # 内容却是空的，这比报错更容易误导人。
+    #
+    # 现在默认落在实测能出计划的那个场景（`scope=service, source=petsite`
+    # → 6 个受影响服务 / 4 个阶段 / RTO 61 分钟）。
+    _preset_names = list(PRESET_SCENARIOS.keys())
     preset_name = st.selectbox(
         "预设场景",
-        ["自定义"] + list(PRESET_SCENARIOS.keys()),
+        _preset_names + ["自定义"],
         index=0,
     )
 
@@ -148,11 +218,12 @@ with st.sidebar:
         default_scope = preset["scope"]
         default_source = preset["source"]
         default_target = preset["target"]
-        default_exclude = preset["exclude"]
+        default_exclude = preset.get("exclude", "")
     else:
-        default_scope = "az"
-        default_source = "apne1-az1"
-        default_target = "apne1-az2"
+        # 自定义也从真实取值起步，不给虚构名
+        default_scope = "service"
+        default_source = "petsite"
+        default_target = os.environ.get("REGION", "ap-northeast-1")
         default_exclude = ""
 
     scope = st.selectbox(
@@ -286,8 +357,39 @@ if result.get("_is_example"):
 meta_c1, meta_c2, meta_c3, meta_c4 = st.columns(4)
 meta_c1.metric("计划 ID", result.get("plan_id", "—"))
 meta_c2.metric("估算 RTO", f"{result.get('estimated_rto', '—')} 分钟")
-meta_c3.metric("估算 RPO", f"{result.get('estimated_rpo', '—')} 分钟")
-meta_c4.metric("受影响服务", result.get("affected_count", "—"))
+# RPO 为 None 是生成器**刻意**的输出，不是缺陷：
+#   "RPO cannot be derived from configuration (aurora, dynamodb, s3, sqs).
+#    The plan will say so rather than print a number that cannot be justified."
+# 原来直接插值成 `None 分钟`，看起来像个 bug，反而把这份诚实抹掉了。
+_rpo = result.get("estimated_rpo")
+if _rpo is None:
+    meta_c3.metric("估算 RPO", "无法推导", help=(
+        "生成器刻意不给数字：数据层（aurora / dynamodb / s3 / sqs）的复制配置"
+        "不足以推导出恢复点。给一个无法论证的数字比说「推导不出」更危险。"))
+else:
+    meta_c3.metric("估算 RPO", f"{_rpo} 分钟")
+meta_c4.metric("受影响服务", result.get("affected_count", 0))
+
+# 0 个受影响服务时必须说清楚 —— 否则页面呈现的是一份「看起来生成成功」的空计划。
+# 这比报错更容易误导人：有计划 ID、有 RTO/RPO 数字、有阶段，唯独没有内容。
+if not result.get("_is_example") and not result.get("affected_count"):
+    st.warning(
+        "**这份计划的受影响服务是 0 —— 它算不出内容。**\n\n"
+        "原因是 scope 锚定没有匹配到图谱里的任何服务，生成器退回了未过滤的子图。"
+        "实测三种 scope 的结果：\n\n"
+        "| scope | source | 受影响服务 |\n|---|---|--:|\n"
+        "| `az` | `apne1-az1`（虚构名） | 0 |\n"
+        "| `az` | `ap-northeast-1a`（真实名） | 0 |\n"
+        "| `service` | `petsite` | **6** |\n\n"
+        "AZ scope 目前算不出来，有两层原因:`apne1-az1` 这套 AZ 名在图谱里不存在"
+        "（图谱是 `ap-northeast-1a/c/d`，而 dr-plan-generator 的 examples、"
+        "fixtures、tests、docs 全用虚构名且没有翻译层）；即使换成真实名，"
+        "profile 声明的服务锚点里有 `petadoptionshistory` / `pethistory-service` / "
+        "`PetAdoptionStatusUpdater` 这些图谱里不存在的名字，而 `Microservice` "
+        "节点也不直接挂在 AZ 上（路径是 Service→Pod→EC2→AZ）。\n\n"
+        "**换左侧的「服务故障：petsite」预设可以看到一份真实计划。**",
+        icon="⚠️",
+    )
 
 # 验证警告
 if result.get("validation_warnings"):
