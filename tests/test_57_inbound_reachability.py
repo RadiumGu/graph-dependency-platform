@@ -65,9 +65,17 @@ KNOWN_GAPS = {
         '注意：**不是**缺 Microservice -> AgentGateway —— PetSite 直调 runtime，'
         '不经网关，见该文档 §3.2(a) 的推翻记录。',
     ('AgentRuntime', 'WaggleAIConcierge'):
-        'orchestrator 有 InvokesTool -> concierge_chat，却没有 '
-        'Delegates -> WaggleAIConcierge，而其余三个 agent 两者都有。'
-        '2026-09-07 实测发现，尚未定性是 span 采集缺口还是真的没有 A2A 调用。',
+        '2026-09-07 已定性：**时序错位，不是采集缺口、也不是真没调用**，无需改代码。'
+        'etl_agentcore 的 _DELEGATION_TOOLS 表原先只有 concierge / ordering，'
+        '而 orchestrator 实际注册的 tool 名是 concierge_chat / food_ordering，'
+        '查表落空导致 Delegates 边建不出来；该映射已于 2026-09-06 补上。'
+        '修复生效有实证：Delegates -> WaggleAIOrdering 的 first_seen 是 09-06 02:38，'
+        '晚于修复。而 concierge_chat 最后一次被调用是 09-05 09:16（早于修复），'
+        '此后未再调用，其 InvokesTool 边已被正确标为 '
+        'drift_status=observed_then_silent。'
+        '**下一次真实调用发生时 Delegates 边会自然建出**，届时本行应删除。'
+        '刻意不硬插边：Delegates 是观测驱动的，凭「对称性应该有」插边等于'
+        '把未观测到的关系写成观测事实。',
 }
 
 _SCOPE_IN_SCOPE = 'observed'
