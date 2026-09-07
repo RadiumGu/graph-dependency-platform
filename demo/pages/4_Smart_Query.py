@@ -104,11 +104,48 @@ with st.sidebar:
         st.caption("引擎不可用，无法展示工作原理。")
 
     st.markdown("---")
+    # 并排对比是**配置**，不是内容 —— 放在主区会把对话和输入框隔开。
+    compare_mode = st.toggle(
+        "⚖️ 并排对比两个引擎",
+        value=False,
+        disabled=not ONLINE,
+        help="同一问题分别用 direct 与 strands 跑。"
+             "Strands 走 ReAct 多轮、会产生工具调用链；direct 是单轮生成加空结果重试。"
+             "对比能直观看到两者的 token 用量与推理过程差异。",
+    )
+
+    st.markdown("---")
     st.caption(
         "**安全边界**　`query_guard` 拦截 "
         "`CREATE / DELETE / DETACH / SET / MERGE / REMOVE / DROP / CALL`，"
         "限制最大跳数 6、默认 LIMIT 200。写操作在这里就被挡掉，不依赖 IAM。"
     )
+
+    # ── 契约 few-shot 语料 ────────────────────────────────────────────────────
+    # 原来这一块渲染在**主区、对话之后**，一个过滤输入框加 N 个 expander，
+    # 把答案顶到很上面、输入框压到很下面，中间隔几十行 —— 这正是用户报的
+    # 「对话框在最下面，被很多内容隔开，答案在最上面」。
+    # 挪到侧栏折叠区：离线时它仍是理解本页的主材料，所以不删，只是收起来。
+    with st.expander(f"📚 契约 few-shot 语料（{len(FEW_SHOT)} 组）",
+                     expanded=not ONLINE):
+        if FEW_SHOT:
+            st.caption(
+                "NL 引擎实际使用的示例语料，来自 `profiles/petsite.yaml`。"
+                "每组是「一个自然语言问题 + 它对应的正确 openCypher」。"
+            )
+            kw = st.text_input("过滤问题", placeholder="如 依赖、AZ、Tier0",
+                               key="fs_filter")
+            shown = [e for e in FEW_SHOT if not kw or kw in e.get("q", "")]
+            st.caption(f"显示 {len(shown)} / {len(FEW_SHOT)} 组")
+            for i, ex in enumerate(shown, 1):
+                st.markdown(f"**{i}. {ex['q']}**")
+                st.code(ex.get("cypher", "（无）"), language="cypher")
+        else:
+            st.warning(
+                "未能从契约读到 few-shot 语料。该功能依赖 "
+                "`profiles/profile_loader.py`，需要安装 `pydantic`。"
+            )
+
     if st.button("🗑️ 清空对话", width="stretch"):
         st.session_state["chat_history"] = []
         st.rerun()
@@ -193,6 +230,27 @@ def _render_answer(data: dict, compact: bool = False) -> None:
     _render_trace(data.get("trace") or [])
 
 
+# ── 空状态引导：放在对话**上方** ──────────────────────────────────────────────
+# 原来它在页面最下面（few-shot 之后），第一次打开的人根本看不到。
+if not st.session_state["chat_history"]:
+    if ONLINE:
+        st.info(
+            "在**页面底部**的输入框提问，或点左侧「示例问题」直接填入。\n\n"
+            "💡 想要**确定性**的查询、不经过 AI？查询库有 "
+            f"{C.query_catalog_info()['count']} 条固定 Cypher，"
+            "参数契约显式、同参同果。",
+            icon="💬",
+        )
+        C.page_link("pages/2_Query_Catalog.py", "→ 打开查询库")
+    else:
+        st.warning(
+            "**离线模式** —— 自然语言查询需要 Neptune 与 Bedrock，"
+            "所以底部输入框是禁用状态（不是坏了）。\n\n"
+            "左侧「📚 契约 few-shot 语料」已展开，那是理解这一页在做什么的最佳材料："
+            "每组都是一个真实问题和它对应的正确 openCypher。",
+            icon="🔵",
+        )
+
 for msg in st.session_state["chat_history"]:
     with st.chat_message(msg["role"]):
         if msg["role"] == "user":
@@ -208,14 +266,28 @@ for msg in st.session_state["chat_history"]:
             _render_answer(msg.get("data", {}))
 
 # ── 输入 ──────────────────────────────────────────────────────────────────────
-compare_mode = st.toggle(
-    "⚖️ 并排对比两个引擎（同一问题分别用 direct 与 strands 跑）",
-    value=False,
-    disabled=not ONLINE,
-    help="Strands 走 ReAct 多轮、会产生工具调用链；direct 是单轮生成加空结果重试。"
-         "对比能直观看到两者的 token 用量与推理过程差异。",
-)
-
+#
+# ## 布局:主区只放「对话」,别的都挪走(2026-09-07 修)
+#
+# 用户报的是「对话框在最下面,被很多内容隔开,答案在最上面,看着很不方便」。
+# 根因不是 chat_input 的位置 —— `st.chat_input` 在顶层**总是固定在页面底部**,
+# 这是 Streamlit 的行为,也是聊天界面的常规。真正的问题是**它和对话之间塞了东西**:
+#
+#     标题 / 引擎状态
+#     对话历史          ← 答案在这里
+#     并排对比开关
+#     [chat_input 固定在底部]
+#     新一轮问答渲染
+#     契约 few-shot 语料（一个过滤输入框 + N 个 expander）← 又长又占地
+#     空状态引导
+#
+# few-shot 那一大块渲染在对话之后,于是答案被顶到很上面,输入框在很下面,
+# 中间隔着几十行。修法是把**所有非对话内容挪出主区**:
+#   · 并排对比开关 → 侧栏（它是配置,不是内容）
+#   · few-shot 语料 → 侧栏折叠区（离线时它是主内容,所以不能删,但可以收起）
+#   · 空状态引导   → 只在没有对话时显示,且放在对话上方
+#
+# 这样主区自上而下只有「引擎状态 → 对话 → 输入框」,答案永远紧贴输入框上方。
 if "pending_question" in st.session_state:
     st.session_state["_autofill"] = st.session_state.pop("pending_question")
 
@@ -273,32 +345,11 @@ if user_input and ONLINE:
 
     st.rerun()
 
-# ── few-shot 对照表（离线主内容 / 在线参考）──────────────────────────────────
-if FEW_SHOT:
-    st.markdown("---")
-    st.subheader(f"契约 few-shot 语料（{len(FEW_SHOT)} 组）")
-    st.caption(
-        "这是 NL 引擎实际使用的示例语料，来自 `profiles/petsite.yaml`。"
-        "每组都是「一个自然语言问题 + 它对应的正确 openCypher」。"
-        + ("离线模式下，它是理解这一页在做什么的最佳材料。" if not ONLINE else "")
-    )
-    kw = st.text_input("过滤问题", placeholder="如 依赖、AZ、Tier0", key="fs_filter")
-    shown = [e for e in FEW_SHOT if not kw or kw in e.get("q", "")]
-    st.caption(f"显示 {len(shown)} / {len(FEW_SHOT)} 组")
-    for i, ex in enumerate(shown, 1):
-        with st.expander(f"{i}. {ex['q']}"):
-            st.code(ex.get("cypher", "（无）"), language="cypher")
-else:
-    st.warning(
-        "未能从契约读到 few-shot 语料。该功能依赖 `profiles/profile_loader.py`，"
-        "需要安装 `pydantic`。"
-    )
-
-# ── 空状态引导 ────────────────────────────────────────────────────────────────
-if not st.session_state["chat_history"] and ONLINE:
-    st.markdown("---")
-    st.caption(
-        "💡 想要**确定性**的查询、不经过 AI？查询库有 "
-        f"{C.query_catalog_info()['count']} 条固定 Cypher，参数契约显式、同参同果。"
-    )
-    C.page_link("pages/2_Query_Catalog.py", "→ 打开查询库")
+# ── few-shot 语料与空状态引导已移出主区 ──────────────────────────────────────
+#
+# few-shot 对照表移到了侧栏折叠区，空状态引导移到了对话**上方**（见下面
+# `_empty_state_hint()` 的调用点）。主区自上而下现在只有：
+#
+#     标题 / 引擎状态 → （空状态引导）→ 对话历史 → [chat_input 固定底部]
+#
+# 这样答案永远紧贴输入框上方，不会再被几十行语料隔开。
