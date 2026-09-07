@@ -310,6 +310,88 @@ AgentRuntime -[RoutesVia]-> AgentGateway     dependency_kind: static
       需 span 里看到网关这一跳、或一次故障注入才能置 confirmed。'
 ```
 
+### 3.4 采集路径：从网关 CLIENT span 派生 —— **已实测验证，且优于现有做法**
+
+`[实测 2026-09-07]` 网关这一跳在 span 里**有结构化记录**，不只是日志文本。
+样本（`/aws/bedrock-agentcore/runtimes/WaggleAIOrchestrator-K85tG867Xt-DEFAULT`）：
+
+```json
+{
+  "scope": {"name": "opentelemetry.instrumentation.httpx", "version": "0.65b0"},
+  "traceId": "6a9ee3124648b5e73d93a8107a962d91",
+  "spanId": "855f3583ac996e96",
+  "parentSpanId": "5741625a76fa2708",
+  "name": "POST",
+  "kind": "CLIENT",
+  "resource": {"attributes": {
+      "cloud.resource_id":
+        "arn:aws:bedrock-agentcore:…:runtime/WaggleAIOrchestrator-K85tG867Xt/runtime-endpoint/DEFAULT:DEFAULT"}},
+  "attributes": {
+    "http.url": "https://waggleaigateway-th4m2rp46p.gateway.bedrock-agentcore.…/adoption/invocations",
+    "aws.remote.service": "waggleaigateway-th4m2rp46p.gateway.bedrock-agentcore.ap-northeast-1.amazonaws.com",
+    "aws.remote.operation": "POST /adoption",
+    "http.status_code": 200
+  }
+}
+```
+
+**四个字段刚好凑齐一条边所需的一切**：
+
+| 字段 | 给出什么 |
+|---|---|
+| `resource.attributes.cloud.resource_id` | 源 runtime 的 ARN —— **正是 ETL 现在已经在用的那个字段** |
+| `attributes.aws.remote.service` | 网关主机名，内含网关 id `waggleaigateway-th4m2rp46p` → 映射到 `AgentGateway` 节点 |
+| `attributes.aws.remote.operation` | **`POST /adoption` —— 直接给出网关 target 名** |
+| `attributes.http.status_code` | 成败信号，可用于置信度 |
+
+筛选条件干净：`name = "POST"` + `kind = "CLIENT"` +
+`scope.name = "opentelemetry.instrumentation.httpx"`。
+
+#### 覆盖度实测（09-04 → 09-07）
+
+| target | 调用数 | first_seen | last_seen | status |
+|---|---|---|---|---|
+| `POST /adoption` | 145 | 09-04 19:53 | 09-07 16:15 | 200 |
+| `POST /nutrition` | 61 | 09-04 19:54 | 09-07 10:10 | 200 |
+| `POST /ordering` | 42 | 09-04 19:30 | 09-07 12:50 | 200 |
+| `POST /concierge` | **17** | 09-04 19:54 | **09-05 03:25** | 200 |
+
+**四个子 agent 全部出现**，方法可泛化，不是只对 adoption 有效。
+
+#### 这条路径还顺手消掉一类既有缺陷
+
+现在 `Delegates` 边的派生依赖 `etl_agentcore` 里的**硬编码映射表**
+`_DELEGATION_TOOLS`（tool 名 → runtime 名）。那张表 2026-09-06 才补上
+`concierge_chat` / `food_ordering` —— **它漏一项就静默少一条依赖边**，
+而「少一条边」在图上与「本来就没有这个依赖」无法区分。
+
+网关 span 不需要这张表：`aws.remote.operation` 给出的是**网关 target 名**，
+而 target → runtime 的映射**本来就来自控制面** `ListGatewayTargets`
+（ETL 已经在调）。于是：
+
+```
+span: cloud.resource_id ─────────────────► 源 AgentRuntime
+      aws.remote.service ──────────────► AgentGateway
+      aws.remote.operation "POST /x" ──► target "x" ──[控制面]──► 目标 AgentRuntime
+```
+
+**一条 span 同时能派生三件事**：`RoutesVia`（源 runtime → 网关）、
+`Delegates`（源 runtime → 目标 runtime，不再需要硬编码表）、
+以及对 `RoutesToRuntime`（网关 → 目标 runtime）的动态印证。
+
+> **建议**：`Delegates` 改由网关 span 派生，`_DELEGATION_TOOLS` 保留作为
+> **不经网关的直连委派**的兜底（若存在），并在注释里写明主路径已换。
+> 这把「靠人肉维护名字映射表」换成「靠控制面的真值」——
+> 与本项目「身份键必须由不变量派生，不能用 name」是同一条原则。
+
+#### 一处必须同时改的过滤器
+
+现有 `SPAN_QUERY` 有 `| filter ispresent(op)`，其中
+`op = attributes.gen_ai.operation.name`。网关 CLIENT span **没有 gen_ai 属性**，
+会被这个过滤器整批排除 —— 这就是它至今没被采集到的原因。
+需要新增一条独立查询，**不要**放宽原查询的过滤器
+（原查询的 `ispresent(op)` 是刻意的，见该处注释）。
+
 ---
 
 ## 4. 迁移步骤（有严格顺序，不能调换）
