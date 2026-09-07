@@ -51,7 +51,9 @@ engine_name = C.active_engine_name() if ONLINE else "（离线）"
 
 e1, e2, e3 = st.columns([1, 1, 2])
 e1.metric("当前引擎", engine_name)
-e2.metric("契约 few-shot", len(FEW_SHOT), "组问题→Cypher")
+e2.metric("契约 few-shot", len(FEW_SHOT),
+          help="每组是「一个自然语言问题 + 它对应的正确 openCypher」，"
+               "来自 `profiles/petsite.yaml`。左侧折叠区可逐条查看。")
 e3.caption(
     f"引擎由 `rca/engines/factory.py` 按环境变量 `NLQUERY_ENGINE` 选择，"
     f"**默认 `strands`**；strands 不可用时会记一条 warning 并静默回落 `direct`。\n\n"

@@ -67,13 +67,30 @@ sc = C.schema_counts()
 qc = C.query_catalog_info()
 fc = C.fault_catalog_counts()
 
+# 附注一律进 help=，不进第三个位置参数 —— 那个位置是 delta，会渲染成
+# 带箭头的涨跌（还带绿/红配色）。「预置查询 24 ↑ 确定性 Cypher」是在
+# 首页最显眼处凭空造一个趋势，而这一页的主张恰恰是「摆出来的数字能被核对」。
+# 门禁 tests/test_58_metric_delta_not_annotation.py。
 m = st.columns(6)
-m[0].metric("图节点", f"{gstats.get('node_total', 0):,}", f"{gstats.get('node_label_count', 0)} 种在用")
-m[1].metric("图边", f"{gstats.get('edge_total', 0):,}", f"{gstats.get('edge_type_count', 0)} 种在用")
-m[2].metric("契约节点类型", sc["node_types"], "声明值")
-m[3].metric("契约边类型", sc["edge_types"], f"依赖边 {sc['dependency_edge_types']} 种")
-m[4].metric("预置查询", qc["count"], "确定性 Cypher")
-m[5].metric("故障目录", fc.get("total", 0), f"Mesh {fc.get('chaosmesh', 0)} / FIS {fc.get('fis', 0)}+{fc.get('fis_scenarios', 0)}")
+m[0].metric("图节点", f"{gstats.get('node_total', 0):,}",
+            help=f"活图谱里的节点总数，其中 "
+                 f"{gstats.get('node_label_count', 0)} 种标签在用。")
+m[1].metric("图边", f"{gstats.get('edge_total', 0):,}",
+            help=f"活图谱里的边总数，其中 "
+                 f"{gstats.get('edge_type_count', 0)} 种关系类型在用。")
+m[2].metric("契约节点类型", sc["node_types"],
+            help="契约 `profiles/graph_contract.yaml` 里**声明**的节点类型数。"
+                 "与左边「图节点」的在用种数对账 —— 两者不一致说明有声明未落地"
+                 "或有类型未声明。")
+m[3].metric("契约边类型", sc["edge_types"],
+            help=f"契约声明的关系类型数，其中 {sc['dependency_edge_types']} 种是"
+                 "**依赖边**（只有依赖边才带故障注入验证判定）。")
+m[4].metric("预置查询", qc["count"],
+            help="固定 openCypher，无 LLM 参与，同参数同结果。见「查询库」页。")
+m[5].metric("故障目录", fc.get("total", 0),
+            help=f"Chaos Mesh {fc.get('chaosmesh', 0)} 个 K8s CRD ＋ "
+                 f"AWS FIS {fc.get('fis', 0)} 个单动作 ＋ "
+                 f"{fc.get('fis_scenarios', 0)} 个复合场景。")
 
 if gstats.get("node_label_count") and sc["node_types"]:
     if gstats["node_label_count"] == sc["node_types"]:

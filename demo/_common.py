@@ -640,19 +640,35 @@ def sidebar(active: str = "") -> None:
 
 
 def status_chips(counts: dict, total: int) -> None:
-    """四种验证状态的指标行。"""
+    """四种验证状态的指标行。
+
+    ## 为什么占比不放在 delta 位
+
+    `st.metric` 的第三个参数是 **delta** —— 它渲染成带箭头的涨跌，
+    而 `delta_color="off"` 只去掉颜色、**箭头照样在**。
+    于是「untested 86」旁边会出现「↑ 76.1%」，读起来像「未验证边涨了 76%」。
+
+    这一行是本站的核心记分牌（每条依赖边的验证判定分布），
+    在它上面制造一个不存在的趋势，比不显示占比糟得多 ——
+    这个站的整个主张是「摆出来的数字要能被核对」。
+
+    所以占比进 label，delta 位空着。
+    """
     cols = st.columns(len(_STATUS_ORDER) + 1)
     for i, key in enumerate(_STATUS_ORDER):
         icon, label, _ = STATUS_META[key]
         n = counts.get(key, 0)
         pct = f"{n / total * 100:.1f}%" if total else "—"
-        cols[i].metric(f"{icon} {label}", n, pct, delta_color="off")
+        cols[i].metric(f"{icon} {label}　{pct}", n,
+                       help=f"{total} 条依赖边里有 {n} 条是 {key}（占 {pct}）。")
     decided = counts.get("confirmed", 0) + counts.get("refuted", 0)
     cols[-1].metric(
         "🎯 已验证覆盖率",
         f"{decided / total * 100:.2f}%" if total else "—",
-        f"{decided}/{total}",
-        delta_color="off",
+        help=f"(confirmed + refuted) / 全部依赖边 = {decided}/{total}，"
+             "即真正做过主动干预并得出结论的比例。"
+             "这个数字低不代表数据差 —— 业界所有依赖图这一列都是 100% 未验证，"
+             "只是没人算过，因为既没有持久化的边实体、也没有故障注入后端。",
     )
 
 

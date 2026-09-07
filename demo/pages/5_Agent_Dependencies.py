@@ -76,10 +76,15 @@ agent_node_types = [n for n in AGENT_LABELS if n in (gc.get("node_types") or {})
 agent_edge_types = sorted({e["edge_type"] for e in edges})
 
 m = st.columns(4)
-m[0].metric("Agent 域节点", len(nodes), f"{len(agent_node_types)} 种类型")
-m[1].metric("相关边", len(edges), f"{len(agent_edge_types)} 种类型")
-m[2].metric("契约声明节点类型", C.schema_counts()["node_types"], "含 agent 域 6 种")
-m[3].metric("数据源", "agentcore-etl", "第 12 个合法源")
+m[0].metric("Agent 域节点", len(nodes),
+            help=f"涵盖 {len(agent_node_types)} 种 agent 域节点类型。")
+m[1].metric("相关边", len(edges),
+            help=f"涵盖 {len(agent_edge_types)} 种关系类型。")
+m[2].metric("契约声明节点类型", C.schema_counts()["node_types"],
+            help="其中 agent 域 6 种。契约在 `profiles/graph_contract.yaml`。")
+m[3].metric("数据源", "agentcore-etl",
+            help="第 12 个合法源。源词表由契约定义，"
+                 "每条边都记录是哪个源写的 —— 这是溯源的基础。")
 
 # ── 节点分布 ──────────────────────────────────────────────────────────────────
 st.markdown("---")

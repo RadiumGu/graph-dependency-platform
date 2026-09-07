@@ -289,7 +289,10 @@ edge_styles = [
 # ── 指标 ──────────────────────────────────────────────────────────────────────
 over = len(node_map) > 50
 m = st.columns(5)
-m[0].metric("节点", len(node_map), "⚠️ 超预算" if over else "在预算内")
+m[0].metric("节点", len(node_map),
+            help=("⚠️ **超预算** —— 实测节点超过约 50 个，判断准确率掉到一半以下。"
+                  "收起几个已展开的节点。"
+                  if over else "在认知预算内（约 50 个节点以下）。"))
 m[1].metric("关系", len(edges))
 m[2].metric("已展开", len(st.session_state[S_EXPANDED]))
 m[3].metric("可继续展开", len([n for n in node_map if n not in st.session_state[S_EXPANDED]]))
@@ -298,7 +301,10 @@ for e in edges:
     k = e.get("verify_status") or "untested"
     vs_counts[k] = vs_counts.get(k, 0) + 1
 m[4].metric("已验证关系", vs_counts.get("confirmed", 0) + vs_counts.get("refuted", 0),
-            f"共 {len(edges)}")
+            help=f"当前视图里共 {len(edges)} 条关系，"
+                 "其中判定为 confirmed 或 refuted 的算「已验证」—— "
+                 "即真正做过主动干预并得出结论的。"
+                 "inconclusive 与 untested 都不算。")
 
 if over:
     st.warning(

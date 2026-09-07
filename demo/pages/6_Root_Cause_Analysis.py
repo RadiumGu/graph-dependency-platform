@@ -296,7 +296,12 @@ if svc_meta:
     head[1].metric("Tier", "/".join(sorted(tiers)) if tiers else "—")
     # AZ 数要去重：svc_rows 每行是一个 (服务, az, tier) 组合，
     # 同一个 AZ 可能出现多行，len(azs) 会把它数成多个 AZ。
-    head[2].metric("AZ 分布", len(set(azs)), "个可用区", delta_color="off")
+    #
+    # 附注不要放在 delta 位：`delta_color="off"` 只去掉颜色，**箭头还在**，
+    # 于是渲染成「↑ 个可用区」，读起来像个上升趋势。附注一律用 help。
+    head[2].metric("AZ 分布", len(set(azs)),
+                   help="该服务的 Pod 分布在几个可用区。1 个可用区意味着 AZ 级故障"
+                        "会让它整体不可用 —— DR 计划那一页按这个判断影响面。")
     # 这里原来是 `head[3].metric("图节点数", len(svc_meta))` —— **标签是错的**。
     # len(svc_meta) 是服务清单里匹配到的行数（az/tier 组合数），不是图节点数，
     # 而且它和左边的「AZ 分布」基本是同一个数换算法数两遍。
@@ -307,10 +312,16 @@ if svc_meta:
     if _brk:
         # 返回结构是 {"total": int, "live": [...], "static": [...], ...} ——
         # 直接取 total，不要对 values() 求 len（total 是 int，会 TypeError）。
-        head[3].metric("依赖出边", _brk.get("total", 0),
-                       f"live {len(_brk.get('live', []))}", delta_color="off")
+        head[3].metric(
+            "依赖出边", _brk.get("total", 0),
+            help=f"该服务指向别人的依赖边共 {_brk.get('total', 0)} 条，"
+                 f"其中 **live**（`dependency_kind=dynamic` 且 `active=true`）"
+                 f"{len(_brk.get('live', []))} 条。"
+                 "RCA 只该用 live 那一档，但差额有意义："
+                 "声明未观测／观测后静默／未对账各自代表不同的问题。"
+                 "**根因在出边、影响面在入边。**")
     else:
-        head[3].metric("依赖出边", "—", "离线不可查", delta_color="off")
+        head[3].metric("依赖出边", "—", help="离线模式下无法实时查依赖边。")
 C.mode_badge(ev_mode if ev else "none", "证据数据")
 
 if not ev:
@@ -436,10 +447,18 @@ with tab_dir:
             "被排除的不是噪声，各有各的含义 —— 读者有权知道代价。"
         )
         b = st.columns(4)
-        b[0].metric("✅ live", len(bd["live"]), "dynamic 且 active", delta_color="off")
-        b[1].metric("📄 声明未观测", len(bd["static"]), "static", delta_color="off")
-        b[2].metric("🔇 观测后静默", len(bd["silent"]), "active=false", delta_color="off")
-        b[3].metric("❔ 未对账", len(bd["unreconciled"]), "active 缺失", delta_color="off")
+        b[0].metric("✅ live", len(bd["live"]),
+                    help="`dependency_kind=dynamic` 且 `active=true` —— "
+                         "运行时确实观测到、且现在仍在出现。RCA 只该用这一档。")
+        b[1].metric("📄 声明未观测", len(bd["static"]),
+                    help="`dependency_kind=static` —— CFN/配置里写了，"
+                         "但运行时从没看到过流量。不等于不存在，只是没被观测到。")
+        b[2].metric("🔇 观测后静默", len(bd["silent"]),
+                    help="`dependency_kind=dynamic` 且 `active=false` —— "
+                         "曾经观测到，现在不再出现。服务可能已下线，"
+                         "也可能只是不再被采集：「不再被采集」≠「不再存在」。")
+        b[3].metric("❔ 未对账", len(bd["unreconciled"]),
+                    help="`active` 缺失 —— 没有任何源的 reconcile 碰过它。")
         for key, title, why in (
             ("live", "✅ live —— RCA 实际使用的",
              "运行时观测到、且当前仍然存在。"),
@@ -740,17 +759,23 @@ with tab_agent:
             "同一个 agent space、同一段问题文本。唯一的变量是**有没有在问题里"
             "点名要求查图谱**。")
 
+        # 比例进 label，不进 delta 位：delta 会渲染成箭头，
+        # 「↑ 25%」读起来像「上升了 25%」，而这是一个占比。
         m = st.columns(4)
-        m[0].metric("不提图谱时会去查", f"{pg}/{len(plain)}",
-                    f"{100 * pg / len(plain):.0f}%" if plain else "—",
-                    delta_color="off")
-        m[1].metric("点名要求查图谱", f"{eg}/{len(expl)}",
-                    f"{100 * eg / len(expl):.0f}%" if expl else "—",
-                    delta_color="off")
+        m[0].metric(
+            "不提图谱时会去查　%s" % (f"{100 * pg / len(plain):.0f}%" if plain else "—"),
+            f"{pg}/{len(plain)}",
+            help="问题里不点名图谱时，agent 自己决定要不要查。")
+        m[1].metric(
+            "点名要求查图谱　%s" % (f"{100 * eg / len(expl):.0f}%" if expl else "—"),
+            f"{eg}/{len(expl)}",
+            help="同一段问题后面加一句「请使用依赖图谱查询」。")
         m[2].metric("单次耗时", "%.0f–%.0f 秒" % (
             min(r["elapsed_seconds"] for r in runs),
-            max(r["elapsed_seconds"] for r in runs)))
-        m[3].metric("图谱查询耗时", "毫秒级", "每次结果相同", delta_color="off")
+            max(r["elapsed_seconds"] for r in runs)),
+            help="所以这一屏默认展示已抓取的记录，不做实时阻塞调用。")
+        m[3].metric("图谱查询耗时", "毫秒级",
+                    help="而且每次结果相同。这个不对称本身就是论据。")
 
         st.info(
             "**工具是好的，关联是好的，一调就准 —— 模型只是不主动去拿。**\n\n"

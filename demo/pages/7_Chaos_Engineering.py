@@ -38,10 +38,14 @@ raw = fc.get("raw", {})
 
 # ── 目录概览（现算）──────────────────────────────────────────────────────────
 m = st.columns(4)
-m[0].metric("故障目录总数", fc["total"], "从 YAML 现算")
-m[1].metric("Chaos Mesh", fc["chaosmesh"], "K8s CRD")
-m[2].metric("AWS FIS 单动作", fc["fis"], "托管服务")
-m[3].metric("FIS 复合场景", fc["fis_scenarios"], "AZ / Region 级")
+m[0].metric("故障目录总数", fc["total"],
+            help="从 `fault_catalog.yaml` 现算，代码里不出现计数字面量。")
+m[1].metric("Chaos Mesh", fc["chaosmesh"],
+            help="K8s CRD 形式的故障注入：Pod/网络/IO/时钟等，作用在集群内。")
+m[2].metric("AWS FIS 单动作", fc["fis"],
+            help="AWS 托管服务提供的单个注入动作，作用在云资源上。")
+m[3].metric("FIS 复合场景", fc["fis_scenarios"],
+            help="AZ / Region 级的组合场景：多个动作按编排一起注入。")
 
 st.caption(
     "⚠️ 界面上曾长期显示 73 条——那是硬编码清单，与 `chaos/code/runner/fault_catalog.yaml` "
@@ -104,7 +108,9 @@ if spec_files:
     verify_specs = [p for p in spec_files if "verify-edges" in os.path.basename(p)]
     s = st.columns(3)
     s[0].metric("实验规格文件", len(spec_files))
-    s[1].metric("边验证专用", len(verify_specs), "verify-edges-*")
+    s[1].metric("边验证专用", len(verify_specs),
+                help="文件名以 `verify-edges-*` 开头 —— 这些实验的目的不是"
+                     "「看系统扛不扛得住」，而是「这条依赖边到底成不成立」。")
     s[2].metric("目录分组", len({os.path.relpath(os.path.dirname(p), EXP_DIR) for p in spec_files}))
 
     if verify_specs:

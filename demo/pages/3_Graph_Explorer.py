@@ -626,7 +626,11 @@ auto_height = min(900, max(height, 560))
 over = len(nodes) > 50
 m = st.columns(4)
 m[0].metric("关系", len(edges))
-m[1].metric("节点", len(nodes), "⚠️ 超认知预算" if over else "在预算内")
+m[1].metric("节点", len(nodes),
+            help=("⚠️ **超认知预算** —— 实测节点超过约 50 个，判断准确率就掉到一半"
+                  "以下。换个更小的场景或减少跳数。"
+                  if over else
+                  "在认知预算内（约 50 个节点以下）。"))
 m[2].metric("节点类型", len({n["label"] for n in nodes.values()}))
 m[3].metric("关系类型", len({e["edge_type"] for e in edges}))
 
