@@ -58,6 +58,49 @@ if vdata:
 else:
     st.warning("暂无验证数据。")
 
+# ── 怎么读这个站（论证线）────────────────────────────────────────────────────
+#
+# T8：首页原来是「主张 + 计分板 + 图谱规模 + 证据卡」，读完不知道下一步去哪。
+# 十个页面在侧栏是一条扁平清单，看起来像「这个项目有十个功能」。
+# 这一节把论证线摆出来 —— 四段，顺序不能换，每段说清**为什么需要它**。
+st.markdown("---")
+st.subheader("怎么读这个站")
+st.caption(
+    "不是十个并列的功能，是四段论证。**第 ② 段是市面产品没有的那一段** —— "
+    "如果只看一页，看它。")
+
+_line = [
+    ("① 这张图是什么",
+     "先让人看见对象。默认不渲染全图 —— 实测节点超过约 50 个，判断准确率就掉到"
+     "一半以下，这也是 Datadog / Neo4j Bloom / Kiali 的共同做法。",
+     [("pages/3_Graph_Explorer.py", "🕸️ 分层总览 · 看方向与层次"),
+      ("pages/9_Interactive_Explorer.py", "🧭 交互探索 · 点节点展开邻居")]),
+    ("② 这张图是真的吗　←核心",
+     "每条依赖边都带一个**可被故障注入推翻**的判定。这一段是上面那块计分板的"
+     "展开：判定从哪来、凭什么、哪些边不得用于推理。",
+     [("pages/1_Edge_Verification.py", "🎯 逐条边的验证判定与证据权重"),
+      ("pages/7_Chaos_Engineering.py", "💥 判定是怎么来的 · 故障注入目录")]),
+    ("③ 它能帮你做什么",
+     "有了可信的图，下游才谈得上。RCA 那页有一屏是「同一个问题交给通用运维 "
+     "agent，接图谱与不接图谱」的实测对照 —— 20 次真实调用，带 executionId。",
+     [("pages/6_Root_Cause_Analysis.py", "🔍 根因分析 · 含 Agent 对照"),
+      ("pages/8_DR_Plan.py", "🛡️ DR 计划 · 区分「全停」与「降级」"),
+      ("pages/5_Agent_Dependencies.py", "🤖 Agent 依赖 · 委派与工具调用")]),
+    ("④ 你可以自己问它",
+     "把验证权交给你，而不是让你信我们。自然语言查询会**把生成的 openCypher "
+     "完整展示出来**；查询库是免 AI 的固定查询，同参同果 —— 用它对账 AI 的答案。",
+     [("pages/4_Smart_Query.py", "💬 自然语言查询 · Cypher 全展示"),
+      ("pages/2_Query_Catalog.py", "📚 查询库 · 免 AI、可复现")]),
+]
+for _title, _why, _links in _line:
+    with st.container(border=True):
+        st.markdown(f"**{_title}**")
+        st.caption(_why)
+        _cols = st.columns(len(_links))
+        for _c, (_p, _l) in zip(_cols, _links):
+            with _c:
+                C.page_link(_p, _l, width="stretch")
+
 # ── 图谱规模（动态）──────────────────────────────────────────────────────────
 st.markdown("---")
 st.subheader("图谱规模")

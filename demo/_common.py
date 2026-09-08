@@ -521,18 +521,58 @@ def verification_data() -> tuple[dict, str]:
 
 
 # ── UI 组件 ───────────────────────────────────────────────────────────────────
-NAV = [
-    ("app.py", "🏠 首页 · 这张图是真的吗"),
-    ("pages/1_Edge_Verification.py", "🎯 边验证 · 核心"),
-    ("pages/2_Query_Catalog.py", "📚 查询库 · 免 AI"),
-    ("pages/3_Graph_Explorer.py", "🕸️ 图谱 · 分层总览"),
-    ("pages/9_Interactive_Explorer.py", "🧭 图谱 · 交互探索"),
-    ("pages/4_Smart_Query.py", "💬 自然语言查询"),
-    ("pages/5_Agent_Dependencies.py", "🤖 Agent 依赖"),
-    ("pages/6_Root_Cause_Analysis.py", "🔍 根因分析"),
-    ("pages/7_Chaos_Engineering.py", "💥 混沌工程"),
-    ("pages/8_DR_Plan.py", "🛡️ DR 计划"),
+# ── 导航：按论证线分组，不是九个并列的功能 ────────────────────────────────────
+#
+# ## 为什么要分组（2026-09-07 重排）
+#
+# 原来是十条扁平清单。十个页面各自都能用，但连起来读不出一条线 ——
+# 访客看到的是「这个项目有十个功能」，而不是「这个项目在论证一件事」。
+#
+# 论证线是四段，顺序不能换：
+#
+#   ① 这张图是什么      —— 先让人看见对象，否则后面说什么都没有落点
+#   ② 这张图是真的吗    —— **核心，市面产品没有这一段**
+#   ③ 它能帮你做什么    —— 有了可信的图，下游才谈得上
+#   ④ 你可以自己问它    —— 把验证权交给访客，而不是让他信我们
+#
+# ## 为什么一个页面都没删（T6 / T7 的结论）
+#
+# 收敛页数曾经是计划的一部分，但把每个坏掉的页面都修好之后重新评估，
+# 两组「疑似重复」其实各有不可替代的部分：
+#
+#   分层总览 vs 交互探索：pyvis 从根本上是**单向**的，选中的节点拿不回
+#     Python，所以「点节点 → 展开邻居 / 出侧栏详情」在它上面做不了。
+#     Cytoscape 那页补的正是这一段。两者是同一张图的两种读法
+#     （Neo4j Bloom / AWS graph-explorer 也都同时提供）。
+#
+#   查询库 vs 自然语言查询：查询库是**免 AI、点一下就有结果**的确定性查询，
+#     它同时是「AI 是不是在编」的对照手段 —— 同一个问题用固定 Cypher 跑一遍。
+#     这跟自然语言问答是互补关系，不是冗余。
+#
+# 所以问题从来不是页数，是扁平清单里读不出论证。分组解决的是后者。
+NAV_GROUPS = [
+    ("① 这张图是什么", [
+        ("app.py", "🏠 首页 · 这张图是真的吗"),
+        ("pages/3_Graph_Explorer.py", "🕸️ 分层总览 · 方向与层次"),
+        ("pages/9_Interactive_Explorer.py", "🧭 交互探索 · 点着走"),
+    ]),
+    ("② 这张图是真的吗　←核心", [
+        ("pages/1_Edge_Verification.py", "🎯 逐条边的验证判定"),
+        ("pages/7_Chaos_Engineering.py", "💥 判定是怎么来的 · 故障注入"),
+    ]),
+    ("③ 它能帮你做什么", [
+        ("pages/6_Root_Cause_Analysis.py", "🔍 根因分析"),
+        ("pages/8_DR_Plan.py", "🛡️ DR 计划"),
+        ("pages/5_Agent_Dependencies.py", "🤖 Agent 依赖"),
+    ]),
+    ("④ 你可以自己问它", [
+        ("pages/4_Smart_Query.py", "💬 自然语言查询"),
+        ("pages/2_Query_Catalog.py", "📚 查询库 · 免 AI、可复现"),
+    ]),
 ]
+
+#: 扁平清单，供只需要「所有页面」的地方用（如覆盖率门禁）。
+NAV = [entry for _, entries in NAV_GROUPS for entry in entries]
 
 
 def page_setup(title: str, icon: str = "🕸️", layout: str = "wide") -> None:
@@ -605,9 +645,14 @@ def page_link(path: str, label: str, width: str = "content") -> None:
 def sidebar(active: str = "") -> None:
     """统一侧栏：导航 + 契约摘要 + 连接状态。"""
     with st.sidebar:
-        st.markdown("### 导航")
-        for path, label in NAV:
-            page_link(path, label)
+        st.markdown("### 一条论证线")
+        st.caption(
+            "不是十个并列的功能 —— 是四段，顺序不能换。"
+            "**第 ② 段是市面产品没有的那一段。**")
+        for group, entries in NAV_GROUPS:
+            st.markdown(f"**{group}**")
+            for path, label in entries:
+                page_link(path, label)
 
         st.markdown("---")
         st.markdown("### 图谱契约")
