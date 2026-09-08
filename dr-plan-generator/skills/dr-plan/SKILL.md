@@ -17,8 +17,8 @@ That file contains the complete interactive workflow, CLI reference, and convers
 
 | Command | Purpose |
 |---------|---------|
-| `python3 main.py assess --scope az --failure apne1-az1` | Impact assessment |
-| `python3 main.py plan --scope az --source apne1-az1 --target apne1-az2` | Generate switchover plan |
+| `python3 main.py assess --scope az --failure ap-northeast-1a` | Impact assessment |
+| `python3 main.py plan --scope az --source ap-northeast-1a --target ap-northeast-1c` | Generate switchover plan |
 | `python3 main.py rollback --plan plans/<id>.json` | Generate rollback plan |
 | `python3 main.py validate --plan plans/<id>.json` | Validate plan |
 | `python3 main.py export-chaos --plan plans/<id>.json --output <dir>` | Export chaos experiments |

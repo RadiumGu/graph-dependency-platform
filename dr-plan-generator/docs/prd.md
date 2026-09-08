@@ -203,8 +203,8 @@ python3 main.py plan \
 # 生成 AZ 级切换计划
 python3 main.py plan \
   --scope az \
-  --source apne1-az1 \
-  --target apne1-az2,apne1-az4
+  --source ap-northeast-1a \
+  --target ap-northeast-1c,ap-northeast-1d
 
 # 生成指定服务的切换计划
 python3 main.py plan \
@@ -215,7 +215,7 @@ python3 main.py plan \
 # 影响评估
 python3 main.py assess \
   --scope az \
-  --failure apne1-az1
+  --failure ap-northeast-1a
 
 # 计划验证
 python3 main.py validate \
@@ -256,7 +256,7 @@ DR 计划生成天然需要多轮交互（参数多且有依赖、需要基于�
 1. **一份 Agent 指令，多工具通用** — `AGENT.md` 是纯 Markdown，不绑定任何特定 AI 框架
 2. **CLI 完全独立** — `main.py` 不知道调用者是人还是 AI，所有参数可命令行传入
 3. **AI 是交互翻译层** — 把自然语言转成 CLI 参数，把 CLI 输出转成可读摘要
-4. **无 AI 也能用** — `main.py plan --scope az --source apne1-az1 --non-interactive` 直接出结果
+4. **无 AI 也能用** — `main.py plan --scope az --source ap-northeast-1a --non-interactive` 直接出结果
 
 #### 各 AI 工具的加载方式
 
@@ -273,11 +273,11 @@ DR 计划生成天然需要多轮交互（参数多且有依赖、需要基于�
 [用户] AZ1 挂了，帮我出切换计划
     │
     ▼
-[Agent] Step 1: 理解需求 → scope=az, source=apne1-az1
+[Agent] Step 1: 理解需求 → scope=az, source=ap-northeast-1a
     │
     ▼
 [Agent] Step 2: 图谱分析
-    │   运行: main.py assess --scope az --failure apne1-az1 --format json
+    │   运行: main.py assess --scope az --failure ap-northeast-1a --format json
     │   → "AZ1 有 5 个 EC2, 8 个 Pod, 2 个 RDS，影响 3 个 Tier0 服务"
     │   → "⚠️ petsite-db writer 只在 AZ1，建议切到 AZ2+AZ4"
     │   → 让用户确认目标、排除项、数据层策略
@@ -287,8 +287,8 @@ DR 计划生成天然需要多轮交互（参数多且有依赖、需要基于�
     │
     ▼
 [Agent] Step 3: 生成计划
-    │   运行: main.py plan --scope az --source apne1-az1 \
-    │          --target apne1-az2,apne1-az4 --exclude petfood
+    │   运行: main.py plan --scope az --source ap-northeast-1a \
+    │          --target ap-northeast-1c,ap-northeast-1d --exclude petfood
     │   → "计划已生成，4 Phase、23 Step，预估 RTO 12 分钟"
     │
     ▼
@@ -632,7 +632,7 @@ service_types:
 EOF
 
 # 生成计划时自动合并
-python3 main.py plan --scope az --source apne1-az1 \
+python3 main.py plan --scope az --source ap-northeast-1a \
   --custom-registry registry/custom_types.yaml
 ```
 

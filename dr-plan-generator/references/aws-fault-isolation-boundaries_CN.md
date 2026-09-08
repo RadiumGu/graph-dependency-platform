@@ -11,7 +11,7 @@
 ```
 分区 Partition（aws / aws-cn / aws-us-gov）
   └── 区域 Region（如 ap-northeast-1）
-       └── 可用区 Availability Zone（如 apne1-az1）
+       └── 可用区 Availability Zone（如 ap-northeast-1a）
             └── 数据中心
 ```
 

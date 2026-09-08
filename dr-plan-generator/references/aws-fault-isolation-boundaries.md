@@ -11,7 +11,7 @@
 ```
 Partition (aws / aws-cn / aws-us-gov)
   └── Region (e.g. ap-northeast-1)
-       └── Availability Zone (e.g. apne1-az1)
+       └── Availability Zone (e.g. ap-northeast-1a)
             └── Data Center(s)
 ```
 

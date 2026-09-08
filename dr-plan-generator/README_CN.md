@@ -70,22 +70,22 @@ export REGION=ap-northeast-1
 
 ```bash
 # AZ 级切换
-python3 main.py plan --scope az --source apne1-az1 --target apne1-az2,apne1-az4
+python3 main.py plan --scope az --source ap-northeast-1a --target ap-northeast-1c,ap-northeast-1d
 
 # Region 级切换
 python3 main.py plan --scope region --source ap-northeast-1 --target us-west-2
 
 # 排除指定服务
-python3 main.py plan --scope az --source apne1-az1 --target apne1-az2 --exclude petfood
+python3 main.py plan --scope az --source ap-northeast-1a --target ap-northeast-1c --exclude petfood
 
 # JSON 输出
-python3 main.py plan --scope az --source apne1-az1 --target apne1-az2 --format json
+python3 main.py plan --scope az --source ap-northeast-1a --target ap-northeast-1c --format json
 ```
 
 ### 影响评估
 
 ```bash
-python3 main.py assess --scope az --failure apne1-az1
+python3 main.py assess --scope az --failure ap-northeast-1a
 ```
 
 ### 验证计划
@@ -146,13 +146,35 @@ python3 main.py export-chaos --plan plans/dr-az-xxx.json --output ../chaos/code/
 
 ## 示例
 
-基于 PetSite 拓扑的预生成示例：
+### 预生成示例（**合成拓扑**，不是真实图谱）
+
+⚠️ 下面三份产物由 `examples/generate_examples.py` 从一份**硬编码的合成节点表**
+生成，AZ 名用的是 `apne1-az1/2/4` —— 那套命名在真实图谱里**不存在**
+（真实 AZ 是 `ap-northeast-1a` / `1c` / `1d`）。文件名与表格里保留原样，
+因为它们是历史产物：把 AZ 名替换掉会造出「声称来自 `ap-northeast-1a`、
+实际来自另一套拓扑」的假产物，那比留着假名更糟。
+
+它们的用途是**离线看输出长什么样**，不能用来判断真实环境的影响面。
 
 | 示例 | 场景 | 服务 | 步骤 | RTO |
 |------|------|------|------|-----|
 | [AZ 切换](examples/az-switchover-apne1-az1.md) | AZ1 → AZ2+AZ4 | 7 服务 / 14 资源 | 19 + 15 回滚 | ~34min |
 | [AZ 排除切换](examples/az-switchover-exclude-petfood.md) | AZ1 → AZ2+AZ4（排除 petfood） | 6 服务 / 13 资源 | 18 + 14 回滚 | ~32min |
 | [Region 切换](examples/region-switchover-apne1-to-usw2.md) | 东京 → 美西 | 7 服务 / 22 资源 | 28 + 23 回滚 | ~55min |
+
+### 真实图谱上的实测（2026-09-08）
+
+同样的 AZ scope，跑在活图谱上：
+
+| source | 受影响服务 | 其中整体不可用 |
+|---|--:|---|
+| `ap-northeast-1a` | 6 | 0 —— 全部跨 AZ，只是降级 |
+| `ap-northeast-1c` | 7 | **1 个**：`trafficgenerator` 只有 1 个 pod 且只在 1c |
+| `ap-northeast-1d` | 0 | 那个 AZ 真的只有 2 个资源 |
+
+「受影响」与「整体不可用」是两件事：`petsite` 在 1a 有 96 个 pod、1c 有 160 个，
+掉一个 AZ 是**降级**；`trafficgenerator` 掉了就是**没了**。计划产物里
+`fully_lost_services` 与 `service_az_pods` 给出这个区分与它的原始依据。
 
 ## 项目结构
 

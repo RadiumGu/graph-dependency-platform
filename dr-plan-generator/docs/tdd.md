@@ -87,7 +87,7 @@ main.py (CLI 入口)
 
 ```
 [用户输入]
-  scope=az, source=apne1-az1, target=apne1-az2,apne1-az4
+  scope=az, source=ap-northeast-1a, target=ap-northeast-1c,ap-northeast-1d
     │
     ▼
 [graph/queries.py] ── Q12: 查 AZ1 所有资源 + 依赖链
@@ -1482,8 +1482,8 @@ Neptune 查询使用 fixture JSON 文件 mock，不依赖真实 Neptune 连接�
 # tests/fixtures/az1_subgraph.json
 {
     "nodes": [
-        {"name": "petsite-db", "type": "RDSCluster", "tier": "Tier0", "az": "apne1-az1"},
-        {"name": "petsite", "type": "Microservice", "tier": "Tier0", "az": "apne1-az1"},
+        {"name": "petsite-db", "type": "RDSCluster", "tier": "Tier0", "az": "ap-northeast-1a"},
+        {"name": "petsite", "type": "Microservice", "tier": "Tier0", "az": "ap-northeast-1a"},
         ...
     ],
     "edges": [
@@ -1496,7 +1496,7 @@ Neptune 查询使用 fixture JSON 文件 mock，不依赖真实 Neptune 连接�
 ### 14.3 集成测试
 
 - 连接真实 Neptune，验证 Q12–Q16 查询正确性
-- 端到端：`main.py plan --scope az --source apne1-az1 --target apne1-az2` → 验证输出完整性
+- 端到端：`main.py plan --scope az --source ap-northeast-1a --target ap-northeast-1c` → 验证输出完整性
 
 ---
 
