@@ -539,7 +539,34 @@
   m02/m03/m04 已反向验证),其中 **m04 钉住 JS 与 Python 两处的 `MIN_SCALE` 同值** ——
   不一致会让提示里算出的百分比是错的。
 - [x] T4 改 `4_Smart_Query` 布局 ✅ 2026-09-07（详见上方 T4 条目）
-- [ ] T5 查 `9_Interactive_Explorer` 为何是空页(Cytoscape 组件未加载?)
+- [x] **T5 更正:线上那页一直是好的,空页是我沙箱缺依赖** ✅ 2026-09-07
+
+  台账原记「0 控件 / 4 md / 0 表」,据此列了 T5。**那个观察来自本地 AppTest,
+  而缺 `st_link_analysis` 的是我的沙箱,不是线上** —— 实查线上早就装着。
+  **我诊断的是自己的环境。** 与本会话反复出现的教训同一类:测错了对象。
+
+  但这条线索带出两个真问题,都已修:
+  - `EdgeStyle` 的 `labeled` 是死参数(已传 `caption`),且它的弃用警告
+    **上游无条件触发**(`if labeled is not None` 对 `bool = False` 恒真)。
+    按具体警告类过滤,不一刀切。
+  - **真正的缺陷是没有任何东西检查已声明的依赖装上了没有。**
+    装漏一个包和写错一行代码同样能让功能消失,但前者页面能打开、HTTP 200、
+    日志无 traceback、错误框还挺得体。门禁 `test_59::m02` 挡这个。
+
+  版本策略:API 已证明不稳的钉死(`streamlit==1.62.0` / `pyvis==0.3.2` /
+  `st-link-analysis==0.4.0`),**刻意不钉 `boto3`** —— 它必须保持新才拿得到
+  新服务(本项目用的 `aws devops-agent` 就需要较新的 botocore),钉死是主动
+  制造故障。
+
+- [ ] **T15(记录)测试文件编号与并发会话撞了三次**
+
+  `test_57` / `test_58` / `test_59` 各有两份:我的
+  `_rca_agent_tab` / `_metric_delta_not_annotation` / `_demo_requirements_importable`,
+  与并发会话的 `_inbound_reachability` / `_gateway_target_and_span` / `_chokepoint_spof`。
+
+  pytest 按**完整文件名**收集,所以两份都能跑、互不影响(实测 49 passed)。
+  但下一个人按编号找测试会困惑。**不改名** —— 改名会让两边的提交历史与
+  引用失效,代价大于收益;记在这里说明原因即可。
 - [x] **T6 两个 Explorer 都保留** ✅ 2026-09-08 —— 不是重复:pyvis 从根本上是
   **单向**的,选中节点拿不回 Python,所以「点节点→展开邻居/出侧栏详情」在它上面
   做不了;Cytoscape 那页补的正是这一段。两者是同一张图的两种读法
