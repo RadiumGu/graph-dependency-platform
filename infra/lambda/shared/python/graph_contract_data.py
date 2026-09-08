@@ -476,10 +476,24 @@ EDGE_TYPES = {   'AccessesData': {   'dependency': True,
                           'pairs': [   ['Guardrail', 'AgentRuntime'],
                                        ['SecurityGroup', 'LambdaFunction']],
                           'src': ['Guardrail', 'SecurityGroup']},
-    'PublishesTo': {   'dependency': False,
+    'PublishesTo': {   'dependency': True,
                        'dst': ['SNSTopic', 'SQSQueue'],
                        'expires_seconds': 21600,
-                       'note': '受 drift 对账覆盖',
+                       'note': '受 drift 对账覆盖。\n'
+                               '2026-09-08 从 dependency: false 翻为 true。理由是原状态存在一处无正当理由的 '
+                               '不对称：etl_xray 的 RESOURCE_NODE_TO_EDGE 把 SQSQueue 映射成 DependsOn '
+                               '（算依赖边）、把 SNSTopic 映射成 PublishesTo（不算）—— 同一个源、同一种 语义关系（服务使用 AWS '
+                               '托管消息服务），两种边类型、两种待遇。\n'
+                               '「发布到 topic」是实打实的服务消费：SNS 不可用则发布失败，与调用一个 下游服务失败没有区别。它也不像 '
+                               'LocatedIn/RunsOn 那样普遍为真 （999/792 条，对所有资源都成立、因而不携带判别信息），实测只有 2 '
+                               '条， 判别力强。\n'
+                               '系统内另有两处早已按依赖对待它，翻转是**消除分歧而非引入新意见**： · '
+                               'rca_window_flush/neptune/schema_prompt.py:135 的依赖遍历包含它 · '
+                               'etl_deepflow:810 的 drift 对账把它与 AccessesData 并列\n'
+                               '合规视角上这一步是必需的：SNS/SQS 是 DORA 要登记的第三方 ICT 服务， '
+                               '而「服务支撑哪些业务功能」那一层要靠依赖边穿透才能算出来。翻转前 SNSTopic 追溯到业务功能的结果是 0 个。\n'
+                               '刻意**不同时翻 InvokesVia**：它在整个 infra/ 里没有任何写入方 （历史只有 cffbe45 '
+                               '引入契约那一个提交），翻成依赖边只会造出一条 没人维护、立刻被 TTL 判陈旧的墓碑边。该边类型是留还是删是另一个问题。',
                        'pairs': [['Microservice', 'SNSTopic'], ['Microservice', 'SQSQueue']],
                        'src': ['Microservice']},
     'Retrieves': {   'dependency': True,

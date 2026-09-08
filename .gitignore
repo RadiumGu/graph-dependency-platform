@@ -29,3 +29,7 @@ infra/cdk.context.json
 # 外部研究归档（可从 s3://m2m-926093770964-ap-northeast-1/ 重新获取，不入库）
 /graph-dep-research-20260531.tar.gz
 /todo/graph-dep-research-20260531/
+
+# 演示材料（PPT / PDF 等二进制，从外部带入的参考件，不入库）
+# 二进制进了 git 历史就删不掉，而这类文件动辄数 MB 且会反复出新版本。
+/todo/decks/

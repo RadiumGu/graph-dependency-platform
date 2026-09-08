@@ -765,7 +765,8 @@ def _dependency_edge_labels() -> list:
     # 这份兜底只在「层模块与 YAML 都读不到」时生效，漂移由 test_52 的门禁钉住 ——
     # 上一次漂移的代价是 Lambda 里漏掉 16 条 Invokes 边。
     return ["AccessesData", "Calls", "Delegates", "DependsOn", "Invokes",
-            "InvokesTool", "Retrieves", "RoutesToRuntime", "RoutesVia"]
+            "InvokesTool", "PublishesTo", "Retrieves", "RoutesToRuntime",
+            "RoutesVia"]
 
 
 def q22_edge_verification_verdicts(service_name: str = None,

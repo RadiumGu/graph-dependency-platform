@@ -446,6 +446,7 @@ DEPENDENCY_EDGES = {
     'DependsOn',
     'Invokes',
     'InvokesTool',
+    'PublishesTo',
     'Retrieves',
     'RoutesToRuntime',
     'RoutesVia',
@@ -483,6 +484,33 @@ def test_g18_dependency_edge_set_is_locked(contract):
     两者都**不复用** `RoutesTo`：那个标签同时用于 LoadBalancer → TargetGroup
     且 dependency: false，而 dependency 是边类型级标志，一个标签无法同时取
     两个值 —— 这正是 2026-09-05 那 5 条边越界携带 dependency_kind 的根因。
+
+    ## PublishesTo 为什么在清单里（2026-09-08）
+
+    原状态 `dependency: false` 存在一处**无正当理由的不对称**：
+    `etl_xray` 的 `RESOURCE_NODE_TO_EDGE`（neptune_etl_xray.py:234）把
+    `SQSQueue` 映射成 `DependsOn`（算依赖边）、把 `SNSTopic` 映射成
+    `PublishesTo`（不算）。同一个源、同一种语义关系（服务使用 AWS 托管消息
+    服务），两种边类型、两种待遇。
+
+    「发布到 topic」是服务消费：SNS 不可用则发布失败，与调用一个下游服务
+    失败没有区别。它也不像 `LocatedIn`/`RunsOn` 那样普遍为真（实测 999/792
+    条、对几乎所有资源都成立，因而不携带判别信息），实测只有 2 条。
+
+    翻转是**消除分歧而非引入新意见** —— 系统内另有两处早已按依赖对待它：
+      · `rca_window_flush/neptune/schema_prompt.py:135` 的依赖遍历包含它
+      · `etl_deepflow:810` 的 drift 对账把它与 `AccessesData` 并列
+
+    `upsert_edge` 是契约驱动的（`if is_dependency_edge(lb): dependency_kind='static'`），
+    所以翻转后写入方自动开始写 `dependency_kind`，无需改代码。
+
+    ### 刻意没有同时翻 InvokesVia
+
+    它在整个 `infra/` 里**没有任何写入方**（`git log -S"InvokesVia"` 只有
+    cffbe45「引入机器可读图谱契约」那一个提交，即只被声明、从未被实现）。
+    翻成依赖边只会造出一条没人维护、立刻被 21600s TTL 判陈旧的墓碑边 ——
+    与 2026-09-07 那 22 条 deepflow-dns 边同一个坑。该边类型是补写入方还是
+    从契约移除，是一个独立问题。
     """
     declared = {e for e, v in contract['edge_types'].items() if v.get('dependency')}
     assert declared == DEPENDENCY_EDGES, (
