@@ -583,6 +583,38 @@ def page_setup(title: str, icon: str = "🕸️", layout: str = "wide") -> None:
         layout=layout,
         initial_sidebar_state="expanded",
     )
+    _hide_auto_nav()
+
+
+def _hide_auto_nav() -> None:
+    """隐藏 Streamlit 自动生成的页面列表。
+
+    ## 为什么
+
+    Streamlit 会按 `pages/` 目录自动生成一份侧栏导航。本项目另有一份
+    **按论证线分组**的自定义导航（见 `NAV_GROUPS`），于是同一批页面在侧栏
+    列了两遍 —— 而自动那份是**扁平的英文文件名**（Edge Verification /
+    Query Catalog / …），正好把分组想传达的东西抵消掉：
+    访客先看到十个并列的英文条目，再看到四段论证，只会觉得重复且混乱。
+
+    ## 为什么用 CSS 而不是 st.navigation
+
+    Streamlit 1.62 有 `st.navigation`，但改用它要把多页结构重写成
+    单入口 + `st.Page`，URL 路径会变（现在是 `/streamlit/Root_Cause_Analysis`），
+    而部署校验与截图复验流程都依赖这些路径。为了去掉一份重复导航而改动
+    URL 结构，代价不成比例。
+
+    ## 这个选择器是内部实现，会随版本变
+
+    `data-testid="stSidebarNav"` 出自 Streamlit 前端 bundle（已在
+    1.62.0 的 static/ 里核实存在，不是猜的）。它变了之后最坏情况是
+    **重复导航重新出现** —— 页面不会坏。所以这里不做存在性断言、
+    也不报错：一个装饰性修正不值得让页面挂掉。
+    """
+    st.markdown(
+        '<style>[data-testid="stSidebarNav"]{display:none;}</style>',
+        unsafe_allow_html=True,
+    )
 
 
 def mode_badge(mode: str, what: str = "数据") -> None:
