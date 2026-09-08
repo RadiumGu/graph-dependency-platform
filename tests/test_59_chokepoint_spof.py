@@ -160,3 +160,71 @@ def test_t59_05_chokepoint_query_runs_and_is_not_noisy(neptune_dr):
     for r in rows[:12]:
         print(f"  {r['type']:<16} {r['chokepoint']:<52} "
               f"阻断 {r['blocked']:<3} 上游 {r['upstream']}")
+
+
+def test_t59_06_query_fallback_matches_contract(gc):
+    """兜底边清单必须等于「契约依赖边 − transitive 边」。
+
+    ## 为什么必须有这条
+
+    `q_articulation_chokepoints` 优先从契约取边集合，取不到才用**字面量兜底**
+    （Lambda 层里没有 `profiles/` 时只能走兜底）。而字面量必然会漂移 ——
+    实测代价有先例：`rca` 那份兜底曾少 `Invokes`，线上因此漏掉 16 条边，
+    本地却是对的（见 `tests/test_52::m04`，本条是它在 dr-plan-generator 侧的对应物）。
+
+    **本条就是被真实漂移逼出来的**：2026-09-08 另一路工作把 `PublishesTo`
+    改成 `dependency: true` 并同步了 `rca` 的两份副本（m04 强制），
+    但 `dr-plan-generator/graph/queries.py` 这份没人管 ——
+    因为当时没有任何门禁指着它。
+
+    ⚠️ 本条比对的是**磁盘上的契约**。若契约与兜底同时改则通过；
+    只改一侧就红 —— 这正是它要拦的东西。
+    """
+    import re
+
+    src_path = os.path.join(DR_DIR, 'graph', 'queries.py')
+    src = open(src_path, encoding='utf-8').read()
+    start = src.index('def q_articulation_chokepoints')
+    nxt = src.find('\ndef ', start + 1)
+    body = src[start:nxt if nxt > 0 else len(src)]
+
+    m = re.search(r'labels = (\[[^\]]*\])', body)
+    assert m, '没找到兜底 labels 字面量'
+    fallback = set(re.findall(r'"([A-Za-z]+)"', m.group(1)))
+
+    expected = set(gc.physical_dependency_edge_labels())
+    assert fallback == expected, (
+        f'兜底清单与契约不一致（契约依赖边 − transitive）。\n'
+        f'  契约有兜底没有: {sorted(expected - fallback)}\n'
+        f'  兜底有契约没有: {sorted(fallback - expected)}\n'
+        f'兜底是 Lambda 里真正生效的那份 —— 漂移会让线上静默漏边，'
+        f'而本地因为能读到 profiles/ 是对的，最难发现。'
+    )
+
+
+def test_t59_07_spof_detector_reports_chokepoint_as_distinct_risk():
+    """`SPOFDetector` 必须把咽喉点作为**独立的 risk 取值**上报。
+
+    静态检查（读源文件，避开全量跑时的包名遮蔽，理由同 t59_04）。
+
+    为什么这条重要：single_az 与 topology_chokepoint 的**处置完全不同** ——
+    前者的答案是「跨 AZ 部署」，后者是「加旁路或让它冗余」，
+    而跨 AZ 部署对咽喉点风险**无效**。合成一类会让恢复建议生成出错的动作。
+
+    同时钉住「咽喉点查询失败不得影响 Q16 结果」：两者必须各自 try/except。
+    """
+    src_path = os.path.join(DR_DIR, 'assessment', 'spof_detector.py')
+    src = open(src_path, encoding='utf-8').read()
+
+    assert 'q_articulation_chokepoints' in src, (
+        'SPOFDetector 没有接入咽喉点查询 —— 一个不被调用的检测器等于没有。'
+        'Q16 对区域级托管服务失明（LocatedIn 边为 0），只靠它会漏掉网关这类单点。'
+    )
+    assert 'topology_chokepoint' in src, (
+        '咽喉点必须用独立的 risk 取值，不能混进 single_az —— 两者处置不同'
+    )
+    # 两个数据源各自 try/except：咽喉点失败不得吞掉已拿到的 Q16 结果
+    assert src.count('except Exception') >= 2, (
+        '咽喉点查询与 Q16 必须各自 try/except：前者比后者重（变长路径），'
+        '它失败不该让已经拿到的 Q16 结果一起丢掉。'
+    )

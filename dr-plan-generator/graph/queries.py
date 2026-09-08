@@ -364,7 +364,9 @@ def q_articulation_chokepoints(min_blocked: int = 2,
         scope: 只看该 node_scope 的候选（默认 observed，排除平台自身与脚手架）。
 
     Returns:
-        List of dicts: chokepoint, type, blocked, upstream。
+        List of dicts: chokepoint, type, blocked, upstream, blocked_sample。
+        `blocked_sample` 最多 5 个被阻断节点名 —— 只给样本不给全量是刻意的：
+        这份结果要给人看，全量列表在扇出大的节点上会长到没人读。
     """
     try:
         from graph_contract import physical_dependency_edge_labels  # type: ignore
@@ -383,9 +385,11 @@ OPTIONAL MATCH p = (u)-[:{rel}*1..3]->(d)
 WHERE NOT n IN nodes(p)
 WITH n, u, d, count(p) AS alt
 WHERE alt = 0
-WITH n, count(DISTINCT d) AS blocked, count(DISTINCT u) AS upstream
+WITH n, count(DISTINCT d) AS blocked, count(DISTINCT u) AS upstream,
+     collect(DISTINCT d.name)[0..5] AS blocked_sample
 WHERE blocked >= $min_blocked
-RETURN n.name AS chokepoint, labels(n)[0] AS type, blocked, upstream
+RETURN n.name AS chokepoint, labels(n)[0] AS type, blocked, upstream,
+       blocked_sample
 ORDER BY blocked DESC, upstream DESC
 """
     return neptune_client.results(cypher, {"scope": scope,
