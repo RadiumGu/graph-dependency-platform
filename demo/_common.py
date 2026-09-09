@@ -564,6 +564,7 @@ NAV_GROUPS = [
         ("pages/6_Root_Cause_Analysis.py", "🔍 根因分析"),
         ("pages/8_DR_Plan.py", "🛡️ DR 计划"),
         ("pages/5_Agent_Dependencies.py", "🤖 Agent 依赖"),
+        ("pages/10_Compliance_Report.py", "📋 合规报告 · 交给监管的形态"),
     ]),
     ("④ 你可以自己问它", [
         ("pages/4_Smart_Query.py", "💬 自然语言查询"),
