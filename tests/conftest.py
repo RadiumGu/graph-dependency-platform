@@ -328,3 +328,153 @@ def cleanup_test_data(neptune_rca):
             logger.info(f"S3 Vectors: cleaned {len(test_keys)} test vectors")
     except Exception as e:
         logger.warning(f"S3 Vectors cleanup failed: {e}")
+
+
+# ── 离线模式（CI 用）─────────────────────────────────────────────────────────
+#
+# ## 要解决的问题
+#
+# 2026-09-09 实测：在无 AWS 凭据的环境跑 `pytest -m "not neptune"`，
+# **767 个用例失败**。原因不是标记不全那么简单：
+#
+#   - 23 个文件用 neptune_rca / neptune_dr fixture，只有 4 个打了 neptune 标记
+#   - 另有一批在测试体里直接用 boto3，neptune 标记根本管不到
+#
+# 于是本仓库精心建的整套门禁（g18 / t59_06 / G2 / test_52::m04 …）
+# **只在有人记得手动跑 pytest 时才生效** —— 而 .github/workflows 只在 main 上
+# 触发且不跑测试套件。门禁本身没有自动执行，就等于门禁只是声明。
+#
+# ## 为什么不用「手工补 74 个标记」
+#
+# 那需要改 24 个文件、打 74 个标记点，而且：
+#   1. 这些文件属于并发进行的其他工作，改动冲突面大；
+#   2. **74 个标记点将来必然漂移** —— 新增一个用云的测试没人记得打标记，
+#      于是它在 CI 里失败，而修法通常是「把 CI 关掉」；
+#   3. 用 grep 判断「哪些测试需要 AWS」不可靠：实测按单词 `boto3` 匹配会把
+#      只在注释里提到它的文件也算进去（本文件作者在同一天犯过两次同类错误：
+#      用正则匹配 docstring 里的散文当代码）。
+#
+# ## 本方案
+#
+# 设 `GDP_OFFLINE=1` 时，**只把「确认是云访问不可达」的失败转成 skip**，
+# 其余失败照旧是失败。签名收得很紧（见 _CLOUD_UNREACHABLE），
+# 尤其依赖 2026-09-09 给 9 处签名路径加的那条可识别错误文本 ——
+# 没有那条文本，这里就只能按异常类型猜。
+#
+# 好处是**自维护**：新增的用云测试会自动 skip，不需要任何人记得打标记。
+#
+# ⚠️ **代价与必须配套的护栏**：全部 skip 的运行看起来是绿的。
+# 所以 CI 必须同时校验「通过数不低于下限」——见 GDP_OFFLINE_MIN_PASSED。
+# 只加 skip 不加下限，等于把「测试没跑」伪装成「测试通过了」，
+# 那比没有 CI 更糟。
+
+_OFFLINE = os.environ.get('GDP_OFFLINE') == '1'
+
+#: 离线模式下要求的最低通过数。0 表示不校验（不建议在 CI 里这样）。
+_OFFLINE_MIN_PASSED = int(os.environ.get('GDP_OFFLINE_MIN_PASSED') or 0)
+
+#: 判定「这个失败是云访问不可达」的签名。**刻意收紧**：
+#: 只认凭据缺失与连接层错误，不认任何业务断言失败。
+_CLOUD_UNREACHABLE = (
+    # 本仓库 9 处签名路径在凭据解析不到时抛的错（2026-09-09 加）。
+    # 这条文本是本机制能精确判定的关键，改它要同步改这里。
+    '凭据未解析到',
+    'NoCredentialsError',
+    'EndpointConnectionError',
+    'ConnectTimeoutError',
+    'CredentialRetrievalError',
+    'UnrecognizedClientException',
+    # botocore 解析不到凭据时的历史形态（保护加上之前的样子），
+    # 留着是为了向后兼容尚未加保护的第三方路径。
+    "'NoneType' object has no attribute 'get_frozen_credentials'",
+)
+
+_offline_skipped = []
+#: 离线模式下自己数通过数。
+#
+# ⚠️ **不要依赖 pytest_terminal_summary 把数字传给 sessionfinish**。
+# 实测（2026-09-09）hook 顺序是 sessionfinish 先跑、terminal_summary 后跑，
+# 于是 sessionfinish 读到的通过数恒为 0，下限判定把**正常运行也判成失败**。
+# 自己在 makereport 里数，不依赖任何 hook 之间的先后。
+_offline_passed = []
+
+
+def _looks_cloud_unreachable(excinfo) -> bool:
+    if excinfo is None:
+        return False
+    text = f'{type(excinfo.value).__name__}: {excinfo.value}'
+    return any(sig in text for sig in _CLOUD_UNREACHABLE)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """离线模式下把「云不可达」的失败转成 skip，其余失败保持失败。"""
+    outcome = yield
+    if not _OFFLINE:
+        return
+    report = outcome.get_result()
+    if report.when == 'call' and report.outcome == 'passed':
+        _offline_passed.append(item.nodeid)
+    if report.outcome != 'failed':
+        return
+    if not _looks_cloud_unreachable(getattr(call, 'excinfo', None)):
+        return
+    report.outcome = 'skipped'
+    report.longrepr = (
+        f'{item.nodeid}: 离线模式跳过 —— 云资源不可达'
+        f'（GDP_OFFLINE=1）。这不是测试通过。'
+    )
+    # ⚠️ **不要设 report.wasxfail**。实测（2026-09-09）设了它之后 pytest 把这条
+    # 归类成 `xfailed` 而不是 `skipped` —— 汇总里看不到 skip 数，
+    # 而 xfail 在多数人的读法里是「已知会失败、可以忽略」，
+    # 与「这条根本没被验证过」是完全不同的含义。
+    _offline_skipped.append(item.nodeid)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """通过数下限不满足时把整个运行判为失败。
+
+    ## 为什么必须在这个 hook 里改退出码
+
+    实测（2026-09-09）：在 `pytest_terminal_summary` 里写
+    `terminalreporter._session.exitstatus = 1` **无效** ——
+    那个 hook 在退出码已经定下来之后才跑，只能打印、改不了结果。
+    于是护栏「看起来有」而实际不生效，**而只做静态检查的测试还通过了**。
+    这是本机制自己踩过的坑，别搬回去。
+
+    `pytest_sessionfinish` 是文档指定的可改 `session.exitstatus` 的位置。
+    """
+    if not _OFFLINE or not _OFFLINE_MIN_PASSED:
+        return
+    if len(_offline_passed) < _OFFLINE_MIN_PASSED:
+        session.exitstatus = 1
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """把离线跳过数与通过下限校验结果显式打出来。
+
+    不打出来的话，一个「全部 skip」的运行在 CI 面板上和「全部通过」
+    长得一样 —— 那是本机制最危险的失效方式。
+    """
+    if not _OFFLINE:
+        return
+    tr = terminalreporter
+    # 用自己数的那份，与 sessionfinish 的判定口径完全一致。
+    # 用 tr.stats 会与 sessionfinish 读到的数不同（hook 顺序，见 _offline_passed）。
+    passed = len(_offline_passed)
+    tr.write_sep('=', '离线模式汇总', bold=True)
+    tr.write_line(f'  因云不可达而跳过: {len(_offline_skipped)} 个')
+    tr.write_line(f'  实际通过:         {passed} 个')
+    if _OFFLINE_MIN_PASSED:
+        ok = passed >= _OFFLINE_MIN_PASSED
+        tr.write_line(
+            f'  通过下限 {_OFFLINE_MIN_PASSED}: '
+            f'{"满足" if ok else "★未满足★"}')
+        if not ok:
+            tr.write_line(
+                '  ⚠️ 通过数低于下限 —— 很可能是大面积 skip 掩盖了真实问题。'
+                '离线模式的价值全在这条校验上。运行已判为失败。')
+    else:
+        tr.write_line(
+            '  ⚠️ 未设 GDP_OFFLINE_MIN_PASSED —— CI 里必须设，'
+            '否则「全部 skip」会被当成绿灯。')
