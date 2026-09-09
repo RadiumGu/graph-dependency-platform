@@ -26,7 +26,13 @@ COPY rca/                 /app/rca/
 COPY shared/              /app/shared/
 COPY chaos/code/          /app/chaos/code/
 COPY dr-plan-generator/   /app/dr-plan-generator/
+COPY compliance_export/   /app/compliance_export/
 COPY demo/                /app/demo/
+
+# ⚠️ 新增页面若 import 了新的仓内模块，必须同步加一行 COPY。
+# 漏了不会在构建时报错 —— 只在容器里点开那一页时炸，而本地跑得好好的。
+# 由 tests/test_55_demo_page_imports.py 静态锁定：页面 import 的每个仓内顶层
+# 模块都必须出现在本文件的 COPY 列表里。
 
 # 去掉可能带进来的字节码缓存
 RUN find /app -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
