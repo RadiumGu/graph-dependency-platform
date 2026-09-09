@@ -317,3 +317,40 @@ def test_m06_部署包里不得有从handler不可达的模块():
         + '\n\n死代码会被后来者当成权威（契约曾引用已删的 schema_prompt.py:135'
           ' 作为分类论据，而那行 cypher 实测 HTTP 400），也会误导将来的接线。'
           '要么接上，要么删掉。')
+
+
+def test_m07_drift规则表的节点标签必须在契约里():
+    """`INFRA_DRIFT_RULES` 的 `label` 必须是契约声明的节点类型。
+
+    ## 这是 ConsumesFrom 那个失效模式换到节点侧
+
+    Gremlin 查一个不存在的**边**标签不报错、只返回空 —— 这就是
+    `ConsumesFrom` 让一项对账长期看起来在工作的原因（见 m03）。
+    `hasLabel()` 查不存在的**节点**标签是同一回事：那条规则会静默地
+    永不匹配，drift 对账少一整类而没有任何信号。
+
+    这张表是手写的（每条还钉着 demo 的资源名子串），所以标签打错、
+    或者契约里节点类型改名而这里没跟，都不会被现有任何测试拦住。
+
+    ## 本断言不检查「该不该扩表」
+
+    那是设计判断，不是可静态断言的东西 —— 判据写在
+    `INFRA_DRIFT_RULES` 上方的注释里（2026-09-09 实测的六类分解）。
+    这里只保证：表里写的每个标签都真实存在。
+    """
+    import re
+
+    from graph_contract import NODE_TYPES  # type: ignore
+
+    p = _ROOT / 'infra' / 'lambda' / 'etl_deepflow' / 'neptune_etl_deepflow.py'
+    src = p.read_text(encoding='utf-8')
+    m = re.search(r'INFRA_DRIFT_RULES = \{(.*?)\n\}', src, re.S)
+    assert m, '没找到 INFRA_DRIFT_RULES'
+    labels = re.findall(r"'label':\s*'(\w+)'", m.group(1))
+    assert labels, 'INFRA_DRIFT_RULES 里没解析出任何 label —— 判据失效了'
+
+    bogus = sorted(set(labels) - set(NODE_TYPES))
+    assert not bogus, (
+        f'INFRA_DRIFT_RULES 里这些 label 不是契约声明的节点类型：{bogus}\n'
+        f'hasLabel() 查不存在的标签不报错、只返回空 —— 该规则会静默永不匹配，'
+        f'drift 对账少一整类而没有任何信号（与 ConsumesFrom 同一失效模式）。')

@@ -296,6 +296,54 @@ GROUP BY server_ip
 
 # infra 类型 → (Neptune 标签, name_contains, [dns_keywords_any_match])
 # 一组 dns_keywords 中任意一个出现在 observed DNS 里，即认为 runtime_verified
+#
+# ── 这张表为什么只有 6 种，以及为什么不该随便扩 ──────────────────────────────
+#
+# 2026-09-09 实测：115 条依赖边里带 drift_status 的 41 条（36%）。
+# 这个数字**基本是设计使然，不是覆盖缺口** —— 我曾连续三轮把它当缺陷追，
+# 所以把分类写在这里，省得下一个人（或下一个我）重走一遍。
+#
+# 74 条没有 drift_status 的边分解如下：
+#
+#   12 条  源不是 Microservice/LambdaFunction（StepFunction/AgentRuntime/
+#          AgentTool/SNSTopic 发起）—— drift 只遍历前两种，结构性不覆盖。
+#
+#   14 条  目标是 AWSServiceEndpoint。**这些不该进 drift**：那 9 个节点是
+#          泛化服务名（'dynamodb' / 's3' / 'sts'…，不是具体资源），且指向
+#          它们的边**全部由观测源写入**（xray 9 / nfm 3 / appsignals-etl 2）——
+#          它们因为被观测到才存在，没有声明侧。对纯观测产物做
+#          declared-vs-observed 对账是循环论证，而且泛化名按 nc 子串匹不上。
+#
+#   13 条  目标是 ECRRepository。有声明（deepflow-etl 读 pod spec 的 image），
+#          但运行时**结构上观测不到**：镜像是 kubelet 在调度时拉的，不是 pod
+#          进程的流量，DNS/eBPF/X-Ray 都不产生可归因到服务的记录。
+#          纳进来的唯一效果是永久盖上 declared_not_observed —— 把「我们无法
+#          验证」谎报成「我们没看到」，比不判更糟。
+#
+#   15 条  目标是 LambdaFunction。DNS 只能看到 lambda.{region}.amazonaws.com，
+#          **函数名在 HTTP path 里而不在 DNS 里**，所以 DNS 源无法归因到具体
+#          函数。要对账得走 X-Ray/appsignals，那是另一条链路。
+#
+#    6 条  目标是 Microservice（服务间 Calls）—— 不属于「服务→基础设施」
+#          这件事的范畴，X-Ray/appsignals 本来就在观测它们。
+#
+#    9 条  类型**已在本表内**却仍没打标。逐条查过，全部有解释：
+#            · 6 条源是 Lambda（petstatusupdater 等）—— 见本文件 ~890 行处
+#              刻意排除 Lambda 的理由（DeepFlow eBPF 采不到 Lambda）。
+#            · 1 条 petsite -DependsOn-> SQS —— 2026-09-08 标签清单改成契约
+#              驱动前 DependsOn 不在查询里，下轮 ETL 会补。
+#            · 2 条指向 gp-alert-buffer（平台自己的 DynamoDB 表）—— 被
+#              nc='ddbpetadoption' 挡掉。业务对账不该包含平台自身，
+#              但这是**子串巧合**而非显式判据，属真实技术债。
+#
+#    5 条  RDSInstance(3) / NeptuneCluster(1) / AgentRuntime(1) —— 前两种 DNS
+#          确实可观测，是**唯一有正当理由扩的候选**。但 RDSCluster 已在表内，
+#          RDSInstance 边是同一物理依赖的另一个抽象层，扩了会重复计数
+#          （与 ConnectsTo 同类问题）。为 4 条边引入重复计数不值得。
+#
+# 扩表前先回答：这个类型有观测源能**归因到具体资源**吗？答不出就不要加 ——
+# 加进来只会让 declared_not_observed 这一栏（本平台相对合同型登记册最不可
+# 替代的产出）掺进永远为真的假指控。
 INFRA_DRIFT_RULES = {
     'dynamodb': {
         'label': 'DynamoDBTable',
