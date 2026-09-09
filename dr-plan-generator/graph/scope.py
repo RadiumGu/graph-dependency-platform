@@ -43,9 +43,16 @@ _FALLBACK_SCOPE_EDGES = (
     "ForwardsTo", "RoutesTo", "Invokes", "InvokesVia",
 )
 
-#: 兜底的排序边集合（契约里 dependency: true 的 6 种）。
+#: 兜底的排序边集合 = 契约里 dependency: true 的全集。
+#:
+#: ⚠️ 这份清单曾漂移：注释写「6 种」、实际列 6 项，而契约 2026-09-08 已是 10 种，
+#: 漏掉 Invokes（16 条）/ PublishesTo（2 条）/ RoutesToRuntime / RoutesVia。
+#: 恢复顺序按依赖边拓扑排，漏边就会把该先恢复的排到后面。
+#: 与契约的一致性由 tests/test_53_drift_label_coverage.py 静态锁定 ——
+#: 别再手改这里而不改那条断言。
 _FALLBACK_ORDERING_EDGES = (
-    "AccessesData", "Calls", "Delegates", "DependsOn", "InvokesTool", "Retrieves",
+    "AccessesData", "Calls", "Delegates", "DependsOn", "Invokes",
+    "InvokesTool", "PublishesTo", "Retrieves", "RoutesToRuntime", "RoutesVia",
 )
 
 _FALLBACK_EXCLUDED_VERIFY = ("refuted",)

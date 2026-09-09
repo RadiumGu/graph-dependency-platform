@@ -54,6 +54,50 @@ ENVIRONMENT = os.environ.get('ENVIRONMENT', 'prod')
 # sources 词表内（由 tests/test_38_source_vocabulary.py 静态校验）。
 NODE_SOURCE = 'deepflow-etl'
 
+
+# ── drift 对账要看哪些边类型：从契约来，不手写 ────────────────────────────────
+#
+# 2026-09-08 实测的事故：这个清单原本手写成
+#     ('AccessesData', 'PublishesTo', 'InvokesVia', 'ConsumesFrom')
+# 四个里 `ConsumesFrom` **在契约与图谱里都不存在**（0 条），`InvokesVia` 只有
+# 一条没有写入方的孤儿边；同时漏掉了 8 种依赖边，其中 `DependsOn` 正是
+# etl_xray 用来表示 `Microservice → SQSQueue` 的标签。
+#
+# 后果不是漏报而是**误报**：drift 判 `has_declared` 时看不见 `DependsOn`，
+# 于是「声明存在且运行时已观测到」被判成 `declared_not_observed`。
+# 实测 9 条 declared_not_observed 里有 2 条是这样的假告警（22%）：
+#
+#     petsite -> SQS           PublishesTo 判「没观测到」，而 DependsOn(xray) 就在旁边
+#     petsite -> StepFunction  InvokesVia  判「没观测到」，而 AccessesData(xray) 就在旁边
+#
+# `declared_not_observed` 是本平台相对合同型登记册的差异化所在（「你申报了但
+# 我们观测不到」这类审计发现），让它带 22% 误报比没有它更糟。
+#
+# 删掉 `ConsumesFrom` 只治一次 —— 病根是清单与契约脱钩。所以改成契约驱动。
+# 顺序 = Layer 里的契约模块 → 兜底。兜底与契约的一致性由
+# tests/test_53_drift_label_coverage.py 静态锁定。
+_DRIFT_LABELS_FALLBACK = (
+    'AccessesData', 'Calls', 'Delegates', 'DependsOn', 'Invokes',
+    'InvokesTool', 'PublishesTo', 'Retrieves', 'RoutesToRuntime', 'RoutesVia',
+)
+
+
+def _drift_edge_labels() -> tuple:
+    """drift 对账覆盖的边类型 = 契约里 dependency: true 的全集。
+
+    为什么用全集而不是「服务→基础设施」的子集：`has_declared` 要回答的是
+    「这条依赖有没有被代码/配置声明过」，**任何**依赖边类型都可能是那个声明。
+    按标签挑子集就是在猜哪些标签会被用到，而实测已经猜错过一次。
+    """
+    try:
+        from graph_contract import dependency_edge_labels  # type: ignore
+        labels = tuple(sorted(dependency_edge_labels()))
+        if labels:
+            return labels
+    except Exception as e:
+        logger.warning("drift: 读不到契约依赖边清单，回落兜底（%s）", e)
+    return _DRIFT_LABELS_FALLBACK
+
 # 只采集这些 namespace 的 pod（从 service_mappings.json 读 + 默认 namespace）
 # deepflow、kube-system 等监控/基础设施 namespace 不纳入图，避免形成孤立分量
 INCLUDED_NAMESPACES = {'default', 'awesomeshop'}
@@ -805,9 +849,10 @@ def run_drift_detection(service_names: list, ip_map: dict):
             # 采集不到；X-Ray 若给 Lambda 插桩则可覆盖）——这是独立的待办，
             # 不该用一个错误的匹配来掩盖。
             try:
+                _dl = ','.join("'%s'" % l for l in _drift_edge_labels())
                 r = neptune_query(
                     f"g.V().hasLabel('Microservice','LambdaFunction').has('name','{svc_name}')"
-                    f".outE('AccessesData','PublishesTo','InvokesVia','ConsumesFrom')"
+                    f".outE({_dl})"
                     f".where(inV().hasLabel('{infra_label}').has('name',containing('{nc}')))"
                     f".id().toList()"
                 )
