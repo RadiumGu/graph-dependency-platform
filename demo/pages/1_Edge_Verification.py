@@ -134,6 +134,58 @@ else:
             "count(*) AS 可判伪边数, collect(DISTINCT s.name) AS _obs "
             "ORDER BY 可判伪边数 DESC")
         _gap_rows = _res.get("results", []) if isinstance(_res, dict) else (_res or [])
+
+        # ── 排除「源已不存在」的边 ────────────────────────────────────────────
+        #
+        # 2026-09-09：队列里有 11 条边的源是 **awesomeshop 命名空间里已删除的
+        # 7 个服务**（auth / order / points / product / gateway / artillery /
+        # artillery-write）。外部核实过：命名空间在集群里still存在，
+        # 但 **0 个 Pod、0 个 Deployment** —— 应用被删了，只剩空命名空间。
+        #
+        # 这些边不属于「未测的依赖」，而是「源已不存在的边」。区别是实质的：
+        #
+        #   未测的依赖    依赖可能成立，只是还没有人去注入验证 → 属于待办
+        #   源已不存在    依赖方本身没了，依赖不可能是 active 的 → 属于清理
+        #
+        # 把后者混进待办队列，会让人以为要为一个已删应用去做故障注入。
+        #
+        # ⚠️ 判据必须窄。**不能用「零 Pod」** —— `petstatusupdater` 零 Pod 但活着，
+        # 它的运行时是 Lambda（`ServicesEks2-statusupdaterservicelambdafn…`，
+        # last_seen = 今天），只是图上没连到载体。用零 Pod 会误伤所有
+        # Lambda / Fargate 支撑的服务。
+        #
+        # 所以这里按**命名空间白名单**排除，而且只列已经在集群里核实过的那一个。
+        # 加新的命名空间之前必须同样核实一次（`list_k8s_resources` 查 Pod 与
+        # Deployment 都为 0），不要靠图谱自身的 last_seen 推断 ——
+        # 那正是并发会话论证过的错误：DNS 是不对称弱信号，
+        # 「没观测到」推不出「不存在」。
+        _DELETED_NS = ("awesomeshop",)
+        _dead = C.gquery(
+            f"MATCH (s)-[r]->(t) WHERE type(r) IN [{_L}] AND {_no_obs} "
+            "AND coalesce(r.verify_status,'untested')='untested' "
+            f"AND s.namespace IN {list(_DELETED_NS)} "
+            "RETURN count(*) AS 边数, count(DISTINCT s.name) AS 源数, "
+            "collect(DISTINCT s.name) AS _srcs")
+        _d = (_dead.get("results") or [{}])[0] if isinstance(_dead, dict) else {}
+        _dead_edges = int(_d.get("边数") or 0)
+        if _dead_edges:
+            _gap_rows = [r for r in _gap_rows if True]      # 靶标聚合不受影响
+            st.warning(
+                f"**队列里有 {_dead_edges} 条边的源已经不存在了** —— "
+                f"{_d.get('源数')} 个服务在 "
+                + "、".join(f"`{n}`" for n in _DELETED_NS)
+                + " 命名空间里，集群实查 **0 Pod、0 Deployment**：应用已删，"
+                "只剩空命名空间。\n\n"
+                "它们属于**清理**，不属于待办 —— 对一个已删应用做故障注入没有意义。"
+                "源：" + "、".join(f"`{n}`" for n in (_d.get("_srcs") or [])[:8]),
+                icon="🧹")
+            st.caption(
+                "⚠️ 判据刻意用**命名空间白名单**而不是「零 Pod」："
+                "`petstatusupdater` 零 Pod 但活着（运行时是 Lambda，last_seen 今天，"
+                "只是图上没连到载体），用零 Pod 会误伤所有 Lambda / Fargate "
+                "支撑的服务。也刻意不用图谱自身的 last_seen 推断 —— "
+                "DNS 是不对称弱信号，「没观测到」推不出「不存在」。"
+                "加新命名空间前必须先在集群里核实一次。")
         _tot = C.gquery(
             f"MATCH ()-[r]->() WHERE type(r) IN [{_L}] "
             f"RETURN count(*) AS 全部, "
@@ -175,6 +227,54 @@ else:
                 "一次注入检验它的**入边**（在 B 注入，看依赖 B 的那些 A 有没有反应），"
                 "所以按靶标聚合就是按「要做几次实验」聚合。"
                 "「观测方」列是这次注入能同时检验哪些调用方。")
+
+            # ── 「可判伪」不等于「测得出结论」──────────────────────────────
+            #
+            # 判定还有一道运行时门禁：观测方基线请求数必须 >= 20，
+            # 否则「零流量与健康在指标上无法区分」，只能回 inconclusive。
+            # 实测 `pethistory → 数据库` 就是这样：退化 66.67% 却判不了，
+            # 因为基线只有 12 个请求。
+            #
+            # 而这个队列里 26/57 条的观测方是 LambdaFunction、5 条是
+            # StepFunction —— 它们触发稀疏，很可能凑不满 20 个请求。
+            # 不说这一句，队列就在暗示 57 条都能测出结论。
+            _by_src = C.gquery(
+                f"MATCH (s)-[r]->(t) WHERE type(r) IN [{_L}] AND {_no_obs} "
+                "AND coalesce(r.verify_status,'untested')='untested' "
+                "RETURN labels(s)[0] AS 观测方类型, count(*) AS 边数 "
+                "ORDER BY 边数 DESC")
+            _src_rows = (_by_src.get("results") or []
+                         if isinstance(_by_src, dict) else (_by_src or []))
+            if _src_rows:
+                _steady = sum(int(r.get("边数") or 0) for r in _src_rows
+                              if r.get("观测方类型") in ("Microservice", "Deployment"))
+                _sparse = sum(int(r.get("边数") or 0) for r in _src_rows) - _steady
+                s1, s2 = st.columns(2)
+                s1.metric(
+                    "观测方有稳定流量", _steady,
+                    help="观测方是 Microservice / Deployment —— 有持续请求流，"
+                         "能满足「观测方基线请求 ≥ 20」这道门禁，注入后测得出结论。")
+                s2.metric(
+                    "观测方触发稀疏", _sparse,
+                    help="观测方是 Lambda / StepFunction / SNS —— 触发稀疏，"
+                         "很可能凑不满 20 个基线请求，于是即使注入了也只能回 "
+                         "inconclusive（零流量与健康在指标上无法区分）。"
+                         "这些边要先制造流量才验得动。")
+                st.caption(
+                    "⚠️ **「可判伪」不等于「测得出结论」。** 判定还有一道运行时门禁："
+                    "观测方基线请求必须 ≥ 20 —— 实测 `pethistory → 数据库` 退化 "
+                    "66.67% 却判不了，就是因为基线只有 12 个请求。"
+                    f"上面 {_sparse} 条的观测方触发稀疏，"
+                    "对它们要先造流量、再注入，否则跑了也是 inconclusive。")
+                st.dataframe(
+                    C.df([{"观测方类型": r.get("观测方类型"),
+                           "边数": int(r.get("边数") or 0),
+                           "流量": ("稳定" if r.get("观测方类型")
+                                    in ("Microservice", "Deployment")
+                                    else "稀疏 —— 需先造流量")}
+                          for r in _src_rows]),
+                    width="stretch", hide_index=True)
+
             st.dataframe(
                 C.df([
                     {"注入靶标": r.get("注入靶标"),
