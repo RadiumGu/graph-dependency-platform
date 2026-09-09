@@ -680,6 +680,37 @@ edge_verification:
   - verify_by
   - verify_experiment
   - verify_degradation
+  # 2026-09-09 新增：用现有注入后端**无法触达**该边的原因。
+  #
+  # ## 为什么不是给 verify_status 加第五个取值
+  #
+  # statuses 只有 untested / confirmed / refuted / inconclusive 四个，
+  # 它们描述的是**验证的结果**；而「能不能验」是另一个正交维度 ——
+  # 一条边可以同时是「被阻断」且「未测试」。塞进 status 会有两个后果：
+  #   1. 每个消费方（置信度计算、覆盖率、DR 影响面）都要改，
+  #      而它们关心的是结果不是能力；
+  #   2. 更糟的是会让「不可验」看起来像一种验证结论，
+  #      而它恰恰是「没有结论」。
+  #
+  # ## 为什么必须落到图上（而不是只在 runner 里判断）
+  #
+  # 选靶逻辑早就会排除结构性不可注入的边（chaos/code/runner/injectability.py，
+  # 由 tests/test_47::t305_06 钉着「排除发生在打分之前」）。
+  # 但**那份知识只存在于代码里，图谱上没有任何痕迹** ——
+  # 于是查图的人看到的是一条没有 verify_status 的边，
+  # 与「还没轮到」完全无法区分。
+  #
+  # 实测代价（2026-09-09）：13 条 AgentCore 层的边
+  # （AgentRuntime -InvokesTool-> AgentTool 8 / Delegates 3 / Retrieves 1、
+  # 以及 LambdaFunction -AccessesData-> NeptuneCluster 1）
+  # 用**任何**后端都打不到：Chaos Mesh 只能打集群内 Pod 而 AgentCore runtime
+  # 是托管的，FIS 也没有 AgentCore 动作。它们混在 untested 里，
+  # 会让覆盖率数字给出错误的努力方向 —— 看起来「再跑几轮就能覆盖」，
+  # 实际上永远轮不到。
+  #
+  # 取值是自由文本（原因描述），由 injectability.injectability() 产出。
+  # 写入方同为 chaos-runner。
+  - verify_blocked_reason
   authority:
   - chaos-runner
   evidence_weights:

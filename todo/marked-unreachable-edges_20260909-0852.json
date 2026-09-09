@@ -1,0 +1,145 @@
+[
+  {
+    "eid": "44d026f7-9651-6a26-2d43-b5079dfba5ab",
+    "edge": "AccessesData",
+    "src_label": "LambdaFunction",
+    "src": "neptune-etl-from-xray",
+    "dst_label": "NeptuneCluster",
+    "dst": "petsite-neptune",
+    "status": null,
+    "existing": null,
+    "reason": "无任何后端能打到目标类型 NeptuneCluster，且源 LambdaFunction 不在集群内、无法在源侧切断"
+  },
+  {
+    "eid": "42d0368d-d6b1-a5f7-1ca8-f15826be604c",
+    "edge": "Delegates",
+    "src_label": "AgentRuntime",
+    "src": "WaggleAIOrchestrator",
+    "dst_label": "AgentRuntime",
+    "dst": "WaggleAINutrition",
+    "status": "untested",
+    "existing": null,
+    "reason": "无任何后端能打到目标类型 AgentRuntime，且源 AgentRuntime 不在集群内、无法在源侧切断"
+  },
+  {
+    "eid": "62d03a4a-beec-d9f8-3ebb-3a9a33127390",
+    "edge": "Delegates",
+    "src_label": "AgentRuntime",
+    "src": "WaggleAIOrchestrator",
+    "dst_label": "AgentRuntime",
+    "dst": "WaggleAIOrdering",
+    "status": null,
+    "existing": null,
+    "reason": "无任何后端能打到目标类型 AgentRuntime，且源 AgentRuntime 不在集群内、无法在源侧切断"
+  },
+  {
+    "eid": "c0d0368d-d6c5-6fd5-2dd3-fc5151c542c9",
+    "edge": "Delegates",
+    "src_label": "AgentRuntime",
+    "src": "WaggleAIOrchestrator",
+    "dst_label": "AgentRuntime",
+    "dst": "WaggleAIAdoption",
+    "status": "untested",
+    "existing": null,
+    "reason": "无任何后端能打到目标类型 AgentRuntime，且源 AgentRuntime 不在集群内、无法在源侧切断"
+  },
+  {
+    "eid": "50d0368d-d6a7-b9d6-7799-8be5b6924ba2",
+    "edge": "InvokesTool",
+    "src_label": "AgentRuntime",
+    "src": "WaggleAIOrchestrator",
+    "dst_label": "AgentTool",
+    "dst": "nutrition_advisor",
+    "status": null,
+    "existing": null,
+    "reason": "无任何后端能打到目标类型 AgentTool，且源 AgentRuntime 不在集群内、无法在源侧切断"
+  },
+  {
+    "eid": "fad0368d-d6f7-f196-2c1d-abadefc1a8de",
+    "edge": "InvokesTool",
+    "src_label": "AgentRuntime",
+    "src": "WaggleAIAdoption",
+    "dst_label": "AgentTool",
+    "dst": "search_available_pets",
+    "status": null,
+    "existing": null,
+    "reason": "无任何后端能打到目标类型 AgentTool，且源 AgentRuntime 不在集群内、无法在源侧切断"
+  },
+  {
+    "eid": "e0d03858-b47f-c86a-043e-b34e0e30f181",
+    "edge": "InvokesTool",
+    "src_label": "AgentRuntime",
+    "src": "WaggleAIOrchestrator",
+    "dst_label": "AgentTool",
+    "dst": "concierge_chat",
+    "status": null,
+    "existing": null,
+    "reason": "无任何后端能打到目标类型 AgentTool，且源 AgentRuntime 不在集群内、无法在源侧切断"
+  },
+  {
+    "eid": "cad0368d-d6bf-7762-ae11-9910ff80b965",
+    "edge": "InvokesTool",
+    "src_label": "AgentRuntime",
+    "src": "WaggleAIOrchestrator",
+    "dst_label": "AgentTool",
+    "dst": "adoption",
+    "status": null,
+    "existing": null,
+    "reason": "无任何后端能打到目标类型 AgentTool，且源 AgentRuntime 不在集群内、无法在源侧切断"
+  },
+  {
+    "eid": "60d03858-b4a6-15c9-9e7b-3b3d9c840278",
+    "edge": "InvokesTool",
+    "src_label": "AgentRuntime",
+    "src": "WaggleAIOrdering",
+    "dst_label": "AgentTool",
+    "dst": "list_available_foods",
+    "status": null,
+    "existing": null,
+    "reason": "无任何后端能打到目标类型 AgentTool，且源 AgentRuntime 不在集群内、无法在源侧切断"
+  },
+  {
+    "eid": "00d03858-b49a-1a24-f24a-a8f9d6662976",
+    "edge": "InvokesTool",
+    "src_label": "AgentRuntime",
+    "src": "WaggleAIOrchestrator",
+    "dst_label": "AgentTool",
+    "dst": "food_ordering",
+    "status": null,
+    "existing": null,
+    "reason": "无任何后端能打到目标类型 AgentTool，且源 AgentRuntime 不在集群内、无法在源侧切断"
+  },
+  {
+    "eid": "66d0368d-d6d1-780a-4c8a-43b3a3de3ce7",
+    "edge": "InvokesTool",
+    "src_label": "AgentRuntime",
+    "src": "WaggleAINutrition",
+    "dst_label": "AgentTool",
+    "dst": "retrieve_nutrition_guidance",
+    "status": null,
+    "existing": null,
+    "reason": "无任何后端能打到目标类型 AgentTool，且源 AgentRuntime 不在集群内、无法在源侧切断"
+  },
+  {
+    "eid": "fed0368d-d6eb-ff05-ae6f-1460b7dfe62f",
+    "edge": "InvokesTool",
+    "src_label": "AgentRuntime",
+    "src": "WaggleAINutrition",
+    "dst_label": "AgentTool",
+    "dst": "get_available_foods",
+    "status": null,
+    "existing": null,
+    "reason": "无任何后端能打到目标类型 AgentTool，且源 AgentRuntime 不在集群内、无法在源侧切断"
+  },
+  {
+    "eid": "a4d0368d-d6dd-9f25-87ed-b5d77203004b",
+    "edge": "Retrieves",
+    "src_label": "AgentRuntime",
+    "src": "WaggleAINutrition",
+    "dst_label": "KnowledgeBase",
+    "dst": "waggle-ai-nutrition-kb",
+    "status": "untested",
+    "existing": null,
+    "reason": "无任何后端能打到目标类型 KnowledgeBase，且源 AgentRuntime 不在集群内、无法在源侧切断"
+  }
+]
