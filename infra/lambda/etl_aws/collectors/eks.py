@@ -32,7 +32,14 @@ def _get_eks_token(cluster_name: str = None) -> tuple:
     """Generate EKS bearer token and return (endpoint, token)."""
     cluster_name = cluster_name or EKS_CLUSTER_NAME
     try:
-        creds = boto3.Session().get_credentials().get_frozen_credentials()
+        # ⚠️ 判 None 的理由同 neptune_client._get_frozen_creds：
+        # get_credentials() 解析不到凭据时返回 None 而不抛异常。
+        _c = boto3.Session().get_credentials()
+        if _c is None:
+            raise RuntimeError(
+                "AWS 凭据未解析到（boto3 Session.get_credentials() 返回 None）。本进程无法对 SigV4 请求签名。\n常见原因：环境变量/配置文件里没有凭据、SSO 会话过期、或在 Lambda 里执行角色未附加。\n本地请先 `aws sso login` 或设置 AWS_PROFILE；CI 请给需要 AWS 的测试打 @pytest.mark.neptune 并从离线子集排除。"
+            )
+        creds = _c.get_frozen_credentials()
         signer = SigV4QueryAuth(
             credentials=Credentials(creds.access_key, creds.secret_key, creds.token),
             service_name='sts', region_name=REGION, expires=60,

@@ -44,7 +44,20 @@ def _get_frozen_creds():
     global _boto_session
     if _boto_session is None:
         _boto_session = boto3.Session(region_name=REGION)
-    return _boto_session.get_credentials().get_frozen_credentials()
+    # ⚠️ 必须判 None。get_credentials() 在**解析不到凭据时返回 None**（不抛异常），
+    # 直接 .get_frozen_credentials() 会得到
+    #   AttributeError: 'NoneType' object has no attribute 'get_frozen_credentials'
+    # —— 一个完全看不出「是凭据问题」的报错。
+    #
+    # 实测代价（2026-09-09）：在无凭据环境跑 `pytest -m "not neptune"`，
+    # 767 个用例全部以这条 AttributeError 失败。根因只有一个，
+    # 但报错信息让人以为是 767 个各自的问题。
+    _creds = _boto_session.get_credentials()
+    if _creds is None:
+        raise RuntimeError(
+            "AWS 凭据未解析到（boto3 Session.get_credentials() 返回 None）。本进程无法对 SigV4 请求签名。\n常见原因：环境变量/配置文件里没有凭据、SSO 会话过期、或在 Lambda 里执行角色未附加。\n本地请先 `aws sso login` 或设置 AWS_PROFILE；CI 请给需要 AWS 的测试打 @pytest.mark.neptune 并从离线子集排除。"
+        )
+    return _creds.get_frozen_credentials()
 
 
 def _get_ca_path() -> str:
