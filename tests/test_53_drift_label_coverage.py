@@ -152,3 +152,53 @@ def test_m04_dr_plan_ordering_兜底清单必须等于契约依赖边集合(dep_
         f'契约有兜底没有: {sorted(dep_labels - fallback)}\n'
         f'兜底有契约没有: {sorted(fallback - dep_labels)}\n'
         f'恢复顺序按依赖边拓扑排，漏边会把该先恢复的排到后面。')
+
+
+def test_m05_profile_示例cypher不得用参数占位符():
+    """profile 的 few-shot 示例里不得出现 `$param` —— LLM 路径不绑定参数。
+
+    ## 实测（2026-09-09）
+
+    `profiles/petsite.yaml` 30 条示例 cypher 实跑，29 条通过，唯一失败的一条是
+    `WHERE inc.start_time >= $since` → **MissingParameter**。
+
+    原因在执行路径：LLM 生成的 cypher 走 `strands_tools.execute_cypher(cypher)`，
+    **只收一个形参**。`neptune_client.query(cypher, params=None)` 虽然支持
+    params，但那条路径从不传。
+
+    few-shot 的作用就是让模型照抄模式，所以一条带 `$param` 的示例会教模型
+    持续生成运行时必然失败的查询。危害在于**信号隐蔽**：用户看到的是 RCA
+    回答变空或答非所问，`MissingParameter` 只出现在 Lambda 日志里，没人会
+    把两者联系起来。
+
+    ## 为什么锁「示例」而不是「加参数支持」
+
+    加参数支持要让 LLM 同时产出 cypher 和参数字典，是 NL 层的接口变更；
+    而 29/30 条示例本来就用字面量，把第 30 条对齐是零风险的一致性修正。
+    真要支持参数化查询，应该连 `execute_cypher` 的签名一起改，那是另一件事。
+    """
+    import yaml
+    p = _ROOT / 'profiles' / 'petsite.yaml'
+    if not p.exists():
+        pytest.skip('profiles/petsite.yaml 不在本工作树')
+    prof = yaml.safe_load(p.read_text(encoding='utf-8'))
+
+    found = []
+
+    def walk(o):
+        if isinstance(o, dict):
+            c = o.get('cypher')
+            if isinstance(c, str) and re.search(r'\$[a-zA-Z_]\w*', c):
+                found.append((o.get('q') or o.get('question') or '?', c[:90]))
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(prof)
+    assert not found, (
+        '以下示例 cypher 含参数占位符，但 LLM 执行路径 '
+        '(strands_tools.execute_cypher) 不绑定参数 —— 会教模型生成运行时'
+        '必然 MissingParameter 的查询：\n  '
+        + '\n  '.join(f'{q} → {c}' for q, c in found))

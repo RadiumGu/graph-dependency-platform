@@ -513,7 +513,13 @@ neptune:
     - q: "payforadoption 的上游调用者有哪些？"
       cypher: "MATCH (caller)-[:Calls]->(s:Microservice {name:'payforadoption'}) RETURN caller.name AS caller, labels(caller)[0] AS type"
     - q: "上个月 petsite 发生过几次故障？"
-      cypher: "MATCH (inc:Incident)-[:TriggeredBy]->(s:Microservice {name:'petsite'}) WHERE inc.start_time >= $since RETURN inc.id AS incident, inc.severity AS severity, inc.root_cause AS root_cause ORDER BY inc.start_time DESC"
+      # ⚠️ 这条示例原本写 `WHERE inc.start_time >= $since`，实测 MissingParameter：
+      # LLM 生成的查询走 strands_tools.execute_cypher(cypher)，**只收一个形参、
+      # 不绑定参数**（neptune_client.query 支持 params，但那条路径没传）。
+      # few-shot 里出现 $param 会教模型持续生成运行时必然失败的查询，
+      # 而失败信号只在 RCA 回答变空时间接体现，不会有人看到 MissingParameter。
+      # 改为内联字面量：时间窗由 LLM 按问题自己算，与其它 29 条示例一致。
+      cypher: "MATCH (inc:Incident)-[:TriggeredBy]->(s:Microservice {name:'petsite'}) WHERE inc.start_time >= '2026-08-01T00:00:00Z' RETURN inc.id AS incident, inc.severity AS severity, inc.root_cause AS root_cause ORDER BY inc.start_time DESC"
     - q: "哪些服务从未做过混沌实验？"
       cypher: "MATCH (s:Microservice) WHERE NOT (s)-[:TestedBy]->(:ChaosExperiment) RETURN s.name AS service, s.recovery_priority AS priority ORDER BY CASE s.recovery_priority WHEN 'Tier0' THEN 0 WHEN 'Tier1' THEN 1 ELSE 2 END"
     - q: "petsite 完整的基础设施路径（到 AZ）"
