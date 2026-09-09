@@ -14,7 +14,8 @@
     "pethistory-deployment": "pethistory",
     "petadoptionshistory": "pethistory",
     "pethistory-service": "pethistory",
-    "list-adoptions": "petlistadoptions"
+    "list-adoptions": "petlistadoptions",
+    "traffic-generator": "trafficgenerator"
   },
   "neptune_to_k8s": {
     "petsite": "petsite-deployment",
@@ -22,7 +23,8 @@
     "payforadoption": "pay-for-adoption",
     "pethistory": "pethistory-deployment",
     "petstatusupdater": "petstatusupdater",
-    "petlistadoptions": "list-adoptions"
+    "petlistadoptions": "list-adoptions",
+    "trafficgenerator": "traffic-generator"
   },
   "service_types": {
     "petsite": "k8s",

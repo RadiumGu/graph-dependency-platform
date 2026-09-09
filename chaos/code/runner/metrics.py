@@ -158,11 +158,67 @@ WHERE start_time > now() - INTERVAL {window_seconds} SECOND
            的直接回答，比拿注入目标的聚合 SLI 反推可靠得多
            （后者在本次实测中返回 None，因为目标侧也查不到流量）
 
-        ## 客户端归属怎么来的
+        ## 名字解析与服务端识别（2026-09-09 实测修正）
 
-        DeepFlow 的 `l7_flow_log` 用 `_0` 后缀表示**客户端侧**、`_1` 表示服务端侧，
-        但只存 ID。名字经 `flow_tag.pod_group_map` 字典解析（这与
-        etl_deepflow 用的是同一张字典，不另立一套映射）。
+        第一版有两处让**最忙的路径被测成 0 次**的缺陷：
+
+        1. 直接拿图谱名去 `LIKE`，而图谱名是**链路追踪的逻辑服务名**、
+           DeepFlow 的 pod_group 是**K8s 工作负载名**，本环境里大面积不一致
+           （petsearch/search-service、petlistadoptions/list-adoptions、
+           payforadoption/pay-for-adoption）。
+        2. 服务端用 `request_domain`（DNS 名）匹配。DNS 名受 K8s Service
+           命名影响，且同一条流会以多种后缀重复出现
+           （`search-service.petadoptions.svc.cluster.local` 还有
+           `.cluster.local` / `.ap-northeast-1` 等花样后缀）。
+
+        实测代价：
+
+            collect_edge_flow('petsite', 'petsearch')      -> 0 次
+            collect_edge_flow('petsite', 'search-service') -> 20,660 次
+
+        而边级流量为 0 在判据里意味着「无从打断，任何退化数字都是噪声」——
+        于是前置检查会挡掉一条本来完全可验的边，**从保护变成伤害**。
+
+        现在：名字过 `service_names.k8s_candidates()`（读 ETL 用的同一份
+        `service_mappings.json`，不另立一套），服务端优先用
+        `pod_group_id_1`，仅在服务端不是集群内工作负载（AWS 托管服务等，
+        pod_group_id_1 = 0）时才回落到 `request_domain`。
+        """
+        from . import service_names
+
+        cli_cands = service_names.k8s_candidates(client_service)
+        srv_cands = service_names.k8s_candidates(server_service)
+        ts = int(time.time())
+
+        for cli in cli_cands:
+            for srv in srv_cands:
+                snap = self._edge_flow_once(cli, srv, window_seconds, ts)
+                if snap.ok and snap.total_requests > 0:
+                    if cli != client_service or srv != server_service:
+                        logger.info(
+                            '边级流量名字解析命中: (%s, %s) -> (%s, %s) = %d 次',
+                            client_service, server_service, cli, srv,
+                            snap.total_requests)
+                    return snap
+        # 所有候选都没流量：返回最后一次的采集结果（保留 ok 语义）。
+        # **不要**在这里伪造 ok=True —— 采集失败与真零流量是两个结论。
+        return self._edge_flow_once(cli_cands[0] if cli_cands else client_service,
+                                    srv_cands[0] if srv_cands else server_service,
+                                    window_seconds, ts)
+
+    def _edge_flow_once(
+        self,
+        client_service: str,
+        server_service: str,
+        window_seconds: int,
+        ts: int,
+    ) -> MetricsSnapshot:
+        """单次边级流量查询（名字已解析）。
+
+        服务端匹配用 `pod_group_id_1 > 0` 分支优先：那是工作负载身份，
+        比 DNS 域名稳定。目标是 AWS 托管服务时 pod_group_id_1 = 0，
+        此时才用 request_domain。两个分支用 OR 合并成一次查询，
+        避免为一条边打两次 ClickHouse。
         """
         sql = f"""
 SELECT
@@ -176,9 +232,13 @@ WHERE start_time > now() - INTERVAL {window_seconds} SECOND
   AND pod_group_id_0 > 0
   AND dictGet('flow_tag.pod_group_map', 'name', toUInt64(pod_group_id_0))
       LIKE '%{client_service}%'
-  AND request_domain LIKE '%{server_service}%'
+  AND (
+        (pod_group_id_1 > 0
+         AND dictGet('flow_tag.pod_group_map', 'name', toUInt64(pod_group_id_1))
+             LIKE '%{server_service}%')
+     OR (pod_group_id_1 = 0 AND request_domain LIKE '%{server_service}%')
+  )
 """
-        ts = int(time.time())
         try:
             data = _ch_query(sql)
             rows = data.get("data", [])

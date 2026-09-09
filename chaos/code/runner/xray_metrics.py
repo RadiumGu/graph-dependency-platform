@@ -125,8 +125,14 @@ class XRayEdgeMetrics:
         return self._client
 
     def _edge_stats(self, src: str, dst: str,
-                    start_ts: int, end_ts: int) -> tuple[int, int, float] | None:
+                    start_ts: int, end_ts: int,
+                    dst_type_prefixes: tuple = ()) -> tuple[int, int, float] | None:
         """返回 (total_count, ok_count, total_response_time_seconds) 或 None。
+
+        `dst_type_prefixes` 非空时，目标按 X-Ray 节点的 **Type 前缀**匹配
+        而不是按 Name —— 图谱的 AWSServiceEndpoint 是服务级抽象
+        （`dynamodb`），而 X-Ray 是资源级节点（表名），按名字永远匹配不上。
+        详见 `service_names._XRAY_AWS_TYPE_PREFIXES` 的说明。
 
         None 的含义是**这条边在这个窗口里没有出现在服务图里**，
         与「出现了但调用数为 0」不同 —— 后者会返回 (0, 0, 0.0)。
@@ -173,14 +179,19 @@ class XRayEdgeMetrics:
             for edge in svc.get('Edges', []) or []:
                 peer = by_ref.get(edge.get('ReferenceId')) or {}
                 peer_name = peer.get('Name') or ''
-                if not _name_matches(dst, peer_name):
-                    continue
-                # `AWS::Lambda -> AWS::Lambda::Function` 同名那条是 X-Ray 表示
-                # 「调用进入函数执行」的内部结构，不是一条依赖。
-                # 只在**要找的不是自环**时排除它 —— 真自环
-                # （self-loop-from-trace）另有处理，不该在这里被吞掉。
-                if not same_edge and _name_matches(src, peer_name):
-                    continue
+                if dst_type_prefixes:
+                    peer_type = str(peer.get('Type') or '')
+                    if not any(peer_type.startswith(p) for p in dst_type_prefixes):
+                        continue
+                else:
+                    if not _name_matches(dst, peer_name):
+                        continue
+                    # `AWS::Lambda -> AWS::Lambda::Function` 同名那条是 X-Ray 表示
+                    # 「调用进入函数执行」的内部结构，不是一条依赖。
+                    # 只在**要找的不是自环**时排除它 —— 真自环
+                    # （self-loop-from-trace）另有处理，不该在这里被吞掉。
+                    if not same_edge and _name_matches(src, peer_name):
+                        continue
                 st = edge.get('SummaryStatistics') or {}
                 total += int(st.get('TotalCount') or 0)
                 ok_n += int(st.get('OkCount') or 0)
@@ -195,6 +206,7 @@ class XRayEdgeMetrics:
         server_service: str,
         window_seconds: int = 180,
         end_ts: int | None = None,
+        dst_type_prefixes: tuple = (),
     ) -> MetricsSnapshot:
         """取 `client_service -> server_service` 在窗口内的调用统计。
 
@@ -204,7 +216,8 @@ class XRayEdgeMetrics:
         """
         now = int(end_ts or time.time())
         start = now - int(window_seconds)
-        stats = self._edge_stats(client_service, server_service, start, now)
+        stats = self._edge_stats(client_service, server_service, start, now,
+                                 dst_type_prefixes=dst_type_prefixes)
         if stats is None:
             return MetricsSnapshot(timestamp=now, success_rate=100.0,
                                    latency_p99_ms=0.0, total_requests=0, ok=False)
