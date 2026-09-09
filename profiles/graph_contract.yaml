@@ -178,7 +178,19 @@ edge_types:
     - SNSTopic
     - SQSQueue
     expires_seconds: 21600
-    note: aws + cfn 静态 + deepflow 动态
+    note: 'aws + cfn 静态 + deepflow 动态。⚠️ BusinessCapability 打头的三组
+      pairs（-> RDSCluster / SNSTopic / SQSQueue）**当前刻意不生成**，图上应为
+      0 条：2026-09-07 查出这个方向的 6 条边全是假边，根因是 business_layer.py
+      的 depends_on_types 按**类型**展开——「依赖 RDSCluster」被展开成「依赖账号里
+      每一个 RDSCluster」，把 Grafana 自己的 aurora-mysql 也接上了；另 4 条方向
+      是反的（业务能力「依赖」自己的告警 topic 与 DLQ，实际是它们观测/承接该能力）。
+      代价已落地：假边让 grafana-aurora-mysql 成为 priority=1 靶点并生成过两个
+      fis_rds_failover 实验。ETL 侧的守卫是 SKIP_BC_INFRA_LABELS。
+      **这三组 pairs 保留而不是删掉，是因为形状本身合法** —— 要正确表达必须在
+      business_config.json 里**按资源名**声明，而不是按类型。所以「契约声明了、
+      图上 0 条」是正确状态，不是 ETL 坏了；看到这里想去「修」它之前，
+      先读 infra/lambda/etl_aws/business_layer.py 的 SKIP_BC_INFRA_LABELS 注释
+      与提交 93e3120。'
     pairs:
     - - AgentTool
       - LambdaFunction
