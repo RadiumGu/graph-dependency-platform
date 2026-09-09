@@ -96,7 +96,103 @@ if refuted:
         "一次主动干预的证伪，压过所有静态声明与被动观测。"
     )
 else:
-    st.info("当前没有被证伪的边。")
+    # ── 「0 条被证伪」是这一页最容易被误读的数字 ──────────────────────────────
+    #
+    # 原来这里只有一句 `st.info("当前没有被证伪的边。")`。那句话是**空洞的** ——
+    # 它没告诉读者这是好事（图很干净）、坏事（判伪通道坏了），
+    # 还是根本没测过。而这三种情形对「这张图能推翻自己」这个主张
+    # 意味着完全不同的东西：
+    #
+    #   ① 图很干净          → 主张成立，只是没触发
+    #   ② 判伪通道不可达    → **主张失去可证伪性**，等于一个永不说「不」的系统
+    #   ③ 没测过            → 主张未被检验，是覆盖缺口
+    #
+    # 2026-09-09 逐条查过（活图谱实测，见下文），答案是 ③。
+    # 把这个答案连同它的原始依据一起摆出来 —— 一个「0」旁边不给解释，
+    # 读者只能猜，而猜出②的人会认为整个项目是自证的。
+    st.info(
+        "**当前没有被证伪的边。这个 0 需要解释 —— 它有三种完全不同的含义。**",
+        icon="🔍")
+
+    _labels = C.dependency_edge_labels()
+    _gap_rows: list = []
+    _dist: dict = {}
+    if C.neptune_online() and _labels:
+        _L = ", ".join(f"'{x}'" for x in _labels)
+        # 判伪的必要条件之一是**没有任何独立观测源看到过这条边**。
+        # 观测源按属性标记计数（与 chaos/code/runner/edge_verification.py
+        # 的 _OBSERVER_MARKERS 同源）：xray_* / nfm_* / deepflow 的
+        # calls|error_rate / k8s 镜像引用 image_ref。
+        _no_obs = ("r.xray_call_count IS NULL AND r.xray_last_seen IS NULL "
+                   "AND r.nfm_flow_count IS NULL AND r.nfm_last_seen IS NULL "
+                   "AND r.calls IS NULL AND r.error_rate IS NULL "
+                   "AND r.image_ref IS NULL")
+        _res = C.gquery(
+            f"MATCH (s)-[r]->(t) WHERE type(r) IN [{_L}] AND {_no_obs} "
+            "AND coalesce(r.verify_status,'untested')='untested' "
+            "RETURN t.name AS 注入靶标, labels(t)[0] AS 靶标类型, "
+            "count(*) AS 可判伪边数, collect(DISTINCT s.name) AS _obs "
+            "ORDER BY 可判伪边数 DESC")
+        _gap_rows = _res.get("results", []) if isinstance(_res, dict) else (_res or [])
+        _tot = C.gquery(
+            f"MATCH ()-[r]->() WHERE type(r) IN [{_L}] "
+            f"RETURN count(*) AS 全部, "
+            f"sum(CASE WHEN {_no_obs} THEN 1 ELSE 0 END) AS 零观测")
+        _t = (_tot.get("results") or [{}])[0] if isinstance(_tot, dict) else {}
+        _dist = {"全部": _t.get("全部") or 0, "零观测": _t.get("零观测") or 0}
+
+    if _gap_rows and _dist.get("全部"):
+        _gap_edges = sum(int(r.get("可判伪边数") or 0) for r in _gap_rows)
+        g = st.columns(3)
+        g[0].metric(
+            "判伪通道可达的边", f"{_dist['零观测']}/{_dist['全部']}",
+            help="判伪要同时满足三条：观测方退化低于阈值、**已确认注入生效**、"
+                 "**且没有任何独立观测源看到过这条边**。"
+                 "第三条是关键：一条被 X-Ray 或 NFM 看到过的边，"
+                 "即使注入后调用方毫无反应，正确结论也是「这是 soft dependency」"
+                 "而不是「边不存在」—— 两者在干预数据上完全同形。")
+        g[1].metric(
+            "其中从未做过注入实验", _gap_edges,
+            help="这些边**可以**被证伪，只是还没有人去试。"
+                 "它们同时是信息增益最高的靶标：零观测意味着"
+                 "我们对它们真实性的证据最少。")
+        g[2].metric(
+            "需要的注入靶标", len(_gap_rows),
+            help="按被注入的那一端聚合 —— 一次注入可以同时检验它的多条入边。")
+
+        st.warning(
+            f"**所以那个 0 的含义是「还没测」，不是「测不了」。**\n\n"
+            f"判伪通道对 **{_dist['零观测']}/{_dist['全部']}** 条依赖边是可达的"
+            f"（占 {_dist['零观测'] / _dist['全部'] * 100:.0f}%），"
+            f"其中 **{_gap_edges} 条从未做过注入实验**，分布在 "
+            f"{len(_gap_rows)} 个注入靶标上。下面这张表就是待办队列。",
+            icon="⚠️")
+
+        with st.expander(
+                f"📋 可判伪但从未测过的边 —— 按注入靶标聚合（{len(_gap_rows)} 个）",
+                expanded=True):
+            st.caption(
+                "一次注入检验它的**入边**（在 B 注入，看依赖 B 的那些 A 有没有反应），"
+                "所以按靶标聚合就是按「要做几次实验」聚合。"
+                "「观测方」列是这次注入能同时检验哪些调用方。")
+            st.dataframe(
+                C.df([
+                    {"注入靶标": r.get("注入靶标"),
+                     "靶标类型": r.get("靶标类型"),
+                     "可判伪边数": int(r.get("可判伪边数") or 0),
+                     "观测方": "、".join(str(x) for x in (r.get("_obs") or [])[:4])}
+                    for r in _gap_rows
+                ]),
+                width="stretch", hide_index=True)
+            st.caption(
+                "⚠️ 这张表**不是**说这些边是假的 —— 是说它们**还没被检验过**，"
+                "而且它们是少数几类**能**被检验出假的边。"
+                "一条边可以完全真实却零观测（例如 DNS 解析派生的边："
+                "看到了解析，看不到流量）。")
+    else:
+        st.caption(
+            "离线模式下无法算判伪覆盖 —— 这一段需要逐条查边的观测标记属性。"
+            "在线时它会回答「那个 0 到底是没测过，还是测不了」。")
 
 # ── 已确认的边 ────────────────────────────────────────────────────────────────
 confirmed = [e for e in decided if e.get("status") == "confirmed"]
