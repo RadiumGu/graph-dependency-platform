@@ -202,3 +202,118 @@ def test_m05_profile_示例cypher不得用参数占位符():
         '(strands_tools.execute_cypher) 不绑定参数 —— 会教模型生成运行时'
         '必然 MissingParameter 的查询：\n  '
         + '\n  '.join(f'{q} → {c}' for q, c in found))
+
+
+def test_m06_部署包里不得有从handler不可达的模块():
+    """`infra/lambda/rca_window_flush/` 里每个模块都必须能从 handler 到达。
+
+    ## 2026-09-09 删掉的四个文件
+
+        neptune/schema_prompt.py     8847 B   上一代硬编码 prompt
+        neptune/nl_query.py          4480 B
+        neptune/nl_query_direct.py  15207 B
+        neptune/query_guard.py       1520 B   只被上面两个用
+
+    `core/`、`actions/`、`window_flush_handler.py` 对它们**零引用** ——
+    它们只互相引用，构成一个自洽的孤岛，所以静态可达性查不出问题、
+    运行时也不会报错。
+
+    ## 为什么死代码在这里不是「无害的多余文件」
+
+    契约 `profiles/graph_contract.yaml` 曾把
+    `rca_window_flush/neptune/schema_prompt.py:135` 当作 `PublishesTo`
+    改判依赖边的**论据之一**。那一行同时是：死代码、上一代（199 行硬编码，
+    而现行是 63 行 profile 驱动）、且 cypher 实测 `HTTP 400 Variable 'r'
+    not defined`。**一份没人执行的文件被当成了权威。**
+
+    更实际的风险是误导后来者：将来谁要给这个 Lambda 接 NL 查询，会照着包里
+    现存的那份接 —— 而那份是坏的、缺整个 agent 层（Delegates / InvokesTool /
+    Retrieves）。留着它让未来的接线更可能出错，不是更不可能。
+
+    ## 判据：从**全部**入口做可达性闭包
+
+    第一版只用 `window_flush_handler` 当根，结果把 `handler.py` 和
+    `actions/*` 五个模块全报成死代码 —— 那是**假阳性**。这个资产服务
+    **两个** Lambda：
+
+        gp-window-flush      handler = window_flush_handler.window_flush_handler
+                             （由 infra/lib/alert-buffer-stack.ts:166 部署）
+        petsite-rca-engine   handler = handler.lambda_handler
+                             （CFN 外部署 —— 见 todo/tech-debt-etl-lambdas-outside-cfn.md，
+                               所以 grep CDK 找不到它，只能从线上配置读出来）
+
+    单入口假设会让这条门禁每次都红，而一条总是红的门禁等于没有门禁。
+    所以两个 handler 都必须当根。新增入口时要同步加进 `_ENTRYPOINTS`。
+
+    遍历用 `ast.walk` 而非只看模块头部：这个包大量使用**函数体内的延迟导入**
+    来压 Lambda 冷启动（`window_flush_handler.py:42` 的
+    `from core.alert_buffer import AlertBuffer` 就在函数里），
+    只扫顶层 import 会把几乎所有模块误报成孤儿。
+    """
+    import ast
+
+    # 两个入口都必须列全 —— 少一个就会把那一支的整条依赖链误报成死代码
+    _ENTRYPOINTS = ('window_flush_handler', 'handler')
+
+    #: 已知不可达但**刻意保留**的模块。
+    #:
+    #: `actions.feedback_collector`（Phase 4 用户反馈回写 Neptune）是一个
+    #: **功能完整但尚未接线**的模块：两个 handler 都不调它，
+    #: `tests/test_15_unit_rca_actions.py` 有 4 处单测覆盖它。
+    #:
+    #: 它与本轮删掉的四个 NL 文件性质不同 —— 那四个是**上一代的重复实现**
+    #: （现行版本在 `rca/neptune/` 且已 profile 驱动），留着只会误导；
+    #: 这一个是**唯一实现**，删了功能就没了。所以白名单而不是删除。
+    #:
+    #: 接线之后应把它从本白名单移除。
+    _INTENTIONAL_ORPHANS = frozenset({'actions.feedback_collector'})
+
+    pkg = _ROOT / 'infra' / 'lambda' / 'rca_window_flush'
+    if not pkg.exists():
+        pytest.skip('rca_window_flush 不在本工作树')
+
+    mods = {}
+    for f in pkg.rglob('*.py'):
+        if f.name == '__init__.py':          # 包声明，不参与可达性
+            continue
+        name = '.'.join(f.relative_to(pkg).with_suffix('').parts)
+        mods[name] = f
+
+    for ep in _ENTRYPOINTS:
+        assert ep in mods, f'入口 {ep} 不在包里 —— 门禁的根写错了'
+
+    def local_imports(path: pathlib.Path) -> set:
+        try:
+            tree = ast.parse(path.read_text(encoding='utf-8'))
+        except SyntaxError:
+            return set()
+        out = set()
+        for n in ast.walk(tree):          # walk = 含函数体内的延迟导入
+            if isinstance(n, ast.Import):
+                for a in n.names:
+                    out.add(a.name)
+            elif isinstance(n, ast.ImportFrom) and n.module:
+                out.add(n.module)
+                for a in n.names:         # from neptune import neptune_queries
+                    out.add(f'{n.module}.{a.name}')
+        return {m for m in out if m in mods}
+
+    reachable, queue = set(), list(_ENTRYPOINTS)
+    while queue:
+        m = queue.pop()
+        if m in reachable:
+            continue
+        reachable.add(m)
+        queue.extend(local_imports(mods[m]))
+
+    orphans = sorted(set(mods) - reachable - _INTENTIONAL_ORPHANS)
+    stale_allow = sorted(_INTENTIONAL_ORPHANS & reachable)
+    assert not stale_allow, (
+        f'白名单里的模块其实已可达，应从 _INTENTIONAL_ORPHANS 移除：{stale_allow}\n'
+        '白名单留着过期条目会掩盖真正的死代码。')
+    assert not orphans, (
+        '以下模块在部署包里但从任何入口都不可达（死代码）：\n  '
+        + '\n  '.join(orphans)
+        + '\n\n死代码会被后来者当成权威（契约曾引用已删的 schema_prompt.py:135'
+          ' 作为分类论据，而那行 cypher 实测 HTTP 400），也会误导将来的接线。'
+          '要么接上，要么删掉。')

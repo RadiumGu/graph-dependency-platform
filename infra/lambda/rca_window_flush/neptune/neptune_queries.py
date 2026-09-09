@@ -173,7 +173,10 @@ def q3_upstream_deps(failed_service: str, kind: str = None) -> list:
 
     ## ⚠️ 函数名里的 `upstream` 与本仓库 NL 层的术语相反
 
-    `schema_prompt.FEW_SHOT_EXAMPLES` 教给模型的约定是：
+    NL 层的 few-shot 示例（现由 `profiles/petsite.yaml` 的 `nl_examples`
+    驱动，经 `rca/neptune/schema_prompt.build_system_prompt()` 渲染 ——
+    本包里那份 `neptune/schema_prompt.py` 是上一代硬编码版本，已于
+    2026-09-09 删除，因为 core/ 与 actions/ 对它零引用）教给模型的约定是：
 
         「下游依赖」  = 出边  (s)-[:Calls|AccessesData|...]->(d)   它依赖谁
         「上游调用者」= 入边  (caller)-[:Calls]->(s)               谁依赖它

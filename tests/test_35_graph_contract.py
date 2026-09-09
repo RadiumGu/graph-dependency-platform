@@ -498,8 +498,14 @@ def test_g18_dependency_edge_set_is_locked(contract):
     条、对几乎所有资源都成立，因而不携带判别信息），实测只有 2 条。
 
     翻转是**消除分歧而非引入新意见** —— 系统内另有两处早已按依赖对待它：
-      · `rca_window_flush/neptune/schema_prompt.py:135` 的依赖遍历包含它
       · `etl_deepflow:810` 的 drift 对账把它与 `AccessesData` 并列
+      · NL 层的依赖遍历示例（`profiles/petsite.yaml` 的 `nl_examples`）包含它
+
+    ⚠️ 2026-09-09 更正：原先还引了
+    `rca_window_flush/neptune/schema_prompt.py:135` —— 坏证据。那是上一代
+    硬编码 prompt，`core/` 与 `actions/` 对它零引用（死代码），且那一行的
+    cypher 实测 HTTP 400（`Variable 'r' not defined`）。文件已删除。
+    结论不变：另一条证据是活代码，现行 profile 驱动的 prompt 覆盖全部 10 种。
 
     `upsert_edge` 是契约驱动的（`if is_dependency_edge(lb): dependency_kind='static'`），
     所以翻转后写入方自动开始写 `dependency_kind`，无需改代码。
