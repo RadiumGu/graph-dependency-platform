@@ -66,7 +66,20 @@ NS = 'petadoptions'
 #: 否则注入期的流量还没落库就去查了 —— 那会读成「零流量」。
 SETTLE_SECONDS = 45           # 规则生效 + 让流量打进去
 OBSERVE_SECONDS = 120         # 观测窗口
-DURATION = f'{SETTLE_SECONDS + OBSERVE_SECONDS + 60}s'
+
+#: 复合模式（--compound）由 main() 置位。它会在故障期间删 Pod，
+#: 所以观测窗必须容纳「Pod 重建 + 新 Pod 在故障下建连失败」的全过程，
+#: 否则观测会落在旧 Pod 还在服务的那一段 —— 看不到退化，又是一次假 refuted。
+COMPOUND = False
+COMPOUND_OBSERVE_SECONDS = 180
+
+
+def _observe_seconds() -> int:
+    return COMPOUND_OBSERVE_SECONDS if COMPOUND else OBSERVE_SECONDS
+
+
+def _duration() -> str:
+    return f'{SETTLE_SECONDS + _observe_seconds() + 90}s'
 
 #: 图谱目标类型 -> DNSChaos 的域名匹配模式。
 #:
@@ -99,6 +112,48 @@ def _kubectl(*args: str, timeout: int = 120) -> tuple[int, str]:
     return p.returncode, (p.stdout or '') + (p.stderr or '')
 
 
+def _restart_pods(label: str) -> tuple[bool, str]:
+    """在故障生效期间重建 Pod，让连接与 DNS 在故障下重新建立。
+
+    ## 为什么复合实验是这类边的唯一验证途径（2026-09-09 实测）
+
+    单纯切断对 `petsearch -> DynamoDB` **完全无效**，两条路都试过：
+
+      · NetworkChaos + externalTargets —— AWS 区域端点有多个轮换 IP，
+        Chaos Mesh 只在 apply 时解析一次，规则只封住其中一个；
+        S3 更是 Gateway 端点，封 IP 根本不在路径上。
+      · DNSChaos —— AllInjected=True 但依然没打断：应用用**长连接 +
+        DNS 缓存**，4.7 次/秒全跑在 keep-alive 连接上，
+        2 分钟窗口内 DNS 从不重查。
+
+    所以必须让连接**重新建立**：删掉 Pod，新 Pod 启动时要重新解析域名、
+    重新建连，此时 DNS 故障才真正拦在路径上。
+
+    这与那 6 条 `Microservice -DependsOn-> ECRRepository` 是同一形状 ——
+    `injectability` 把 ECR 判为 `needs_compound_experiment` 的理由
+    （"稳态无退化，配合删 Pod 就是可验证的复合实验"）在这里同样成立，
+    只是被切断的东西不同。
+
+    用 `delete pod` 而不是 `rollout restart`：后者是滚动更新，
+    会**等新 Pod Ready 才删旧的**，于是故障期间始终有健康的旧 Pod 在服务，
+    观测方看不到任何退化 —— 那会重演一次假 refuted。
+    """
+    rc, out = _kubectl('delete', 'pod', '-n', NS, '-l', f'app={label}',
+                       '--wait=false', timeout=180)
+    return rc == 0, out.strip()[:200]
+
+
+def _pods_ready(label: str) -> tuple[int, int]:
+    """返回 (ready 数, 总数)。用于恢复确认。"""
+    rc, out = _kubectl(
+        'get', 'pod', '-n', NS, '-l', f'app={label}', '-o',
+        'jsonpath={range .items[*]}{.status.containerStatuses[0].ready}{"\\n"}{end}')
+    if rc != 0:
+        return 0, 0
+    vals = [x.strip() for x in out.splitlines() if x.strip()]
+    return sum(1 for v in vals if v == 'true'), len(vals)
+
+
 def _all_injected(name: str) -> str:
     rc, out = _kubectl(
         'get', 'dnschaos', name, '-n', NS, '-o',
@@ -108,11 +163,22 @@ def _all_injected(name: str) -> str:
 
 
 def _candidates() -> list[dict]:
-    """有边级流量、源在集群内、目标是集群外托管服务的待验边。"""
+    """有边级流量、源在集群内、目标是集群外托管服务的待验边。
+
+    复合模式下**额外纳入 `inconclusive`**：它的含义是「试过但没得出结论」，
+    而复合实验正是为了用更强的手法重试。上一轮那两条就是因为
+    「切断了但应用用长连接 + DNS 缓存，注入没真正拦在路径上」而 inconclusive ——
+    不重试它们，复合实验就没有对象。
+
+    `confirmed` / `refuted` 不纳入：那是已有结论的边，重跑要另走复核流程
+    （且 refuted 累计两次会删边，不能顺手触发）。
+    """
     from neptune import neptune_client as nc
-    rows = nc.results("""
+    retryable = ("['inconclusive']" if COMPOUND else "[]")
+    rows = nc.results(f"""
 MATCH (a:Microservice)-[r]->(b)
-WHERE (r.verify_status IS NULL OR r.verify_status='untested')
+WHERE (r.verify_status IS NULL OR r.verify_status = 'untested'
+       OR r.verify_status IN {retryable})
   AND r.verify_blocked_class IS NULL
   AND labels(b)[0] IN ['DynamoDBTable','S3Bucket']
 RETURN id(r) AS eid, type(r) AS edge, a.name AS src, labels(b)[0] AS dl,
@@ -147,7 +213,11 @@ def main() -> int:
     g.add_argument('--list', action='store_true')
     g.add_argument('--dry-run', action='store_true')
     g.add_argument('--run', action='store_true')
+    ap.add_argument('--compound', action='store_true',
+                    help='复合实验：在故障生效期间删 Pod，让连接与 DNS 重建')
     args = ap.parse_args()
+    global COMPOUND
+    COMPOUND = bool(args.compound)
 
     os.environ.setdefault(
         'NEPTUNE_ENDPOINT',
@@ -187,8 +257,9 @@ def main() -> int:
     if args.list or not plans:
         return 0
 
-    print(f'\n注入窗口 duration={DURATION}'
-          f'（生效等待 {SETTLE_SECONDS}s + 观测 {OBSERVE_SECONDS}s + 余量 60s）')
+    print(f'\n注入窗口 duration={_duration()}'
+          f'（生效等待 {SETTLE_SECONDS}s + 观测 {_observe_seconds()}s + 余量 90s）'
+          + ('  [复合模式：故障期间删 Pod]' if COMPOUND else ''))
     if args.dry_run:
         for p in plans:
             print('\n' + _manifest(p))
@@ -232,7 +303,7 @@ metadata:
 spec:
   action: error
   mode: all
-  duration: {DURATION}
+  duration: {_duration()}
   selector:
     namespaces: [{NS}]
     labelSelectors:
@@ -249,11 +320,27 @@ def _run_one(p: dict, df, xr) -> dict:
     rec: dict = {'edge': edge_desc, 'chaos': name}
 
     # ── 基线 ─────────────────────────────────────────────────────────
-    obs_base = df.collect_edge_flow(p['observer'], p['src'], window_seconds=900)
+    #
+    # ⚠️ 基线窗与注入窗**必须等长**（2026-09-09 第二次踩同一个坑）。
+    #
+    # 第一版基线用 900s、注入用 180s，于是传给 verify_edge 的
+    # `observer_baseline_requests=21051` 与 `observer_injected_requests=1010`
+    # 根本不可比 —— 归一化后是 23.4/s vs 5.6/s（降 76%），
+    # 但原始计数的比例是 95%，凭空放大了退化。
+    #
+    # 这与 `xray_metrics.took_effect` 那次是**同一个错误**：
+    # 跨窗口比较前先问两个窗口一样长吗。既然判定链拿到的是计数，
+    # 那就把两个窗口做成一样长，让计数本身可比。
+    obs_window = _observe_seconds()
+    obs_base = df.collect_edge_flow(p['observer'], p['src'],
+                                    window_seconds=obs_window)
     edge_base = xr.collect_edge_flow(p['src'], p['dst'], window_seconds=3600)
     print(f"  基线  观测方 {p['observer']}->{p['src']}: "
-          f"{obs_base.total_requests} 次 / 成功率 {obs_base.success_rate}%")
+          f"{obs_base.total_requests} 次/{obs_window}s "
+          f"（{obs_base.total_requests / obs_window:.1f}/s）"
+          f" / 成功率 {obs_base.success_rate}%")
     print(f"        被测边自身(X-Ray 1h): {edge_base.total_requests} 次")
+    rec['observer_window_seconds'] = obs_window
     rec['baseline'] = {'observer_requests': obs_base.total_requests,
                        'observer_success_rate': obs_base.success_rate,
                        'edge_calls': edge_base.total_requests}
@@ -288,14 +375,42 @@ def _run_one(p: dict, df, xr) -> dict:
             print(f"  → 不下结论：{rec['reason']}")
             return rec
 
-        print(f"  注入生效，观测 {OBSERVE_SECONDS}s…")
-        time.sleep(OBSERVE_SECONDS)
+        print(f"  注入生效，观测 {_observe_seconds()}s…")
+        if COMPOUND:
+            # ── 复合步骤：在故障生效期间重建 Pod ──
+            ok, msg = _restart_pods(p['k8s_label'])
+            rec['pods_deleted'] = ok
+            print(f"  ⟳ 复合步骤：删除 app={p['k8s_label']} 的 Pod"
+                  f"（{'成功' if ok else '失败: ' + msg}）"
+                  f" —— 让连接与 DNS 在故障下重建")
+            if not ok:
+                rec['verdict'] = 'skipped'
+                rec['reason'] = f'复合步骤失败，未能重建 Pod: {msg}'
+                print(f"  → 跳过：{rec['reason']}")
+                return rec
+            # ── 判别信号：新 Pod 在故障下能否 Ready ──
+            #
+            # 观测方吞吐在复合模式下**没有判别力**：删了 Pod，
+            # 上游对它的调用当然会塌 —— 这个信号分不清
+            # 「连不上被切断的目标」与「Pod 正在重启」。
+            # 第一版用它判出了一个 soft，已撤回（第二次）。
+            #
+            # 有判别力的是：新 Pod 在目标不可达时能不能起来并就绪。
+            #   起不来  -> 目标是**启动期硬依赖**
+            #   起得来  -> 目标至少不是启动期硬依赖
+            # 这个信号不受「Pod 重启」本身干扰，因为重启是两种情况的共同前提。
+            time.sleep(_observe_seconds())
+            ready, total = _pods_ready(p['k8s_label'])
+            rec['pods_ready_under_fault'] = f'{ready}/{total}'
+            print(f"  🔍 故障下 Pod 就绪: {ready}/{total}")
+        else:
+            time.sleep(_observe_seconds())
 
         obs_inj = df.collect_edge_flow(p['observer'], p['src'],
-                                       window_seconds=OBSERVE_SECONDS)
+                                       window_seconds=_observe_seconds())
         # 边自身：X-Ray 的注入窗口用真实起止，不用「近 N 秒」
         eff, eff_why = xr.took_effect(p['src'], p['dst'],
-                                     injection_seconds=OBSERVE_SECONDS,
+                                     injection_seconds=_observe_seconds(),
                                      baseline_seconds=1800)
         still = _all_injected(name)
         rec['all_injected_after'] = still
@@ -316,7 +431,30 @@ def _run_one(p: dict, df, xr) -> dict:
 
         deg = obs_base.success_rate - obs_inj.success_rate
         rec['observer_degradation_pct'] = round(deg, 2)
-        print(f"  观测方退化: {deg:.2f}%")
+        print(f"  观测方退化(成功率): {deg:.2f}%")
+
+        # ── 复合模式：观测方信号被 Pod 重启混淆，**不得**据此写判定 ──
+        #
+        # 这道拒绝是硬的，不是保守。删 Pod 会让上游对它的调用必然塌陷，
+        # 于是「吞吐降了」既可以读成「依赖被切断」也可以读成「Pod 在重启」。
+        # 拿它喂判定链已经产出过一次 soft 并被撤回（2026-09-09，第二次同类错误）。
+        #
+        # 复合模式的产出是**结构化观察**而不是 verdict：
+        # 由人看 pods_ready_under_fault 决定下一步，
+        # 或者补一个对照臂（同样删 Pod 但不切断）之后再自动判。
+        if COMPOUND:
+            ready_s = rec.get('pods_ready_under_fault', '?')
+            rec['verdict'] = 'observation_only'
+            rec['reason'] = (
+                f'复合模式：删 Pod 使观测方信号失去判别力（删了 Pod，'
+                f'上游调用必然塌陷，分不清「连不上目标」与「Pod 在重启」）。'
+                f'刻意不写 verify_status。'
+                f'故障下 Pod 就绪={ready_s}；'
+                f'注入生效性={eff}（{eff_why}）')
+            print(f"  → 只记观察，不写判定：{rec['reason']}")
+            print(f"     要自动判定需补一个对照臂：同样删 Pod 但**不**切断目标，"
+                  f"对比两次的就绪时间与错误率")
+            return rec
 
         from runner.edge_verification import verify_edge, write_verdict
         v = verify_edge(
@@ -356,6 +494,21 @@ def _run_one(p: dict, df, xr) -> dict:
                 break
             time.sleep(10)
         print(f"  已清理 DNSChaos/{name}")
+        if COMPOUND:
+            # ── 复合实验删过 Pod，必须确认服务真的恢复了 ──
+            # 「故障注入必须可自动恢复」这条硬约束，在复合实验里不只是
+            # 撤销故障规则 —— 被删掉的 Pod 也必须重新起来并 Ready。
+            # 不等它就退出，会把一个降级中的服务留给下一条实验当基线。
+            for i in range(20):
+                ready, total = _pods_ready(p['k8s_label'])
+                if total > 0 and ready == total:
+                    print(f"  ✓ Pod 已恢复: {ready}/{total} Ready")
+                    break
+                time.sleep(15)
+            else:
+                ready, total = _pods_ready(p['k8s_label'])
+                print(f"  ⚠️  Pod 未在 5 分钟内全部恢复: {ready}/{total} Ready"
+                      f" —— 请人工检查 app={p['k8s_label']}")
 
 
 if __name__ == '__main__':

@@ -1,0 +1,39 @@
+[
+  {
+    "edge": "AccessesData petsearch -> ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+    "chaos": "vx-petsearch-dynamodbtable",
+    "observer_window_seconds": 180,
+    "baseline": {
+      "observer_requests": 4405,
+      "observer_success_rate": 100.0,
+      "edge_calls": 17152
+    },
+    "all_injected_before": "True",
+    "pods_deleted": true,
+    "pods_ready_under_fault": "2/2",
+    "all_injected_after": "True",
+    "injected": {
+      "observer_requests": 1324,
+      "observer_success_rate": 100.0
+    },
+    "injection_confirmed": true,
+    "injection_confirmed_why": "调用速率 4.55 -> 1.73 次/秒（下降 62% >= 40%），打断确认生效",
+    "observer_degradation_pct": 0.0,
+    "verdict": "observation_only",
+    "reason": "复合模式：删 Pod 使观测方信号失去判别力（删了 Pod，上游调用必然塌陷，分不清「连不上目标」与「Pod 在重启」）。刻意不写 verify_status。故障下 Pod 就绪=2/2；注入生效性=True（调用速率 4.55 -> 1.73 次/秒（下降 62% >= 40%），打断确认生效）"
+  },
+  {
+    "edge": "AccessesData petsearch -> serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+    "chaos": "vx-petsearch-s3bucket",
+    "observer_window_seconds": 180,
+    "baseline": {
+      "observer_requests": 1294,
+      "observer_success_rate": 100.0,
+      "edge_calls": 2427
+    },
+    "all_injected_before": "False",
+    "verdict": "inconclusive",
+    "reason": "注入未生效 AllInjected=False",
+    "events": "alid\n17s         Warning   Failed            dnschaos/vx-petsearch-s3bucket   Failed to apply chaos: rpc error: code = Unknown desc = insert into schema selector: pattern *.s3.* not valid\n17s         Normal    Updated           dnschaos/vx-petsearch-s3bucket   Successfully update records of resource"
+  }
+]
