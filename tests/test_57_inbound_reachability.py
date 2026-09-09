@@ -104,6 +104,7 @@ def zero_inbound(neptune_rca):
     return sorted(found)
 
 
+@pytest.mark.neptune
 def test_g2_01_no_new_unreachable_observed_nodes(zero_inbound):
     """被观测域内、声明必须有上游的节点，不得零入边（已知缺口除外）。
 
@@ -123,6 +124,7 @@ def test_g2_01_no_new_unreachable_observed_nodes(zero_inbound):
     )
 
 
+@pytest.mark.neptune
 def test_g2_02_known_gaps_are_still_real(zero_inbound):
     """`KNOWN_GAPS` 里的条目必须仍然成立 —— 修好了就要销账。
 

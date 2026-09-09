@@ -123,6 +123,7 @@ def test_t59_04_query_excludes_transitive_labels():
     )
 
 
+@pytest.mark.neptune
 def test_t59_05_chokepoint_query_runs_and_is_not_noisy(neptune_dr):
     """实跑一次：查询能执行，且结果规模在可人工消费的范围内。
 
