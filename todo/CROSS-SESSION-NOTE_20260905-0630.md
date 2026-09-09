@@ -244,3 +244,218 @@ m02 钉的是**语义不变量**（判定来自干预，干预必然产生测量
    而这个仓库最引以为傲的那套门禁（`g18` / `t59_06` / `G2` / `test_52::m04` …）
    **只在有人记得手动跑 pytest 时才生效**。
    离线模式是为补这个洞做的前置，job 本身还没加。
+
+---
+
+## 追加（2026-09-09 12:0xZ）：我往图谱写了两条**错误结论**，已撤回
+
+这一条比前面几条都值得看，因为它不是"测试没跟上"或"判据写歪了"，
+而是**一个测量缺陷把假证据喂进判定链，产出了看起来有依据的错误结论**。
+
+### 事故
+
+跑 `petsearch -[AccessesData]-> DynamoDBTable` / `-> S3Bucket` 的注入实验
+（用户已批准对活环境注入）。`chaos/code/runner/xray_metrics.py` 的
+`took_effect()` 当时这样判"注入是否生效"：
+
+```python
+thin = b_total - i_total
+if thin > 0:
+    return True, f'调用数 {b_total} -> {i_total}（减少 {thin} 次），打断确认生效'
+```
+
+而调用方传的是 `baseline_seconds=1800` / `injection_seconds=120`：
+
+```
+基线窗 1800s: 8470 次  ->  4.706 次/秒
+注入窗  120s:  548 次  ->  4.567 次/秒   ← 速率几乎没变
+```
+
+`8470 - 548 = 7922 > 0` → 判"生效"。**基线窗比注入窗长 15 倍，
+绝对计数必然下降 —— 这个判据是恒真的。**
+
+真相是注入完全没生效。识破它的是**旁证**：逐分钟看
+`petsite -> search-service`，整个 22 分钟响应码全 200、
+平均延迟 190-350ms、p99 恒定 ~3008ms —— 完全平坦，
+没有任何被打断的痕迹。
+
+### 污染路径：为什么假证据比没证据糟得多
+
+假的 `injection_confirmed=True` 进入 `graph_confidence.classify_intervention`
+之后：
+
+```
+生效性=True + 观测方零退化 + 有独立观测源
+  -> STATUS_INCONCLUSIVE + dependency_class='soft'
+     「打断它本就不该影响调用方 —— 这是 soft dependency，
+       不是「边不存在」。这是**设计良好**的证据」
+```
+
+判定链本身是对的 —— 它的两道门禁（注入生效门禁、独立证据门禁）都正确
+拦住了 refuted，没有删边。**但它的输入是假的**，于是两条根本没验到的边
+被写上了 `dependency_class=soft`。
+
+`soft` 不是中性标签。DR 影响面分析会把它读成"这条依赖不影响可用性"，
+在故障预案里降级。**用测量 bug 得出的 soft 比 untested 危险得多** ——
+untested 只是没有信息，soft 是错误信息，而且带着 confidence 数字。
+
+### 已做的处置
+
+- `chaos/code/runner/xray_metrics.py` 改比**速率**（次/秒），
+  新增 `_QPS_DROP_THRESHOLD_PCT = 40.0`。取 40 而不是成功率那条 5%：
+  数量信号比质量信号更容易被流量自然波动干扰，实测 X-Ray 分钟级聚合
+  相邻窗口的速率抖动可达 ±20%。
+- `scripts/retract_false_soft_verdicts.py` 撤回那两条，清掉本次实验写入的
+  全部 `verify_*` 属性，**回到"未测试"而不是改写成别的结论** ——
+  我们不知道这两条边是什么性质，诚实的状态是没有结论。
+  留痕 `todo/retracted-false-soft-verdicts_20260909-1202.json`。
+- `tests/test_70_effectiveness_must_compare_rates.py`（5 条）。
+  `t70_01` **直接用事故的原始数字**（1800s/8470 vs 120s/548）钉住
+  "速率不变必须判未生效" —— 旧实现在这组数字上判 True。
+  另有一条源码检查：判据里不得再出现 `b_total - i_total`。
+
+### 给你们的三条可迁移教训
+
+**一、任何跨窗口的比较，先问两个窗口一样长吗。**
+这次是 15 倍。同类风险点还有：`collect()` 与 `collect_edge_flow()` 的
+`window_seconds` 不一致时算出的退化、CloudWatch `Period` 与实际采样窗
+不一致时的 Sum。凡是"基线 vs 注入"的对比，都该在**速率或比例**上做，
+不要在绝对量上做。
+
+**二、判定链的门禁只能挡住坏的推理，挡不住坏的输入。**
+本仓库在门禁上投了很多（注入生效门禁、独立证据门禁、零流量不判 refuted、
+纯吞吐需 60%），它们这次全都正常工作 —— 正因为如此，错误结论才显得
+特别可信。**下一道该补的不是判据，是对证据本身的自检。**
+
+**三、写图之前先找一个独立的旁证。**
+识破这次的是延迟与响应码曲线，它和被测的计数是**两个不同的信号源**。
+如果只看一个信号，"减少 7922 次"看起来无可置疑。
+建议以后凡是要写 `verify_status` 或 `dependency_class` 的路径，
+都在日志里同时打出一条独立信号（延迟分布、响应码分布、
+或对照组的同期数字），哪怕不参与判定 —— 它是事后复核的唯一抓手。
+
+### 顺带记一个环境事实（省你们的时间）
+
+托管服务类目标**用网络层注入很可能打不断**，两条路都试过：
+
+- `NetworkChaos` + `externalTargets: dynamodb.<region>.amazonaws.com`
+  —— Chaos Mesh 在 apply 时把域名解析成 IP 再装 iptables，
+  而 AWS 区域端点有**多个轮换 IP**（pod 内解析到 35.71.114.102，
+  SDK 后续会拿到别的），规则只封住其中一个。
+  S3 更糟：它是 **Gateway 端点**（`com.amazonaws.ap-northeast-1.s3`），
+  靠路由表 + 前缀列表转发，封单个 IP 根本不在路径上。
+  这与仓库既有记载同源 —— FIS `disrupt-connectivity scope=s3` 当年
+  也没切断这条路径，那次还导致了一个假 refuted。
+- `DNSChaos` (`action: error`, `patterns: ['dynamodb.*']`)
+  —— `AllInjected=True` 但依然没打断：petsearch 用**长连接 + DNS 缓存**，
+  4.7 次/秒全跑在 keep-alive 连接上，2 分钟窗口内 DNS 从不重查。
+
+结论：这类边要**复合实验**（切断 + 重启 Pod，让连接在故障下重建），
+与那 6 条 `Microservice -DependsOn-> ECRRepository` 是同一形状
+（ECR 也是"稳态无影响，须配合删 Pod"）。
+`chaos/code/runner/composite_runner.py` 与
+`chaos/code/experiments/composite/*.yaml` 可复用，别从零写。
+
+---
+
+## 2026-09-09 16:10 — 关于你们第 1 条（cdk deploy NeptuneEtlStack）的三个核实结果
+
+我去查了这条待办的前置条件，结论有一条是**推翻你们的判断、方向是放宽**，
+另有一条是**你们没点到的真实风险**。另外先更正我自己上一轮写错的一个推断。
+
+### 一、concierge 孤立：你们已经定性过了，我这里只是独立复核 + 一条新推论
+
+我上一轮在别处说过「`WaggleAIConcierge` 零条边，会在 cdk deploy 后消失」——
+**那是错的**。而正确答案你们两天前就写下来了，比我精确：
+`tests/test_57_inbound_reachability.py` 第 67–78 行那条登记
+（「时序错位，不是采集缺口、也不是真没调用」，最后调用 09-05 09:16，
+`drift_status=observed_then_silent`，下次真实调用时自然建出，届时删除该行）。
+**那条推理我完全同意，包括「刻意不硬插边」的理由。**
+我顺手核实了它的前提也成立：`concierge_chat` 进 `_DELEGATION_TOOLS` 是
+`9f9b5bf`（09-06 02:45:38Z），部署的 Lambda 是 09-06 10:05:50Z ——
+映射确实已在部署版本里，所以「下次调用会自然建出」是对的。
+
+我能新增的只有两点：**沉默已经到第四天**，以及由此得到的一条部署后验收推论
+（见下一节）。按天计数（日志组
+`/aws/bedrock-agentcore/runtimes/WaggleAIOrchestrator-K85tG867Xt-DEFAULT`
+的 `spans` 流，判据 `attributes.gen_ai.operation.name = 'execute_tool'`）：
+
+    工具                09-04  09-05  09-06  09-07  09-08  09-09
+    adoption              15     36     47     70     56     43
+    nutrition_advisor     18     21     15     14     18     11
+    food_ordering          6      9     15     15     16     17
+    concierge_chat        10      7      0      0      0      0   ← 连续四天零
+
+**10 + 7 = 17，正好是契约 `RoutesVia` 注记里引用的那个数字。**
+也就是说那条证据只覆盖 09-04 与 09-05，之后 concierge 再没被委派过。
+
+所以图上只有 3 条 `Delegates` 是**正确的**（与你们的结论一致）。
+
+### 二、这会影响你们的部署后验收判据
+
+`RoutesVia` 部署后**只会出现 3 条，不是 4 条**（concierge 无流量）。
+若按注记里「四个子 agent 全部出现」去验收，会把成功的部署误判成失败。
+
+顺带：契约 `RoutesVia` 的 note 里那句「窗口 09-04→09-07 四个子 agent
+全部出现（adoption 145 / nutrition 61 / ordering 42 / concierge 17 次）」
+**已经过期**。SPOF 的结论不变（网关仍承载剩下 3 个子 agent 的全部委派），
+但「4 个」这个数现在是 3 个。这条证据在写的时候是真的，之后静默失效了 ——
+正是本项目存在的理由的一个实例，而它长在单一真相源里。
+
+### 三、你们点的那个前置动作，守的不是这个栈的风险
+
+你们写「先跑 `cdk diff`，因为已知有 CDK 声明 Neptune 1.3.4.0 / 实际跑
+1.4.6.3 这类分叉，`cdk deploy` 会把栈收敛到模板状态」。
+
+实查（全部只读，没创建 changeset、没装 node_modules）：
+
+  1. **`NeptuneEtlStack` 里没有 Neptune 集群。** 资源构成是
+     9 × EventBridge Rule、4 × Lambda Function、1 × Lambda LayerVersion、
+     2 × SQS Queue、2 × IAM Role、2 × IAM Policy、1 × SQS QueuePolicy、
+     1 × EventSourceMapping、1 × EKS AccessEntry。
+  2. **`petsite-neptune` 不在任何 CFN 栈里。** 它没有 `aws:cloudformation:*`
+     标签，账号里也**没有已部署的 NeptuneClusterStack**。
+     `infra/lib/neptune-cluster-stack.ts:102` 的 `engineVersion: '1.3.4.0'`
+     属于**从未部署过的代码**。
+
+  ⇒ 部署 `NeptuneEtlStack` **不可能**降级 Neptune。引擎版本那个隐患是真的，
+     但它是「将来若有人 `cdk deploy` 那个集群栈」的隐患 —— 而且那种情况下
+     CDK 会**新建**一个集群（现有的不受 CFN 管理），不是改现有的。
+
+### 四、但有一个你们没点到的真实风险，比引擎版本更该看
+
+**`NeptuneEtlStack` 的最后一次更新是 2026-04-19T19:12:56Z —— 将近五个月前。**
+而 `neptune-etl-from-agentcore` 的代码 LastModified 是 2026-09-06。
+
+也就是说这五个月里 Lambda 代码是**绕过 CloudFormation 直接更新的**
+（`update-function-code` 之类）。后果：部署侧的模板停留在 4 月，
+而 `infra/lib` 的 TypeScript 已经改了五个月。`cdk deploy` 会把这五个月的
+栈级变更**一次全部落地**，范围就是上面那 21 个资源 —— 尤其是 9 条
+EventBridge 规则（ETL 的触发节奏）和那个 Lambda LayerVersion（契约数据）。
+
+**这才是 `cdk diff` 真正该看的东西**，且与 Neptune 无关。
+
+如果只是想让 `RoutesVia` / `RoutesToRuntime` 出现而不想承担五个月的栈收敛，
+另一条路是只更新那一个函数的代码与 layer（沿用这五个月一直在用的方式），
+把 `cdk deploy` 留给一次单独的、有 diff 评审的栈对齐。两条路各有代价：
+前者继续加深模板与现实的分叉，后者一次性承担五个月的变更。**这个取舍我没有替你们做。**
+
+### 五、我这轮另外落地的两件（都已提交）
+
+- `graph_contract.yaml` 的 `DependsOn.note` 补了说明：BusinessCapability 打头的
+  三组 pairs 刻意不生成、为什么保留而不删、以及指向 `93e3120` 与
+  `SKIP_BC_INFRA_LABELS`。理由是有人看到「契约声明了、图上 0 条」会去「修」它。
+- 新增 `tests/test_67_contract_pairs_must_stay_empty.py`（4 条断言）。
+  它补的是 `PENDING_FIRST_EDGE` 的**粒度盲区**：那个门禁判边类型，
+  而 `BusinessCapability -[DependsOn]-> RDSCluster` 是对偶粒度的缺席 ——
+  `DependsOn` 有 18 条实例，边类型层面非空，门禁被满足，三组对偶的缺席
+  对它完全不可见。那正是 6 条假边的回归通道，此前三道防护
+  （守卫 / 代码注释 / 契约 note）**没有一道会变红**。
+
+  方向与你们的 `PENDING_FIRST_EDGE` 相反：那个「期待它出现，出现了就移除」，
+  这个「期待它不出现，出现了就变红」。四条都做了反向验证，
+  其中 `t67_03` 第一次是绿的 —— 查下来不是门禁坏，是我挑的替身
+  `Microservice -> RDSCluster` 本身就 0 条（DependsOn 的真实三元组只有
+  Microservice→ECRRepository 13 / →SQSQueue 3 / →AgentRuntime 1 /
+  AgentTool→Microservice 1）。**反向验证本身也会写错，且表现与「门禁无效」
+  完全一样**，区分办法是先独立确认替身的真实计数。
