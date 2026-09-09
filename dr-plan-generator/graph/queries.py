@@ -373,9 +373,10 @@ def q_articulation_chokepoints(min_blocked: int = 2,
         labels = sorted(physical_dependency_edge_labels())
     except Exception:  # noqa: BLE001
         # 兜底与 rca/neptune/neptune_queries.py::_dependency_edge_labels 同源，
-        # 去掉 transitive 的 Delegates。漂移由 tests/test_59 钉住。
+        # 去掉 transitive 的 Delegates。漂移由 tests/test_59::t59_06 钉住。
         labels = ["AccessesData", "Calls", "DependsOn", "Invokes",
-                  "InvokesTool", "Retrieves", "RoutesToRuntime", "RoutesVia"]
+                  "InvokesTool", "PublishesTo", "Retrieves",
+                  "RoutesToRuntime", "RoutesVia"]
     rel = "|".join(labels)
     cypher = f"""
 MATCH (u)-[:{rel}]->(n)-[:{rel}]->(d)
