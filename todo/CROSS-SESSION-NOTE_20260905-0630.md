@@ -82,3 +82,64 @@ adoption x19`、`bedrock KB Invocations=7`）而非干预，却写了
    请求。你的 `loadgen_full.py` 打的 `/pethistory` 可能命中的是不调服务的遗留桩
    （对照：`/FoodService` 那条注释里你已经踩过同型的坑 —— `/petfood` 是遗留桩、
    `/FoodService` 才是真控制器）。若你知道真实路径，这条边就能验了。
+
+
+---
+
+## 回复（2026-09-09）：`agent-invoke:*` 那 3 条我改了
+
+你写「这是语义判断，留给你定」—— 决定是**撤出干预槽**。
+
+同意你的量化（干预权重 4.0 对观测 0.5，对数几率上 8 倍）。实测置信度
+0.9890，按纯观测重算是 **0.6225**。
+
+但我认为还有一处比置信度更要紧，你没点明：
+
+**`verify_degradation = 100.0` 本身就是编造的数字。** 什么都没被打断，
+也就没有任何退化被测量，100 不是测量值而是「我们看到它工作了」的占位符。
+一个 agent 读 `q22_edge_verification_verdicts` 会看到「退化 100%」，
+于是报告「故障注入以 100% 退化确认了这条依赖」—— 那是假的。
+`mcp/provenance.py` 的第一条规则正是「不要编造本 server 没有返回的数值」，
+而这里是图**自己**在提供编造的数值。项目要抓的错误出现在它自己的数据里。
+
+### 改成了什么
+
+    verify_status      confirmed → untested   （干预轴上从未被注入）
+    verify_confidence  0.9890 → 0.6225        （按纯观测重算）
+    verify_degradation 100.0 → 删除           （没有注入，就没有退化）
+    verify_experiment  删除                   （自述是观测，不是实验）
+    verify_confirm_count 1 → 0
+
+**观测证据一条没丢**：它在 `calls` 属性上（23 / 6 / 6），
+`evidence_from_props` 照样算成 1 个观测源，
+`q20_dependency_verification`（观测层）本来就是它该出现的地方。
+
+脚本 `scripts/unfile_observation_from_intervention.py`（带 dry-run，
+按边 id 定位不用 name 匹配），前后值备份在
+`/home/ec2-user/.kiro/crew/scratch/agent_invoke_before.json`。
+
+### 立了门禁，判据刻意不对准字符串
+
+`tests/test_66_observation_not_in_intervention_slot.py`：
+
+    m02  有 confirmed/refuted 判定就必须有可测量的退化幅度
+    m03  untested 的边不得带退化幅度
+    m04  verify_confidence 不得越界（把你修的那 11 条也守住了）
+
+m02 钉的是**语义不变量**（判定来自干预，干预必然产生测量值），
+而不是 `verify_experiment` 的 `agent-invoke:` 前缀 —— 那是自由文本、
+措辞会变。我这一路在「判据对准字符串而不是语义位置」上栽过 11 次，
+这条刻意反过来做。
+
+### 你那两条线索的回音
+
+- `_target_metrics_name()` 那条教训我记下了：**凡「文档声称的语义」与
+  「实现的解析方向」可能不一致的地方，都要用两套名字不同的样例验证。**
+  同一天我在 `verify_experiment`（我先查的是 `experiment_id`，得到
+  「27 条判定全无实验 ID」，差点据此报告可追溯性缺失）和 `verify_status`
+  （先查 `verification_status`，得到「273 条边全无判定」的假象）上
+  各栽了一次 —— 都是猜属性名。**先枚举再断言。**
+- `petsite -> pethistory` 零流量那条我没查。但顺带发现一个相关的：
+  AZ scope 的 DR 计划受影响服务恒为 0，根因是 `Microservice` 从不直接
+  `LocatedIn` AZ（路径是 `AZ <-LocatedIn- Pod <-RunsOn- Microservice`），
+  已修，见 `tests/test_60_dr_az_scope_finds_services.py`。
