@@ -1,0 +1,57 @@
+[
+  {
+    "edge": "AccessesData petsearch -> ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+    "chaos": "vx-petsearch-dynamodbtable",
+    "baseline": {
+      "observer_requests": 20696,
+      "observer_success_rate": 100.0,
+      "edge_calls": 17372
+    },
+    "all_injected_before": "True",
+    "all_injected_after": "True",
+    "injected": {
+      "observer_requests": 2505,
+      "observer_success_rate": 100.0
+    },
+    "injection_confirmed": false,
+    "injection_confirmed_why": "成功率 100.0% -> 100.0%、调用速率 4.73 -> 4.45 次/秒（仅降 6%）—— 这条边照常工作，注入未作用到它",
+    "observer_degradation_pct": 0.0,
+    "verdict": "inconclusive",
+    "reason": "观测方退化仅 0.0%，但已确认注入未生效 —— 无法区分「注入生效而未传导」（真 refuted）与「注入根本没生效」（什么都没验证）。证伪需要先证明打断确实发生，故不下结论",
+    "dependency_class": null,
+    "verdict_full": {
+      "edge_id": "22ce5ef1-553d-a703-2074-8860be72e8bc",
+      "label": "AccessesData",
+      "observer": "petsite",
+      "status": "inconclusive",
+      "reason": "观测方退化仅 0.0%，但已确认注入未生效 —— 无法区分「注入生效而未传导」（真 refuted）与「注入根本没生效」（什么都没验证）。证伪需要先证明打断确实发生，故不下结论",
+      "confidence": 0.9241,
+      "degradation_pct": 0.0,
+      "evidence_channel": "both",
+      "injection_confirmed": false,
+      "edge_baseline_calls": 17372,
+      "observer_total_calls": null,
+      "dependency_class": null,
+      "dependency_class_reason": "退化仅 0.0% 但注入生效性未确认 —— 分不清 soft dependency 与「注入根本没生效」，不分级",
+      "observing_sources": 1,
+      "confirm_count": 0,
+      "refute_count": 0,
+      "verified_at": 1788955591,
+      "experiment_id": "chaosmesh/vx-petsearch-dynamodbtable"
+    },
+    "written": true
+  },
+  {
+    "edge": "AccessesData petsearch -> serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+    "chaos": "vx-petsearch-s3bucket",
+    "baseline": {
+      "observer_requests": 21207,
+      "observer_success_rate": 100.0,
+      "edge_calls": 2528
+    },
+    "all_injected_before": "False",
+    "verdict": "inconclusive",
+    "reason": "注入未生效 AllInjected=False",
+    "events": "         Warning   Failed            dnschaos/vx-petsearch-s3bucket       Failed to apply chaos: rpc error: code = Unknown desc = insert into schema selector: pattern *.s3.* not valid\n17s         Normal    Updated           dnschaos/vx-petsearch-s3bucket       Successfully update records of resource"
+  }
+]

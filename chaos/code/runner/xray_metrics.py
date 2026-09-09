@@ -80,6 +80,18 @@ REGION = os.environ.get('REGION') or os.environ.get('AWS_REGION') \
 #: 这里不另立一套。
 XRAY_MAX_WINDOW_SECONDS = 6 * 3600
 
+#: 调用**速率**下降多少才算「打断生效」。
+#:
+#: 取 40% 而不是 5%：X-Ray 服务图的分钟级聚合本身有抖动，而注入窗口通常只有
+#: 一两分钟，样本少。实测同一条边相邻窗口的速率自然波动可达 ±20%，
+#: 门槛太低会把抖动读成生效 —— 而假的「生效」会污染判定链，
+#: 让一条没验到的边带上看起来有依据的结论。
+#:
+#: 注意这与成功率通道的 5% 不是一回事：成功率是**质量**信号
+#: （请求失败了），速率是**数量**信号（请求没发生）。
+#: 数量信号更容易被流量自然波动干扰，所以门槛更高。
+_QPS_DROP_THRESHOLD_PCT = 40.0
+
 
 def _segments(start_ts: int, end_ts: int) -> list[tuple[int, int]]:
     """把任意长度的窗口切成 <= 6h 的片段（从后往前切）。"""
@@ -248,6 +260,26 @@ class XRayEdgeMetrics:
         门槛与 DeepFlow 路径保持一致（5%）：这里回答的是「有没有作用到链路」
         这个是非问题，不是「影响有多大」。用 confirm 那条 20% 的线
         会把「生效但影响小」误判成「没生效」，反而放宽 refuted。
+
+        ## ⚠️ 必须比**速率**而不是绝对计数（2026-09-09 实测事故）
+
+        第一版直接比 `b_total - i_total > 0` 就判生效。而基线窗默认 1800s、
+        注入窗 120s，**长度差 15 倍**，于是绝对计数必然「下降」——
+        判生效变成了恒真。
+
+        实测代价：切 `petsearch -> DynamoDB` 时读到
+
+            基线窗 1800s: 8470 次  ->  4.706 次/秒
+            注入窗  120s:  548 次  ->  4.567 次/秒   ← 速率几乎没变
+
+        绝对计数「减少 7922 次」被判成「打断确认生效」，而真相是
+        **注入完全没生效**（externalTargets 只封住了 DNS 解析出的那一个 IP，
+        AWS 端点有多个轮换 IP）。
+
+        这个假的 `injection_confirmed=True` 直接污染了判定链：
+        生效性为真 + 观测方零退化 → 判定链走到「soft dependency」，
+        而正确结论是「什么都没验到」。**假证据比没证据更糟** ——
+        它会让一条未验证的边带上一个看起来有依据的强度分级。
         """
         now = int(end_ts or time.time())
         inj_start = now - injection_seconds
@@ -272,18 +304,25 @@ class XRayEdgeMetrics:
         b_rate = b_ok / b_total * 100.0
         i_rate = (i_ok / i_total * 100.0) if i_total > 0 else 0.0
         drop = b_rate - i_rate
-        thin = b_total - i_total
+
+        # 调用**速率**（次/秒），窗口长度归一化后才可比
+        b_qps = b_total / max(1, baseline_seconds)
+        i_qps = i_total / max(1, injection_seconds)
+        # 速率下降比例。用比例而不是差值：不同边的绝对量差几个数量级。
+        qps_drop_pct = ((b_qps - i_qps) / b_qps * 100.0) if b_qps > 0 else 0.0
 
         if drop >= drop_threshold_pct:
             return True, (f'成功率 {b_rate:.1f}% -> {i_rate:.1f}%'
                           f'（退化 {drop:.1f}% >= {drop_threshold_pct}%），'
                           f'打断确认生效')
         if i_total <= 0:
-            return True, (f'基线 {b_total} 次调用、注入期 0 次 —— '
+            return True, (f'基线 {b_qps:.2f} 次/秒、注入期 0 次 —— '
                           f'调用停止，打断确认生效')
-        if thin > 0:
-            return True, (f'调用数 {b_total} -> {i_total}（减少 {thin} 次），'
-                          f'打断确认生效')
+        if qps_drop_pct >= _QPS_DROP_THRESHOLD_PCT:
+            return True, (f'调用速率 {b_qps:.2f} -> {i_qps:.2f} 次/秒'
+                          f'（下降 {qps_drop_pct:.0f}% >= '
+                          f'{_QPS_DROP_THRESHOLD_PCT:.0f}%），打断确认生效')
         return False, (f'成功率 {b_rate:.1f}% -> {i_rate:.1f}%、'
-                       f'调用数 {b_total} -> {i_total} —— 这条边照常工作，'
+                       f'调用速率 {b_qps:.2f} -> {i_qps:.2f} 次/秒'
+                       f'（仅降 {qps_drop_pct:.0f}%）—— 这条边照常工作，'
                        f'注入未作用到它')
