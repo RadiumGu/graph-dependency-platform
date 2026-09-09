@@ -707,6 +707,28 @@ def fetch_xray_dependencies() -> dict:
 
     失败是**非致命**的：拿不到 X-Ray 数据就退回只用 DNS 判定，
     与本函数引入前的行为一致。
+
+    ## ⚠️ 为什么 Lambda 拿不到 X-Ray 漂移判定（2026-09-09 实测）
+
+    常见的误判是「drift 没接 X-Ray，所以 Lambda 没覆盖」。**X-Ray 早就接了** ——
+    见下方 `has_xray` / `verified_by='xray'`。Lambda 没覆盖有两个独立原因：
+
+    **一、本函数的 `if s.get('Type'): continue` 会跳过 Lambda 节点。**
+    实测 X-Ray 服务图（近 6h，38 个节点）里 Lambda 以两种 Type 各出现一次：
+    `AWS::Lambda` 与 `AWS::Lambda::Function`。被跳过的 8 个 Lambda 节点
+    **全部是 neptune-etl-* 即平台自身的 ETL**（scope=platform）——
+    纳进来只会把 drift 扩到平台域，与 INFRA_DRIFT_RULES 的 nc 子串所
+    强制的业务域范围相矛盾。所以这个过滤在当前环境下**恰好是对的**。
+
+    **二、业务 Lambda 压根不在 X-Ray 服务图里。**
+    `petstatusupdater`、`ServicesEks2-*lambdafn*` 等根本没出现 —— 它们没插桩。
+    所以「给 Lambda 边接 X-Ray 对账」卡在**插桩缺失**，不是本函数的问题；
+    要插桩得改 one-observability-demo（公开上游仓库）。
+
+    实测本函数返回值：**1 个服务**（petsearch → {dynamodb, s3}）。
+    9 个被保留的插桩服务里只有它有直达这 6 种 infra 类型的下游边，
+    其余（PetSite / WaggleAI* / payforadoption-api-go …）的下游是别的服务
+    或 Bedrock，不在 INFRA_DRIFT_RULES 范围内。这是正确行为，不是漏读。
     """
     if not XRAY_DRIFT_ENABLED:
         logger.info("X-Ray drift source disabled by XRAY_DRIFT_ENABLED")

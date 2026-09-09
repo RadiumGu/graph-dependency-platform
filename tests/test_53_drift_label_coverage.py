@@ -354,3 +354,103 @@ def test_m07_drift规则表的节点标签必须在契约里():
         f'INFRA_DRIFT_RULES 里这些 label 不是契约声明的节点类型：{bogus}\n'
         f'hasLabel() 查不存在的标签不报错、只返回空 —— 该规则会静默永不匹配，'
         f'drift 对账少一整类而没有任何信号（与 ConsumesFrom 同一失效模式）。')
+
+
+@pytest.mark.neptune
+def test_m08_nc子串不得漏掉业务域资源():
+    """每个 `scope=observed` 且有依赖入边的资源，都必须匹配其类型的 `nc` 子串。
+
+    ## 这条探测的是一个当前**尚未发生**的静默跳过
+
+    `INFRA_DRIFT_RULES` 每条规则钉着一个资源名子串（`ddbpetadoption`、
+    `databaseb269d8bb`…）。这个子串同时在做两件事：
+
+      (a) 挑出「本 demo 的业务资源」
+      (b) 顺带排除平台自身与噪声
+
+    2026-09-09 实测交叉表显示两者**当前完全一致**：
+
+        nc✓ + scope=observed + 已打标   31 条
+        nc✓ + scope=observed + 未打标    7 条   （源是 Lambda，已记录的刻意排除）
+        nc✗ + scope=platform + 未打标    2 条   （gp-alert-buffer）
+        nc✗ + scope=observed             0 条   ← 这一格是空的
+
+    所以**当前没有缺陷**，(b) 恰好由 (a) 免费实现了。但那是巧合而非判据：
+    图里已经存在 `ServicesEks2-ddbpetfoodcart` / `ddbpetfoodfood`
+    两张 `scope=observed` 的业务表，`nc='ddbpetadoption'` 匹配不上它们。
+    它们现在没有依赖边，所以没暴露；**petfood 服务一旦被插桩、边一出现，
+    drift 就会静默跳过它们**，而 drift_status 缺失看起来跟「未评估」
+    一模一样，不会有任何信号。
+
+    ## 为什么是探测器而不是直接改成 scope 判据
+
+    把 `nc` 换成 `scope != platform` 是改一个**在线写图 Lambda 的判定语义**，
+    今天收益为零（那一格是空的）、却有把新资源错误纳入对账的风险。
+    先让失效模式发出声音，等它真的发生时再改 —— 那时也才知道该按 scope
+    还是按别的判据。
+
+    连不上活图则 skip：本断言是关于真实数据分布的，桩数据无意义。
+    """
+    import re
+
+    try:
+        from neptune import neptune_client as nc  # type: ignore
+    except Exception as e:                                    # noqa: BLE001
+        pytest.skip(f'无法导入 neptune_client: {e}')
+
+    from graph_contract import dependency_edge_labels  # type: ignore
+
+    src = (_ROOT / 'infra' / 'lambda' / 'etl_deepflow'
+           / 'neptune_etl_deepflow.py').read_text(encoding='utf-8')
+    m = re.search(r'INFRA_DRIFT_RULES = \{(.*?)\n\}', src, re.S)
+    assert m, '没找到 INFRA_DRIFT_RULES'
+    rules = dict(re.findall(r"'label':\s*'(\w+)',\s*\n\s*'nc':\s*'([^']+)'", m.group(1)))
+    assert rules, 'INFRA_DRIFT_RULES 里没解析出 label→nc 映射 —— 判据失效了'
+
+    labels = ', '.join(f'"{l}"' for l in rules)
+    # ⚠️ Neptune 的 openCypher **不支持 `any()` 谓词函数**
+    #    （实测报 `'any' predicate function is not supported.`），
+    #    所以源侧标签用 `(s:A OR s:B)`、目标侧用 `labels(t)[0] IN [...]`。
+    query = (
+        'MATCH (s)-[r]->(t) '
+        'WHERE (s:Microservice OR s:LambdaFunction) '
+        "AND t.scope = 'observed' "
+        f'AND labels(t)[0] IN [{labels}] '
+        'RETURN DISTINCT labels(t)[0] AS tl, t.name AS tname, type(r) AS rel'
+    )
+    try:
+        rows = nc.results(query)
+    except Exception as e:                                    # noqa: BLE001
+        # 只对**连不上**放行。查询语法错（400 / MalformedQuery）必须 fail ——
+        # 第一版把 400 也 skip 掉了，结果这条门禁看起来通过、实际从未运行，
+        # 正是本文件其余断言在防的那个失效模式（m03 的 ConsumesFrom、
+        # m07 的节点标签）换到测试自身上。
+        msg = str(e)
+        if '400' in msg or 'Malformed' in msg or 'Bad Request' in msg:
+            raise AssertionError(
+                f'本断言的 cypher 被 Neptune 拒绝，说明判据本身写错了，'
+                f'不是环境问题：\n  {query}\n  {msg}') from e
+        pytest.skip(f'连不上活图（非语法错，按环境缺失处理）: {msg[:160]}')
+
+    assert rows, (
+        '查到 0 条 scope=observed 的业务资源依赖边 —— 判据很可能失效了'
+        '（属性名或标签变了），而不是真的没有业务依赖。')
+
+    # drift 只遍历契约里的依赖边，所以非依赖边（RunsOn / LocatedIn 等承载类）
+    # 不在本断言范围内 —— 把它们算进来会报出 drift 本来就不该管的东西。
+    dep = dependency_edge_labels()
+    rows = [r for r in rows if r['rel'] in dep]
+
+    missed = [
+        r for r in rows
+        if rules.get(r['tl'], '').lower() not in (r['tname'] or '').lower()
+    ]
+    assert not missed, (
+        '以下业务域资源（scope=observed）有依赖入边，但名字不匹配其类型的 nc '
+        '子串 —— drift 会静默跳过它们，而 drift_status 缺失看起来与「未评估」'
+        '无法区分：\n  '
+        + '\n  '.join(
+            f"{r['tl']} / {r['tname']}  (nc='{rules.get(r['tl'])}', 边={r['rel']})"
+            for r in missed)
+        + '\n\n要么把该资源纳入规则，要么把 nc 子串换成显式判据'
+          '（scope != platform）—— 但后者是改在线写图 Lambda 的语义，先想清楚。')
