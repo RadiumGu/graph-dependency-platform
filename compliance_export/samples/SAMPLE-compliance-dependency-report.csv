@@ -1,0 +1,49 @@
+# compliance dependency mapping
+# snapshot_taken_at=2026-09-09T15:32:49Z
+# endpoint=petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com
+# dependency_edge_labels=AccessesData,Calls,Delegates,DependsOn,Invokes,InvokesTool,PublishesTo,Retrieves,RoutesToRuntime,RoutesVia
+# source=graph_contract.dependency_edge_labels()
+capability,tier,service,service_label,edge_type,target,target_label,target_scope,dependency_kind,verify_status,confidence,source,drift_status,last_seen,verify_experiment
+AdoptionHistoryView,Tier1,pethistory,Microservice,AccessesData,serviceseks2-databaseb269d8bb-efjeyzicx2ak,RDSCluster,observed,static,inconclusive,,aws-etl,ok,1788967908,exp-serviceseks2-databaseb269d8bb-efjeyzicx2ak-fis-rds-reboot-20260831-110323
+AdoptionHistoryView,Tier1,pethistory,Microservice,AccessesData,serviceseks2-databasewriter2462cc03-fwgfu4gossqe,RDSInstance,observed,dynamic,,,deepflow-l4,,1788967908,
+AdoptionHistoryView,Tier1,pethistory,Microservice,DependsOn,pet-adoptions-history,ECRRepository,observed,dynamic,,,deepflow-etl,,,
+PetAdoptionFlow,Tier0,payforadoption,Microservice,AccessesData,ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM,DynamoDBTable,observed,static,,,aws-etl,declared_not_observed,1788627649,
+PetAdoptionFlow,Tier0,payforadoption,Microservice,AccessesData,StepFnStateMachine76D362E8-3jkn8j2OUpdQ,StepFunction,observed,dynamic,,,deepflow-dns,observed_then_silent,1788579104,
+PetAdoptionFlow,Tier0,payforadoption,Microservice,AccessesData,dynamodb,AWSServiceEndpoint,external,dynamic,confirmed,,nfm,,1788595248,exp-dynamodb-fis-network-disrupt-20260831-160742
+PetAdoptionFlow,Tier0,payforadoption,Microservice,AccessesData,serviceseks2-databaseb269d8bb-efjeyzicx2ak,RDSCluster,observed,static,confirmed,,aws-etl,declared_not_observed,1788589906,exp-serviceseks2-databaseb269d8bb-efjeyzicx2ak-fis-rds-reboot-20260831-110323
+PetAdoptionFlow,Tier0,payforadoption,Microservice,AccessesData,serviceseks2-databasewriter2462cc03-fwgfu4gossqe,RDSInstance,observed,dynamic,,,deepflow-l4,,1788589906,
+PetAdoptionFlow,Tier0,payforadoption,Microservice,AccessesData,serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb,S3Bucket,observed,dynamic,,,deepflow-dns,observed_then_silent,1788579104,
+PetAdoptionFlow,Tier0,payforadoption,Microservice,AccessesData,ssm,AWSServiceEndpoint,external,dynamic,,,xray,,1788634772,
+PetAdoptionFlow,Tier0,payforadoption,Microservice,DependsOn,cdk-hnb659fds-container-assets-926093770964-ap-northeast-1,ECRRepository,scaffolding,dynamic,inconclusive,,deepflow-etl,,,"image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable"
+PetAdoptionFlow,Tier0,petsite,Microservice,AccessesData,ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM,DynamoDBTable,observed,dynamic,,,deepflow-dns,declared_not_observed,1788801407,
+PetAdoptionFlow,Tier0,petsite,Microservice,AccessesData,StepFnStateMachine76D362E8-3jkn8j2OUpdQ,StepFunction,observed,dynamic,,,xray,declared_not_observed,1788663649,
+PetAdoptionFlow,Tier0,petsite,Microservice,AccessesData,serviceseks2-databaseb269d8bb-efjeyzicx2ak,RDSCluster,observed,dynamic,confirmed,,deepflow-dns,declared_not_observed,1788801407,exp-serviceseks2-databaseb269d8bb-efjeyzicx2ak-fis-rds-reboot-20260831-110323
+PetAdoptionFlow,Tier0,petsite,Microservice,AccessesData,serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb,S3Bucket,observed,dynamic,,,deepflow-dns,declared_not_observed,1788801407,
+PetAdoptionFlow,Tier0,petsite,Microservice,AccessesData,sns,AWSServiceEndpoint,external,dynamic,,,appsignals-etl,,1788666678,
+PetAdoptionFlow,Tier0,petsite,Microservice,AccessesData,ssm,AWSServiceEndpoint,external,dynamic,confirmed,,xray,,1788967274,exp-petsite-network-partition-20260831-165936
+PetAdoptionFlow,Tier0,petsite,Microservice,AccessesData,stepfunctions,AWSServiceEndpoint,external,dynamic,,,appsignals-etl,,1788666678,
+PetAdoptionFlow,Tier0,petsite,Microservice,AccessesData,sts,AWSServiceEndpoint,external,dynamic,,,xray,,1788967274,
+PetAdoptionFlow,Tier0,petsite,Microservice,Calls,payforadoption,Microservice,observed,dynamic,inconclusive,,deepflow-etl,,1788666678,exp-pay-for-adoption-http-chaos-20260905-053059
+PetAdoptionFlow,Tier0,petsite,Microservice,Calls,petfood,Microservice,observed,dynamic,confirmed,,deepflow-etl,,1788681077,networkchaos-partition:petsite->petfood
+PetAdoptionFlow,Tier0,petsite,Microservice,Calls,pethistory,Microservice,observed,dynamic,confirmed,,deepflow-etl,,1788627649,exp-pethistory-http-chaos-20260905-064354
+PetAdoptionFlow,Tier0,petsite,Microservice,Calls,petlistadoptions,Microservice,observed,dynamic,inconclusive,,deepflow-etl,,1788627649,exp-list-adoptions-http-chaos-20260905-064919
+PetAdoptionFlow,Tier0,petsite,Microservice,Calls,petsearch,Microservice,observed,dynamic,confirmed,,deepflow-etl,,1788967937,exp-search-service-http-chaos-20260905-073516
+PetAdoptionFlow,Tier0,petsite,Microservice,DependsOn,ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj,SQSQueue,observed,dynamic,,,xray,,1788663649,
+PetAdoptionFlow,Tier0,petsite,Microservice,DependsOn,WaggleAIOrchestrator,AgentRuntime,observed,static,,,agentcore-etl,,1788967879,
+PetAdoptionFlow,Tier0,petsite,Microservice,DependsOn,cdk-hnb659fds-container-assets-926093770964-ap-northeast-1,ECRRepository,scaffolding,dynamic,inconclusive,,deepflow-etl,,,"image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable"
+PetAdoptionFlow,Tier0,petsite,Microservice,DependsOn,petadoptions/petsite,ECRRepository,observed,dynamic,,,deepflow-etl,,,
+PetAdoptionFlow,Tier0,petsite,Microservice,PublishesTo,ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj,SQSQueue,observed,,,,aws-etl,declared_not_observed,,
+PetAdoptionFlow,Tier0,petsite,Microservice,PublishesTo,ServicesEks2-topicpetadoption192CAB8F-Dn0iiU45RZ1g,SNSTopic,observed,,,,aws-etl,declared_not_observed,1788663649,
+PetInventoryManagement,Tier1,ServicesEks2-statusupdaterservicelambdafn37242E00-0SHsIkrhwJ32,LambdaFunction,AccessesData,ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM,DynamoDBTable,observed,static,,,aws-etl,,1788967945,
+PetInventoryManagement,Tier1,ServicesEks2-statusupdaterservicelambdafn37242E00-0SHsIkrhwJ32,LambdaFunction,AccessesData,dynamodb,AWSServiceEndpoint,external,dynamic,,,xray,,1788631248,
+PetInventoryManagement,Tier1,petlistadoptions,Microservice,AccessesData,serviceseks2-databaseb269d8bb-efjeyzicx2ak,RDSCluster,observed,static,confirmed,,aws-etl,ok,1788594705,exp-serviceseks2-databaseb269d8bb-efjeyzicx2ak-fis-rds-reboot-20260831-110323
+PetInventoryManagement,Tier1,petlistadoptions,Microservice,AccessesData,serviceseks2-databasewriter2462cc03-fwgfu4gossqe,RDSInstance,observed,dynamic,,,deepflow-l4,,1788594705,
+PetInventoryManagement,Tier1,petlistadoptions,Microservice,Calls,petsearch,Microservice,observed,dynamic,inconclusive,,deepflow-etl,,1788677478,exp-search-service-http-chaos-20260905-073516
+PetInventoryManagement,Tier1,petlistadoptions,Microservice,DependsOn,cdk-hnb659fds-container-assets-926093770964-ap-northeast-1,ECRRepository,scaffolding,dynamic,inconclusive,,deepflow-etl,,,"image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable"
+PetInventoryManagement,Tier1,petsearch,Microservice,AccessesData,ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM,DynamoDBTable,observed,static,inconclusive,,aws-etl,ok,1788966048,chaosmesh/vx-petsearch-dynamodbtable
+PetInventoryManagement,Tier1,petsearch,Microservice,AccessesData,dynamodb,AWSServiceEndpoint,external,dynamic,confirmed,,nfm,,1788967937,exp-dynamodb-fis-network-disrupt-20260831-160742
+PetInventoryManagement,Tier1,petsearch,Microservice,AccessesData,s3,AWSServiceEndpoint,external,dynamic,inconclusive,,xray,,1788967937,exp-s3-fis-network-disrupt-20260831-160219
+PetInventoryManagement,Tier1,petsearch,Microservice,AccessesData,serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb,S3Bucket,observed,static,,,aws-etl,ok,1788966048,
+PetInventoryManagement,Tier1,petsearch,Microservice,AccessesData,ssm,AWSServiceEndpoint,external,dynamic,,,xray,,1788681077,
+PetInventoryManagement,Tier1,petsearch,Microservice,AccessesData,sts,AWSServiceEndpoint,external,dynamic,,,xray,,1788967274,
+PetInventoryManagement,Tier1,petsearch,Microservice,DependsOn,cdk-hnb659fds-container-assets-926093770964-ap-northeast-1,ECRRepository,scaffolding,dynamic,inconclusive,,deepflow-etl,,,"image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable"
