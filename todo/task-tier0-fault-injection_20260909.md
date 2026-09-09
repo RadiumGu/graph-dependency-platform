@@ -223,3 +223,155 @@ PetAdoptionFlow (Tier0)  一跳依赖 27 条  多跳可达 37 个对象
 ```bash
 python3 -m compliance_export --dry-run
 ```
+
+---
+
+## 实测回执（2026-09-09 16:2xZ，执行侧会话）
+
+我按这份交接书动手了。**三处结论需要修正,一处坑要补**——都有实测支撑,写在这里
+免得下一个接手的人重复踩。
+
+### 一、第一批那 2 条**不是「调参即可」,是零流量**（反证）
+
+交接书说 `petsite -> payforadoption` / `petsite -> petlistadoptions`
+「注入过但退化不足以判定，说明实验路径已经通过一次 —— 大概率是注入强度或
+观测窗口的问题，调参即可」。
+
+**实测否掉了这个判断**：
+
+```
+petsite -> payforadoption     900s 窗口: 0 次    3600s 窗口: 0 次
+petsite -> petlistadoptions   900s 窗口: 0 次    3600s 窗口: 0 次
+对照 petsite -> petsearch     900s 窗口: 15,422 次
+对照 trafficgenerator->petsite 900s 窗口:  5,938 次
+```
+
+图上那条 inconclusive 的原因文本自己就写着：
+*「**被测依赖路径本身**近期只有 0 次调用（需 >= 20）—— 观测方总流量再大也无关：
+没有调用就无从打断，此时任何退化数字都是噪声。需先给这条路径造出流量再验」*
+
+**负载生成器只压首页与搜索**，领养提交与列表路径压根没有流量。
+调多大的注入强度都没用 —— 打不断一个没在跑的东西。
+这批要先造流量（触发领养提交流程），再验。
+
+⚠️ 量这个数之前先注意：`collect_edge_flow` 到 2026-09-09 才修好名字解析。
+在那之前它拿图谱名去 `LIKE` 匹配，而 DeepFlow 用 K8s 名
+（`petsearch`/`search-service`、`payforadoption`/`pay-for-adoption`），
+**最忙的路径都会被读成 0 次**。如果你手上的旧数据显示某条边零流量，
+先确认那份数据是修复之后测的（见 `chaos/code/runner/service_names.py`）。
+
+### 二、第二批的「FIS 直打托管服务」有一个前提要说清
+
+交接书引判定器原话「目标类型 DynamoDBTable / S3Bucket 可由 fis 直接注入」。
+类型级判定没错，但**网络层切断对这类目标实测打不断**，两条路都试过：
+
+- `NetworkChaos` + `externalTargets: dynamodb.<region>.amazonaws.com`
+  —— Chaos Mesh 在 apply 时把域名解析成 IP 再装 iptables，
+  AWS 区域端点有**多个轮换 IP**（pod 内解析到 35.71.114.102，SDK 后续拿到别的），
+  规则只封住其中一个。S3 更糟：**Gateway 端点**，靠路由表 + 前缀列表转发，
+  封单个 IP 根本不在路径上。
+- `DNSChaos`（`action: error`）—— `AllInjected=True` 但依然没打断：
+  应用用**长连接 + DNS 缓存**，4.7 次/秒全跑在 keep-alive 连接上，
+  2 分钟窗口内 DNS 从不重查。
+
+所以交接书推荐的 `fis_api_unavailable` / `fis_api_throttle` 这条路
+**看起来比网络层切断靠谱**——它在 AWS API 层动手，不受 DNS 缓存与 IP 轮换影响。
+我按这个思路做了实验，**但它撞在一个硬边界上，见下一节。**
+
+### 二之二、FIS API 注入**不支持 DynamoDB / S3**（实测 + 文档双重确认）
+
+我照交接书的建议写了
+`chaos/code/experiments/fis/api-injection/fis-api-unavailable-dynamodb-petsearch.yaml`，
+打 search-service 的 **IRSA 角色**（不是节点角色，半径精确到一个服务：
+`ServicesEks2-searchserviceServiceAccountRole588AF64-Sulrl6FvKO5F`）。
+
+dry-run 全绿、安全规则引擎放行、观测方基线识别正常
+（`petsite (AccessesData): success=99.9% total=1697`）。真跑时 AWS 直接拒绝：
+
+```
+ValidationException: The service parameter value is not supported for the action.
+Specify a valid service and try again.
+```
+
+AWS FIS Actions reference 对 `aws:fis:inject-api-internal-error` 的原文：
+
+> **service** – The target AWS API namespace.
+> The supported value is `ec2` and `kinesis`.
+
+**所以 API 注入这条路对 DynamoDB / S3 走不通**，它只覆盖 `ec2` / `kinesis`。
+顺带提醒：仓库里既有的 `fis-api-unavailable-rds.yaml` 写的是 `service: "rds"`，
+按同一份文档它**大概也跑不起来**——那个文件可能从未真跑过，别拿它当已验证的范式。
+
+### 二之三、那么这类边到底怎么验：复合实验，且必须有对照臂
+
+三条路的实测结论汇总：
+
+| 手段 | 结果 |
+|---|---|
+| NetworkChaos + externalTargets | 打不断（端点 IP 轮换 / S3 是 Gateway 端点） |
+| DNSChaos 单独用 | 打不断（长连接 + DNS 缓存，窗口内不重查） |
+| FIS API 注入 | **AWS 不支持该 service** |
+| **DNSChaos + 删 Pod（复合）** | **打断成功**：调用速率 4.55 → 1.73 次/秒，降 62% |
+
+复合实验是目前唯一能真正打断这类依赖的手段
+（`scripts/verify_external_target_edges.py --compound`）。
+但它的观测方信号被 Pod 重启混淆，所以**还差一个对照臂**才能自动判定，
+详见下一节。
+
+### 三、ECR 那 3 条：交接书说「后端没有 startAfter 编排」——绕过去了
+
+`fis_backend.py` 确实零 `startAfter` 实现。但复合实验不必走 FIS：
+`scripts/verify_external_target_edges.py --compound` 用 kubectl 直接编排
+（施加故障 → 等 `AllInjected` → `delete pod` → 观测 → 清理 + 等 Pod 恢复 Ready）。
+
+用 `delete pod` 而不是 `rollout restart`：后者滚动更新会等新 Pod Ready 才删旧的，
+故障期间始终有健康旧 Pod 在服务，观测方看不到任何变化。
+
+**但 ECR 这一类有个更硬的障碍，交接书没提**：
+**拉镜像是节点上的 kubelet 做的，不是 Pod。** Chaos Mesh 的选择器只能选 Pod，
+切 Pod 的网络对 kubelet 的镜像拉取无效。要打断 ECR 得做**节点级**中断。
+
+顺带一个决定这 3 条边「是否真实」的事实——`imagePullPolicy`：
+
+```
+list-adoptions / pay-for-adoption / pethistory / petsite / search-service : Always
+petfood / traffic-generator                                               : IfNotPresent
+```
+
+`Always` 的每次重启都必须拉 ECR，依赖是真的；`IfNotPresent` 的镜像已缓存则
+根本不拉，ECR 不可用也照常起来。**这两类不该给同一个结论。**
+
+### 四、补一个坑：复合实验里观测方信号**没有判别力**
+
+我踩了，而且写错了数据两次（都已撤回，见
+`todo/retracted-false-soft-verdicts_20260909-*.json`）。
+
+删 Pod 会让上游对它的调用**必然**塌陷，于是「吞吐降了」既能读成
+「依赖被切断」也能读成「Pod 在重启」。拿它喂判定链会得到一个
+`dependency_class=soft` —— 而 `soft` 会被 DR 影响面分析读成
+「这条依赖不影响可用性」并在预案里降级。**用混淆信号得出的 soft
+比 untested 危险得多。**
+
+有判别力的信号是「**新 Pod 在故障下能否 Ready**」：它不受 Pod 重启本身干扰，
+因为重启是两种情况的共同前提。
+
+```
+起不来 -> 目标是启动期硬依赖
+起得来 -> 至少不是启动期硬依赖
+```
+
+所以 `--compound` 现在产出 `verdict='observation_only'` 与结构化观察，
+**刻意不写 `verify_status`**。要自动判定需补一个**对照臂**：
+同样删 Pod 但不切断目标，对比两次的就绪时间与错误率。
+
+实测一条（`petsearch -[AccessesData]-> DynamoDBTable`）：
+注入生效性=True（调用速率 4.55 -> 1.73 次/秒，降 62%），
+**故障下 Pod 就绪 2/2** → DynamoDB **不是** petsearch 的启动期硬依赖。
+
+### 五、你那条「判定器不带 reason_text 会返回 injectable」的提醒——收到并已修
+
+我的 `scripts/preflight_edge_traffic.py` 原先硬编码了边形态
+`{('DependsOn','Microservice','ECRRepository')}` 来识别复合实验类。
+实测 `phase='startup'` 的边恰好全是这个形态（13 条），所以**碰巧没出错**，
+但方式是错的。已改成读边上的 `phase` 属性推出 reason_text 再问判定器
+（`_PHASE_TO_REASON` / `_reason_text_for`）。谢谢这条，它省了我一次线上误判。

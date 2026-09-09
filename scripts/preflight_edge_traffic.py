@@ -54,9 +54,40 @@ for _p in (ROOT / 'chaos' / 'code', ROOT / 'rca', ROOT):
 #: 量级：低于这个数，注入期的任何退化都分不清信号与噪声。
 MIN_EDGE_CALLS = 20
 
-#: 稳态无流量但仍可验（需复合实验）的边形态。
-#: 不做流量检查 —— 对它们判「无流量」是把方法学问题误报成环境问题。
-_COMPOUND_SHAPES = {('DependsOn', 'Microservice', 'ECRRepository')}
+#: 边上 `phase` 属性 -> 传给 `injectability()` 的 reason_text token。
+#:
+#: ## 为什么必须传 reason_text（2026-09-09 交接书指出的坑）
+#:
+#: `injectability(src_label, dst_label)` **不带 reason_text 时会返回
+#: `injectable`** —— 因为按类型级判定，`Microservice -> ECRRepository`
+#: 的源在集群内，轴二（源侧切断）成立。只有传入 `'image-repo-dependency'`
+#: 才会命中 `REASON_TOKEN_CLASS` 拿到 `needs_compound_experiment`。
+#:
+#: 第一版这里硬编码了边形态 `{('DependsOn','Microservice','ECRRepository')}`。
+#: 那次**碰巧给出正确答案**（实测 phase='startup' 的 13 条边确实全是这个形态），
+#: 但方式是错的：判据应该来自边上的属性，而不是脚本里的一份形态清单。
+#: 本仓库已经因为「同类清单各处一份」踩过坑
+#: （rca 那份依赖边清单少 Invokes，线上漏 16 条边）。
+_PHASE_TO_REASON = {
+    'startup': 'image-repo-dependency',
+}
+
+
+def _reason_text_for(props: dict) -> str:
+    """从边属性推出该传给 injectability 的 reason_text。
+
+    先看 `phase`，再退回边上已记录的 `verify_reason` 里的 token ——
+    后者是既有实验留下的判定依据，比重新猜更可靠。
+    """
+    phase = (props or {}).get('phase')
+    if phase and phase in _PHASE_TO_REASON:
+        return _PHASE_TO_REASON[phase]
+    # 边上已有的原因文本里可能就带着 token（如 'image-repo-dependency: ...'）
+    existing = str((props or {}).get('verify_reason') or '')
+    for token in _PHASE_TO_REASON.values():
+        if token in existing:
+            return token
+    return ''
 
 
 #: DeepFlow **结构性看不见**的目标类型。
@@ -229,16 +260,20 @@ MATCH (a)-[r:{'|'.join(labels)}]->(b)
 WHERE (r.verify_status IS NULL OR r.verify_status='untested')
   AND r.verify_blocked_class IS NULL
 RETURN type(r) AS edge, labels(a)[0] AS sl, a.name AS src,
-       labels(b)[0] AS dl, b.name AS dst
+       labels(b)[0] AS dl, b.name AS dst, properties(r) AS props
 """)
     print(f'待验边（untested 且未被标阻断）: {len(rows)} 条')
     print(f'边级流量下限: {MIN_EDGE_CALLS} 次 / {_window_seconds()}s\n')
 
     verifiable, no_traffic, compound, unknown = [], [], [], []
     for r in rows:
-        shape = (r['edge'], r['sl'], r['dl'])
-        if shape in _COMPOUND_SHAPES:
-            compound.append({**r, 'note': '稳态无流量属正常 —— 需删Pod+切仓库的复合实验'})
+        # 判定来自 injectability，reason_text 由边上的 phase 推出 ——
+        # 不再用脚本里的形态清单（见 _PHASE_TO_REASON 的说明）。
+        from runner import injectability as _inj
+        _verdict, _why = _inj.injectability(
+            r['sl'], r['dl'], _reason_text_for(r.get('props') or {}))
+        if _verdict == _inj.NEEDS_COMPOUND:
+            compound.append({**r, 'note': _why})
             continue
         probe = _PROBES.get(r['sl'])
         if probe is None:
