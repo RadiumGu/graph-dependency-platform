@@ -67,6 +67,59 @@ def test_m02_观测标记必须与运行时同源():
         '「判伪通道可达边数」就偏大，而且没有任何报错。')
 
 
+def test_m02b_被阻断的边不得再被算成untested():
+    """四类必须互斥分桶，且 blocked 的判定要**优先于** untested。
+
+    2026-09-09 之前脚本用 `coalesce(r.verify_status,'untested')` 一刀切，
+    于是 13 条「用任何后端都打不到」的 AgentCore 边被算进 untested ——
+    读数的人看到「78+13 条待覆盖」，以为再跑几轮战役就能推进，
+    实际上那 13 条永远轮不到。这是**错误的努力方向**，
+    而且没有任何报错。
+
+    这条门禁钉住两件事：
+      1. 分桶查询里 blocked 分支必须在 untested 之前
+      2. 必须同时发 addressable 分母 —— 否则比率的分母里
+         永久掺着不可能项
+    """
+    src = SCRIPT.read_text(encoding='utf-8')
+    code = _code_only(src)
+
+    assert 'verify_blocked_reason' in code, (
+        '覆盖率脚本没有读 verify_blocked_reason —— '
+        '被阻断的边会重新混进 untested。')
+
+    i_blocked = code.find("'blocked_by_backend'")
+    i_untested = code.find("ELSE 'untested'")
+    assert i_blocked != -1 and i_untested != -1, (
+        f'找不到四类分桶的 CASE 分支（blocked={i_blocked}, untested={i_untested}）')
+    assert i_blocked < i_untested, (
+        'CASE 里 untested 分支排在 blocked 之前 —— '
+        'untested 是 ELSE 兜底，排在前面会把被阻断的边吞掉。')
+
+    for m in ('blocked_by_backend', 'addressable_edges',
+              'verified_ratio_addressable_pct'):
+        assert m in code, (
+            f'缺指标 {m}。四类分开报的意义在于让「进度」与「能力天花板」'
+            f'各自可见：untested 会随战役下降，blocked 只会因获得新注入能力而下降。')
+
+
+def test_m02c_既有比率的分母不得被悄悄换掉():
+    """`verified_ratio_pct` 的分母必须仍是 total，不得改成 addressable。
+
+    CloudWatch 是**时序**数据。换分母不会报错，但会让改动前后的同一条曲线
+    不可比 —— 而这条曲线正是用来看战役进度的。要按可达分母看，
+    应该并排加一条新指标（verified_ratio_addressable_pct），而不是改旧的。
+    """
+    src = SCRIPT.read_text(encoding='utf-8')
+    m = re.search(r"'verified_ratio_pct':\s*(.+)", src)
+    assert m, "找不到 verified_ratio_pct 的算式"
+    expr = m.group(1)
+    assert 'total' in expr and 'addressable' not in expr, (
+        f"verified_ratio_pct 的分母被换成了非 total: {expr.strip()}\n"
+        f"这会让 CloudWatch 上改动前后的历史数据不可比，且不会报错。"
+        f"按可达分母看请用 verified_ratio_addressable_pct。")
+
+
 def _code_only(text: str) -> str:
     """剥 docstring 与注释。
 

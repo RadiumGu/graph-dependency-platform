@@ -728,6 +728,40 @@ class ExperimentRunner:
             except Exception as ex:
                 logger.warning("边级流量采集失败（非致命）: %r", ex)
 
+            # ── DeepFlow 测不出生效性时回落到 X-Ray（2026-09-09 补入）─────────
+            # DeepFlow 抓的是集群内 Pod 的 L7 流量，**源不在集群内的边它必然
+            # 返回 None** —— 而 None 会让判定链一路走到 inconclusive，
+            # 等于付出了注入的代价却什么都没验到。
+            #
+            # 实测这个盲区占 78 条可注入边里的 41 条：
+            #     LambdaFunction -> ... 32 / StepFunction -> ... 8 / SNSTopic 1
+            #
+            # X-Ray 服务图看得见 Lambda 与 Step Functions，正好补这块。
+            # 只在 DeepFlow 给不出结论时才查 —— DeepFlow 有结论时优先用它，
+            # 因为它是 L7 实测流量，而 X-Ray 受采样率影响。
+            if edge_took_effect is None:
+                try:
+                    from .xray_metrics import XRayEdgeMetrics
+                    _xr = XRayEdgeMetrics()
+                    _eff, _why = _xr.took_effect(obs.service,
+                                                 self._target_metrics_name(exp))
+                    if _eff is not None:
+                        edge_took_effect = _eff
+                        logger.info("🔎 X-Ray 生效性回落判定: %s —— %s",
+                                    '已确认' if _eff else '未观测到', _why)
+                        # 边级调用数也一并补上（判据的前置条件要用它）。
+                        # 仅在 DeepFlow 没采到时补，避免覆盖更可靠的 L7 数字。
+                        if edge_calls is None:
+                            _snap = _xr.collect_edge_flow(
+                                obs.service, self._target_metrics_name(exp),
+                                window_seconds=900)
+                            if _snap.ok:
+                                edge_calls = _snap.total_requests
+                    else:
+                        logger.info("🔎 X-Ray 也测不出生效性: %s", _why)
+                except Exception as ex:
+                    logger.warning("X-Ray 生效性回落失败（非致命）: %r", ex)
+
             try:
                 verdict = verify_edge(
                     edge=cand,

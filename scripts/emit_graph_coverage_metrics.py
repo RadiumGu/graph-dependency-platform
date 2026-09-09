@@ -82,9 +82,17 @@ def graph_coverage() -> dict:
     labels = ', '.join(f"'{x}'" for x in _dependency_edge_labels())
     no_obs = ' AND '.join(f'r.{p} IS NULL' for p in _OBSERVER_PROPS)
 
+    # 四类互斥分桶。注意 blocked 必须**优先于** untested 判：
+    # 被阻断的边本来就没有 verify_status，用 coalesce 会把它们算成 untested，
+    # 于是「再跑几轮就能覆盖」看起来成立，实际上永远轮不到。
+    # （2026-09-09 实测：13 条 AgentCore 边就是这样藏在 untested 里的。）
     rows = nc.results(
         f"MATCH ()-[r]->() WHERE type(r) IN [{labels}] "
-        "RETURN coalesce(r.verify_status,'untested') AS vs, count(*) AS c")
+        "RETURN CASE "
+        "  WHEN r.verify_status IN ['confirmed','refuted','inconclusive'] "
+        "    THEN r.verify_status "
+        "  WHEN r.verify_blocked_reason IS NOT NULL THEN 'blocked_by_backend' "
+        "  ELSE 'untested' END AS vs, count(*) AS c")
     by_status = {r['vs']: int(r['c']) for r in rows}
     total = sum(by_status.values())
 
@@ -100,15 +108,61 @@ def graph_coverage() -> dict:
         "RETURN count(DISTINCT t.name) AS c")
     decided = by_status.get('confirmed', 0) + by_status.get('refuted', 0)
 
+    blocked = by_status.get('blocked_by_backend', 0)
+
+    # 阻断桶必须按类别展开 —— 两类性质完全不同，混着报会再犯一次
+    # 「错误的努力方向」的错：
+    #   unreachable_by_any_backend  永久工具天花板，不该进待办
+    #   precondition_unmet          环境前提（如源 Lambda 24h 零调用），
+    #                               该进待办，但待办事项是**造流量**不是跑注入
+    # 2026-09-09 实测：13 条属前者，26 条属后者。
+    kls = nc.results(
+        f"MATCH ()-[r]->() WHERE type(r) IN [{labels}] "
+        "AND r.verify_blocked_class IS NOT NULL "
+        "RETURN r.verify_blocked_class AS k, count(*) AS c")
+    by_class = {r['k']: int(r['c']) for r in kls}
+
+    # 「用现有后端**可能**验到的边」= 总数 - 被阻断。
+    # 这是进度该对齐的分母：拿含不可能项的分母算比率，会把一个
+    # 永久的工具天花板混进「还没做完」里，读数的人得不到正确的努力方向。
+    #
+    # 注意 precondition_unmet **也**从分母里扣掉：零流量链路上无从打断，
+    # 它现在确实验不了。但它与 unreachable 的区别在于**会变** ——
+    # 造出流量后这条边会自动回到分母里，所以这个分母是浮动的，
+    # 这正是要把两类分开报的原因。
+    addressable = total - blocked
+
     return {
         'dependency_edges_total': total,
         'confirmed': by_status.get('confirmed', 0),
         'refuted': by_status.get('refuted', 0),
         'inconclusive': by_status.get('inconclusive', 0),
         'untested': by_status.get('untested', 0),
+        # 2026-09-09 新增：用**任何**后端都打不到的边（AgentCore 托管运行时、
+        # Neptune 等）。与 untested 的区别是能力维度而非进度维度 ——
+        # untested 会随战役推进而下降，这个数只会因**获得新注入能力**而下降。
+        'blocked_by_backend': blocked,
+        # 永久工具天花板：只会因**获得新注入能力**而下降。
+        # 这个数不该被读成待办 —— 再跑一万轮注入也不会动。
+        'blocked_unreachable': by_class.get('unreachable_by_any_backend', 0),
+        # 环境前提不满足（源 Lambda 零调用等）：该进待办，
+        # 但待办事项是**造流量**，不是跑注入。有流量后会自动回到分母。
+        'blocked_precondition': by_class.get('precondition_unmet', 0),
+        'blocked_needs_compound': by_class.get('needs_compound_experiment', 0),
+        'blocked_no_observer': by_class.get('no_observer', 0),
+        'addressable_edges': addressable,
         # 真正做过主动干预并得出结论的比例。业界这个数字无从计算 ——
         # 没有持久化的边实体，也没有故障注入后端。
+        #
+        # ⚠️ 分母刻意仍是 total（含被阻断的边），**不要改**：
+        # CloudWatch 是时序数据，悄悄换分母会让改动前后的历史数据不可比，
+        # 而这条曲线正是用来看战役进度的。要按可达分母看就用下面那条新指标。
         'verified_ratio_pct': round(decided / total * 100, 2) if total else 0.0,
+        # 同一个分子、换成可达分母。两条并排看才有信息量：
+        # 二者的差就是**永久工具天花板**贡献的那部分，
+        # 它不会因为多跑几轮注入而缩小。
+        'verified_ratio_addressable_pct': (
+            round(decided / addressable * 100, 2) if addressable else 0.0),
         # 判伪通道对多少条边是可达的（零独立观测源）。这个数掉下去
         # 比 refuted 恒为 0 更值得警觉：它意味着「能被推翻的边」在变少。
         'refutable_edges': refutable_total,

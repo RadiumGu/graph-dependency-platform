@@ -711,6 +711,26 @@ edge_verification:
   # 取值是自由文本（原因描述），由 injectability.injectability() 产出。
   # 写入方同为 chaos-runner。
   - verify_blocked_reason
+  # 2026-09-09 补入：阻断的**类别**，取值来自 injectability 的判定常量
+  #   unreachable_by_any_backend  永久工具天花板 —— 只会因获得新注入能力而消失
+  #   precondition_unmet          环境前提不满足 —— 变了就该重测
+  #   needs_compound_experiment   需复合实验（如 ECR 须配合删 Pod）
+  #   no_observer                 缺观测方（自环 / 合成流量源）
+  #
+  # ## 为什么光有 reason 文本不够（同日实测补课）
+  #
+  # 先只加了 verify_blocked_reason。随后实测发现被阻断的边至少有两种**性质
+  # 完全不同**的成因：
+  #
+  #   13 条 AgentCore 边 —— 任何后端都打不到，属于永久天花板；
+  #   35 条 Lambda/StepFunction 出边 —— 源函数 24h 内**零调用**，
+  #      链路是休眠的。混沌验证在零流量链路上不可能成立
+  #      （打不断一个没在跑的东西），但它明天有流量就该重测。
+  #
+  # 把这两类混在一个桶里，覆盖率会再犯一次同样的错：
+  # 前者不该进「待办」，后者该进，而且待办事项是**造流量**而不是跑注入。
+  # 类别必须是结构化字段，不能让消费方去解析人话文本。
+  - verify_blocked_class
   authority:
   - chaos-runner
   evidence_weights:

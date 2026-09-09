@@ -63,6 +63,31 @@ def _dependency_edge_labels() -> list:
                   if isinstance(v, dict) and v.get('dependency'))
 
 
+def _dormant_sources(names: set) -> dict:
+    """查这些 Lambda 源近 24h 的调用数，返回 {name: invocations}。
+
+    只对 LambdaFunction 有意义（CloudWatch AWS/Lambda Invocations）。
+    查不到的不做判断 —— 宁可漏标，不可错标成休眠。
+    """
+    import boto3
+    cw = boto3.client('cloudwatch',
+                      region_name=os.environ.get('REGION', 'ap-northeast-1'))
+    now = datetime.datetime.now(datetime.timezone.utc)
+    out = {}
+    for n in sorted(names):
+        try:
+            d = cw.get_metric_statistics(
+                Namespace='AWS/Lambda', MetricName='Invocations',
+                Dimensions=[{'Name': 'FunctionName', 'Value': n}],
+                StartTime=now - datetime.timedelta(hours=24), EndTime=now,
+                Period=86400, Statistics=['Sum'])
+            pts = d.get('Datapoints') or []
+            out[n] = int(sum(p['Sum'] for p in pts)) if pts else 0
+        except Exception:                                     # noqa: BLE001
+            continue          # 查不到就不下结论
+    return out
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument('--apply', action='store_true',
@@ -92,27 +117,52 @@ WHERE r.verify_status IS NULL OR r.verify_status = 'untested'
 RETURN id(r) AS eid, type(r) AS edge,
        labels(a)[0] AS src_label, a.name AS src,
        labels(b)[0] AS dst_label, b.name AS dst,
-       r.verify_status AS status, r.verify_blocked_reason AS existing
+       r.verify_status AS status, r.verify_blocked_reason AS existing,
+       r.verify_blocked_class AS existing_class
 """)
 
     planned, skipped = [], 0
+    unreachable_rows, remaining = [], []
     for row in rows:
         verdict, why = inj.injectability(row['src_label'], row['dst_label'])
-        if verdict != inj.UNREACHABLE:
-            skipped += 1
+        if verdict == inj.UNREACHABLE:
+            unreachable_rows.append({**row, 'reason': why,
+                                     'klass': inj.UNREACHABLE})
+        else:
+            remaining.append(row)
+
+    # ── 休眠链路（2026-09-09 实测新增）────────────────────────────────────
+    # 剩下的边里，源是 Lambda 且 24h 零调用的，属于 PRECONDITION_UNMET：
+    # 混沌验证在零流量链路上不可能成立 —— **打不断一个没在跑的东西**。
+    # 与 UNREACHABLE 的性质完全不同：它明天有流量就该重测，
+    # 所以类别必须分开存，否则覆盖率会把「该造流量」误读成「该跑注入」。
+    lam_srcs = {r['src'] for r in remaining if r['src_label'] == 'LambdaFunction'}
+    invocations = _dormant_sources(lam_srcs) if lam_srcs else {}
+    dormant_rows = []
+    for row in remaining:
+        n = invocations.get(row['src'])
+        if row['src_label'] == 'LambdaFunction' and n == 0:
+            dormant_rows.append({
+                **row, 'klass': inj.PRECONDITION_UNMET,
+                'reason': (f"dependency-path-dormant: 源 Lambda {row['src']} "
+                           f"近 24h 调用数为 0 —— 链路休眠，无从打断。"
+                           f"这是**环境前提**不是工具边界，有流量后应重测"),
+            })
+
+    for cand in unreachable_rows + dormant_rows:
+        if cand.get('existing') and cand.get('existing_class'):
+            skipped += 1          # 已完整标注过，不重复写
             continue
-        if row.get('existing'):
-            skipped += 1          # 已标注过，不重复写
-            continue
-        planned.append({**row, 'reason': why})
+        planned.append(cand)
 
     print(f'候选（无结论的依赖边）: {len(rows)} 条')
-    print(f'判定为后端不可达      : {len(planned)} 条')
-    print(f'跳过（可注入或已标注）: {skipped} 条')
+    print(f'  后端不可达（永久天花板）: {len(unreachable_rows)} 条')
+    print(f'  链路休眠（环境前提）    : {len(dormant_rows)} 条')
+    print(f'待写入                  : {len(planned)} 条')
+    print(f'跳过（已完整标注）      : {skipped} 条')
     print()
     for p in planned:
-        print(f"  {p['edge']:<12} {p['src']} -> {p['dst']}")
-        print(f"      {p['reason']}")
+        print(f"  [{p['klass']}] {p['edge']:<12} {p['src']} -> {p['dst']}")
 
     if not args.apply:
         print('\n（dry-run。加 --apply 实写）')
@@ -136,7 +186,8 @@ RETURN id(r) AS eid, type(r) AS edge,
 MATCH (a)-[r:{p['edge']}]->(b)
 WHERE a.name = $src AND b.name = $dst
   AND (r.verify_status IS NULL OR r.verify_status = 'untested')
-SET r.verify_blocked_reason = '{safe}'
+SET r.verify_blocked_reason = '{safe}',
+    r.verify_blocked_class = '{p['klass']}'
 RETURN count(r) AS n
 """, {'src': p['src'], 'dst': p['dst']})
         written += 1
