@@ -143,3 +143,104 @@ m02 钉的是**语义不变量**（判定来自干预，干预必然产生测量
   AZ scope 的 DR 计划受影响服务恒为 0，根因是 `Microservice` 从不直接
   `LocatedIn` AZ（路径是 `AZ <-LocatedIn- Pod <-RunsOn- Microservice`），
   已修，见 `tests/test_60_dr_az_scope_finds_services.py`。
+
+
+---
+
+## 追加（2026-09-09 08:0xZ）：并发提交踩了一次，另有四次同类判据错误
+
+写这段的会话在做 agent 层建模 + 契约门禁那条线（`RoutesToRuntime` /
+`RoutesVia` / 咽喉点 SPOF / 离线模式）。下面三件事对**任何**在这个工作区
+并发作业的人都有用。
+
+### 一、共用 git index —— 我的提交扫进了你 4 个文件的删除
+
+`dc144da fix(aws): 凭据解析不到时给出可诊断的错误` 里多出了 751 行删除：
+
+    infra/lambda/rca_window_flush/neptune/{nl_query,nl_query_direct,query_guard,schema_prompt}.py
+
+**不是我删的。** 那是另一路「删部署包里的死代码模块」的工作，
+当时已经 `git add` 进 index、还没 commit。而我用的是
+
+    git add <我的文件...>
+    git commit -F - <<'MSG' ...
+
+`git commit` **提交整个 index**，不只是我刚 add 的路径。于是你那批删除
+提前落在了我的提交里、挂在一句完全无关的说明下。
+
+后果还有一层：你随后的 `7600187 fix(rca): 删部署包里 4 个死代码模块…`
+标题仍说删了 4 个模块，但那 4 个删除已经不在它里面了 ——
+`git log --diff-filter=D` 查出来的归属是 `dc144da`。两边的历史都被搅了一次。
+
+**已确认内容是安全的**：四份规范副本都还在 `rca/neptune/` 下，
+部署包内只剩两处注释引用、无实际 import，`test_53::m06` 通过。
+
+**做法改成**（建议所有并发会话都这么做）：
+
+    git add <paths>
+    git commit -F <msgfile> -- <paths>      # ← pathspec 限定，只提交这些路径
+
+注意两个坑：
+- `--only` 对**未跟踪的新文件**无效（`pathspec did not match any file(s) known to git`），
+  必须先 `git add` 再 `commit -- <paths>`。
+- `-F -` 不能放在 `--` 之后，会被当成路径。把消息写进临时文件、选项放前面。
+
+**没有 force push 去修那句说明**：我那条提交上面已经压了 4 个别的会话的提交，
+这条分支有 6 个会话在活跃提交。为一句提交说明重写共享分支历史，
+风险远大于收益。记在这里即可。
+
+### 二、我今天第四~七次栽在「判据对准文本而不是语义」
+
+上面 §「立了门禁，判据刻意不对准字符串」那段说栽过 11 次 —— 我又贡献了四次，
+**每次都是我自己写的门禁把我抓出来的**：
+
+| 场景 | 错法 | 后果 |
+|---|---|---|
+| 查未加保护的 `get_credentials()` 写法 | 正则 | 命中 docstring 里**引用旧写法作为历史记录**的散文，误报 4 个文件 |
+| 判「哪些测试需要 AWS」 | grep 单词 `boto3` | 误判我自己的 `test_65` —— 它用 monkeypatch，根本不需要 AWS |
+| 查签名清单是否过于宽泛 | `'Exception' not in sigs` | 被 `UnrecognizedClientException` 的**子串**误报 |
+| 判签名条目是否过宽 | `len(e) < 12` | 中文条目「凭据未解析到」只有 6 个字符，被误报 |
+
+前两个改用 **AST**，后两个改为**逐项比对字面量** + **仅对 ASCII 条目判长度**。
+
+第一条尤其值得记：**注释里引用旧写法讲历史是好事，门禁不该因此逼人删注释。**
+凡是要判「代码里有没有某种写法」，用语法树；正则只适合判文本本身。
+
+### 三、静态检查通过、机制是坏的 —— 又一个实例
+
+`tests/test_66` 的 `t66_03` 第一版只断言 conftest 源码里出现
+`exitstatus = 1`。**它通过了，而护栏根本不生效**：原实现写在
+`pytest_terminal_summary` 里，那个 hook 在退出码定下来之后才跑，
+只能打印、改不了结果。实测退出码仍是 0。
+
+改成起子进程实跑、验退出码之后才暴露出来。同时暴露了另外三个：
+- 设 `report.wasxfail` 会让 pytest 归类成 `xfailed` 而非 `skipped`
+  （xfail 的读法是「已知会失败可忽略」，与「这条没被验证过」完全不同）
+- 子进程测试的靶子必须在 `tests/` 目录链上，否则 conftest 不加载、
+  hook 不运行、退出码自然是 0 —— 测试会因**错误的原因**失败
+- `pytest_sessionfinish` 比 `pytest_terminal_summary` **先**跑，
+  依赖后者传通过数会让下限判定读到 0，把正常运行也判成失败
+
+**判据**：凡门禁的对象是「某个机制会不会真的生效」，静态检查不够，
+必须有一条行为验证。我在 RPO 那次也栽过同形的一次
+（`estimated_rpo_minutes` 推不出时返回 0，字段类型看着对、语义是错的）。
+
+### 四、留给你们的三个未完成项
+
+1. **`cdk deploy NeptuneEtlStack` 我没执行。** M1–M6 的 ETL 改动已提交但未部署，
+   所以 `RoutesVia` / `RoutesToRuntime` 在活图谱里还没有实例
+   （`tests/test_11` 的 `PENDING_FIRST_EDGE` 登记着，部署后首轮出现即销账）。
+   **前置动作是先跑 `cdk diff NeptuneEtlStack`** —— 这个环境已知有
+   「CDK 声明 Neptune 1.3.4.0 / 实际跑 1.4.6.3」这类分叉，
+   `cdk deploy` 会把栈收敛到模板状态，可能顺手改掉别的漂移项。
+2. **74 个 pytest 标记没补，是刻意的。** 实测 64 个用例需 `neptune` 标记、
+   另有 10 个文件是纯 boto3 依赖。我改用 `GDP_OFFLINE=1` 离线模式
+   （见 `tests/conftest.py` 末尾），它自维护、不需要任何人记得打标记。
+   **但它必须配 `GDP_OFFLINE_MIN_PASSED`** —— 全部 skip 的运行看起来是绿的，
+   只加 skip 不加下限等于把「测试没跑」伪装成「测试通过了」。
+3. **CI 里还没有任何 job 跑测试套件。** `.github/workflows/migration-checks.yml`
+   只在 `main` 的 push/PR 上触发，且只做迁移期限与冻结文件两项窄检查。
+   也就是说这条分支的 140+ 个提交**从未跑过 CI**，
+   而这个仓库最引以为傲的那套门禁（`g18` / `t59_06` / `G2` / `test_52::m04` …）
+   **只在有人记得手动跑 pytest 时才生效**。
+   离线模式是为补这个洞做的前置，job 本身还没加。
