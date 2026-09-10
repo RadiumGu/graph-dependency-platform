@@ -160,7 +160,7 @@ st.caption(
 st.markdown("---")
 
 # ── 三栏分列 ─────────────────────────────────────────────────────────────────
-st.markdown("### 三栏分列统计")
+st.markdown("### 证据状态分列统计")
 st.caption(
     "三个维度回答三个不同问题，**刻意不合并成单一覆盖率** —— "
     "平均会让「已声明但从未观测」与「已观测但从未验证」互相抵消，"
@@ -179,7 +179,7 @@ for col, (title, why, buckets) in zip(cols, D["dimensions"]):
 st.markdown("---")
 
 # ── 功能映射表 ───────────────────────────────────────────────────────────────
-st.markdown("### 功能映射表")
+st.markdown("### 依赖关系映射")
 st.caption(
     "对应 DORA Art. 8(1)（business functions ← 支撑资产 ← 其 dependencies）与 "
     "8(4)，以及 SYSC 15A.4.1R 的 technology 维度。"
@@ -291,7 +291,7 @@ with c1:
     st.caption("含全部四份表格 + 由数据算出的局限披露。")
 with c2:
     st.download_button(
-        "⬇️ 下载功能映射表（CSV）",
+        "⬇️ 下载依赖关系映射（CSV）",
         data=D["csv"].encode("utf-8"),
         file_name=f"compliance-dependency-mapping_{stamp}.csv",
         mime="text/csv", width="stretch",
@@ -303,12 +303,21 @@ st.caption(
     "同名覆盖会让历史版本消失。"
 )
 
-with st.expander("📌 必须随报告一同披露的局限（报告里已自动生成）", expanded=False):
+with st.expander("📌 重大固有局限性与范围排除（报告里已自动生成）", expanded=False):
     st.markdown(
         "披露内容**由快照数据算出，不手写** —— 手写的披露会过期。"
         "确证率现算、缺失维度现查、impact tolerance 是否为空现判。"
+        "本节对应 ISAE 3000 §69(e) 与 SYSC 15A.6.1R(7)。"
     )
     st.markdown("下面是本次快照对应的实际披露文本：")
-    _marker = "## 必须随报告一同披露的局限"
+    # 章节标题从包里导入，**不在这里硬编码** —— 硬编码的第二份会漂移，
+    # 且失效形状是静默显示「（未生成）」，既不报错也不缺页。
+    # 沿用本页的延迟导入风格（Neptune 可达性检查在前）。
+    from compliance_export import LIMITATIONS_HEADING
+
     _md = D["markdown"]
-    st.markdown(_md[_md.index(_marker):] if _marker in _md else "（未生成）")
+    st.markdown(
+        _md[_md.index(LIMITATIONS_HEADING):] if LIMITATIONS_HEADING in _md
+        else "（未生成 —— 若持续出现，说明 LIMITATIONS_HEADING 与渲染器不一致，"
+             "这是缺陷而非空数据）"
+    )

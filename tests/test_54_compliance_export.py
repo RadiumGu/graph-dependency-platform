@@ -305,11 +305,20 @@ def test_m08_样例产出必须存在且结构与当前代码一致():
         "样例 CSV 的表头与当前 CSV_COLUMNS 不一致 —— 代码改了列但样例没重生成。\n"
         "  样例: %s\n  当前: %s" % (header, ",".join(CSV_COLUMNS)))
 
-    # Markdown 必须含全部章节
+    # Markdown 必须含全部章节。章节名带编号 —— 正式文档要能被「见 §5.2」这样引用。
     md_text = md.read_text(encoding="utf-8")
-    for section in ("## 三栏分列统计", "## 功能映射表", "## 技术集中度",
-                    "## 基础设施承载层", "## 业务能力与容忍度阈值",
-                    "## 必须随报告一同披露的局限"):
+    for section in ("## 文档控制",
+                    "## 1 报告性质与适用范围",
+                    "## 2 报告基准与数据来源",
+                    "## 3 适用标准",
+                    "## 4 术语与取值定义",
+                    "## 5 依赖关系映射",
+                    "## 6 证据状态分列统计",
+                    "## 7 技术集中度",
+                    "## 8 基础设施承载层",
+                    "## 9 业务功能与容忍度阈值",
+                    "## 10 重大固有局限性与范围排除",
+                    "## 附录 A"):
         assert section in md_text, (
             "样例 Markdown 缺少章节 %r —— 模板改了但样例没重生成。" % section)
 
@@ -369,3 +378,168 @@ def test_m10_唯一入口():
     assert (_PKG / "__main__.py").exists(), "缺少 compliance_export/__main__.py"
     assert (_PKG / "README.md").exists(), (
         "缺少 compliance_export/README.md —— 这个目录是交付物，要能自解释。")
+
+
+# ─── 文档形制（把「看起来正规」变成可校验的约束）─────────────────────────────
+
+
+def test_m11_不得声称是独立鉴证报告():
+    """报告必须声明自己不是鉴证报告，且不得作出三条它做不出的声明。
+
+    ## 这条门禁防的是什么
+
+    形制改造有一个具体的失效方向：为了让报告「看起来正规」而照抄 ISAE 3000
+    §69 的全部要素。但 §69(h)(i)(j) 要求声明「本业务按本 ISAE 执行」、
+    「适用 ISQC 1 质量控制」、「遵守 IESBA Code 独立性要求」—— 一份由自有工具
+    自动生成、未经独立执业者鉴证的管理层记录，这三条一条都做不出。
+
+    照抄的结果是一份**暗示存在独立鉴证的文件**。那不是形制粗糙，是虚假陈述，
+    危害远大于原先的「山寨感」。所以：必须有免责声明，且不得出现那三类断言。
+
+    这是形制改造里唯一有法律风险的一步，因此单独立一条门禁锁住。
+    """
+    rep = (_PKG / "report.py").read_text(encoding="utf-8")
+
+    assert "不是鉴证报告" in rep, (
+        "报告模板没有声明「本报告不是鉴证报告」。ISAE 3000 §69(f) 要求提醒读者"
+        "适用范围；缺了这句，形制上的正规会变成误导。")
+    assert "ISAE 3000" in rep, (
+        "既然借用了 ISAE 3000 的要素纪律，就应明确说明借用范围与不适用之处。")
+
+    # 不得出现「我们依准则执行了鉴证业务」这类断言
+    #
+    # ## 判据的对象是**渲染产出**，不是源码；切分单位是**句**，不是行
+    #
+    # 前两版都失败在同一个地方，值得记下来：
+    #
+    # 第一版朴素子串匹配整份源码 —— 被自己的免责声明触发（§1.2 写着「不含……
+    # 『适用 ISQC 1 质量控制』……声明」，含被禁短语但语义正好相反）。
+    #
+    # 第二版改逐行扫描 + 跳过含否定标记的行 —— 仍失败，因为源码里那些句子是
+    # **跨行折行**的，否定标记（不含 / 未经）落在上一行，被禁短语落在下一行。
+    #
+    # 第三版换判据对象：该管的是交付给监管的那份产出，不是源码。渲染后折行已
+    # 消失，一个句子就是一个连续字符串，按句号切分即可稳定判断语义方向。
+    #
+    # 这是本仓库第三次踩「凭朴素子串匹配写门禁」的坑（test_53::m03 把节点标签
+    # 报成违规、test_54::m09 被披露文本自己触发）。假阳性会训练人忽略告警。
+    md = _SAMPLES / "SAMPLE-compliance-dependency-report.md"
+    if not md.exists():
+        pytest.skip("样例不存在，由 m08 报错")
+
+    negation_markers = ("不是", "未按", "未经", "不得", "不含", "做不出",
+                        "无法", "误用", "不构成")
+    banned_claims = (
+        "按照 ISAE 3000 执行了",
+        "我们已按 ISAE 3000",
+        "本业务按本准则执行",
+        "适用 ISQC 1",
+        "遵守 IESBA Code 的独立性",
+        "独立鉴证结论",
+        "我们的意见是",
+        "无保留意见",
+    )
+    hits = []
+    for sentence in re.split(r"[。！\n]", md.read_text(encoding="utf-8")):
+        if any(m in sentence for m in negation_markers):
+            continue                      # 这句在免责，不是在断言
+        for claim in banned_claims:
+            if claim in sentence:
+                hits.append("%r 出现在：%s" % (claim, sentence.strip()[:70]))
+    assert not hits, (
+        "样例报告出现了它做不出的鉴证声明：\n  " + "\n  ".join(hits)
+        + "\n\n本报告由自有工具自动生成、未经独立执业者鉴证，不得作出上述断言。")
+
+
+def test_m12_缺失值措辞必须对齐法定枚举且不得泄漏实现词():
+    """`None` / `null` / `（无此字段）` 一类实现细节不得出现在正式产出里。
+
+    法定填报模版（ITS (EU) 2024/2956 B_06.01.0050）把「未评估」规定为一个
+    **显式枚举取值**（码 3 `Assessment not performed`），而不是空值。数据库的
+    null 直接渲染出来，读者无从判断「没有这一列」与「这一列没值」的区别 ——
+    而这两件事在审计上完全不同。
+    """
+    from compliance_export import MISSING_LABEL
+
+    assert "Assessment not performed" in MISSING_LABEL, (
+        "MISSING_LABEL 未对齐 ITS B_06.01.0050 的枚举措辞，当前为 %r。"
+        % MISSING_LABEL)
+
+    md = _SAMPLES / "SAMPLE-compliance-dependency-report.md"
+    if not md.exists():
+        pytest.skip("样例不存在，由 m08 报错")
+    md_text = md.read_text(encoding="utf-8")
+
+    leaked = [w for w in ("（无此字段）", "| None |", "| null |", "| nan |")
+              if w in md_text]
+    assert not leaked, (
+        "样例出现了实现细节泄漏：%s。缺失值应渲染为 %r。" % (leaked, MISSING_LABEL))
+
+    # 报告必须在术语定义节解释这个取值，否则显式枚举也只是另一个黑话
+    assert "## 4 术语与取值定义" in md_text, "缺少术语与取值定义节"
+    assert MISSING_LABEL.split("（")[0] in md_text, (
+        "术语定义节没有定义缺失值取值的含义。")
+
+
+def test_m13_表格与章节必须编号():
+    """正式文档的表要连续编号并带题注，章节要能被「见 §5.2」引用。
+
+    编号不是装饰：没有编号，审计意见里就无法精确指向某一张表或某一节，
+    只能描述「那个讲集中度的表」，而报告一改内容就对不上了。
+    """
+    md = _SAMPLES / "SAMPLE-compliance-dependency-report.md"
+    if not md.exists():
+        pytest.skip("样例不存在，由 m08 报错")
+    md_text = md.read_text(encoding="utf-8")
+
+    captions = re.findall(r"\*\*表 (\d+)：", md_text)
+    assert captions, (
+        "样例里没有任何表题注（形如 `**表 1：...**`）。正式文档的表必须编号。")
+    nums = [int(n) for n in captions]
+    assert nums == list(range(1, len(nums) + 1)), (
+        "表编号不连续：%s。编号器应在一次渲染内自成一体。" % nums)
+
+    # 章节编号：至少要有 §1 到 §10 的二级标题
+    for n in range(1, 11):
+        assert re.search(r"^## %d " % n, md_text, re.M), (
+            "缺少编号章节 `## %d `。" % n)
+
+
+def test_m14_章节标题不得在页面里硬编码():
+    """demo 页面按章节标题切片取局限披露节，该标题必须从包里导入。
+
+    ## 失效形状比「报错」更坏
+
+    页面原先硬编码 `"## 必须随报告一同披露的局限"`。章节改名后，页面的
+    `if _marker in _md else "（未生成）"` 分支会**静默显示「（未生成）」**——
+    不报错、不缺页、健康检查通过，只有真的展开那一栏的人才看到空白。
+
+    这与部署时 `demo/Dockerfile` 漏 COPY `compliance_export` 是同一失效类型
+    （构建成功、启动成功、点开才炸），也与本仓库「同一份清单四处各抄一份、
+    其中两处漂移到实际错误」是同一判据类型：**第二份副本必须消除，不是校准。**
+    """
+    from compliance_export import LIMITATIONS_HEADING
+
+    page = _ROOT / "demo" / "pages" / "10_Compliance_Report.py"
+    assert page.exists(), "找不到合规报告页面"
+    src = page.read_text(encoding="utf-8")
+
+    assert "LIMITATIONS_HEADING" in src, (
+        "页面没有导入 LIMITATIONS_HEADING。章节标题的单一来源是 report.py，"
+        "页面不得自己写一份。")
+
+    # 页面里不得出现形如 "## X" 的报告章节标题字面量（st.markdown 的 "### " 小标题
+    # 是页面自己的排版，不在此列 —— 判据只拦二级标题，那是报告的章节层级）
+    offenders = [line.strip()[:70] for line in src.splitlines()
+                 if '"## ' in line or "'## " in line]
+    assert not offenders, (
+        "页面硬编码了报告章节标题：\n  " + "\n  ".join(offenders)
+        + "\n\n请改为从 compliance_export 导入常量。")
+
+    # 常量必须真的出现在渲染产出里，否则导入了也白搭
+    md = _SAMPLES / "SAMPLE-compliance-dependency-report.md"
+    if not md.exists():
+        pytest.skip("样例不存在，由 m08 报错")
+    assert LIMITATIONS_HEADING in md.read_text(encoding="utf-8"), (
+        "LIMITATIONS_HEADING (%r) 在样例报告里找不到 —— 常量与渲染器已脱节，"
+        "页面会静默显示「（未生成）」。" % LIMITATIONS_HEADING)

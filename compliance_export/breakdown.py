@@ -32,7 +32,15 @@ DIMENSIONS: Tuple[Tuple[str, str, str], ...] = (
 )
 
 #: 缺失值在报告里的呈现。刻意不是 "0" 或空串 —— 见模块 docstring。
-MISSING_LABEL = "（无此字段）"
+#:
+#: 措辞对齐 ITS (EU) 2024/2956 B_06.01.0050 的枚举码 3
+#: `Assessment not performed`：DORA 的法定填报模版把「未评估」当成一个**显式
+#: 枚举取值**，而不是空值。原先这里写的是 `（无此字段）` —— 那是数据库实现
+#: 细节泄漏进正式文档，读者无从判断「没有这一列」与「这一列没值」的区别。
+#:
+#: 每个维度下该取值的**精确含义不同**（verify_status 缺失 = 未做场景测试；
+#: dependency_kind 缺失 = ETL 尚未打标），故报告的术语定义节逐字段说明。
+MISSING_LABEL = "未评估（Assessment not performed）"
 
 
 @dataclass(frozen=True)

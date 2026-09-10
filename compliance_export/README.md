@@ -44,14 +44,33 @@ interdependencies`。**第三步在数据结构上就是一张图的边集，清
 
 ---
 
+## 文档形制的依据
+
+章节骨架取自 **FCA SYSC 15A.6.1R(1)-(9)** —— 那一条列举了 firm 自己的书面记录
+必须包含什么。文档控制要素（标准识别、固有局限性、所执行工作摘要、日期、批准）
+借自 **ISAE 3000 (Revised) §69** 的要素纪律。取值词汇对齐 **ITS (EU) 2024/2956
+B_06.01** 的枚举措辞（`Assessment not performed`）、**NIST OSCAL**
+`observation.method` 的取证方法（`TEST` / `EXAMINE`）、以及 **SOC 2 Section IV**
+的结论措辞（`Confirmed — no exceptions noted`）。
+
+**但本报告刻意不声称是鉴证报告。** ISAE 3000 §69(h)(i)(j) 要求声明「本业务按本
+ISAE 执行」、「适用 ISQC 1」、「遵守 IESBA Code 独立性要求」—— 自动生成的管理层
+记录这三条一条都做不出。照抄整套要素会产出一份**暗示存在独立鉴证的文件**，
+那不是形制粗糙而是虚假陈述。故 §1.2 明确否认，并由 `m11` 锁定。
+
+---
+
 ## 四份产出与其条文依据
 
-| 产出 | 条文依据 |
+| 产出（报告章节） | 条文依据 |
 |---|---|
-| **功能映射表** | DORA Art. 8(1)（business functions ← 支撑资产 ← 其 dependencies）、8(4)、SYSC 15A.4.1R 的 technology 维度、关基条例第九条(一) |
-| **三栏分列统计** | 证据等级 ← SYSC 15A.5.3R 场景测试；声明/观测 ← 本平台核心不变量；第三方范围 ← DORA Art. 8(5) |
-| **技术集中度** | SYSC 15A.2.7G(10)「multiple IBS rely on **common operational resources**」、DORA Art. 29/31 的技术输入、关基条例第九条(三) |
-| **承载层（单列）** | 不是依赖，但 EKS/LB 在 DORA 视角下确实是关键 ICT 服务，不能静默丢弃 |
+| **§5 依赖关系映射** | DORA Art. 8(1)（business functions ← 支撑资产 ← 其 dependencies）、8(4)、SYSC 15A.4.1R 的 technology 维度、关基条例第九条(一) |
+| **§6 证据状态分列统计** | 证据等级 ← SYSC 15A.5.3R 场景测试；声明/观测 ← 本平台核心不变量；第三方范围 ← DORA Art. 8(5) |
+| **§7 技术集中度** | SYSC 15A.2.7G(10)「multiple IBS rely on **common operational resources**」、DORA Art. 29/31 的技术输入、关基条例第九条(三) |
+| **§8 承载层（单列）** | 不是依赖，但 EKS/LB 在 DORA 视角下确实是关键 ICT 服务，不能静默丢弃 |
+
+Markdown 呈现审阅所需的列；**机器可读的完整字段集在同名 CSV 里**，两者取自同一
+快照。CSV 刻意保留技术字段名 —— 消费方是脚本与取证工具，字段名稳定比可读性重要。
 
 ---
 
