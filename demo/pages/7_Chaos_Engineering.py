@@ -109,8 +109,8 @@ if spec_files:
     s = st.columns(3)
     s[0].metric("实验规格文件", len(spec_files))
     s[1].metric("边验证专用", len(verify_specs),
-                help="文件名以 `verify-edges-*` 开头 —— 这些实验的目的不是"
-                     "「看系统扛不扛得住」，而是「这条依赖边到底成不成立」。")
+                help="文件名以 `verify-edges-*` 开头，这些实验判定的是"
+                     "「这条依赖边到底成不成立」。")
     s[2].metric("目录分组", len({os.path.relpath(os.path.dirname(p), EXP_DIR) for p in spec_files}))
 
     if verify_specs:

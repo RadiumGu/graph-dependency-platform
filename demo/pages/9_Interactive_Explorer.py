@@ -153,7 +153,7 @@ def directed_rows(name: str, ets: tuple, limit: int, downstream: bool) -> list:
 # 「只看 Calls」和「只看 AccessesData」是两个不同的排查问题。
 edge_types = st.multiselect(
     "关系类型", DEP_EDGES, default=DEP_EDGES,
-    help="只列依赖边（契约里 dependency: true 的那 6 种）。结构/包含边不画 —— "
+    help="只列依赖边（契约里 dependency: true 的那 6 种）。结构/包含边不画： "
          "把它们也画成箭头会让图的杂乱度翻倍，而它们回答的不是「谁依赖谁」。")
 if not edge_types:
     st.warning("至少选一种关系类型，否则没有边可画。")
@@ -177,7 +177,7 @@ with c2:
 with c3:
     limit = st.number_input(
         "每层上限", min_value=4, max_value=60, value=14,
-        help="真正卡住规模的是这个，不是跳数：度数高的节点在低上限下不会全展开 —— "
+        help="真正卡住规模的是这个，不是跳数：度数高的节点在低上限下不会全展开。"
              "选中它之后，侧栏会告出它还有多少个邻居没显示，并给一个"
              "「展开全部邻居」绕开这个上限。"
              "代价是取数走**迭代单跳**（Neptune 对带谓词的变长路径支持有限，"
@@ -333,8 +333,8 @@ m[5].metric(
 if len(_az_count) == 1 and _placed >= 3:
     _only = next(iter(_az_count))
     st.warning(
-        f"⚠️ 图上 {_placed} 个有属地的节点**全部**在 `{_only}` —— "
-        "这一层没有跨 AZ 冗余，该 AZ 故障会一起失效。"
+        f"⚠️ 图上 {_placed} 个有属地的节点**全部**在 `{_only}`，"
+        "这一层没有跨 AZ 冗余，该 AZ 故障会让它们一起失效。"
         "（位置来自 `RunsOn` / `LocatedIn` 结构边，不画在图上：那是包含关系，"
         "画成箭头会被读成依赖。）",
         icon="🏗️",
@@ -343,7 +343,7 @@ elif _crossed:
     st.info(
         f"🔀 有 **{_crossed}** 条依赖边跨了可用区（图上画成**虚线**）。"
         "跨 AZ 调用多一跳网络延迟、产生跨区数据传输费用，"
-        "但换来的是单 AZ 故障时不会一起失效 —— 这是取舍，不是缺陷。"
+        "换来的是单 AZ 故障时不会一起失效。这是取舍，不是缺陷。"
         "悬停虚线边可以看到具体是哪两个 AZ 之间。"
     )
 
@@ -368,7 +368,7 @@ st.caption(
     "**单击**节点看下方详情与可做的操作，**双击**展开它的下一跳。"
     "记号：**✓** 走过一跳（仍受每层上限）／**✦** 邻居已全部拉进来。"
     "键盘：`Tab` 逐个聚焦节点、`Enter` 选中，聚焦时同样点亮相邻。"
-    "左侧色条 = 分组，边色 = 故障注入验证状态。节点名恒定 13px —— "
+    "左侧色条 = 分组，边色 = 故障注入验证状态。节点名恒定 13px："
     "不做「缩到装下」，图比容器大时滚动浏览。"
 )
 
@@ -393,7 +393,7 @@ with d1:
             st.caption("**属地**　" + "　→　".join(f"{lab} `{v}`" for lab, v in _chain))
         elif online:
             st.caption(
-                "属地：图里没有这个节点的 `RunsOn` / `LocatedIn` 边 —— "
+                "属地：图里没有这个节点的 `RunsOn` / `LocatedIn` 边，"
                 "它可能是逻辑实体（业务能力、Agent 工具）而非部署实体。"
             )
 
@@ -413,15 +413,15 @@ with d1:
                 st.session_state[S_FULL] = full_expanded
                 st.rerun()
             st.caption(
-                f"这个节点沿当前方向共有 {len(peers)} 个邻居，图上已有 {len(on_graph)} 个 —— "
-                f"差的 {hidden} 个是被「每层上限」({int(limit)}) 截掉的。"
+                f"这个节点沿当前方向共有 {len(peers)} 个邻居，图上已有 {len(on_graph)} 个，"
+                f"差的 {hidden} 个被「每层上限」({int(limit)}) 截掉了。"
                 "这个按钮绕开那个上限，只对这一个节点。"
             )
         else:
             st.caption(f"它的邻居（{len(peers)} 个）都已经在图上了。")
 
         st.markdown("**下钻查询**")
-        st.caption("拿这个节点去跑预置查询——确定性 Cypher，不经过 AI。")
+        st.caption("拿这个节点去跑预置查询：确定性 Cypher，不经过 AI。")
         for qname, why in (
             ("q22_edge_verification_verdicts", "这个服务的依赖边验证判定"),
             ("q1_blast_radius", "它挂了会影响什么"),
@@ -435,17 +435,17 @@ with d2:
     st.subheader("展开路径")
     if expanded or full_expanded:
         for name in sorted(full_expanded):
-            st.markdown(f"- ✦ `{name}` —— 全部邻居")
+            st.markdown(f"- ✦ `{name}`：全部邻居")
         for name in sorted(expanded - full_expanded):
-            st.markdown(f"- ✓ `{name}` —— 下一跳")
+            st.markdown(f"- ✓ `{name}`：下一跳")
         st.caption(
-            "这些是**增量**，不是把基础跳数调大 —— 后者会让所有分支一起膨胀。"
+            "这些是**增量**。把基础跳数调大会让所有分支同时膨胀，那不是同一件事。"
             "✦ 绕开了「每层上限」，✓ 仍受它约束。"
         )
     else:
         st.caption(
             "还没手动展开过。双击一个节点会把它的下一跳并进这张图，"
-            "而不是重画一张 —— 这是「顺着依赖走」和「换一张快照」的区别。"
+            "而不是重画一张。这是「顺着依赖走」和「换一张快照」的区别。"
             "要一次看完某个节点的全部邻居，单击它、用左边的「展开全部邻居」。"
         )
 
@@ -465,13 +465,13 @@ with st.expander("图例与设计说明"):
     st.markdown("---")
     st.markdown(
         "**边颜色 = 故障注入验证状态**，不是关系类型：\n\n"
-        "- 🟢 已确认 —— 注入故障后下游确实受影响\n"
-        "- 🔴 已证伪 —— 注入了但下游没反应，这条边存疑\n"
-        "- 🟠 未定 —— 注入过但结论不明确\n"
-        "- ⚫ 未验证 —— 还没注入过\n\n"
+        "- 🟢 已确认：注入故障后下游确实受影响\n"
+        "- 🔴 已证伪：注入了但下游没反应，这条边存疑\n"
+        "- 🟠 未定：注入过但结论不明确\n"
+        "- ⚫ 未验证：还没注入过\n\n"
         "关系类型（Calls / AccessesData / …）在**悬停边**时显示，"
         "因为颜色这一维已经给了更稀缺的信息：这条依赖是否被证据支持。\n\n"
-        "**虚线 = 跨可用区**。这一维刻意用线型而不是颜色 —— 颜色已经表示验证状态，"
+        "**虚线 = 跨可用区**。这一维用线型而不是颜色，是因为颜色已经表示验证状态；"
         "两种含义挤进同一个通道，读者就分不清自己看到的是哪一件事。"
     )
     st.markdown("---")
@@ -482,5 +482,5 @@ with st.expander("图例与设计说明"):
         "认知上也有硬数字：Yoghourdjian 等（IEEE TVCG 2020，EEG + 眼动对照）测得"
         "**节点超过约 50 个时，被试答错或不确定的比例超过一半**。"
         "所以默认是锚点 + 有界邻域，要看更远靠**双击展开**顺着一条路径走，"
-        "而不是把跳数或每层上限拉满 —— 后者会让所有分支一起膨胀。"
+        "把跳数或每层上限拉满则会让所有分支同时膨胀，那是另一回事。"
     )

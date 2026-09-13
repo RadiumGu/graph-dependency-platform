@@ -693,7 +693,7 @@ if positions:
     _span = max(_xs) - min(_xs)
     if _span > _ASSUMED_CANVAS_PX:
         st.caption(
-            f"ℹ️ 图的横向跨度约 {_span:.0f}px，比画布宽 —— "
+            f"ℹ️ 图的横向跨度约 {_span:.0f}px，比画布宽，"
             f"**约 {max(0, 1 - _ASSUMED_CANVAS_PX / _span) * 100:.0f}% 的内容在视口外，"
             "在图框内横向滚动即可看到。**　"
             "节点名保持 13px 不缩小：缩到装下全图会让标签变糊，那样图就白画了。"
