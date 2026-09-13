@@ -225,13 +225,17 @@ export default function (component) {
     }
     d += ` L ${p[p.length - 1].x},${p[p.length - 1].y}`;
     const color = e.color || "#9aa4b2";
-    const path = el("path", {
+    const attrs = {
       class: "gs-edge",
       d,
       stroke: color,
       "stroke-width": e.width || 1.6,
       "marker-end": `url(#${arrowFor(color)})`,
-    });
+    };
+    // 虚线用来编码「跨 AZ」。刻意不用颜色：颜色那一维已经给了故障注入验证状态，
+    // 两种含义挤进同一个通道，读者就无法分辨自己看到的是哪一件事。
+    if (e.dashed) attrs["stroke-dasharray"] = "6 4";
+    const path = el("path", attrs);
     if (e.title) {
       const t = el("title");
       t.textContent = e.title;

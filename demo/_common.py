@@ -421,6 +421,53 @@ def _neptune_module():
         return None
 
 
+# ── 属地（infra 位置）─────────────────────────────────────────────────────────
+#
+# 「这个 pod 在哪台 EC2、哪个 AZ」是值班时的高频问题，而这条链在图里走的是
+# **结构边**（RunsOn / LocatedIn），不是依赖边 —— 本页只画依赖边，所以位置信息
+# 不在图形里。这是刻意的：把包含边也画成箭头会让杂乱翻倍，而且 pod→ec2→az 是
+# 树状包含、不是依赖，画成同样的箭头会被读成「pod 依赖 ec2」，语义就错了。
+#
+# 所以位置以**属性**的形式给出：选中节点看完整属地链，指标区给 AZ 分布汇总。
+# 后者才是 SRE 真正要判断的那件事 —— 这堆东西有没有跨 AZ 冗余。
+#
+# 一次查询拿全图的属地，不是每个节点查一次：迭代单跳已经让查询次数随前沿增长，
+# 再叠一层会把跨 VPC 的延迟放大到有感。
+@st.cache_data(ttl=120, show_spinner=False)
+def placements(names: tuple) -> dict:
+    """{name: {"host":…, "az":…, "region":…, "subnet":…}}，取不到就留空。"""
+    if not names or not neptune_online():
+        return {}
+    # 单引号会破坏下面的字面量列表 —— 名字里带引号的直接排除，不做转义：
+    # 这一层只是展示属地，少一个节点的位置远好过拼出一条可注入的查询。
+    safe = [n for n in names if isinstance(n, str) and "'" not in n]
+    if not safe:
+        return {}
+    lst = ", ".join(f"'{n}'" for n in safe[:400])
+    # 显式两跳而不是变长路径：Neptune 对带谓词的变长路径支持有限（A 档踩过 400）。
+    # pod 的 AZ 要经 EC2 才拿到，而 EC2/其他资源自己就直连 AZ，所以两条 OPTIONAL
+    # 都写上、用 coalesce 取先有的那个。
+    q = (
+        f"MATCH (n) WHERE n.name IN [{lst}] "
+        "OPTIONAL MATCH (n)-[:RunsOn]->(h) "
+        "OPTIONAL MATCH (h)-[:LocatedIn]->(hz:AvailabilityZone) "
+        "OPTIONAL MATCH (n)-[:LocatedIn]->(nz:AvailabilityZone) "
+        "OPTIONAL MATCH (n)-[:LocatedIn]->(sn:Subnet) "
+        "RETURN n.name AS name, h.name AS host, "
+        "coalesce(hz.name, nz.name) AS az, sn.name AS subnet, n.region AS region"
+    )
+    res = gquery(q)
+    if "error" in res:
+        return {}
+    out = {}
+    for r in res.get("results", []):
+        nm = r.get("name")
+        if nm:
+            out[nm] = {k: r.get(k) for k in ("host", "az", "subnet", "region")}
+    return out
+
+
+
 @st.cache_data(ttl=120, show_spinner=False)
 def neptune_online() -> bool:
     """一次轻量查询判断图谱是否可达。结果缓存 2 分钟，避免每次交互都探。"""

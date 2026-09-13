@@ -779,6 +779,14 @@ if _sel:
                 f"层级 {levels.get((_n['type'], _sel), '—')} · "
                 f"图上被 {len(_ins)} 个依赖、依赖 {len(_outs)} 个"
             )
+        # 属地与交互探索页同源（C.placements），两页给同类信息，
+        # 免得操作者要记「哪一页看得到位置」。位置走结构边，不画在图上。
+        _p = (C.placements((_sel,)) or {}).get(_sel) or {}
+        _chain = [(lab, _p.get(k)) for lab, k in
+                  (("宿主", "host"), ("子网", "subnet"), ("AZ", "az"), ("Region", "region"))]
+        _chain = [(lab, v) for lab, v in _chain if v]
+        if _chain:
+            st.caption("**属地**　" + "　→　".join(f"{lab} `{v}`" for lab, v in _chain))
         if _outs:
             st.caption("**它依赖**：" + "　".join(
                 f"`{e['target']}`（{e.get('edge_type')}）" for e in _outs[:8]))

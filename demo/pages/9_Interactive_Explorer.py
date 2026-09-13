@@ -268,52 +268,6 @@ for e in seen_edges:
     deg[e["source"]] = deg.get(e["source"], 0) + 1
     deg[e["target"]] = deg.get(e["target"], 0) + 1
 
-# ── 属地（infra 位置）─────────────────────────────────────────────────────────
-#
-# 「这个 pod 在哪台 EC2、哪个 AZ」是值班时的高频问题，而这条链在图里走的是
-# **结构边**（RunsOn / LocatedIn），不是依赖边 —— 本页只画依赖边，所以位置信息
-# 不在图形里。这是刻意的：把包含边也画成箭头会让杂乱翻倍，而且 pod→ec2→az 是
-# 树状包含、不是依赖，画成同样的箭头会被读成「pod 依赖 ec2」，语义就错了。
-#
-# 所以位置以**属性**的形式给出：选中节点看完整属地链，指标区给 AZ 分布汇总。
-# 后者才是 SRE 真正要判断的那件事 —— 这堆东西有没有跨 AZ 冗余。
-#
-# 一次查询拿全图的属地，不是每个节点查一次：迭代单跳已经让查询次数随前沿增长，
-# 再叠一层会把跨 VPC 的延迟放大到有感。
-@st.cache_data(ttl=120, show_spinner=False)
-def placements(names: tuple) -> dict:
-    """{name: {"host":…, "az":…, "region":…, "subnet":…}}，取不到就留空。"""
-    if not names or not online:
-        return {}
-    # 单引号会破坏下面的字面量列表 —— 名字里带引号的直接排除，不做转义：
-    # 这一层只是展示属地，少一个节点的位置远好过拼出一条可注入的查询。
-    safe = [n for n in names if isinstance(n, str) and "'" not in n]
-    if not safe:
-        return {}
-    lst = ", ".join(f"'{n}'" for n in safe[:400])
-    # 显式两跳而不是变长路径：Neptune 对带谓词的变长路径支持有限（A 档踩过 400）。
-    # pod 的 AZ 要经 EC2 才拿到，而 EC2/其他资源自己就直连 AZ，所以两条 OPTIONAL
-    # 都写上、用 coalesce 取先有的那个。
-    q = (
-        f"MATCH (n) WHERE n.name IN [{lst}] "
-        "OPTIONAL MATCH (n)-[:RunsOn]->(h) "
-        "OPTIONAL MATCH (h)-[:LocatedIn]->(hz:AvailabilityZone) "
-        "OPTIONAL MATCH (n)-[:LocatedIn]->(nz:AvailabilityZone) "
-        "OPTIONAL MATCH (n)-[:LocatedIn]->(sn:Subnet) "
-        "RETURN n.name AS name, h.name AS host, "
-        "coalesce(hz.name, nz.name) AS az, sn.name AS subnet, n.region AS region"
-    )
-    res = C.gquery(q)
-    if "error" in res:
-        return {}
-    out = {}
-    for r in res.get("results", []):
-        nm = r.get("name")
-        if nm:
-            out[nm] = {k: r.get(k) for k in ("host", "az", "subnet", "region")}
-    return out
-
-
 nodes = []
 for nid, lb in seen_nodes.items():
     gname, gcolor = group_of(lb)
@@ -337,7 +291,20 @@ for nid, lb in seen_nodes.items():
         n["fill"] = "#f4fbf5"
     nodes.append(n)
 
-_place = placements(tuple(sorted(seen_nodes)))
+_place = C.placements(tuple(sorted(seen_nodes)))
+
+# 跨 AZ 的依赖边：两端都有属地且 AZ 不同。这是**边的属性**，所以画在图上 ——
+# 与「节点在哪个 AZ」（属性、进详情）不同，跨 AZ 调用本身是关系的一个事实：
+# 多一跳网络延迟、产生跨可用区数据传输费用，而且 AZ 故障时它的失效方式与
+# 同区调用不同。用虚线画，不占用颜色那一维（颜色已经给了验证状态）。
+_crossed = 0
+for _e in seen_edges:
+    _sa = (_place.get(_e["source"]) or {}).get("az")
+    _ta = (_place.get(_e["target"]) or {}).get("az")
+    if _sa and _ta and _sa != _ta:
+        _e["dashed"] = True
+        _e["title"] = (_e.get("title") or "") + f" · 跨 AZ {_sa}→{_ta}"
+        _crossed += 1
 
 m = st.columns(6)
 m[0].metric("节点", len(nodes))
@@ -371,6 +338,13 @@ if len(_az_count) == 1 and _placed >= 3:
         "（位置来自 `RunsOn` / `LocatedIn` 结构边，不画在图上：那是包含关系，"
         "画成箭头会被读成依赖。）",
         icon="🏗️",
+    )
+elif _crossed:
+    st.info(
+        f"🔀 有 **{_crossed}** 条依赖边跨了可用区（图上画成**虚线**）。"
+        "跨 AZ 调用多一跳网络延迟、产生跨区数据传输费用，"
+        "但换来的是单 AZ 故障时不会一起失效 —— 这是取舍，不是缺陷。"
+        "悬停虚线边可以看到具体是哪两个 AZ 之间。"
     )
 
 if expanded or full_expanded:
@@ -496,7 +470,9 @@ with st.expander("图例与设计说明"):
         "- 🟠 未定 —— 注入过但结论不明确\n"
         "- ⚫ 未验证 —— 还没注入过\n\n"
         "关系类型（Calls / AccessesData / …）在**悬停边**时显示，"
-        "因为颜色这一维已经给了更稀缺的信息：这条依赖是否被证据支持。"
+        "因为颜色这一维已经给了更稀缺的信息：这条依赖是否被证据支持。\n\n"
+        "**虚线 = 跨可用区**。这一维刻意用线型而不是颜色 —— 颜色已经表示验证状态，"
+        "两种含义挤进同一个通道，读者就分不清自己看到的是哪一件事。"
     )
     st.markdown("---")
     st.markdown(
