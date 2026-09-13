@@ -130,6 +130,20 @@ SEVERANCE_METHODS: dict[str, dict] = {
 #: 内联策略名。固定前缀便于识别与清理遗留。
 POLICY_PREFIX = "ChaosDenyProbe"
 
+#: 宠物可用性重置接口。`/housekeeping` 只删领养交易记录，不重置可用性 ——
+#: 真正把宠物放回去的那段在 petsite 现版代码里是注释掉的，所以负载驱动
+#: 必须自己调这个 API，否则十几分钟就把库存耗光，而库存耗光的表现
+#: （adopt 探针归零）与「依赖被切断」完全一样，会产出假 confirmed。
+#: 从 SSM 现取而**不硬编码** —— 本项目已因凭记忆写名字踩过七次。
+def _status_updater_url() -> str:
+    out, _ = _aws("ssm", "get-parameter", "--name",
+                  "/petstore/updateadoptionstatusurl")
+    try:
+        return (out or {}).get("Parameter", {}).get("Value") or ""
+    except Exception:
+        return ""
+
+
 #: 观测下限。低于它拒绝出判定 —— 判定器对「被测路径本身」的调用数有要求，
 #: 少于这个数时任何退化数字都是噪声（回执里那 2 条 inconclusive 的原因）。
 MIN_BASELINE_REQUESTS = 20
@@ -423,6 +437,8 @@ class _LoadDriver:
         self._gap = max(1.0, 60.0 * workers / max(1, rate_per_min))
         self._sent = 0
         self._failed = 0
+        self._unreturned = 0
+        self._updater = ""
         self._lock = threading.Lock()
 
     def _drive(self, uid: str, slot: int) -> None:
@@ -431,6 +447,7 @@ class _LoadDriver:
         from runner.business_probes import parse_pets
         base = _PETSITE_URL
         while not self._stop.is_set():
+            pet = None
             try:
                 with urllib.request.urlopen(
                         base + "/?userId=" + uid, timeout=20) as r:
@@ -462,9 +479,35 @@ class _LoadDriver:
                 with self._lock:
                     self._failed += 1
             finally:
-                # 每轮都清理：不清理会单调消耗库存，几分钟后可领养的就没了，
-                # 而领养探针的前置条件正是「有可用宠物」——
-                # 负载会把自己造成的库存枯竭伪装成业务退化。
+                # ── 必须把宠物「放回去」，否则库存单调消耗 ──
+                #
+                # 2026-09-13 踩到：我以为 `/housekeeping?userId=X` 会释放宠物，
+                # 于是驱动器每轮只调它。实测跑完约 1,400 次领养后
+                # **26 只里只剩 3 只可用**，领养探针随之报 value=0。
+                #
+                # 读 `HomeController.HouseKeeping()` 才知道它只调
+                # `CLEANUP_ADOPTIONS_URL` 删**领养交易记录**，
+                # 不重置宠物可用性 —— 真正把宠物放回去的那段
+                # （PUT `updateadoptionstatusurl`，petavailability=yes）
+                # 在现版代码里**是注释掉的**。
+                #
+                # 所以驱动器必须自己调那个 API 归还宠物。不归还的话，
+                # 负载会在十几分钟内把库存耗光，而库存耗光的表现
+                # （adopt 探针归零）与「依赖被切断」**完全一样** ——
+                # 那会直接产出假 confirmed。
+                if pet is not None:
+                    try:
+                        body = json.dumps({
+                            "pettype": pet["pettype"], "petid": pet["id"],
+                            "petavailability": "yes"}).encode()
+                        rq = urllib.request.Request(
+                            self._updater, data=body, method="PUT",
+                            headers={"Content-Type": "application/json"})
+                        with urllib.request.urlopen(rq, timeout=25):
+                            pass
+                    except Exception:
+                        with self._lock:
+                            self._unreturned += 1
                 try:
                     with urllib.request.urlopen(
                             base + "/housekeeping?userId=" + uid, timeout=20):
@@ -474,6 +517,13 @@ class _LoadDriver:
             self._stop.wait(self._gap)
 
     def start(self) -> None:
+        # 归还接口的地址从 SSM 现取。取不到就不启动 —— 不归还宠物的负载会在
+        # 十几分钟内耗光库存，而那会伪装成业务退化并产出假 confirmed。
+        self._updater = _status_updater_url()
+        if not self._updater:
+            raise RuntimeError(
+                "取不到 /petstore/updateadoptionstatusurl —— 拒绝启动负载驱动。"
+                "没有归还宠物的手段时，负载会耗光库存并伪装成业务退化。")
         for i in range(self._workers):
             # 每个 worker 一个独立 uid，见类 docstring 第二条理由。
             t = threading.Thread(target=self._drive,
@@ -489,7 +539,10 @@ class _LoadDriver:
     @property
     def stats(self) -> str:
         with self._lock:
-            return "已驱动 %d 次领养（失败 %d）" % (self._sent, self._failed)
+            extra = ("，⚠️ %d 只未归还" % self._unreturned
+                     if self._unreturned else "")
+            return ("已驱动 %d 次领养（失败 %d%s）"
+                    % (self._sent, self._failed, extra))
 
 
 def _measure(client: str, server: str, window: int,
