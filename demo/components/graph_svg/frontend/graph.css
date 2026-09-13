@@ -1,0 +1,76 @@
+/* graph.css —— 自绘依赖图的样式。
+ *
+ * 样式全在这里，不受任何图库的内置规则约束 —— 这是自绘相对封装组件的主要收益：
+ * 上一个方案里「节点标签是否显示」由组件硬编码的 min-zoomed-font-size 决定，
+ * 而这里字号就是下面这一条 .gs-label 的 font-size，没有别人能改它。
+ */
+
+.gs-wrap {
+  width: 100%;
+  height: 100%;
+  overflow: auto;                 /* 图比容器大时滚动浏览，不缩小字号 */
+  background: #ffffff;
+  border: 1px solid #e3e8ef;
+  border-radius: 10px;
+}
+
+.gs-svg {
+  display: block;
+}
+
+.gs-empty {
+  padding: 28px 18px;
+  color: #5f6b7a;
+  font: 13px -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* ── 边 ─────────────────────────────────────────────────────────────────── */
+.gs-edge {
+  fill: none;
+  stroke-linecap: round;
+  opacity: 0.85;
+}
+
+/* ── 节点 ───────────────────────────────────────────────────────────────── */
+.gs-node {
+  cursor: pointer;
+  outline: none;
+}
+
+.gs-box {
+  stroke-width: 1;
+  transition: stroke 0.12s ease, filter 0.12s ease;
+}
+
+.gs-node:hover .gs-box {
+  stroke: #7f8c9b;
+  filter: drop-shadow(0 1px 3px rgba(15, 25, 45, 0.13));
+}
+
+.gs-node.is-selected .gs-box {
+  stroke: #3759ce;
+  stroke-width: 2;
+}
+
+/* 键盘可达：焦点必须看得见，否则 tabindex 只是形式 */
+.gs-node:focus-visible .gs-box {
+  stroke: #3759ce;
+  stroke-width: 2;
+  filter: drop-shadow(0 0 0 3px rgba(55, 89, 206, 0.28));
+}
+
+.gs-label {
+  font: 13px -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  fill: #16191f;                  /* 字色写死，不跟随主题：白底白字是上一版的坑 */
+  dominant-baseline: auto;
+  pointer-events: none;           /* 点击落在整块节点上，不被文字截走 */
+  user-select: none;
+}
+
+.gs-badge-t {
+  font: 700 9px -apple-system, "Segoe UI", Roboto, sans-serif;
+  fill: #ffffff;
+  text-anchor: middle;
+  pointer-events: none;
+  user-select: none;
+}
