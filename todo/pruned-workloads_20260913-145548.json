@@ -1,0 +1,571 @@
+{
+  "taken_at": "20260913-145548",
+  "applied": true,
+  "targets": [
+    "awesomeshop"
+  ],
+  "node_count": 27,
+  "edge_count": 53,
+  "nodes": [
+    {
+      "namespace": "awesomeshop",
+      "label": "Microservice",
+      "name": "gateway-service",
+      "scope": "observed",
+      "source": "deepflow-etl",
+      "edges": [
+        {
+          "et": "Implements",
+          "other": "gateway-service",
+          "olbl": "K8sService",
+          "src": "eks-etl"
+        },
+        {
+          "et": "Manages",
+          "other": "gateway-service",
+          "olbl": "Deployment",
+          "src": "eks-etl"
+        },
+        {
+          "et": "OwnedBy",
+          "other": "awesomeshop",
+          "olbl": "Namespace",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "Microservice",
+      "name": "auth-service",
+      "scope": "observed",
+      "source": "deepflow-etl",
+      "edges": [
+        {
+          "et": "Implements",
+          "other": "auth-service",
+          "olbl": "K8sService",
+          "src": "eks-etl"
+        },
+        {
+          "et": "Manages",
+          "other": "auth-service",
+          "olbl": "Deployment",
+          "src": "eks-etl"
+        },
+        {
+          "et": "AccessesData",
+          "other": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+          "olbl": "RDSCluster",
+          "src": "deepflow-dns"
+        },
+        {
+          "et": "OwnedBy",
+          "other": "awesomeshop",
+          "olbl": "Namespace",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "Microservice",
+      "name": "artillery",
+      "scope": "observed",
+      "source": "deepflow-etl",
+      "edges": [
+        {
+          "et": "OwnedBy",
+          "other": "awesomeshop",
+          "olbl": "Namespace",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "Microservice",
+      "name": "order-service",
+      "scope": "observed",
+      "source": "deepflow-etl",
+      "edges": [
+        {
+          "et": "Implements",
+          "other": "order-service",
+          "olbl": "K8sService",
+          "src": "eks-etl"
+        },
+        {
+          "et": "Manages",
+          "other": "order-service",
+          "olbl": "Deployment",
+          "src": "eks-etl"
+        },
+        {
+          "et": "AccessesData",
+          "other": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+          "olbl": "RDSCluster",
+          "src": "deepflow-dns"
+        },
+        {
+          "et": "OwnedBy",
+          "other": "awesomeshop",
+          "olbl": "Namespace",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "Microservice",
+      "name": "points-service",
+      "scope": "observed",
+      "source": "deepflow-etl",
+      "edges": [
+        {
+          "et": "Implements",
+          "other": "points-service",
+          "olbl": "K8sService",
+          "src": "eks-etl"
+        },
+        {
+          "et": "Manages",
+          "other": "points-service",
+          "olbl": "Deployment",
+          "src": "eks-etl"
+        },
+        {
+          "et": "AccessesData",
+          "other": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+          "olbl": "RDSCluster",
+          "src": "deepflow-dns"
+        },
+        {
+          "et": "OwnedBy",
+          "other": "awesomeshop",
+          "olbl": "Namespace",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "Microservice",
+      "name": "artillery-write",
+      "scope": "observed",
+      "source": "deepflow-etl",
+      "edges": [
+        {
+          "et": "OwnedBy",
+          "other": "awesomeshop",
+          "olbl": "Namespace",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "Microservice",
+      "name": "product-service",
+      "scope": "observed",
+      "source": "deepflow-etl",
+      "edges": [
+        {
+          "et": "Implements",
+          "other": "product-service",
+          "olbl": "K8sService",
+          "src": "eks-etl"
+        },
+        {
+          "et": "Manages",
+          "other": "product-service",
+          "olbl": "Deployment",
+          "src": "eks-etl"
+        },
+        {
+          "et": "AccessesData",
+          "other": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+          "olbl": "RDSCluster",
+          "src": "deepflow-dns"
+        },
+        {
+          "et": "OwnedBy",
+          "other": "awesomeshop",
+          "olbl": "Namespace",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "K8sService",
+      "name": "frontend",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": []
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "Deployment",
+      "name": "auth-service",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "Manages",
+          "other": "auth-service-hpa",
+          "olbl": "HPA",
+          "src": "eks-etl"
+        },
+        {
+          "et": "Manages",
+          "other": "auth-service",
+          "olbl": "Microservice",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "Deployment",
+      "name": "points-service",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "Manages",
+          "other": "points-service-hpa",
+          "olbl": "HPA",
+          "src": "eks-etl"
+        },
+        {
+          "et": "Manages",
+          "other": "points-service",
+          "olbl": "Microservice",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "K8sService",
+      "name": "order-service",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "Implements",
+          "other": "order-service",
+          "olbl": "Microservice",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "K8sService",
+      "name": "points-service",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "Implements",
+          "other": "points-service",
+          "olbl": "Microservice",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "HPA",
+      "name": "product-service-hpa",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "Manages",
+          "other": "product-service",
+          "olbl": "Deployment",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "Deployment",
+      "name": "gateway-service",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "Manages",
+          "other": "gateway-service-hpa",
+          "olbl": "HPA",
+          "src": "eks-etl"
+        },
+        {
+          "et": "Manages",
+          "other": "gateway-service",
+          "olbl": "Microservice",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "K8sService",
+      "name": "gateway-service",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "Implements",
+          "other": "gateway-service",
+          "olbl": "Microservice",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "HPA",
+      "name": "auth-service-hpa",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "Manages",
+          "other": "auth-service",
+          "olbl": "Deployment",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "HPA",
+      "name": "frontend-hpa",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "Manages",
+          "other": "frontend",
+          "olbl": "Deployment",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "HPA",
+      "name": "points-service-hpa",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "Manages",
+          "other": "points-service",
+          "olbl": "Deployment",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "Deployment",
+      "name": "order-service",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "Manages",
+          "other": "order-service-hpa",
+          "olbl": "HPA",
+          "src": "eks-etl"
+        },
+        {
+          "et": "Manages",
+          "other": "order-service",
+          "olbl": "Microservice",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "K8sService",
+      "name": "product-service",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "Implements",
+          "other": "product-service",
+          "olbl": "Microservice",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "K8sService",
+      "name": "auth-service",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "Implements",
+          "other": "auth-service",
+          "olbl": "Microservice",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "Deployment",
+      "name": "frontend",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "Manages",
+          "other": "frontend-hpa",
+          "olbl": "HPA",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "Deployment",
+      "name": "product-service",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "Manages",
+          "other": "product-service-hpa",
+          "olbl": "HPA",
+          "src": "eks-etl"
+        },
+        {
+          "et": "Manages",
+          "other": "product-service",
+          "olbl": "Microservice",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "HPA",
+      "name": "gateway-service-hpa",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "Manages",
+          "other": "gateway-service",
+          "olbl": "Deployment",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "HPA",
+      "name": "order-service-hpa",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "Manages",
+          "other": "order-service",
+          "olbl": "Deployment",
+          "src": "eks-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "TargetGroup",
+      "name": "awesomeshop-frontend",
+      "scope": "unknown",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "RoutesTo",
+          "other": "Servic-PetSi-by0kpyBtxswj",
+          "olbl": "LoadBalancer",
+          "src": "aws-etl"
+        },
+        {
+          "et": "ForwardsTo",
+          "other": "petsite",
+          "olbl": "Microservice",
+          "src": "aws-etl"
+        }
+      ]
+    },
+    {
+      "namespace": "awesomeshop",
+      "label": "Namespace",
+      "name": "awesomeshop",
+      "scope": "observed",
+      "source": "aws-etl",
+      "edges": [
+        {
+          "et": "OwnedBy",
+          "other": "order-service",
+          "olbl": "Microservice",
+          "src": "eks-etl"
+        },
+        {
+          "et": "OwnedBy",
+          "other": "product-service",
+          "olbl": "Microservice",
+          "src": "eks-etl"
+        },
+        {
+          "et": "OwnedBy",
+          "other": "gateway-service",
+          "olbl": "Microservice",
+          "src": "eks-etl"
+        },
+        {
+          "et": "OwnedBy",
+          "other": "points-service",
+          "olbl": "Microservice",
+          "src": "eks-etl"
+        },
+        {
+          "et": "OwnedBy",
+          "other": "artillery",
+          "olbl": "Microservice",
+          "src": "eks-etl"
+        },
+        {
+          "et": "OwnedBy",
+          "other": "artillery-write",
+          "olbl": "Microservice",
+          "src": "eks-etl"
+        },
+        {
+          "et": "OwnedBy",
+          "other": "auth-service",
+          "olbl": "Microservice",
+          "src": "eks-etl"
+        },
+        {
+          "et": "BelongsTo",
+          "other": "PetSite",
+          "olbl": "EKSCluster",
+          "src": "eks-etl"
+        }
+      ]
+    }
+  ]
+}
