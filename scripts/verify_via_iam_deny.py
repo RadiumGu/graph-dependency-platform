@@ -354,6 +354,30 @@ def run_probe(service: str, label: str, target: str,
         print("[dry-run] 两个通道基线都合格，具备执行条件。加 --apply 真跑。")
         return 0
 
+    # ── 置位实验期互锁 ──
+    #
+    # 合成流量 cron（领养 / Waggle）会在故障期发现链路坏了并按设计报警 ——
+    # 那是本实验的**预期副作用**，不该进用户的通知渠道。2026-09-13 首发实验
+    # 就产生了一条这样的假警报。反向也成立：cron 的突发流量会扰动基线与恢复判定。
+    #
+    # 标记模块刻意从 `~/.kiro/crew/crons/` 导入而不在这里复制一份路径与格式 ——
+    # 本仓库有过「同一份清单四处各抄一份、其中两处漂移到实际错误」的记录。
+    _lock = None
+    try:
+        sys.path.insert(0, os.path.expanduser("~/.kiro/crew/crons"))
+        import chaos_lock as _lock  # type: ignore
+    except Exception as _e:
+        print("⚠️ 取不到实验期互锁模块（%r）—— 合成流量 cron 可能在故障期报假警报"
+              % _e)
+
+    # 预算给足余量：restart + 生效轮询 + hold + 恢复确认，宁可多标一会儿。
+    budget = 240 + propagation_budget + hold_seconds + _RECOVERY_BUDGET_SECONDS
+    if _lock:
+        _lock.begin("%s -> %s" % (service, target), budget,
+                    note="iam-deny probe")
+        print("已置位实验期互锁（%ds 后自动失效）—— 合成流量 cron 本期间整轮跳过"
+              % budget)
+
     policy_name = "%s-%s" % (POLICY_PREFIX, int(time.time()))
     during = biz_during = post = None
     removed = False
@@ -502,6 +526,9 @@ def run_probe(service: str, label: str, target: str,
         "caveat": "IAM deny 证明依赖承重，不等于延迟/部分失败场景测试",
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     print("   记录: %s" % out.relative_to(_ROOT))
+    if _lock:
+        _lock.end()
+        print("   已释放实验期互锁 —— 合成流量 cron 下一轮恢复正常。")
     return 0
 
 
