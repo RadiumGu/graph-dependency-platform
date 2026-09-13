@@ -30,6 +30,7 @@ frameless、双向——所以当初选那个封装的前提已经不成立。�
 
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -104,7 +105,9 @@ def _neighbors_live(name: str, ets: tuple, limit: int) -> dict:
         "RETURN coalesce(startNode(r).name, startNode(r).tool_key, startNode(r).arn) AS source, "
         "labels(startNode(r))[0] AS source_label, type(r) AS edge_type, "
         "coalesce(endNode(r).name, endNode(r).tool_key, endNode(r).arn) AS target, "
-        "labels(endNode(r))[0] AS target_label, r.verify_status AS verify_status "
+        "labels(endNode(r))[0] AS target_label, r.verify_status AS verify_status, "
+        "r.verify_degradation AS deg, r.verify_last AS verify_last, "
+        "r.nfm_cross_az AS nfm_cross_az "
         f"LIMIT {int(limit)}"
     )
 
@@ -235,10 +238,31 @@ def absorb(rows: list) -> list:
             _edge_keys.add(key)
             vs = r.get("verify_status") or "untested"
             color, vs_text = VS_COLOR.get(vs, VS_COLOR["untested"])
+            # 边的粗细编码**实测退化率**，不是「确认与否」。
+            # verify_degradation 是故障注入后观测方的退化百分比 —— 也就是这条依赖
+            # 断掉时下游坏到什么程度。实测分布很宽（10% / 62% / 64%），
+            # 而「确认与否」只有两档：把粗细给二值化的信息，就浪费了真正的爆炸半径。
+            # 1.4–5.0px 之间线性映射，未确认或无退化数据的保持最细。
+            _deg = r.get("deg")
+            if vs == "confirmed" and isinstance(_deg, (int, float)) and _deg > 0:
+                width = 1.6 + min(float(_deg), 100.0) / 100.0 * 3.4
+            else:
+                width = 1.4
+            _bits = [f"{r.get('edge_type')} · {vs_text}"]
+            if isinstance(_deg, (int, float)) and _deg > 0:
+                _bits.append(f"下游退化 {_deg:.1f}%")
+            # 验证时效：一条边「确认过」不等于「现在还成立」。
+            # 把距今天数摆出来，让读者自己判断这个结论有多新。
+            _vl = r.get("verify_last")
+            if isinstance(_vl, (int, float)) and _vl > 0:
+                _days = (time.time() - float(_vl)) / 86400.0
+                _bits.append(f"{_days:.1f} 天前验证" if _days >= 1 else "今天验证过")
             seen_edges.append({
-                "source": s, "target": t, "color": color,
-                "width": 2.0 if vs == "confirmed" else 1.5,
-                "title": f"{r.get('edge_type')} · {vs_text}",
+                "source": s, "target": t, "color": color, "width": round(width, 2),
+                "title": " · ".join(_bits),
+                "_nfm_cross_az": r.get("nfm_cross_az"),
+                "_deg": _deg if isinstance(_deg, (int, float)) else None,
+                "_verify_last": _vl if isinstance(_vl, (int, float)) else None,
             })
         out.append(t if downstream else s)
     return out
@@ -293,18 +317,31 @@ for nid, lb in seen_nodes.items():
 
 _place = C.placements(tuple(sorted(seen_nodes)))
 
-# 跨 AZ 的依赖边：两端都有属地且 AZ 不同。这是**边的属性**，所以画在图上 ——
-# 与「节点在哪个 AZ」（属性、进详情）不同，跨 AZ 调用本身是关系的一个事实：
-# 多一跳网络延迟、产生跨可用区数据传输费用，而且 AZ 故障时它的失效方式与
-# 同区调用不同。用虚线画，不占用颜色那一维（颜色已经给了验证状态）。
-_crossed = 0
+# 跨 AZ 的依赖边：**先信图上的观测字段，再退到属地推算**。
+#
+# 边上有 `nfm_cross_az`（Network Flow Monitor 的实测结果），但只覆盖约 11% 的依赖边
+# （实测 91 条依赖边里 10 条有这个字段）—— NFM 只看得到它采样到的网络流。
+# 所以两个来源是互补的：有观测就用观测，没有就用两端属地推算。
+#
+# 顺序不能反：属地推算是「两端 AZ 不同所以调用跨区」，而 NFM 是真的看到了流量走向。
+# 推算会把「同城不同 AZ 但走了 VPC 端点」这类情况算错，观测不会。
+_crossed = _crossed_obs = 0
 for _e in seen_edges:
-    _sa = (_place.get(_e["source"]) or {}).get("az")
-    _ta = (_place.get(_e["target"]) or {}).get("az")
-    if _sa and _ta and _sa != _ta:
+    _obs = _e.pop("_nfm_cross_az", None)
+    if _obs is True:
         _e["dashed"] = True
-        _e["title"] = (_e.get("title") or "") + f" · 跨 AZ {_sa}→{_ta}"
+        _e["title"] = (_e.get("title") or "") + " · 跨 AZ（NFM 实测）"
         _crossed += 1
+        _crossed_obs += 1
+    elif _obs is False:
+        pass  # 实测同区，不必再拿属地去推翻观测
+    else:
+        _sa = (_place.get(_e["source"]) or {}).get("az")
+        _ta = (_place.get(_e["target"]) or {}).get("az")
+        if _sa and _ta and _sa != _ta:
+            _e["dashed"] = True
+            _e["title"] = (_e.get("title") or "") + f" · 跨 AZ {_sa}→{_ta}（按属地推算）"
+            _crossed += 1
 
 m = st.columns(6)
 m[0].metric("节点", len(nodes))
@@ -340,11 +377,13 @@ if len(_az_count) == 1 and _placed >= 3:
         icon="🏗️",
     )
 elif _crossed:
+    _src = (f"其中 {_crossed_obs} 条来自 NFM 实测，其余按两端属地推算"
+            if _crossed_obs else "按两端属地推算")
     st.info(
-        f"🔀 有 **{_crossed}** 条依赖边跨了可用区（图上画成**虚线**）。"
+        f"🔀 有 **{_crossed}** 条依赖边跨了可用区（图上画成**虚线**，{_src}）。"
         "跨 AZ 调用多一跳网络延迟、产生跨区数据传输费用，"
         "换来的是单 AZ 故障时不会一起失效。这是取舍，不是缺陷。"
-        "悬停虚线边可以看到具体是哪两个 AZ 之间。"
+        "悬停虚线边可以看到具体是哪两个 AZ、以及这一条是实测还是推算。"
     )
 
 if expanded or full_expanded:
@@ -353,7 +392,11 @@ if expanded or full_expanded:
         st.session_state[S_FULL] = set()
         st.rerun()
 
-res = graph_svg.render(nodes, seen_edges, height=640, anchor=anchor, key="proto")
+# 传给组件前摘掉内部字段（`_` 前缀）：组件只认
+# source/target/color/width/title/dashed，其余键只会白占序列化体积。
+_render_edges = [{k: v for k, v in e.items() if not k.startswith("_")}
+                 for e in seen_edges]
+res = graph_svg.render(nodes, _render_edges, height=640, anchor=anchor, key="proto")
 
 # 双击展开：把节点并进集合并重画。
 # 只在它**还不在集合里**时才 rerun —— setTriggerValue 是一次性的，但同一个
@@ -469,9 +512,14 @@ with st.expander("图例与设计说明"):
         "- 🔴 已证伪：注入了但下游没反应，这条边存疑\n"
         "- 🟠 未定：注入过但结论不明确\n"
         "- ⚫ 未验证：还没注入过\n\n"
-        "关系类型（Calls / AccessesData / …）在**悬停边**时显示，"
-        "因为颜色这一维已经给了更稀缺的信息：这条依赖是否被证据支持。\n\n"
-        "**虚线 = 跨可用区**。这一维用线型而不是颜色，是因为颜色已经表示验证状态；"
+        "**边的粗细 = 实测退化率**（`verify_degradation`）：注入故障后观测方退化的"
+        "百分比，也就是这条依赖断掉时下游坏到什么程度。实测分布很宽（10% 到 64%），"
+        "所以粗细给了它而不是给「确认与否」那两档。未确认的边一律最细。\n\n"
+        "关系类型、退化率数值、**距今多久验证过**都在**悬停边**时显示。"
+        "时效值得单独看一眼：一条边确认过，不等于它现在还成立。\n\n"
+        "**虚线 = 跨可用区**。优先用边上 `nfm_cross_az`（Network Flow Monitor 实测，"
+        "但只覆盖约一成的依赖边），没有观测时退回按两端属地推算，悬停可看到是哪一种。"
+        "这一维用线型而不是颜色，是因为颜色已经表示验证状态；"
         "两种含义挤进同一个通道，读者就分不清自己看到的是哪一件事。"
     )
     st.markdown("---")
