@@ -65,6 +65,40 @@ lead-in 不够基线窗口就跑不满）；`--hold` 也要 ≥ `--window`，
 失败的 SDK 调用发子段。判定已认这种形态，但要求三环齐全：
 基线有量 → 故障期消失 → **回滚后重现**（第三环排除采样波动）。
 
+## ⚠️ 目标可达性：IAM deny 最多做到 14/47（2026-09-13 实测）
+
+把剩余 24 条未评估边全部实测了一遍（420s 窗口、负载约 90 次领养/分），
+结论是**门槛 24 条用 IAM deny 达不到**。逐条原因：
+
+| 数量 | 目标 | 阻塞原因（都是实测，不是推断） |
+|---|---|---|
+| 6 | `RDSInstance` | **IAM deny 无效**：数据面走 postgres 凭证，`rds:*` deny 拦不住。另外 X-Ray 里只有一个 `postgres` 节点（`Database::SQL`），**reader 与 writer 分不开** —— 类型前缀匹配会让两条边都命中同一个节点 |
+| 1 | `Microservice(petsearch)` | 服务间 HTTP，不经 IAM。可观测（662 次）但切不断 |
+| 3 | `S3Bucket` | 稳态成功率 0%（CreateBucket 缺陷），基线闸门必拒 |
+| 2 | `ECRRepository` | 拉镜像是 kubelet 做的，IRSA 角色管不到 |
+| 2 | statusupdater Lambda | 无业务探针 |
+| 2 | `StepFunction` | **X-Ray 服务图里没有 StepFunctions 节点**（实测三种前缀全 0；那 1547 次是 API Gateway 节点，拿它当状态机就是把另一个资源的流量算到这条边上） |
+| 3 | `DynamoDBTable` | petsite / payforadoption / statusupdater 侧实测 **0 次** —— 不可观测 |
+| 5 | `AWSServiceEndpoint` | `sts`、`stepfunctions`、petsearch 的 `ssm`/`sts` 实测 **0 次**；`dynamodb` 属 statusupdater |
+| **1** | `petsite → AWSServiceEndpoint(sns)` | **唯一剩下可跑的**（29 次、零错误） |
+
+所以上限是 13 + 1 = **14 条**（若该边也是同对多边则 15）。
+
+### 这不是失败，是一个应当上报的事实
+
+大量边实测 **0 次调用**，那不是「验证做得不够」，而是**可观测性缺口**：
+依赖是声明的、但当前遥测看不见它。对合规报告来说，
+「declared / not observed / 现有遥测不可验证」本身就是一个诚实且有价值的状态 ——
+把它们硬凑成 `confirmed` 才是造假。
+
+### 要继续推高覆盖率，需要的是新手段而不是更多轮次
+
+- **RDS 那 6 条**：需要网络层切断（K8s NetworkPolicy 才能按 Pod 隔离；
+  安全组按 SG 生效，若这几个服务共用 SG 就无法归因到单个服务）。
+  还要先解决「reader/writer 在 X-Ray 里分不开」这个观测问题。
+- **DynamoDB / StepFunction / 端点那些 0 次的边**：先补埋点，
+  没有观测就没有基线，没有基线任何退化数字都是噪声。
+
 ## 候选边（按优先级）
 
 源服务都有独立 IRSA 角色，所以 deny 的半径恰好是一个服务。

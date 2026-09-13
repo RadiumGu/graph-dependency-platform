@@ -80,6 +80,26 @@ REGION = os.environ.get("REGION", "ap-northeast-1")
 #: 而 X-Ray 的节点叫 `SQS`（Type=`AWS::SQS`）或队列 URL —— **按名字永远匹配不上**，
 #: `collect_edge_flow` 会返回 ok=False，基线闸门于是拒绝开跑。
 #: 空元组表示按名字就能匹配上（DynamoDB 表、S3 桶实测可以）。
+#: `AWSServiceEndpoint` 的图谱名（服务名）→ X-Ray 节点的 Type 前缀。
+#:
+#: 必须是一张**按实测填的**表，不能从服务名推 —— 同一个 AWS 服务在 X-Ray 里
+#: 可能有多个节点形态。2026-09-13 实测（420s 窗口、负载约 90 次领养/分）：
+#:
+#:     ssm            AWS::SSM                        634 次  ✓ 可测
+#:     ssm            AWS::SimpleSystemsManagement      0 次  （petsite 侧才是这个形态）
+#:     sns            AWS::SNS                         29 次  ✓ 可测
+#:     sts            AWS::STS / AWS::SecurityToken…    0 次  ✗ 不可观测
+#:     stepfunctions  AWS::StepFunctions / AWS::States  0 次  ✗ 不可观测
+#:
+#: 空元组表示**已实测确认不可观测**，与「还没测」不同 —— 前者应当跳过，
+#: 后者应当先测。所以这里只登记测过的，未登记的会在基线闸门处响。
+_ENDPOINT_XRAY_TYPES: dict[str, tuple] = {
+    "ssm": ("AWS::SSM", "AWS::SimpleSystemsManagement"),
+    "sns": ("AWS::SNS",),
+    "sqs": ("AWS::SQS",),
+    "dynamodb": ("AWS::DynamoDB",),
+}
+
 SEVERANCE_METHODS: dict[str, dict] = {
     "DynamoDBTable": {
         "actions": ["dynamodb:*"],
@@ -610,6 +630,15 @@ def run_probe(service: str, label: str, target: str,
 
     print("── 1. 基线 ──")
     xray_types = tuple(SEVERANCE_METHODS[label].get("xray_types") or ())
+    if label == "AWSServiceEndpoint":
+        # 端点边的类型前缀按**目标服务名**查实测表，见 `_ENDPOINT_XRAY_TYPES`。
+        # 服务名推不出节点类型（同一服务在 X-Ray 里可能有多个节点形态），
+        # 所以未登记时不猜 —— 让基线闸门以 ok=False 响，而不是静默测 0 次。
+        xray_types = _ENDPOINT_XRAY_TYPES.get(target.lower(), ())
+        if not xray_types:
+            print("   ⚠️ 端点 %r 未登记 X-Ray 节点类型前缀 —— "
+                  "基线大概率采集不到。先实测确认它是否可观测，"
+                  "再决定登记还是列入跳过。" % target)
     base = _measure(service, target, window, xray_types)
     print("   被测边 %s -> %s: %s" % (service, target[:26], base))
     biz_base = _probe_business(service)
