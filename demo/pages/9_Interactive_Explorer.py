@@ -351,9 +351,48 @@ layout_name = st.radio(
 layout_key = {"dagre（分层，推荐）": "dagre", "fcose（力导向）": "fcose",
               "breadthfirst（广度树）": "breadthfirst", "cola": "cola"}[layout_name]
 
+# dagre 走**自定义 dict 而不是字符串键**，为了拿到 `rankDir`。
+#
+# 上游 LAYOUTS["dagre"] 只有 {name: "dagre"} + 默认属性，不设 rankDir，于是用
+# cytoscape-dagre 的默认 "TB"：层自上而下、**同层节点横向铺开**。一个锚点带
+# 12 个一跳邻居就是两层，第二层把 12 个节点摊成一行，横向撑得很宽、要大量横向
+# 拖动才看得完。"LR" 让它们纵向排开，横向只占「层数」这一个维度；横向流向也是
+# Datadog / Dynatrace 表达依赖方向的做法。
+#
+# ## 已知未解决：节点标签在这个封装里不显示
+#
+# st-link-analysis 0.4.0 的前端 bundle 把 Cytoscape 的 `min-zoomed-font-size`
+# 硬编码成 **10**（裸 Cytoscape 默认 0，即从不因缩放隐藏文字）。它的含义是
+# 「字号 × 缩放低于该值就不画文字」。组件既不暴露 font-size 也不暴露 cy 选项，
+# 字号固定为 Cytoscape 默认 16px，于是标签可见的条件是 **缩放 > 0.625**，
+# 而 fit 后的缩放落在 0.6 附近 —— 差一点点，13 个节点全成了无标签的圆点。
+#
+# 用同一份 elements + style 喂裸 cytoscape.js 复现过：`min-zoomed-font-size`
+# 为 0 时标签全部正常显示。所以数据、selector、caption 都是对的，
+# 问题只在这个阈值与 fit 的组合。
+#
+# 试过且无效：改 rankDir 让布局更紧凑（缩放没跨过 0.625）；关掉 fit
+# （缩放确实变了，但视图不再对准内容，锚点被推到容器边缘，是更糟的结果）。
+# 在不改这个封装的前提下没有别的入口 —— 它不接受 style 覆盖，
+# 也没有透传 Cytoscape 实例的通道。**这一条是换掉该封装的具体理由。**
+_LAYOUTS_WITH_RANKDIR = {
+    "dagre": {
+        "name": "dagre",
+        "rankDir": "LR",
+        "rankSep": 120,      # 层间距：留给最长的节点名
+        "nodeSep": 26,       # 同层间距：12 个邻居纵向排开不粘连
+        "padding": 20,
+        "fit": True,
+        "animate": True,
+        "animationDuration": 500,
+        "nodeDimensionsIncludeLabels": True,
+    },
+}
+layout_arg = _LAYOUTS_WITH_RANKDIR.get(layout_key, layout_key)
+
 result = st_link_analysis(
     elements=elements,
-    layout=layout_key,
+    layout=layout_arg,
     node_styles=node_styles,
     edge_styles=edge_styles,
     height=620,
@@ -366,26 +405,50 @@ st.caption(
     "**单击**节点看详情（下方侧栏）　**双击 / 用节点上的 expand 动作**展开它的邻居。"
     "边颜色 = 故障注入验证状态：🟢 已确认　🔴 已证伪　🟠 未定　⚫ 未验证。"
 )
+st.caption(
+    "⚠️ 节点名在这张图上不显示：所用组件把 Cytoscape 的 `min-zoomed-font-size` "
+    "硬编码为 10，而自动缩放后的比例落在阈值下方，文字被整体隐藏 —— "
+    "它不接受字号覆盖，所以在换掉这个组件之前只能靠**颜色分组 + 单击看详情**辨认节点。"
+    "颜色对应的分组见下方「图例与设计说明」。"
+)
 
 # ── 选中回传：这是 pyvis 做不到的部分 ─────────────────────────────────────────
+#
+# 载荷形状取自 st-link-analysis 0.4.0 的前端 bundle（index.*.bundle.js），
+# 那里只有一个出口：`setComponentValue({action, data, timestamp})`，三种 action：
+#
+#   自定义事件  {action: "<Event.name>", data: {type, target_id, target_group}}
+#   expand     {action: "expand",       data: {node_ids: [id]}}
+#   remove     {action: "remove",       data: {node_ids: [...]}}
+#
+# 两个键名的坑都在 `data` 里面而不是顶层：单击给的是 **target_id**（单数），
+# 双击展开给的是 **node_ids**（复数、数组）。按顶层 `node_id` 去找永远是 None，
+# 于是双击展开的那个节点拿不到，只有单击这条路能通。
 selected = None
+expanded_hit = None
 if isinstance(result, dict):
-    # 组件返回形态随版本略有差异，这里宽松解析，取不到就当无选中
-    for key in ("data", "selection", "node_click"):
-        blob = result.get(key)
-        if isinstance(blob, dict):
-            for k2 in ("id", "node", "target_id"):
-                if blob.get(k2):
-                    selected = blob[k2] if isinstance(blob[k2], str) else None
-                    break
-        elif isinstance(blob, list) and blob:
-            first = blob[0]
-            if isinstance(first, dict) and first.get("id"):
-                selected = first["id"]
-        if selected:
-            break
-    if not selected and isinstance(result.get("action"), str) and result.get("node_id"):
-        selected = result["node_id"]
+    action = result.get("action")
+    blob = result.get("data")
+    if isinstance(blob, dict):
+        # 单击/tap：自定义事件的 target_id
+        tid = blob.get("target_id")
+        if isinstance(tid, str) and tid:
+            selected = tid
+        # 双击/expand 按钮：node_ids 是数组，取第一个
+        ids = blob.get("node_ids")
+        if isinstance(ids, list) and ids and isinstance(ids[0], str):
+            if action == "expand":
+                expanded_hit = ids[0]
+            # 展开的节点同时就是用户当前关注的那个，没有单击事件时用它兜底
+            if not selected:
+                selected = ids[0]
+
+# 双击展开等价于按下「展开」，所以走**同一个** expand()：它才会把邻居边并进
+# 累积边集。只往 S_EXPANDED 里塞个名字的话，Python 侧的「已展开」计数会动，
+# 图上却不会多出任何节点 —— 那是把状态和内容改成不一致，比不接更糟。
+if expanded_hit and expanded_hit not in st.session_state[S_EXPANDED]:
+    expand(expanded_hit, edge_types, per_expand)
+    st.rerun()
 
 st.markdown("---")
 detail_col, action_col = st.columns([3, 2])

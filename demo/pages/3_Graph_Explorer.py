@@ -690,12 +690,12 @@ if layered and positions:
             f"这是刻意的取舍：自动缩放到装下全图会让缩放降到 "
             f"{_ASSUMED_CANVAS_PX / _span:.2f} 倍，节点标签变成糊点、图就白画了。"
             f"所以缩放保持在可读下限 {_MIN_SCALE} 并对准锚点，"
-            "剩下靠平移。也可用滚轮缩放或右下角导航按钮。"
+            "剩下靠平移。也可用滚轮缩放或按住空白处拖动。"
         )
     elif widest > 12:
         st.caption(
             f"ℹ️ 最宽的一层有 {widest} 个节点，画布已缩放到能装下全图。"
-            "可用滚轮缩放、按住空白处拖动平移，或用右下角导航按钮。"
+            "可用滚轮缩放、按住空白处拖动平移。"
         )
 
 
@@ -792,8 +792,15 @@ def build_html(nodes_t: tuple, edges_t: tuple, h: int, use_layered: bool,
             # ⚠️ 「节点拖不动」不要从这里查 —— dragNodes 只管交互层的总开关，
             # 而分层布局是在每个节点上写 fixed.y/fixed.x 来锁轴的，这里配什么都
             # 覆盖不了。本页已改为自算坐标，不再启用 hierarchical，故无此问题。
+            # navigationButtons 关闭：vis-network 把它们固定在容器四角，而本页
+            # 的最外层节点就贴在画布边缘（y 是依赖层级、x 是 scope 分簇，两端都
+            # 会顶到边），于是那几个圆形按钮直接盖在节点名上 —— 实测最下面一行
+            # 的名字被 ⇦ ⇧ ⊞ ⊖ ⊕ 压掉一半，读不出是哪个服务。
+            # 按钮的位置不可配，能留的只有「关掉」。缩放与平移一点没少：
+            # zoomView 给滚轮、dragView 给空白处拖动，两者都在下面显式打开。
+            # 用节点名换一组重复的缩放入口，是划算的。
             "interaction": {"hover": True, "tooltipDelay": 200,
-                            "navigationButtons": True, "keyboard": False,
+                            "navigationButtons": False, "keyboard": False,
                             "dragView": True, "zoomView": True,
                             "dragNodes": True, "multiselect": False},
             "nodes": {"font": {"size": 13, "face": "sans-serif", "color": "#16191f",
@@ -804,7 +811,11 @@ def build_html(nodes_t: tuple, edges_t: tuple, h: int, use_layered: bool,
             "physics": {"barnesHut": {"gravitationalConstant": -9000,
                                       "centralGravity": 0.35, "springLength": 150},
                         "enabled": True},
-            "interaction": {"hover": True, "navigationButtons": True,
+            # 同上关闭。压标签是在**分层视图**实测到的；这里是力导向，节点位置
+            # 每次不同，我没有实测到同样的遮挡。一起关是为了两个视图行为一致 ——
+            # 下面那句「滚轮缩放 / 拖动平移」的提示是两个视图共用的，
+            # 如果一个有按钮一个没有，那句话就必须分情况写，或者对一半的人是错的。
+            "interaction": {"hover": True, "navigationButtons": False,
                             "dragView": True, "zoomView": True},
             "edges": {"font": {"size": 11, "color": "#5f6b7a",
                                "strokeWidth": 3, "strokeColor": "#ffffff"}},
