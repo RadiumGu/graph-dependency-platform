@@ -55,6 +55,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import threading
 import time
 
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -369,6 +370,119 @@ def _biz_degraded(base: dict, during: dict) -> tuple[bool, bool, str]:
     return degraded, broke, "；".join(notes)
 
 
+class _LoadDriver:
+    """贯穿整场实验的背景流量驱动。
+
+    ## 为什么需要它：候选边的稳态流量够不到判定门槛
+
+    2026-09-13 实测 petsite 的写入类依赖在 180s 窗口里的调用数：
+    `→ SNSTopic` 1 次、`→ SQSQueue` 0~8 次，而基线门槛是 20 次。
+    领养 cron 每 5 分钟 8 次突发（≈5 次/180s）远远不够。
+    闸门拒绝是对的 —— 打不断一个没在跑的东西 —— 所以要造流量，不是放宽闸门。
+
+    ## 为什么是「贯穿」而不是「预热突发」
+
+    `_measure` 查的是**过去** `window` 秒，而基线期和故障期各有一个窗口。
+    只在开跑前打一轮突发，只能填满基线窗口；故障期窗口会是空的，
+    于是 `during` 采样不足 → 成功率读作「未变化」→ 判定出一个假的
+    `inconclusive`。所以流量必须从基线前一直跑到故障期测量结束。
+
+    ## 为什么不复用 `probe_adopt`
+
+    两个原因。一是 `probe_adopt` 用固定 `userId`，而它的 `/housekeeping`
+    清理是按 userId 做的 —— 多个并发 worker 共用一个 uid 会互相取消
+    对方在途的领养。二是**测量探针必须与负载发生器相互独立**：共用状态时
+    负载侧的故障会被读成业务故障，那正是判定要区分的两件事。
+    ## 速率怎么定：X-Ray 采样是天花板，不是应用吞吐
+
+    2026-09-13 实测：负载跑 162 次领养 / 240s（≈40 次/分），而服务图上
+    `→ SNSTopic` 与 `→ SQSQueue` 各只有 **14 次 / 180s**，约 12% ——
+    与 X-Ray 默认采样规则（1 次/秒储备 + 超出部分 5%）一致。
+    也就是说**观测数 ≈ 实际调用数 × 采样率**，闸门的 20 次是观测数。
+
+    要观测到 20 次需约 57 次/分。默认取 120 次/分（约 2 倍余量），
+    因为采样率本身会随集群总流量波动 —— 余量不足会让实验白跑 12 分钟。
+
+    提高采样率本来是更省事的办法（改应用的采样配置），但那需要重新构建镜像，
+    本机没有构建工具链，所以只能从流量侧解决。
+    """
+
+    def __init__(self, rate_per_min: int = 120, workers: int = 6) -> None:
+        self._stop = threading.Event()
+        self._threads: list[threading.Thread] = []
+        self._workers = workers
+        self._gap = max(1.0, 60.0 * workers / max(1, rate_per_min))
+        self._sent = 0
+        self._failed = 0
+        self._lock = threading.Lock()
+
+    def _drive(self, uid: str, slot: int) -> None:
+        import urllib.request
+        import urllib.parse
+        from runner.business_probes import parse_pets
+        base = _PETSITE_URL
+        while not self._stop.is_set():
+            try:
+                with urllib.request.urlopen(
+                        base + "/?userId=" + uid, timeout=20) as r:
+                    html = r.read().decode("utf-8", "replace")
+                # 只挑**可用**的宠物，并用**它自己的类型**提交。
+                # 原先所有 worker 都取 `ids[0]`（同一只宠物），既让它们互相
+                # 取消对方的 housekeeping，也把 `pettype` 写死成 puppy ——
+                # 实测把宠物 001 留成了 Unavailable，而领养探针恰好也取
+                # `ids[0]`，于是探针报「领养功能坏了」而实际 25 只都能领养。
+                usable = [p for p in parse_pets(html) if p["available"]]
+                if usable:
+                    # 按 worker 序号错开取，避免 6 个 worker 抢同一只。
+                    pet = usable[slot % len(usable)]
+                    data = urllib.parse.urlencode(
+                        {"petId": pet["id"], "pettype": pet["pettype"],
+                         "userId": uid}).encode()
+                    req = urllib.request.Request(
+                        base + "/Payment/MakePayment", data=data,
+                        headers={"Content-Type":
+                                 "application/x-www-form-urlencoded"})
+                    with urllib.request.urlopen(req, timeout=30):
+                        pass
+                    with self._lock:
+                        self._sent += 1
+                else:
+                    with self._lock:
+                        self._failed += 1
+            except Exception:
+                with self._lock:
+                    self._failed += 1
+            finally:
+                # 每轮都清理：不清理会单调消耗库存，几分钟后可领养的就没了，
+                # 而领养探针的前置条件正是「有可用宠物」——
+                # 负载会把自己造成的库存枯竭伪装成业务退化。
+                try:
+                    with urllib.request.urlopen(
+                            base + "/housekeeping?userId=" + uid, timeout=20):
+                        pass
+                except Exception:
+                    pass
+            self._stop.wait(self._gap)
+
+    def start(self) -> None:
+        for i in range(self._workers):
+            # 每个 worker 一个独立 uid，见类 docstring 第二条理由。
+            t = threading.Thread(target=self._drive,
+                                 args=("chaos-load-%d" % i, i), daemon=True)
+            t.start()
+            self._threads.append(t)
+
+    def stop(self) -> None:
+        self._stop.set()
+        for t in self._threads:
+            t.join(timeout=15)
+
+    @property
+    def stats(self) -> str:
+        with self._lock:
+            return "已驱动 %d 次领养（失败 %d）" % (self._sent, self._failed)
+
+
 def _measure(client: str, server: str, window: int,
              xray_types: tuple = ()) -> dict:
     """被测边本身的调用统计 —— 用于判定**注入是否真的生效**。
@@ -387,7 +501,8 @@ def _measure(client: str, server: str, window: int,
 
 def run_probe(service: str, label: str, target: str,
               observer: str, hold_seconds: int, window: int,
-              apply: bool, propagation_budget: int = 300) -> int:
+              apply: bool, propagation_budget: int = 300,
+              warmup: int = 210) -> int:
     acct = _account_id()
     if not acct:
         print("✗ 取不到账号 ID —— 中止（ARN 构造不能猜）")
@@ -417,6 +532,20 @@ def run_probe(service: str, label: str, target: str,
           % (service, pnames, window))
     print()
 
+    # ── 0. 背景流量（贯穿全场）──
+    #
+    # 必须在**基线测量之前**就跑满一个观测窗口：`_measure` 查的是过去 window 秒。
+    # 见 `_LoadDriver` 的 docstring。
+    load = _LoadDriver()
+    if apply and warmup > 0:
+        print("── 0. 背景流量 ──")
+        print("   启动负载驱动（6 worker，各自独立 userId），"
+              "lead-in %ds 让基线窗口跑满…" % warmup)
+        load.start()
+        time.sleep(warmup)
+        print("   %s" % load.stats)
+        print()
+
     print("── 1. 基线 ──")
     xray_types = tuple(SEVERANCE_METHODS[label].get("xray_types") or ())
     base = _measure(service, target, window, xray_types)
@@ -427,11 +556,14 @@ def run_probe(service: str, label: str, target: str,
         print("✗ 被测边基线采集失败（ok=False）—— 中止。")
         print("  ok=False 表示这个采样点没有数据，不表示指标为 0。"
               "拿它当基线会把任何后续数字读成退化。")
+        load.stop()
         return 3
     if (base["total_requests"] or 0) < MIN_BASELINE_REQUESTS:
         print("✗ 基线请求数 %s < 下限 %d —— 拒绝出判定。"
               % (base["total_requests"], MIN_BASELINE_REQUESTS))
         print("  打不断一个没在跑的东西；此时任何退化数字都是噪声。")
+        print("  %s" % load.stats)
+        load.stop()
         return 3
     if (base["success_rate"] or 0) < MIN_BASELINE_SUCCESS_RATE:
         print("✗ 基线成功率 %.2f%% < 下限 %.0f%% —— 拒绝开跑。"
@@ -439,16 +571,19 @@ def run_probe(service: str, label: str, target: str,
         print("  基线本身已经是坏的，拿它算退化 delta 毫无意义。")
         print("  常见原因：上一次实验的 deny 仍在生效（会话缓存 + IAM 传播延迟）。")
         print("  处置：等前一次实验完全恢复（或 rollout restart 该服务）后再跑。")
+        load.stop()
         return 3
     biz_ok, biz_why = _biz_baseline_ok(biz_base)
     if not biz_ok:
         print("✗ 业务探针基线不可用：%s" % biz_why)
         print("  基线就坏或会抖的话，故障期的数字说明不了任何事。")
+        load.stop()
         return 3
 
     if not apply:
         print()
         print("[dry-run] 两个通道基线都合格，具备执行条件。加 --apply 真跑。")
+        load.stop()
         return 0
 
     # ── 置位实验期互锁 ──
@@ -556,6 +691,7 @@ def run_probe(service: str, label: str, target: str,
     finally:
         print()
         print("── 3. 回滚（finally，任何路径都执行）──")
+        print("   背景流量：%s" % load.stats)
         d, e = _aws("iam", "delete-role-policy", "--role-name", role,
                     "--policy-name", policy_name)
         removed = d is not None
@@ -636,6 +772,9 @@ def run_probe(service: str, label: str, target: str,
     if _lock:
         _lock.end()
         print("   已释放实验期互锁 —— 合成流量 cron 下一轮恢复正常。")
+    # 恢复确认期间刻意保留负载（更贴近真实），到这里才停。
+    load.stop()
+    print("   背景流量已停：%s" % load.stats)
     return 0
 
 
@@ -816,6 +955,9 @@ def main() -> int:
     ap.add_argument("--window", type=int, default=180, help="观测窗口秒数")
     ap.add_argument("--propagation-budget", type=int, default=300,
                     help="等 IAM 传播生效的预算秒数（默认 300）")
+    ap.add_argument("--warmup", type=int, default=210,
+                    help="背景流量 lead-in 秒数（必须 ≥ --window，"
+                         "否则基线窗口跑不满；0 表示不造流量）")
     ap.add_argument("--apply", action="store_true", help="真跑（默认 dry-run）")
     ap.add_argument("--list", action="store_true", help="列出方法表")
     a = ap.parse_args()
@@ -834,7 +976,7 @@ def main() -> int:
         print("✗ --edge 格式应为 service:TargetLabel:targetName")
         return 2
     return run_probe(parts[0], parts[1], parts[2], a.observer,
-                     a.hold, a.window, a.apply, a.propagation_budget)
+                     a.hold, a.window, a.apply, a.propagation_budget, warmup=a.warmup)
 
 
 if __name__ == "__main__":

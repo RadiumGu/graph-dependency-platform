@@ -49,9 +49,63 @@ PETSITE_URL = os.environ.get(
 _UA = {"User-Agent": "kirocrew-business-probe/1.0"}
 _PETID_RE = re.compile(r'class="ps-petid">Pet #([^<]+)<')
 
+#: 首页每张卡片的起始标记。按它切开才能把「宠物 id」「类型」「可用性」
+#: 三件事归到同一只宠物上 —— 三个独立的 findall 只能得到三个等长列表，
+#: 一旦某只宠物缺了某个字段，三者就错位，而错位是静默的。
+_CARD_SPLIT_RE = re.compile(r'<div class="ps-cardbody">')
+
+#: 宠物类型从图片的 aria-label 取（`View full size photo of brown bunny`）。
+#: **不能硬编码 `puppy`**：实测 26 只里有 15 只 puppy、7 只 kitten、4 只 bunny，
+#: 而 `/Payment/MakePayment` 的 pettype 必须与宠物实际类型一致，否则支付不成功。
+_TYPE_RE = re.compile(r'aria-label="View full size photo of ([a-z]+ )?([a-z]+)"')
+
+#: 已被领养的卡片没有提交按钮，只有这个标记。
+_UNAVAIL_MARK = 'ps-unavailable'
+
 #: 探针专用 userId 前缀。与合成流量 cron 的 userId 分开 ——
 #: 两者同时跑时不能互相污染状态（cron 会 housekeeping 清理它自己的 userId）。
 _UID = "chaos-probe"
+
+#: 领养探针最多连试几只宠物。>1 是因为单只宠物可能在两次请求之间被别人领走
+#: （合成流量 cron、压测 TGB、另一个实验同时在跑），一只失败不足以断言功能坏。
+_ADOPT_TRIES = 3
+
+
+def parse_pets(html: str) -> list[dict]:
+    """把首页 HTML 解析成 `[{"id", "pettype", "available"}, …]`。
+
+    ## 为什么必须解析可用性和类型，而不是取第一个 petId
+
+    2026-09-13 实测两个各自独立、都会产出**假业务故障**的缺陷：
+
+    1. `probe_adopt` 原先取 `ids[0]`，而那只宠物**可能已被领养**
+       （卡片上是 `ps-unavailable`，没有提交按钮）。此时支付返回 HTTP 200
+       但只是渲染领养表单页（10,117 字符，无成功标记），探针于是报
+       `value=0` = 「领养功能坏了」—— 而当时另外 25 只都能正常领养。
+    2. `pettype` 原先硬编码 `"puppy"`，只是碰巧 `ids[0]` 是狗才一直有效。
+       实测 025/026 是 bunny，用 `puppy` 提交必然不成功；用真实类型
+       立刻成功（11,172 字符）。
+
+    两者都会让判定逻辑读到「业务退化」并写出**假 confirmed** ——
+    比未评估危险得多，因为它会被 DR 影响面分析当成结论。
+
+    可用性判断只看卡片**前段**：`ps-unavailable` 只出现在卡片自己的
+    cardfoot 里，但整页搜索会让一只不可用的宠物污染它后面所有的卡片。
+    """
+    pets: list[dict] = []
+    for chunk in _CARD_SPLIT_RE.split(html)[1:]:
+        m = _PETID_RE.search(chunk)
+        if not m:
+            continue
+        seg = chunk[:1200]
+        tm = _TYPE_RE.search(chunk) or _TYPE_RE.search(html)
+        pets.append({
+            "id": m.group(1).strip(),
+            # aria-label 形如「black puppy」，类型是最后一个词（颜色在前）。
+            "pettype": (tm.group(2) if tm else "puppy"),
+            "available": _UNAVAIL_MARK not in seg,
+        })
+    return pets
 
 
 def _get(path: str, timeout: int = 30) -> tuple[int, str]:
@@ -97,19 +151,46 @@ def probe_adopt() -> dict:
     覆盖 payforadoption、SQSQueue、StepFunction、以及 petsite 侧的
     DynamoDBTable —— 支付链路会写这些。
 
-    先取真实 petId（不硬编码），再 POST。取不到 petId 时返回 ok=False
-    而不是 value=0：那说明前置条件不满足，不是领养功能坏了。
+    ## 选哪只宠物是这个探针的正确性关键
+
+    必须挑**可用**的宠物、并用**它自己的类型**提交，理由见 `parse_pets`
+    的 docstring：取 `ids[0]` + 硬编码 `puppy` 会在宠物已被领养或不是狗时
+    报出 `value=0`，把「前置条件不满足」伪装成「领养功能坏了」，
+    进而让切断实验写出假 `confirmed`。
+
+    连试至多 `_ADOPT_TRIES` 只：单只宠物可能在两次请求之间被别人领走
+    （合成流量 cron、压测 TGB、另一个实验都在跑），一只失败不足以断言功能坏。
+
+    一只都没可用时返回 `ok=False`（前置条件不满足）而**不是** `value=0`
+    —— 这两者的区别正是这个探针存在的意义。
     """
     uid = "%s-adopt" % _UID
     try:
         st, html = _get("/?userId=%s" % uid)
-        ids = _PETID_RE.findall(html)
-        if st != 200 or not ids:
+        if st != 200:
             return {"ok": False, "value": None,
-                    "detail": "前置失败：首页 HTTP %d、petId %d 个" % (st, len(ids))}
-        st2, body = _post("/Payment/MakePayment",
-                          {"petId": ids[0].strip(), "pettype": "puppy",
-                           "userId": uid})
+                    "detail": "前置失败：首页 HTTP %d" % st}
+        pets = parse_pets(html)
+        usable = [p for p in pets if p["available"]]
+        if not usable:
+            return {"ok": False, "value": None,
+                    "detail": "前置失败：%d 只宠物全部已被领养，无可领养对象"
+                              % len(pets)}
+        tried = []
+        for pet in usable[:_ADOPT_TRIES]:
+            st2, body = _post("/Payment/MakePayment",
+                              {"petId": pet["id"], "pettype": pet["pettype"],
+                               "userId": uid})
+            good = st2 == 200 and ("Thank" in body or "txStatus" in body)
+            tried.append("%s/%s=%s" % (pet["id"], pet["pettype"],
+                                       "成功" if good else "HTTP %d" % st2))
+            if good:
+                return {"ok": True, "value": 1,
+                        "detail": "领养成功（%s；可用 %d/%d 只）"
+                                  % (tried[-1], len(usable), len(pets))}
+        return {"ok": True, "value": 0,
+                "detail": "连试 %d 只均未成功（%s；可用 %d/%d 只）"
+                          % (len(tried), "、".join(tried), len(usable), len(pets))}
     except Exception as e:
         return {"ok": False, "value": None, "detail": "请求失败 %r" % e}
     finally:
@@ -117,9 +198,6 @@ def probe_adopt() -> dict:
             _get("/housekeeping?userId=%s" % uid)   # 清理，避免库存单调消耗
         except Exception:
             pass
-    good = st2 == 200 and ("Thank" in body or "txStatus" in body)
-    return {"ok": True, "value": 1 if good else 0,
-            "detail": "支付 HTTP %d，成功标记 %s" % (st2, good)}
 
 
 def probe_list() -> dict:
