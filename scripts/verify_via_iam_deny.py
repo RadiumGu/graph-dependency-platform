@@ -65,7 +65,7 @@ for p in (_ROOT, _ROOT / "rca", _ROOT / "chaos" / "code",
 
 REGION = os.environ.get("REGION", "ap-northeast-1")
 
-#: 声明式方法表：目标节点类型 → 怎么构造 deny 语句。
+#: 声明式方法表：目标节点类型 → 怎么构造 deny 语句 + 怎么在 X-Ray 里找到这条边。
 #:
 #: **必须声明式**（不许在流程里内联 if/else）—— 这样「哪类目标用什么手段」
 #: 是可审计的一张表，而不是散在代码里的分支。由 test_73 校验。
@@ -73,36 +73,56 @@ REGION = os.environ.get("REGION", "ap-northeast-1")
 #: `actions` 用通配是刻意的：我们要证明的是「这条依赖承重」，不是「某个具体
 #: API 调用失败会怎样」。收窄到单个 action 会让结论依赖于实现细节
 #: （应用今天用 Query 明天换 Scan，结论就不成立了）。
+#:
+#: `xray_types` 是 X-Ray 服务图里目标节点的 **Type 前缀**。
+#: 2026-09-13 实测：图谱用资源名（队列名 `ServicesEks2-sqspetadoption...`），
+#: 而 X-Ray 的节点叫 `SQS`（Type=`AWS::SQS`）或队列 URL —— **按名字永远匹配不上**，
+#: `collect_edge_flow` 会返回 ok=False，基线闸门于是拒绝开跑。
+#: 空元组表示按名字就能匹配上（DynamoDB 表、S3 桶实测可以）。
 SEVERANCE_METHODS: dict[str, dict] = {
     "DynamoDBTable": {
         "actions": ["dynamodb:*"],
         "arn": "arn:aws:dynamodb:{region}:{acct}:table/{name}",
         "also": ["arn:aws:dynamodb:{region}:{acct}:table/{name}/index/*"],
+        "xray_types": (),
     },
     "S3Bucket": {
         "actions": ["s3:*"],
         "arn": "arn:aws:s3:::{name}",
         "also": ["arn:aws:s3:::{name}/*"],
+        "xray_types": (),
     },
     "SQSQueue": {
         "actions": ["sqs:*"],
         "arn": "arn:aws:sqs:{region}:{acct}:{name}",
         "also": [],
+        "xray_types": ("AWS::SQS",),
     },
     "SNSTopic": {
         "actions": ["sns:*"],
         "arn": "arn:aws:sns:{region}:{acct}:{name}",
         "also": [],
+        "xray_types": ("AWS::SNS",),
     },
     "StepFunction": {
         "actions": ["states:*"],
         "arn": "arn:aws:states:{region}:{acct}:stateMachine:{name}",
         "also": ["arn:aws:states:{region}:{acct}:execution:{name}:*"],
+        "xray_types": ("AWS::StepFunctions", "AWS::States"),
+    },
+    "AWSServiceEndpoint": {
+        # 图谱里的名字就是服务名（sns / sts / ssm / stepfunctions / dynamodb），
+        # deny 收窄到该服务的全部 action。
+        "actions": ["{name}:*"],
+        "arn": "*",
+        "also": [],
+        "xray_types": (),
     },
     "AgentRuntime": {
         "actions": ["bedrock-agentcore:InvokeAgentRuntime"],
         "arn": "*",          # runtime ARN 形态多变，先用 * 再收窄
         "also": [],
+        "xray_types": ("AWS::BedrockAgentCore",),
     },
 }
 
@@ -149,27 +169,37 @@ def _k8s_workload(service: str) -> str | None:
     return None
 
 
-def _wait_recovery(baseline_pets: int) -> tuple[dict, bool]:
-    """轮询业务探针直到连续 `_RECOVERY_STREAK` 次正常。
+def _wait_recovery(service: str, biz_base: dict) -> tuple[dict, bool]:
+    """轮询该服务的业务探针，直到连续 `_RECOVERY_STREAK` 次全部回到基线。
 
-    为什么要连续而不是单次：恢复期不同 Pod 的凭证刷新进度不同，
-    探针会在正常与退化之间抖动（实测 26/0/0/0/26/26/26/0/0/26…）。
-    单次正常就宣布恢复，会在服务实际仍半坏的状态下退出。
+    为什么要连续而不是单次：恢复期不同 Pod 的凭证刷新进度不同，探针会在正常与
+    退化之间抖动（实测 26/0/0/0/26/26/26/0/0/26…）。单次正常就宣布恢复，
+    会在服务实际仍半坏的状态下退出，把一个退化状态留给线上而脚本已经结束。
+
+    **全部探针都要回到基线**才算一次正常 —— 只看其中一个会漏掉「首页好了但
+    领养还挂着」这种半恢复。
     """
-    counts, streak, waited = [], 0, 0
+    hist: list[dict] = []
+    streak, waited = 0, 0
+    base_min = {k: min(v for v in vals if v is not None)
+                for k, vals in (biz_base.get("per_probe") or {}).items()
+                if any(v is not None for v in vals)}
     while waited < _RECOVERY_BUDGET_SECONDS:
-        p = _probe_business(n=1)
-        got = p.get("max_pets")
-        counts.append(got)
-        streak = streak + 1 if got == baseline_pets else 0
+        cur = _probe_business(service, n=1)
+        per = cur.get("per_probe") or {}
+        got = {k: (v[0] if v else None) for k, v in per.items()}
+        hist.append(got)
+        all_back = bool(base_min) and all(
+            got.get(k) is not None and got[k] >= base_min[k] for k in base_min)
+        streak = streak + 1 if all_back else 0
         if streak >= _RECOVERY_STREAK:
-            return {"ok": True, "pet_counts": counts, "min_pets": min(
-                c for c in counts if c is not None), "recovered": True}, True
+            return {"ok": True, "history": hist[-12:], "recovered": True,
+                    "detail": "连续 %d 次全部探针回到基线" % _RECOVERY_STREAK}, True
         time.sleep(5)
         waited += 5
-    return {"ok": True, "pet_counts": counts,
-            "min_pets": min([c for c in counts if c is not None] or [0]),
-            "recovered": False}, False
+    return {"ok": True, "history": hist[-12:], "recovered": False,
+            "detail": "%ds 预算内未连续 %d 次恢复"
+                      % (_RECOVERY_BUDGET_SECONDS, _RECOVERY_STREAK)}, False
 
 
 def _aws(*args) -> tuple[dict | None, str]:
@@ -239,8 +269,10 @@ def _deny_document(label: str, target: str, acct: str) -> dict | None:
         return None
     fmt = dict(region=REGION, acct=acct, name=target)
     res = [m["arn"].format(**fmt)] + [a.format(**fmt) for a in m["also"]]
+    # AWSServiceEndpoint 的 action 模板含 {name}（服务名即 action 前缀）
+    acts = [a.format(**fmt) for a in m["actions"]]
     return {"Version": "2012-10-17",
-            "Statement": [{"Effect": "Deny", "Action": m["actions"],
+            "Statement": [{"Effect": "Deny", "Action": acts,
                            "Resource": res}]}
 
 
@@ -251,47 +283,102 @@ _PETSITE_URL = os.environ.get(
 _PETID_RE = __import__("re").compile(r'class="ps-petid">Pet #([^<]+)<')
 
 
-def _probe_business(n: int = 3) -> dict:
-    """业务级观测：首页还能返回多少个宠物。
+def _probe_business(service: str, n: int = 3) -> dict:
+    """跑**该源服务**登记的全部业务探针。
 
-    ## 为什么观测通道不是 X-Ray 的观测方边
+    ## 为什么探针由源服务决定
 
-    2026-09-13 实测：X-Ray 服务图里 `PetSite -> PetSearch` **这条边不存在**
-    （petsite 对下游微服务的调用被记成 `HTTP GET / type=remote`，没有解析成
-    服务间边）。`PetSite -> payforadoption-api-go`、`-> petlistadoptions`
-    同样测不出。所以指标通道在这里根本不可用。
+    被验证的命题是「这个服务失去这个依赖后，**它的**业务输出坏不坏」。
+    2026-09-13 第一版这里硬编码了 petsite 首页探针，而 28 条待验边里只有 4 条
+    在搜索路径上。拿首页探针测 `petsite -PublishesTo-> SQSQueue` 会得到
+    「注入生效但业务正常」→ 判成 `inconclusive: 消费方存在降级路径`。
+    **那个结论是反的**：SQS 断了不影响首页，但它影响领养提交。
+    用错探针不是「测不出」，是得出一个假结论并写进合规报告。
 
-    改用业务输出断言，而且这比指标更贴近监管要的东西 ——
-    SYSC 15A.5.3R 要的是「能否在中断下继续交付重要业务服务」，
-    「首页还能不能列出宠物」正是这个问题本身，而不是它的代理指标。
+    注册表在 `chaos/code/runner/business_probes.py` 的 `SERVICE_PROBES`。
+    petsite 登记了四个（home/adopt/list/waggle），因为某条依赖可能只坏其中一个。
+
+    没登记探针时返回 `no_probe=True` —— 调用方必须据此**拒绝出 confirmed**，
+    而不是退回某个默认探针。没有业务证据的 confirmed 是过度声称。
     """
-    import urllib.request
-    counts, errs = [], []
-    for i in range(n):
-        try:
-            req = urllib.request.Request(
-                _PETSITE_URL + "/?userId=chaos-observer-probe",
-                headers={"User-Agent": "kirocrew-iam-deny-probe/1.0"})
-            with urllib.request.urlopen(req, timeout=30) as r:
-                html = r.read().decode("utf-8", "replace")
-            counts.append(len(_PETID_RE.findall(html)))
-        except Exception as e:
-            errs.append(repr(e)[:80])
-        if i < n - 1:
-            time.sleep(3)
-    return {"ok": bool(counts), "pet_counts": counts, "errors": errs,
-            "min_pets": min(counts) if counts else None,
-            "max_pets": max(counts) if counts else None}
+    from runner.business_probes import probes_for, run_probes
+    if not probes_for(service):
+        return {"ok": False, "no_probe": True, "per_probe": {},
+                "detail": "源服务 %s 未登记业务探针" % service}
+    raw = run_probes(service, n=n, gap=3.0)
+    per: dict[str, list] = {}
+    all_ok = True
+    for name, results in raw.items():
+        vals = []
+        for r in results:
+            if not r.get("ok"):
+                all_ok = False
+            vals.append(r.get("value"))
+        per[name] = vals
+    detail = "; ".join("%s=%s" % (k, v) for k, v in sorted(per.items()))
+    return {"ok": all_ok, "no_probe": False, "per_probe": per, "detail": detail}
 
 
-def _measure(client: str, server: str, window: int) -> dict:
+def _biz_baseline_ok(biz: dict) -> tuple[bool, str]:
+    """基线是否可用作判定依据：全部探针采集成功、且每个探针的值稳定且 > 0。
+
+    基线本身抖动或为 0 的探针不能用 —— 故障期的 0 说明不了任何事。
+    """
+    if biz.get("no_probe"):
+        return False, biz["detail"] + " —— 拒绝开跑（没有业务证据的判定不可采信）"
+    if not biz.get("ok"):
+        return False, "业务探针基线采集失败：%s" % biz["detail"]
+    for name, vals in (biz.get("per_probe") or {}).items():
+        clean = [v for v in vals if v is not None]
+        if not clean or min(clean) <= 0:
+            return False, "探针 %s 基线本身为 0/缺值（%s）" % (name, vals)
+        if len(set(clean)) > 1:
+            return False, "探针 %s 基线抖动（%s）—— 抖动的基线无法与退化区分" % (name, vals)
+    return True, biz["detail"]
+
+
+def _biz_degraded(base: dict, during: dict) -> tuple[bool, bool, str]:
+    """比较基线与故障期，返回 (是否退化, 是否有探针归零, 说明)。
+
+    **按每个探针的最小值比**，不用 max —— 采样 [0,26,0,0] 的 max 是 26，
+    一个正常样本会盖掉三个退化样本，结论正好反了（2026-09-13 实测踩过）。
+    抖动的成因是多 Pod 各自传播策略状态，不是消费方有降级路径。
+
+    **任一探针退化即算业务退化**：petsite 有四个探针，某条依赖可能只坏其中一个
+    （SQS 断了领养挂、首页照常）。要求全部退化才算，会把真实影响判成无影响。
+    """
+    degraded = broke = False
+    notes = []
+    bp = base.get("per_probe") or {}
+    dp = during.get("per_probe") or {}
+    for name, bvals in sorted(bp.items()):
+        bclean = [v for v in bvals if v is not None]
+        dclean = [v for v in (dp.get(name) or []) if v is not None]
+        if not bclean or not dclean:
+            notes.append("%s：故障期无有效采样" % name)
+            continue
+        b_min, d_min = min(bclean), min(dclean)
+        if d_min == 0 and b_min > 0:
+            broke = degraded = True
+            notes.append("%s 归零（%s → 0，采样 %s）" % (name, b_min, dclean))
+        elif d_min < b_min:
+            degraded = True
+            notes.append("%s 退化（%s → %s）" % (name, b_min, d_min))
+        else:
+            notes.append("%s 未退化（%s）" % (name, d_min))
+    return degraded, broke, "；".join(notes)
+
+
+def _measure(client: str, server: str, window: int,
+             xray_types: tuple = ()) -> dict:
     """被测边本身的调用统计 —— 用于判定**注入是否真的生效**。
 
     采集失败必须体现为 ok=False：`ok=False / success_rate=100 / requests=0`
     这个形态与「真的健康」在结构上无法区分，拿它当基线会把任何后续数字读成退化。
     """
     from runner.xray_metrics import XRayEdgeMetrics
-    snap = XRayEdgeMetrics().collect_edge_flow(client, server, window_seconds=window)
+    snap = XRayEdgeMetrics().collect_edge_flow(
+        client, server, window_seconds=window, dst_type_prefixes=xray_types)
     return {"ok": bool(getattr(snap, "ok", False)),
             "success_rate": getattr(snap, "success_rate", None),
             "total_requests": getattr(snap, "total_requests", None),
@@ -318,15 +405,24 @@ def run_probe(service: str, label: str, target: str,
               % (label, sorted(SEVERANCE_METHODS)))
         return 2
     print("deny 语句: %s" % json.dumps(doc["Statement"][0], ensure_ascii=False))
-    print("观测通道: 被测边 X-Ray 统计 + petsite 首页业务探针（窗口 %ds）"
-          % window)
+    from runner.business_probes import probes_for
+    pnames = [n for n, _ in probes_for(service)]
+    if not pnames:
+        print("✗ 源服务 %s 未登记业务探针 —— 拒绝开跑。" % service)
+        print("  没有业务证据的 confirmed 是过度声称：只证明了调用失败，")
+        print("  没证明业务受损。请先在 chaos/code/runner/business_probes.py 的")
+        print("  SERVICE_PROBES 里为该服务登记探针（并先测出它的稳态基线）。")
+        return 2
+    print("观测通道: 被测边 X-Ray 统计 + %s 的业务探针 %s（窗口 %ds）"
+          % (service, pnames, window))
     print()
 
     print("── 1. 基线 ──")
-    base = _measure(service, target, window)
+    xray_types = tuple(SEVERANCE_METHODS[label].get("xray_types") or ())
+    base = _measure(service, target, window, xray_types)
     print("   被测边 %s -> %s: %s" % (service, target[:26], base))
-    biz_base = _probe_business()
-    print("   业务探针（首页宠物数）: %s" % biz_base)
+    biz_base = _probe_business(service)
+    print("   业务探针: %s" % biz_base["detail"])
     if not base["ok"]:
         print("✗ 被测边基线采集失败（ok=False）—— 中止。")
         print("  ok=False 表示这个采样点没有数据，不表示指标为 0。"
@@ -344,9 +440,10 @@ def run_probe(service: str, label: str, target: str,
         print("  常见原因：上一次实验的 deny 仍在生效（会话缓存 + IAM 传播延迟）。")
         print("  处置：等前一次实验完全恢复（或 rollout restart 该服务）后再跑。")
         return 3
-    if not biz_base["ok"] or not biz_base["min_pets"]:
-        print("✗ 业务探针基线异常（首页本来就取不到宠物）—— 中止。")
-        print("  基线就坏的话，故障期的 0 说明不了任何事。")
+    biz_ok, biz_why = _biz_baseline_ok(biz_base)
+    if not biz_ok:
+        print("✗ 业务探针基线不可用：%s" % biz_why)
+        print("  基线就坏或会抖的话，故障期的数字说明不了任何事。")
         return 3
 
     if not apply:
@@ -432,13 +529,16 @@ def run_probe(service: str, label: str, target: str,
         #
         # 所以不猜延迟：轮询业务探针直到它退化，那才是「注入已生效」的证据。
         # 到预算还不退化就诚实报 inconclusive，绝不把「没等到」写成「不依赖」。
+        #
+        # **任一探针退化即算生效**：某条依赖可能只坏源服务的一个功能
+        # （SQS 断了领养挂、首页照常），要求全部退化会永远等不到。
         effective_at = None
         for i in range(propagation_budget // 15):
             time.sleep(15)
-            probe = _probe_business(n=1)
-            got = probe.get("max_pets")
-            print("      [+%3ds] 业务探针宠物数=%s" % ((i + 1) * 15, got))
-            if got is not None and got < (biz_base["min_pets"] or 0):
+            probe = _probe_business(service, n=1)
+            deg, _brk, note = _biz_degraded(biz_base, probe)
+            print("      [+%3ds] %s" % ((i + 1) * 15, note))
+            if deg:
                 effective_at = (i + 1) * 15
                 print("      ✓ 注入已生效（第 %ds）" % effective_at)
                 break
@@ -446,12 +546,12 @@ def run_probe(service: str, label: str, target: str,
             print("      ⚠️ %ds 预算内业务未退化 —— 注入可能未生效或消费方有降级路径"
                   % propagation_budget)
 
-        biz_during = _probe_business(n=4)
-        print("   业务探针（生效后）: %s" % biz_during)
+        biz_during = _probe_business(service, n=4)
+        print("   业务探针（生效后）: %s" % biz_during["detail"])
 
         print("   等待 %ds 让 X-Ray 聚合出足够样本…" % hold_seconds)
         time.sleep(hold_seconds)
-        during = _measure(service, target, window)
+        during = _measure(service, target, window, xray_types)
         print("   被测边（故障期）: %s" % during)
     finally:
         print()
@@ -497,13 +597,13 @@ def run_probe(service: str, label: str, target: str,
 
     print()
     print("── 4. 恢复确认（连续 %d 次正常才算恢复）──" % _RECOVERY_STREAK)
-    biz_post, recovered = _wait_recovery(biz_base.get("min_pets") or 0)
+    biz_post, recovered = _wait_recovery(service, biz_base)
     print("   %s" % biz_post)
     if not recovered:
         print("   ⚠️⚠️ 业务未在预算内恢复 —— 线上仍处于退化状态，需人工介入：")
         print("      kubectl rollout restart deploy/%s -n %s"
               % (_k8s_workload(service) or service, _NAMESPACE))
-    post = _measure(service, target, window)
+    post = _measure(service, target, window, xray_types)
 
     # ── 判定 ──
     print()
@@ -664,20 +764,10 @@ def _verdict(base: dict, during: dict | None, post: dict | None,
         return "observation_only", "成功率缺值，无法判定"
     edge_drop = b_sr - d_sr
 
-    b_pets = biz_base.get("min_pets") or 0
-    # ⚠️ 必须用退化样本占比，**不能用 max**。
-    #
-    # 第一版用了 `max_pets`：故障期采样 [0, 26, 0, 0] 的 max 是 26，
-    # 于是判定写成「业务未退化（26 → 26）」—— 那一个未退化的样本把三个
-    # 退化样本盖掉了，结论正好反了。
-    #
-    # 抖动的成因是**多 Pod 各自传播策略状态**（实测 search-service 有 2 个
-    # Pod），不是消费方有降级路径。所以：只要有任何一次业务输出归零、而基线
-    # 是稳定满值，就说明这条依赖承重 —— 一次归零已经是业务失败的证据。
-    counts = [c for c in (biz_during.get("pet_counts") or []) if c is not None]
-    degraded = [c for c in counts if c < b_pets]
-    broke = [c for c in counts if c == 0]
-    frac = (len(degraded) / len(counts)) if counts else 0.0
+    # 按**每个探针各自的最小值**比较，见 `_biz_degraded` 的判据说明。
+    # 关键两点：不用 max（一个正常样本会盖掉多个退化样本）；
+    # 任一探针退化即算业务退化（某条依赖可能只坏源服务的一个功能）。
+    degraded, broke, biz_note = _biz_degraded(biz_base, biz_during)
 
     rec = ""
     if biz_post:
@@ -687,18 +777,26 @@ def _verdict(base: dict, during: dict | None, post: dict | None,
     if edge_drop >= 20 and broke:
         return "confirmed", (
             "注入生效（边成功率 %.1f%% → %.1f%%，降 %.1fpp）"
-            "且业务归零（%d/%d 次探针返回 0 个，基线稳定 %d 个）%s"
-            % (b_sr, d_sr, edge_drop, len(broke), len(counts), b_pets, rec))
+            "且业务归零（%s）%s" % (b_sr, d_sr, edge_drop, biz_note, rec))
     if edge_drop >= 20 and degraded:
         return "confirmed", (
-            "注入生效（降 %.1fpp）且业务退化（%.0f%% 探针低于基线 %d 个）%s"
-            % (edge_drop, frac * 100, b_pets, rec))
+            "注入生效（降 %.1fpp）且业务退化（%s）%s"
+            % (edge_drop, biz_note, rec))
     if edge_drop >= 20:
         return "inconclusive", (
-            "注入生效（边成功率降 %.1fpp）但 %d 次业务探针全部正常（%d 个）—— "
+            "注入生效（边成功率降 %.1fpp）但业务探针全部未退化（%s）—— "
             "消费方存在降级路径，该依赖非业务关键路径。"
             "**不写 confirmed**：证明了调用失败，没证明业务受损"
-            % (edge_drop, len(counts), b_pets))
+            % (edge_drop, biz_note))
+    if broke:
+        return "observation_only", (
+            "业务归零（%s）但被测边成功率只降 %.1fpp —— "
+            "退化原因可能不是这次注入，信号混淆，拒绝出判定"
+            % (biz_note, edge_drop))
+    return "inconclusive", (
+        "两个通道都未见明显退化（边降 %.1fpp；%s）。"
+        "可能 deny 未覆盖应用实际使用的 action，或注入未在预算内生效"
+        % (edge_drop, biz_note))
     if broke:
         return "observation_only", (
             "业务归零但被测边成功率只降 %.1fpp —— "
