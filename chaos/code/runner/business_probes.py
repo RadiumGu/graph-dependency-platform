@@ -1,0 +1,215 @@
+"""业务功能探针注册表 —— 每条被测边匹配它所支撑的业务功能。
+
+## 为什么必须按业务功能分，而不是一个通用探针
+
+2026-09-13 实测的教训链：
+
+第一版只有一个探针（petsite 首页还能返回多少宠物）。它对 `petsearch ->
+DynamoDBTable` 是对的 —— 首页确实靠它。但 28 条待验边里**只有 4 条在搜索路径
+上**。拿首页探针去测 `petsite -PublishesTo-> SQSQueue`，会得到「注入生效
+（边成功率归零）但业务正常（首页照常 26 个宠物）」→ 判定写成
+`inconclusive: 消费方存在降级路径`。
+
+那个结论是**假的**：SQS 断了确实不影响首页，但它影响领养提交。用错探针不是
+「测不出」，是**得出一个反向的结论**并写进合规报告。
+
+## 判据：探针 = 源服务提供的业务功能
+
+被验证的命题是「这个服务失去这个依赖后，**它的**业务输出坏不坏」。所以探针由
+**源服务**决定，与目标类型无关：
+
+    petsite            入口服务，同时提供 4 种功能 → 4 个探针全跑
+    payforadoption     领养支付      → adopt
+    petlistadoptions   领养列表      → list
+    pethistory         领养历史      → history
+    petsearch          宠物搜索      → home
+
+petsite 必须跑全部四个：它的某条依赖可能只坏其中一个功能（SQS 断了领养挂、
+首页照常）。只跑首页会漏掉，且漏掉的形状是「业务正常」——一个假结论。
+
+## 每个探针必须有稳定的基线
+
+判定靠「基线稳定 → 故障期退化」。基线本身抖动的探针不能用 ——
+2026-09-13 实测首页探针稳态 0/40 归零，可用；其余探针在首次使用前
+必须同样测出基线假阳性率，否则它报出的退化无法与噪声区分。
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import time
+import urllib.parse
+import urllib.request
+
+PETSITE_URL = os.environ.get(
+    "PETSITE_INTERNAL_URL",
+    "http://internal-petsite-internal-lt-1660792065.ap-northeast-1.elb.amazonaws.com")
+
+_UA = {"User-Agent": "kirocrew-business-probe/1.0"}
+_PETID_RE = re.compile(r'class="ps-petid">Pet #([^<]+)<')
+
+#: 探针专用 userId 前缀。与合成流量 cron 的 userId 分开 ——
+#: 两者同时跑时不能互相污染状态（cron 会 housekeeping 清理它自己的 userId）。
+_UID = "chaos-probe"
+
+
+def _get(path: str, timeout: int = 30) -> tuple[int, str]:
+    req = urllib.request.Request(PETSITE_URL + path, headers=_UA)
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.status, r.read().decode("utf-8", "replace")
+
+
+def _post(path: str, fields: dict, timeout: int = 45) -> tuple[int, str]:
+    body = urllib.parse.urlencode(fields).encode()
+    req = urllib.request.Request(
+        PETSITE_URL + path, data=body, headers={
+            **_UA, "Content-Type": "application/x-www-form-urlencoded"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.status, r.read().decode("utf-8", "replace")
+
+
+# ── 各业务功能的探针 ────────────────────────────────────────────────────────
+#
+# 约定：返回 dict，至少含
+#   ok      本次采集是否成功（False 表示采不到，**不表示业务坏了**）
+#   value   业务输出的可比数值（越大越好）
+#   detail  人类可读细节
+# `ok=False` 与 `value=0` 必须区分 —— 前者是探针失败，后者是业务失败。
+# 这两者合并就是本仓库反复踩的那个坑（metrics fallback 成 100%/0 requests）。
+
+
+def probe_home() -> dict:
+    """宠物搜索：首页能列出多少宠物。覆盖 petsearch 与 petsite→petsearch。"""
+    try:
+        st, html = _get("/?userId=%s-home" % _UID)
+    except Exception as e:
+        return {"ok": False, "value": None, "detail": "请求失败 %r" % e}
+    if st != 200:
+        return {"ok": False, "value": None, "detail": "HTTP %d" % st}
+    n = len(_PETID_RE.findall(html))
+    return {"ok": True, "value": n, "detail": "首页宠物 %d 个" % n}
+
+
+def probe_adopt() -> dict:
+    """领养支付：能否完成一次领养提交。
+
+    覆盖 payforadoption、SQSQueue、StepFunction、以及 petsite 侧的
+    DynamoDBTable —— 支付链路会写这些。
+
+    先取真实 petId（不硬编码），再 POST。取不到 petId 时返回 ok=False
+    而不是 value=0：那说明前置条件不满足，不是领养功能坏了。
+    """
+    uid = "%s-adopt" % _UID
+    try:
+        st, html = _get("/?userId=%s" % uid)
+        ids = _PETID_RE.findall(html)
+        if st != 200 or not ids:
+            return {"ok": False, "value": None,
+                    "detail": "前置失败：首页 HTTP %d、petId %d 个" % (st, len(ids))}
+        st2, body = _post("/Payment/MakePayment",
+                          {"petId": ids[0].strip(), "pettype": "puppy",
+                           "userId": uid})
+    except Exception as e:
+        return {"ok": False, "value": None, "detail": "请求失败 %r" % e}
+    finally:
+        try:
+            _get("/housekeeping?userId=%s" % uid)   # 清理，避免库存单调消耗
+        except Exception:
+            pass
+    good = st2 == 200 and ("Thank" in body or "txStatus" in body)
+    return {"ok": True, "value": 1 if good else 0,
+            "detail": "支付 HTTP %d，成功标记 %s" % (st2, good)}
+
+
+def probe_list() -> dict:
+    """领养列表：页面能否正常返回。覆盖 petlistadoptions 与其 RDS 依赖。
+
+    这个探针的 value 是「页面是否渲染出列表容器」而不是「有几条领养」——
+    列表为空是正常业务状态（没人领养过），不是故障。
+    """
+    try:
+        st, html = _get("/PetListAdoptions?userId=%s-list" % _UID)
+    except Exception as e:
+        return {"ok": False, "value": None, "detail": "请求失败 %r" % e}
+    if st != 200:
+        return {"ok": False, "value": None, "detail": "HTTP %d" % st}
+    # 正常页面必含标题；后端挂掉时 petsite 渲染的是错误/空壳页
+    good = "Adopted Pet List" in html
+    return {"ok": True, "value": 1 if good else 0,
+            "detail": "列表页标题 %s，HTML %d 字符" % (good, len(html))}
+
+
+def probe_history() -> dict:
+    """领养历史：页面能否正常返回。覆盖 pethistory 与其 RDS 依赖。"""
+    try:
+        st, html = _get("/PetHistory?userId=%s-hist" % _UID)
+    except Exception as e:
+        return {"ok": False, "value": None, "detail": "请求失败 %r" % e}
+    if st != 200:
+        return {"ok": False, "value": None, "detail": "HTTP %d" % st}
+    good = len(html) > 12000        # 空壳页约 10.7KB，正常页明显更大
+    return {"ok": True, "value": 1 if good else 0,
+            "detail": "HTML %d 字符（阈值 12000）" % len(html)}
+
+
+def probe_waggle() -> dict:
+    """AI 问答：Waggle 能否给出实质回答。覆盖 AgentRuntime 与 agent 委派链。
+
+    ## agent 层的观测通道必须是语义的
+
+    HTTP 调用无论委派成功与否都返回 200 —— petsite 在 AgentCore 调用失败时
+    返回 200 + 兜底文案。只看状态码永远看不出 agent 依赖断没断，
+    只有**回答内容**会变。这是 agent 依赖唯一可行的观测通道。
+    """
+    sid = "chaos-probe-%s" % ("x" * 40)      # runtimeSessionId 必须 >= 33 字符
+    body = json.dumps({"Message": "Which dogs are available for adoption?",
+                       "SessionId": sid}).encode()
+    req = urllib.request.Request(
+        PETSITE_URL + "/Waggle/SendMessage", data=body,
+        headers={**_UA, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=90) as r:
+            st, text = r.status, r.read().decode("utf-8", "replace")
+    except Exception as e:
+        return {"ok": False, "value": None, "detail": "请求失败 %r" % e}
+    fallback = any(m in text.lower() for m in
+                   ("connection was interrupted", "please try again"))
+    good = st == 200 and len(text.strip()) >= 40 and not fallback
+    return {"ok": True, "value": 1 if good else 0,
+            "detail": "HTTP %d，%d 字符，兜底文案 %s" % (st, len(text), fallback)}
+
+
+#: 源服务 → 该服务提供的业务功能探针。**声明式**，由 test_74 校验。
+#:
+#: petsite 挂四个：它的某条依赖可能只坏其中一个功能。少挂一个，
+#: 漏掉的形状是「业务正常」—— 一个假结论，比测不出更糟。
+SERVICE_PROBES: dict[str, tuple] = {
+    "petsite": (("home", probe_home), ("adopt", probe_adopt),
+                ("list", probe_list), ("waggle", probe_waggle)),
+    "petsearch": (("home", probe_home),),
+    "payforadoption": (("adopt", probe_adopt),),
+    "petlistadoptions": (("list", probe_list),),
+    "pethistory": (("history", probe_history),),
+}
+
+
+def probes_for(service: str) -> tuple:
+    """取该源服务的探针组。没有登记的服务返回空 —— 调用方必须据此拒绝开跑。
+
+    返回空**不等于**「用默认探针」。没有匹配的业务探针时，任何退化数字都
+    无法归因到业务影响，此时应拒绝出 confirmed 判定。
+    """
+    return SERVICE_PROBES.get(service, ())
+
+
+def run_probes(service: str, n: int = 3, gap: float = 3.0) -> dict:
+    """跑该服务的全部探针各 n 次，返回 {探针名: [结果…]}。"""
+    out: dict[str, list] = {}
+    for name, fn in probes_for(service):
+        out[name] = []
+        for i in range(n):
+            out[name].append(fn())
+            if i < n - 1:
+                time.sleep(gap)
+    return out
