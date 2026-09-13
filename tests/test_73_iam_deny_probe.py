@@ -103,25 +103,83 @@ def test_t73_03_基线闸门必须存在():
 
 
 def test_t73_04_判定不得用max且混淆时必须拒绝():
-    """业务退化必须按退化样本统计，不能用 max。
+    """业务退化必须按每个探针各自的最小值统计，不能用 max。
 
     ## 实测依据
 
     第一版用 `max_pets`：故障期采样 [0, 26, 0, 0] 的 max 是 26，
     判定写成「业务未退化」—— 一个未退化样本盖掉了三个退化样本，结论正好反了。
     抖动成因是多 Pod 各自传播策略状态，不是消费方有降级路径。
+
+    ## 判据盯语义，不盯变量名
+
+    第二版这条门禁断言 `_verdict` 里含 `pet_counts` —— 那是当时的实现细节。
+    逐样本比较后来搬进了 `_biz_degraded`（为支持多探针），`pet_counts` 随之消失，
+    门禁于是红了。**红在这里是对的**（实现变了就该复核），但断言不该钉在变量名上。
+    现在盯两件不随重构漂移的事：判定里不得出现 max 取值，
+    且必须走 `_biz_degraded` 那条按最小值比的路径。
     """
     src = _src()
     vi = src.index("def _verdict")
     body = src[vi:]
 
-    assert 'biz_during.get("max_pets")' not in body, (
-        "判定里用了 max_pets 统计业务退化 —— 一个正常样本会盖掉多个退化样本。")
-    assert "pet_counts" in body, "判定没有按逐次采样统计"
+    assert "max_pets" not in body and 'get("max' not in body, (
+        "判定里用了 max 统计业务退化 —— 一个正常样本会盖掉多个退化样本。")
+    assert "_biz_degraded" in body, (
+        "判定没有走 _biz_degraded —— 逐样本按最小值比较的判据在那里。")
     assert "observation_only" in body, (
         "判定里没有 observation_only 出口。信号混淆时必须拒绝出结论 —— "
         "用混淆信号得出的结论会被 DR 影响面分析当真。")
-    # confirmed 必须同时要求「注入生效」与「业务退化」两个条件
     assert "edge_drop >= 20 and" in body, (
         "confirmed 的条件里没有同时要求业务侧证据。"
         "只有边退化就写 confirmed 等于只证明了调用失败、没证明业务受损。")
+
+    di = src.index("def _biz_degraded")
+    nxt = src.index("\ndef ", di + 10)
+    dbody = src[di:nxt]
+    assert "min(" in dbody, "_biz_degraded 没有按最小值比较"
+    assert "max(" not in dbody, "_biz_degraded 出现了 max —— 会盖掉退化样本"
+
+
+def test_t73_05_探针必须按源服务取且未登记时拒绝():
+    """业务探针由**源服务**决定，没登记探针的服务必须拒绝开跑。
+
+    被验证的命题是「这个服务失去这个依赖后，**它的**业务输出坏不坏」。
+    退回某个默认探针会产出反向结论：拿 petsite 首页探针测
+    `petsite -> SQSQueue` 得到「业务正常」，而 SQS 断了实际影响领养提交。
+    """
+    src = _src()
+    assert "business_probes" in src, "实验器没有接入业务探针注册表"
+    assert "probes_for(" in src, "没有按源服务取探针"
+    assert "未登记业务探针" in src, (
+        "源服务未登记探针时没有拒绝开跑。没有业务证据的 confirmed 是过度声称。")
+    assert "def _biz_baseline_ok" in src, "缺少业务探针基线闸门"
+    assert "基线抖动" in src, (
+        "基线闸门没有拦「探针基线本身抖动」—— 抖动的基线无法与退化区分。")
+
+
+def test_t73_06_方法表必须带xray类型前缀():
+    """图谱用资源名、X-Ray 用服务级抽象，靠类型前缀才能对上。
+
+    实测：队列在图谱里叫 `ServicesEks2-sqspetadoption...`，在 X-Ray 里叫 `SQS`
+    （Type=AWS::SQS）—— 按名字永远匹配不上，`collect_edge_flow` 返回 ok=False，
+    基线闸门于是拒绝开跑，看起来像「这条边没流量」。
+    """
+    src = _src()
+    assert "xray_types" in src, "方法表缺少 xray_types"
+    assert "dst_type_prefixes" in src, (
+        "没有把类型前缀传给 collect_edge_flow —— 加了字段不用等于没加。")
+
+    tree = ast.parse(src)
+    node = None
+    for n in ast.walk(tree):
+        if isinstance(n, ast.AnnAssign) and getattr(n.target, "id", "") == "SEVERANCE_METHODS":
+            node = n.value
+        elif isinstance(n, ast.Assign) and any(
+                getattr(t, "id", "") == "SEVERANCE_METHODS" for t in n.targets):
+            node = n.value
+    table = ast.literal_eval(node)
+    for label, spec in table.items():
+        assert "xray_types" in spec, (
+            "%s 没有声明 xray_types（按名字能匹配就写空元组，"
+            "但必须显式声明 —— 缺失与「空」在读代码时无法区分）" % label)
