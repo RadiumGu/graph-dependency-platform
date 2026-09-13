@@ -331,6 +331,16 @@ def write_verdict(v: dict) -> bool:
     # 不分级（None）时写 'unclassified' 而不是留空 —— 属性缺失与「判过但分不了级」
     # 在查询上无法区分，这与节点过期那次踩的是同一个坑。
     dep_esc = str(v.get('dependency_class_reason') or '').replace("'", "").replace('\\', '')[:300]
+    # 切断手段必须落在边上，不能只留在实验记录里。
+    #
+    # 不同手段证明的东西不同：网络层切断能覆盖延迟与部分失败；IAM deny 只证明
+    # 「这条依赖承重」（AccessDenied 立即返回，与超时挂住的失败模式不同）。
+    # 合规报告要据此披露证据的适用范围 —— 少了这个属性，读者会以为所有
+    # confirmed 都做过完整的韧性场景测试，那是过度声称。
+    #
+    # 未声明时写 'unspecified' 而不是留空：属性缺失与「没说」在查询上无法区分，
+    # 这与节点过期那次踩的是同一个坑。
+    sev = str(v.get('severance') or 'unspecified').replace("'", "")[:40]
     q = (
         "g.E('%s')"
         ".property('verify_status', '%s')"
@@ -343,13 +353,15 @@ def write_verdict(v: dict) -> bool:
         ".property('verify_confirm_count', %d)"
         ".property('verify_refute_count', %d)"
         ".property('verify_evidence_channel', '%s')"
+        ".property('verify_severance', '%s')"
         ".property('verify_dependency_class', '%s')"
         ".property('verify_dependency_class_reason', '%s')"
         ".property('verify_observing_sources', %d)"
         % (v['edge_id'], v['status'], v['confidence'], v['verified_at'],
-           VERIFIER, v['experiment_id'], v['degradation_pct'], esc,
+           v.get('verifier') or VERIFIER, v['experiment_id'],
+           v['degradation_pct'], esc,
            v['confirm_count'], v['refute_count'],
-           v.get('evidence_channel', 'unknown'),
+           v.get('evidence_channel', 'unknown'), sev,
            v.get('dependency_class') or 'unclassified', dep_esc,
            int(v.get('observing_sources') or 0))
     )

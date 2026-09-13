@@ -526,10 +526,115 @@ def run_probe(service: str, label: str, target: str,
         "caveat": "IAM deny 证明依赖承重，不等于延迟/部分失败场景测试",
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     print("   记录: %s" % out.relative_to(_ROOT))
+
+    # ── 写回图谱 ──
+    # 不写回的话，跑再多实验覆盖率也不会动 —— JSON 记录只有人看得到。
+    persisted = _persist_verdict(service, label, target, verdict, why,
+                                 base, during or {}, out.stem)
+    print("   写回: %s" % persisted)
+
     if _lock:
         _lock.end()
         print("   已释放实验期互锁 —— 合成流量 cron 下一轮恢复正常。")
     return 0
+
+
+def _edge_id(service: str, target: str) -> tuple[str | None, str, str]:
+    """按 (源, 目标) 精确定位边，返回 (边 id, 边标签, 说明)。
+
+    ## 边标签由图谱返回，不由调用方给
+
+    ⚠️ 第一版让调用方传 `label`，而调用方手上的是 `--edge` 里的
+    `TargetLabel`（**节点**类型，如 `DynamoDBTable`，用于查方法表）——
+    不是**边**类型（`AccessesData`）。于是查询恒空，写回静默失败：
+    「图谱里找不到 petsearch -[DynamoDBTable]-> ...」。
+
+    节点类型与边类型是两个不同的东西，同一个变量名承载两种语义就会撞。
+    现在边标签从图谱读，调用方给不出错的东西。
+
+    ## 为什么自己查而不用 `candidate_edges()`
+
+    那个函数对 `injection_target` 先做 `_resolve_graph_name()`（为服务名设计），
+    而这里的目标是 DynamoDB 表、S3 桶一类**非服务节点**，解析规则不适用。
+
+    命中 0 条或 >1 条都拒绝写回 —— 写错一条边的 `verify_status` 比不写更糟：
+    报告会声称某依赖已确证，而证据其实来自另一条边。
+    """
+    from runner.neptune_helpers import query_gremlin_parsed
+    esc_s = service.replace("'", "")
+    esc_t = target.replace("'", "")
+    q = ("g.V().has('name','%s').outE().as('e')"
+         ".inV().has('name','%s')"
+         ".select('e').project('eid','elabel')"
+         ".by(__.id()).by(__.label()).fold()" % (esc_s, esc_t))
+    try:
+        rows = query_gremlin_parsed(q)
+    except Exception as e:
+        return None, "", "查询边 id 失败: %r" % e
+    while isinstance(rows, list) and len(rows) == 1 and isinstance(rows[0], list):
+        rows = rows[0]
+    hits = [r for r in (rows or []) if isinstance(r, dict) and r.get('eid')]
+    if not hits:
+        return None, "", ("图谱里找不到 %s -> %s 的任何边。空结果必须响 —— "
+                          "它可能是真没这条边，也可能是名字对不上，"
+                          "而两者在日志里长得一样时后者会被当成前者放过。"
+                          % (service, target))
+    if len(hits) > 1:
+        labels = sorted({h.get('elabel') for h in hits})
+        return None, "", ("%s -> %s 之间有 %d 条边（%s），拒绝写回 —— "
+                          "写错一条边的 verify_status 比不写更糟。"
+                          % (service, target, len(hits), labels))
+    return hits[0]['eid'], str(hits[0].get('elabel') or ''), "唯一匹配"
+
+
+def _persist_verdict(service: str, label: str, target: str,
+                     verdict: str, why: str, base: dict, during: dict,
+                     record_id: str) -> str:
+    """把判定写回图谱边属性。只有 confirmed / inconclusive 才写。
+
+    `observation_only` **刻意不写** —— 它的含义是「采集到的信号不足以判定」，
+    写进 `verify_status` 会让它看起来像一个结论。回执里的教训：用混淆信号得出的
+    结论会被 DR 影响面分析当真并在预案里降级，比 untested 危险得多。
+
+    入参 `label` 是**节点**类型（用于记录），边标签从图谱读。
+    """
+    if verdict not in ("confirmed", "inconclusive"):
+        return "未写回（%s 不是结论，写进 verify_status 会让它看起来像结论）" % verdict
+
+    eid, elabel, how = _edge_id(service, target)
+    if not eid:
+        return "未写回：%s" % how
+
+    from runner.edge_verification import write_verdict
+    b_sr = base.get("success_rate") or 0.0
+    d_sr = during.get("success_rate") or 0.0
+    ok = write_verdict({
+        "edge_id": eid,
+        "label": elabel,
+        "observer": service,
+        "status": verdict,
+        "reason": why,
+        "confidence": 0.9 if verdict == "confirmed" else 0.4,
+        "degradation_pct": round(b_sr - d_sr, 2),
+        # `verified_at` 是 write_verdict 的必填字段（epoch 秒）。
+        # 少了它是 KeyError 而不是静默写错，这个失效形状是好的。
+        "verified_at": int(time.time()),
+        # 双通道：被测边的 X-Ray 统计 + petsite 首页业务输出断言
+        "evidence_channel": "xray-edge+business-probe",
+        # 切断手段必须落在边上，报告据此披露证据的适用范围
+        "severance": "iam-deny",
+        "verifier": "iam-deny-probe",
+        "experiment_id": record_id,
+        "confirm_count": 1 if verdict == "confirmed" else 0,
+        "refute_count": 0,
+        "observing_sources": 2,
+        "dependency_class": None,
+        "dependency_class_reason":
+            "IAM deny 证明依赖承重，不覆盖延迟/部分失败场景，"
+            "不足以给出 hard/soft 分级",
+    })
+    return ("已写回边 %s（%s，severance=iam-deny）" % (eid[:20], elabel) if ok
+            else "写回失败，见日志")
 
 
 def _verdict(base: dict, during: dict | None, post: dict | None,
