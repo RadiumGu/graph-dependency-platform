@@ -107,7 +107,9 @@ def _neighbors_live(name: str, ets: tuple, limit: int) -> dict:
         "coalesce(endNode(r).name, endNode(r).tool_key, endNode(r).arn) AS target, "
         "labels(endNode(r))[0] AS target_label, r.verify_status AS verify_status, "
         "r.verify_degradation AS deg, r.verify_last AS verify_last, "
-        "r.nfm_cross_az AS nfm_cross_az "
+        "r.nfm_cross_az AS nfm_cross_az, r.drift_status AS drift, "
+        "r.unobserved_since AS unobserved_since, r.last_seen AS last_seen, "
+        "r.p99_latency_ms AS p99, r.error_rate AS error_rate, r.calls AS calls "
         f"LIMIT {int(limit)}"
     )
 
@@ -257,13 +259,59 @@ def absorb(rows: list) -> list:
             if isinstance(_vl, (int, float)) and _vl > 0:
                 _days = (time.time() - float(_vl)) / 86400.0
                 _bits.append(f"{_days:.1f} 天前验证" if _days >= 1 else "今天验证过")
-            seen_edges.append({
+
+            # ── 陈旧度 → 透明度 ────────────────────────────────────────────────
+            #
+            # 现在图上颜色给了验证状态、粗细给了退化率、虚线给了跨 AZ，
+            # 陈旧度需要第四个通道，用**透明度**：越久没观测到越淡。
+            # 这个映射有天然语义（褪色 = 正在消失），而且不与前三个冲突。
+            #
+            # 只让 `observed_then_silent` 和 `unobserved_since` 走透明度：
+            # 它们是「曾经存在、现在沉默」。`declared_not_observed` 不走 ——
+            # 那是「声明了但从没见过」，属于未证实而非褪色，语义上更接近
+            # 已经由颜色表达的 untested，用变淡表示会把两件事混成一件。
+            _drift = r.get("drift")
+            _unobs = r.get("unobserved_since")
+            _opacity = None
+            _silent_days = None
+            if isinstance(_unobs, (int, float)) and _unobs > 0:
+                _silent_days = (time.time() - float(_unobs)) / 86400.0
+                # 7 天以上压到最淡，线性过渡；不压到 0 以下，否则边就看不见了
+                _opacity = round(max(0.32, 1.0 - min(_silent_days, 7.0) / 7.0 * 0.68), 2)
+            elif _drift == "observed_then_silent":
+                _opacity = 0.45
+
+            if _drift == "observed_then_silent":
+                _bits.append("曾观测到、现已沉默")
+            elif _drift == "declared_not_observed":
+                _bits.append("配置里声明但从未观测到")
+            elif _drift == "ok":
+                _bits.append("声明与观测一致")
+            if _silent_days is not None:
+                _bits.append(f"已沉默 {_silent_days:.1f} 天")
+
+            # 性能数据只在有值时进提示：error_rate 在这个环境恒为 0，
+            # 把恒定值印出来是噪音，不是信息。
+            _p99 = r.get("p99")
+            if isinstance(_p99, (int, float)) and _p99 > 0:
+                _bits.append(f"p99 {_p99:.0f}ms")
+            _err = r.get("error_rate")
+            if isinstance(_err, (int, float)) and _err > 0:
+                _bits.append(f"错误率 {_err:.2%}")
+            _calls = r.get("calls")
+            if isinstance(_calls, (int, float)) and _calls > 0:
+                _bits.append(f"{int(_calls)} 次调用")
+
+            _edge = {
                 "source": s, "target": t, "color": color, "width": round(width, 2),
                 "title": " · ".join(_bits),
                 "_nfm_cross_az": r.get("nfm_cross_az"),
-                "_deg": _deg if isinstance(_deg, (int, float)) else None,
-                "_verify_last": _vl if isinstance(_vl, (int, float)) else None,
-            })
+                "_drift": _drift,
+                "_silent_days": _silent_days,
+            }
+            if _opacity is not None:
+                _edge["opacity"] = _opacity
+            seen_edges.append(_edge)
         out.append(t if downstream else s)
     return out
 
@@ -384,6 +432,32 @@ elif _crossed:
         "跨 AZ 调用多一跳网络延迟、产生跨区数据传输费用，"
         "换来的是单 AZ 故障时不会一起失效。这是取舍，不是缺陷。"
         "悬停虚线边可以看到具体是哪两个 AZ、以及这一条是实测还是推算。"
+    )
+
+# ── 沉默边：这张图里有几条依赖可能已经不存在了 ────────────────────────────────
+#
+# 值班时最误导人的不是缺一条边，而是**多一条早就没了的边** —— 它会把爆炸半径算大，
+# 把根因候选拉长。所以这个数单独摆出来，而不是只靠图上变淡让人自己发现。
+_silent = [e for e in seen_edges
+           if e.get("_drift") == "observed_then_silent" or e.get("_silent_days")]
+_declared_only = [e for e in seen_edges if e.get("_drift") == "declared_not_observed"]
+if _silent or _declared_only:
+    _parts = []
+    if _silent:
+        _worst = max((e.get("_silent_days") or 0) for e in _silent)
+        _parts.append(
+            f"**{len(_silent)}** 条曾观测到、现已沉默（图上**变淡**，"
+            + (f"最久 {_worst:.1f} 天" if _worst else "无沉默时长数据") + "）"
+        )
+    if _declared_only:
+        _parts.append(f"**{len(_declared_only)}** 条只在配置里声明、从未观测到")
+    st.warning(
+        "🕰️ " + "；".join(_parts) + "。\n\n"
+        "沉默的边不代表一定失效，低频路径也会长时间没有流量；但把它们当成活跃依赖会"
+        "**把爆炸半径算大、把根因候选拉长**。变淡是提醒去核对，不是判定它已消失。"
+        "「只声明未观测」则是另一回事：它没有褪色，因为从来没有亮过 —— "
+        "可能是死配置，也可能是尚未触发的路径。",
+        icon="🕰️",
     )
 
 if expanded or full_expanded:
@@ -520,7 +594,14 @@ with st.expander("图例与设计说明"):
         "**虚线 = 跨可用区**。优先用边上 `nfm_cross_az`（Network Flow Monitor 实测，"
         "但只覆盖约一成的依赖边），没有观测时退回按两端属地推算，悬停可看到是哪一种。"
         "这一维用线型而不是颜色，是因为颜色已经表示验证状态；"
-        "两种含义挤进同一个通道，读者就分不清自己看到的是哪一件事。"
+        "两种含义挤进同一个通道，读者就分不清自己看到的是哪一件事。\n\n"
+        "**变淡 = 越久没观测到**（`unobserved_since` / `drift_status`）。"
+        "曾经观测到、现在沉默的边会褪色，7 天以上压到最淡。"
+        "「只在配置里声明、从未观测到」的边**不褪色** —— 它不是正在消失，"
+        "而是从来没亮过，那更接近「未验证」，已经由颜色表达了。\n\n"
+        "四个通道到此为止：颜色（验证状态）、粗细（退化率）、线型（跨区）、"
+        "透明度（陈旧度）。再往上加编码会超出一眼能辨的数量，"
+        "其余字段（p99 延迟、调用次数、错误率）都放在**悬停提示**里。"
     )
     st.markdown("---")
     st.markdown(

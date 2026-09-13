@@ -28,7 +28,9 @@
 .gs-edge {
   fill: none;
   stroke-linecap: round;
-  opacity: 0.85;
+  /* --gs-stale 由 Python 侧按「多久没观测到」写入（1 = 新鲜，越小越旧）。
+     没有这个数据时回落到 0.85，与原来的默认一致。 */
+  opacity: var(--gs-stale, 0.85);
 }
 
 /* ── 节点 ───────────────────────────────────────────────────────────────── */
@@ -84,8 +86,11 @@
   opacity: 0.1;
 }
 
+/* 被点亮的边恢复到**它自己的**陈旧度，而不是一律 1 ——
+   否则 hover 会把「这条边已经沉默很久」这个信息临时抹掉，
+   而那恰恰是用户盯着一个节点看时最需要知道的事。 */
 .gs-spotlight .gs-edge.is-lit {
-  opacity: 1;
+  opacity: var(--gs-stale, 1);
   stroke-width: 2.6;
 }
 

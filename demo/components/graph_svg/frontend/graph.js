@@ -235,6 +235,10 @@ export default function (component) {
     // 虚线用来编码「跨 AZ」。刻意不用颜色：颜色那一维已经给了故障注入验证状态，
     // 两种含义挤进同一个通道，读者就无法分辨自己看到的是哪一件事。
     if (e.dashed) attrs["stroke-dasharray"] = "6 4";
+    // 透明度编码「陈旧度」（越久没观测到越淡）。写成 CSS 变量而不是 opacity 属性：
+    // hover 聚光要整体压暗无关的边，如果这里直接设 opacity，两者会互相覆盖 ——
+    // 变量让聚光的规则能乘在它上面，而不是把它抹掉。
+    if (typeof e.opacity === "number") attrs.style = `--gs-stale:${e.opacity}`;
     const path = el("path", attrs);
     if (e.title) {
       const t = el("title");
