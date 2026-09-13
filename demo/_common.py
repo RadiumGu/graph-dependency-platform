@@ -802,3 +802,109 @@ def df(rows: list[dict[str, Any]]):
     import pandas as pd
 
     return pd.DataFrame(rows or [])
+
+# ── DevOps Agent（`aws devops-agent`）────────────────────────────────────────
+#
+# 真实调用的封装在 `demo/devops_agent.py`，这里只做**页面需要的那层**：可用性探测、
+# 频率闸门、把 RCA 上下文拼成一段材料。放在 _common 是因为判定与闸门要跨 rerun
+# 共享，而页面每次 rerun 都重新执行。
+
+
+def devops_agent_available() -> tuple:
+    """(能不能调, 不能的原因)。任何一环缺失都返回可读的原因而不是抛错 ——
+    页面要能降级成说明，而不是崩在 import 或凭据上。"""
+    try:
+        import devops_agent
+    except Exception as exc:                                     # noqa: BLE001
+        return False, f"导入 devops_agent 失败：{type(exc).__name__}"
+    try:
+        import boto3
+    except Exception:                                            # noqa: BLE001
+        return False, "环境里没有 boto3"
+    try:
+        c = devops_agent.client()
+    except Exception as exc:                                     # noqa: BLE001
+        # botocore 太旧时这里报 UnknownServiceError —— 那是最常见的原因，
+        # 说清楚比只报异常名有用。
+        if "UnknownService" in type(exc).__name__:
+            return False, "botocore 太旧，不认识 `devops-agent` 服务"
+        return False, f"建客户端失败：{type(exc).__name__}"
+    try:
+        c.meta.service_model.operation_model("SendMessage")
+    except Exception:                                            # noqa: BLE001
+        return False, "这个 botocore 版本没有 SendMessage 操作"
+    import botocore.exceptions
+    try:
+        boto3.Session().get_credentials().get_frozen_credentials()
+    except (AttributeError, botocore.exceptions.NoCredentialsError):
+        return False, "没有可用的 AWS 凭据"
+    return True, ""
+
+
+def devops_agent_wait(state) -> float:
+    """还要等几秒才能再调一次。0 表示可以调。"""
+    try:
+        import devops_agent
+        return devops_agent.rate_limited(state, "_devops_agent_last_ts")
+    except Exception:                                            # noqa: BLE001
+        return 0.0
+
+
+def devops_agent_ask(space_id: str, question: str, *, context=None,
+                     asset_ids=None) -> dict:
+    import devops_agent
+    return devops_agent.ask(space_id, question, context=context,
+                            asset_ids=asset_ids)
+
+
+def devops_agent_judge(answer: str) -> dict:
+    import devops_agent
+    return devops_agent.judge_used_graph(answer)
+
+
+def rca_context_blob(service: str, ev: dict) -> str:
+    """把这一页已经查好的证据拼成一段材料，走 SendMessage 的 `context`。
+
+    `ev` 就是页面用的证据字典：{查询名: {"why":…, "params":…, "data": [...]}}。
+
+    刻意**只放这一页已经摆出来的东西**，不额外查图谱补料 —— 那样读者在页面上看到的
+    和 agent 收到的就不是同一份，两边结论冲突时没法裁决。
+
+    每条查询都带上它的 `why`（这条查询在问什么）：agent 拿到一堆行而不知道每堆
+    回答的是哪个问题时，最容易做的就是把它们当同质数据混着用。
+    """
+    lines = [f"# 受影响服务：{service or '（未指定）'}", ""]
+    if not isinstance(ev, dict) or not ev:
+        lines.append("（这一页还没有收齐证据）")
+        return "\n".join(lines)
+
+    for qname, item in ev.items():
+        if not isinstance(item, dict):
+            continue
+        if item.get("error"):
+            lines.append(f"## {qname}　{item.get('why', '')}")
+            lines.append(f"   查询失败：{item['error']}")
+            lines.append("")
+            continue
+        rows = item.get("data") or []
+        if not isinstance(rows, list):
+            rows = [rows]
+        lines.append(f"## {qname}　{item.get('why', '')}")
+        if not rows:
+            lines.append("   （无结果）")
+        for r in rows[:25]:
+            if isinstance(r, dict):
+                # 只保留有值的字段，键名原样带上 —— verify_status 这类字段名
+                # 本身就是证据的一部分，改写会让 agent 无法引用它。
+                lines.append("   " + "　".join(
+                    f"{k}={v}" for k, v in r.items() if v not in (None, "", [])))
+            else:
+                lines.append(f"   {r}")
+        if len(rows) > 25:
+            lines.append(f"   …还有 {len(rows) - 25} 行未列出")
+        lines.append("")
+
+    lines.append("以上全部来自依赖图谱的确定性查询，是这一页此刻显示的同一份数据。")
+    lines.append("请只基于它们回答。缺数据就说缺数据 —— "
+                 "特别是不要用 FIS 实验模板的存在替代验证结果，模板是意图不是结果。")
+    return "\n".join(lines)

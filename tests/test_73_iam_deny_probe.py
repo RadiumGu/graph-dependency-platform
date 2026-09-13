@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import re
 
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _SCRIPT = _ROOT / "scripts" / "verify_via_iam_deny.py"
@@ -22,6 +23,23 @@ _SCRIPT = _ROOT / "scripts" / "verify_via_iam_deny.py"
 def _src() -> str:
     assert _SCRIPT.exists(), "找不到 %s" % _SCRIPT
     return _SCRIPT.read_text(encoding="utf-8")
+
+
+def _body_of(src: str, decl: str) -> str:
+    """取一个顶层定义的函数体，到**下一个顶层 def 或 class** 为止。
+
+    2026-09-13：这里原来有两种写法，都会误判。
+    `src[src.index("def _verdict"):]` 取到文件末尾；按 `"\\ndef "` 找边界的那处
+    则会被中间的 `class` 躲过去 —— 脚本后半部分有个限流器类，里面一行
+    `self._gap = max(1.0, 60.0 * workers / max(1, rate_per_min))`
+    于是被算进 `_biz_degraded` 的函数体，让「不得出现 max」这条断言红了。
+    那行是限流间隔计算，与业务退化判定毫无关系。
+
+    门禁误报比漏报更伤：它会让人怀疑门禁本身，下次就倾向于跳过它。
+    """
+    i = src.index(decl)
+    m = re.search(r"\n(?:def |class )", src[i + len(decl):])
+    return src[i:i + len(decl) + m.start()] if m else src[i:]
 
 
 def test_t73_01_方法表必须声明式():
@@ -120,8 +138,7 @@ def test_t73_04_判定不得用max且混淆时必须拒绝():
     且必须走 `_biz_degraded` 那条按最小值比的路径。
     """
     src = _src()
-    vi = src.index("def _verdict")
-    body = src[vi:]
+    body = _body_of(src, "def _verdict")
 
     assert "max_pets" not in body and 'get("max' not in body, (
         "判定里用了 max 统计业务退化 —— 一个正常样本会盖掉多个退化样本。")
@@ -134,9 +151,7 @@ def test_t73_04_判定不得用max且混淆时必须拒绝():
         "confirmed 的条件里没有同时要求业务侧证据。"
         "只有边退化就写 confirmed 等于只证明了调用失败、没证明业务受损。")
 
-    di = src.index("def _biz_degraded")
-    nxt = src.index("\ndef ", di + 10)
-    dbody = src[di:nxt]
+    dbody = _body_of(src, "def _biz_degraded")
     assert "min(" in dbody, "_biz_degraded 没有按最小值比较"
     assert "max(" not in dbody, "_biz_degraded 出现了 max —— 会盖掉退化样本"
 

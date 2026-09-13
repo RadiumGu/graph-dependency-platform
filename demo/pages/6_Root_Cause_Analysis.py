@@ -44,6 +44,7 @@
 """
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import _common as C  # noqa: E402
@@ -1000,3 +1001,169 @@ with tab_agent:
                 "每一条都可以用 `aws devops-agent list-pending-messages` "
                 "按 executionId 取回原始消息核对。"
                 "逐字全文在 `demo/fixtures/agent_unaided_answer.json`。")
+
+    # ── 6　自己按一次 ─────────────────────────────────────────────────────────
+    #
+    # 上面那 20 次是我们跑的，读者只能选择信或不信。这一段让他当场再跑一次。
+    #
+    # 为什么值得做：这一屏的论点（工具可用 ≠ 工具会被用）是反直觉的，而反直觉的结论
+    # 靠统计说服不了人 —— 按一下看它翻车才会信。判定用的是 detection_rule 那套判据
+    # （见 `demo/devops_agent.py`），对上面 20 条实录回答验证过 20/20 一致，
+    # 所以「这次到底查没查图谱」不是我们说了算，是有可核对的证据。
+    #
+    # 为什么不做成通用对话框：按上面的分组数据，不点名要求时 agent 只有 1/4 会查图谱，
+    # 其余会拿 FIS 模板当依据编一个答案。放一个自由输入框，读者大概率看到的是后者，
+    # 却没有办法分辨 —— 那等于在一页专门讲这件事的地方，再造一个同样的坑。
+    st.markdown("---")
+    st.markdown("#### 6　自己按一次")
+
+    _space = rec.get("agent_space_id")
+    _asset = rec.get("skill_asset_id")
+    _agent_ok, _agent_why = C.devops_agent_available()
+
+    if not _space:
+        st.info("这一段需要 `agent_space_id`，当前 fixture 里没有，所以不提供实时调用。")
+    elif not _agent_ok:
+        # 降级成能读的说明：凭据/boto3/权限任一缺失都会走到这里。
+        # 不整页崩，也不假装按钮可用 —— 一个按下去必然失败的按钮比没有按钮更糟。
+        st.info(
+            f"**实时调用当前不可用**：{_agent_why}\n\n"
+            "上面那 20 次调用的逐字原文与 executionId 都在 fixture 里，"
+            "可以用 `aws devops-agent list-pending-messages` 自行核对。"
+            "要启用这一段，运行环境需要能调用 `devops-agent`（凭据 + 较新的 botocore）。")
+    else:
+        _wait = C.devops_agent_wait(st.session_state)
+        st.caption(
+            "会发起一次**真实**的 `aws devops-agent` 调用：产生 Bedrock 推理费用，"
+            "通常要几十秒。返回后自动按 `detection_rule` 判定这次有没有查依赖图谱，"
+            "并把命中的证据列出来。"
+        )
+
+        _mode = st.radio(
+            "问哪一版",
+            ["不点名要求查图谱（原样 A 组）", "点名要求查图谱（原样 B 组）"],
+            horizontal=True, key="rca_agent_mode",
+            help="两版问题文本就是上面 A/B 两组用的原文，一字未改 —— "
+                 "所以你这次的结果可以直接和上面的统计并列看。")
+        _use_explicit = _mode.startswith("点名")
+        _q = (rec.get("question_explicit") if _use_explicit else rec.get("question")) or ""
+
+        with st.expander("看这次要发出去的问题原文"):
+            st.code(_q, language="text")
+
+        _confirm = st.checkbox(
+            "我知道这会产生真实调用与费用", key="rca_agent_confirm",
+            help="刻意做成两步：这一页任何访客都能按，没有这个勾选，"
+                 "一次围观就能把 agent space 打满。")
+
+        _c1, _c2 = st.columns([1, 3])
+        with _c1:
+            _go = st.button(
+                "▶ 发起调用", type="primary", disabled=not _confirm or _wait > 0,
+                key="rca_agent_go")
+        with _c2:
+            if _wait > 0:
+                st.caption(f"冷却中，还需 {_wait:.0f} 秒 —— 频率闸门，避免连点。")
+            elif not _confirm:
+                st.caption("先勾上左边的确认。")
+
+        if _go:
+            with st.spinner("正在调用 DevOps Agent，通常几十秒…"):
+                _res = C.devops_agent_ask(
+                    _space, _q, asset_ids=[_asset] if _asset else None)
+            st.session_state["rca_agent_result"] = _res
+            st.session_state["_devops_agent_last_ts"] = time.time()
+            st.rerun()
+
+        _res = st.session_state.get("rca_agent_result")
+        if _res:
+            if _res.get("error") and not _res.get("answer"):
+                st.error(f"调用失败：{_res['error']}")
+            else:
+                _j = C.devops_agent_judge(_res.get("answer") or "")
+                _used = _j.get("used_graph")
+                if _used is True:
+                    st.success(
+                        "**这次查了依赖图谱。** 判据："
+                        + "；".join(_j["evidence"])
+                        + "。这类证据控制面拿不到，只能来自图谱。", icon="✅")
+                elif _used is False:
+                    st.warning(
+                        "**这次没查图谱。** " + "；".join(_j["evidence"])
+                        + "。FIS 模板是**意图**不是结果 —— 模板存在不等于实验跑过、"
+                          "更不等于依赖被证实。这正是上面那 %d/%d 想说明的事。"
+                          % (len(plain) - pg, len(plain)), icon="⚠️")
+                else:
+                    # 判定器拿不准时说拿不准。这一屏的整个论点建立在
+                    # 「判定要有依据」上，猜一个反而自伤。
+                    st.info(
+                        "**这次判不出来**：回答里既没有图谱侧证据"
+                        "（`injection_confirmed` / `exp-` 实验 ID / 退化幅度），"
+                        "也没有 FIS 模板 ID。可能是回答方式变了，"
+                        "判据需要按新的实录补一条。", icon="❓")
+                if _res.get("execution_id"):
+                    st.caption(
+                        f"executionId `{_res['execution_id']}` —— 可以用 "
+                        "`aws devops-agent list-pending-messages` 取回原始消息核对。")
+                if _res.get("error"):
+                    st.caption(f"（读流时有一处异常：{_res['error']}）")
+                with st.expander("这次的回答全文", expanded=False):
+                    st.markdown(_res.get("answer") or "_（空）_")
+
+    # ── 7　带着这一页的事实去追问 ──────────────────────────────────────────────
+    #
+    # 与上面那段的区别是**给不给材料**：上面测的是「不给材料时它会不会自己去查」，
+    # 这里是「把这一页已经查好的事实交给它，让它在这个范围内深挖」。
+    #
+    # 事实走 SendMessage 的 `context` 参数而不是拼进问题正文：那样能分清
+    # 「我问了什么」和「我给了什么材料」，agent 侧也不会把材料当成提问的一部分。
+    st.markdown("---")
+    st.markdown("#### 7　带着这一页的事实去追问")
+
+    if not _space:
+        st.caption("同上，缺 `agent_space_id`，这一段不提供。")
+    elif not _agent_ok:
+        st.caption(f"同上，实时调用不可用：{_agent_why}")
+    else:
+        _ctx = C.rca_context_blob(selected_service, ev)
+        st.caption(
+            "把这一页**已经查好的事实**（受影响服务、候选根因、相关依赖边及其验证状态）"
+            "作为 `context` 一起发过去，agent 只在这个范围里往下问。"
+            "这样它是上面结论的延伸，而不是另一个平行入口 —— "
+            "自然语言随便问在 **自然语言查询** 那一页。")
+        with st.expander(f"看要一起发过去的事实（{len(_ctx.splitlines())} 行）"):
+            st.code(_ctx, language="text")
+
+        _q2 = st.text_input(
+            "追问", key="rca_agent_followup",
+            placeholder="例如：这些候选根因里，哪几条的依赖边其实还没被验证过？",
+            help="问题会连同上面那份事实一起发出。范围限定在这一页已收齐的材料内。")
+        _wait2 = C.devops_agent_wait(st.session_state)
+        _confirm2 = st.checkbox(
+            "我知道这会产生真实调用与费用", key="rca_followup_confirm")
+        _go2 = st.button(
+            "▶ 带上下文追问", disabled=not (_q2.strip() and _confirm2) or _wait2 > 0,
+            key="rca_followup_go")
+        if _wait2 > 0:
+            st.caption(f"冷却中，还需 {_wait2:.0f} 秒。")
+
+        if _go2:
+            with st.spinner("正在调用（带上下文），通常几十秒…"):
+                _r2 = C.devops_agent_ask(
+                    _space, _q2.strip(), context=_ctx,
+                    asset_ids=[_asset] if _asset else None)
+            st.session_state["rca_followup_result"] = _r2
+            st.session_state["_devops_agent_last_ts"] = time.time()
+            st.rerun()
+
+        _r2 = st.session_state.get("rca_followup_result")
+        if _r2:
+            if _r2.get("error") and not _r2.get("answer"):
+                st.error(f"调用失败：{_r2['error']}")
+            else:
+                st.markdown(_r2.get("answer") or "_（空）_")
+                if _r2.get("execution_id"):
+                    st.caption(f"executionId `{_r2['execution_id']}`")
+                st.caption(
+                    "⚠️ 这段是模型叙述，不是查询结果。上面各 Tab 里的判定都能追到具体"
+                    "查询与实验 ID；这里的内容需要你自己对照核实。")
