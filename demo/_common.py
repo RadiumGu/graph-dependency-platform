@@ -555,9 +555,6 @@ NAV_GROUPS = [
         ("app.py", "🏠 首页 · 这张图是真的吗"),
         ("pages/3_Graph_Explorer.py", "🕸️ 分层总览 · 方向与层次"),
         ("pages/9_Interactive_Explorer.py", "🧭 交互探索 · 点着走"),
-        # 原型：与上面两页并排对比用。放在同一组，因为它回答的是同一个问题
-        # （这张图长什么样），只是渲染方式不同 —— dagre 分层 + 自绘 SVG。
-        ("pages/99_SVG_Prototype.py", "🧪 SVG 原型 · 对比用"),
     ]),
     ("② 这张图是真的吗　←核心", [
         ("pages/1_Edge_Verification.py", "🎯 逐条边的验证判定"),

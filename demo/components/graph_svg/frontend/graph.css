@@ -74,3 +74,49 @@
   pointer-events: none;
   user-select: none;
 }
+
+/* ── 聚光：hover / 键盘聚焦某个节点时，压暗无关的、点亮相连的 ─────────────
+ *
+ * 压暗而不是隐藏：被压暗的部分仍然占位、仍然看得见轮廓，所以用户不会以为
+ * 图变小了。隐藏会让布局看起来发生变化，那是更大的干扰。
+ */
+.gs-spotlight .gs-edge {
+  opacity: 0.1;
+}
+
+.gs-spotlight .gs-edge.is-lit {
+  opacity: 1;
+  stroke-width: 2.6;
+}
+
+.gs-spotlight .gs-node .gs-box,
+.gs-spotlight .gs-node .gs-accent,
+.gs-spotlight .gs-node .gs-label {
+  opacity: 0.28;
+}
+
+.gs-spotlight .gs-node.is-lit .gs-box,
+.gs-spotlight .gs-node.is-lit .gs-accent,
+.gs-spotlight .gs-node.is-lit .gs-label {
+  opacity: 1;
+}
+
+.gs-spotlight .gs-node.is-lit .gs-box {
+  stroke: #7f8c9b;
+}
+
+/* 尊重「减少动效」偏好：过渡对前庭敏感的用户是负担，而高亮本身不依赖它 */
+@media (prefers-reduced-motion: reduce) {
+  .gs-box {
+    transition: none;
+  }
+}
+
+/* ── 泳道标题（Graph_Explorer 的 scope 簇）───────────────────────────────── */
+.gs-band-t {
+  font: 600 12px -apple-system, "Segoe UI", Roboto, sans-serif;
+  fill: #8492a6;
+  text-anchor: middle;
+  pointer-events: none;
+  user-select: none;
+}

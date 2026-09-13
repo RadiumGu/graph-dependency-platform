@@ -43,7 +43,27 @@ _JS = (_FE / "dagre.min.js").read_text(encoding="utf-8") + "\n" + (
     _FE / "graph.js"
 ).read_text(encoding="utf-8")
 
-_component = components.component("kc_graph_svg", js=_JS, html='<div></div>')
+_COMPONENT_NAME = "kc_graph_svg"
+
+
+def _renderer():
+    """拿到组件的 mount 函数，**每次调用都重新注册**。
+
+    `st.components.v2.component()` 把组件注册进**当前 session** 的注册表。按通常
+    的写法在模块顶层调用它，注册只发生在模块首次导入那一次 —— Python 的模块缓存
+    意味着之后新建的 session 不会再执行它，于是 mount 时抛
+    `Component 'kc_graph_svg' is not registered`。
+
+    实测两种情形都会踩到：Streamlit 的 AppTest 每次 `run()` 用新的 script run
+    context（`test_22_ui_streamlit.py` 因此整片报错），以及编辑源码触发热重载
+    之后。真实浏览器里第一次打开是正常的，恰好掩盖了这个问题。
+
+    也不能把返回的 callable 缓存在 module 级 —— 那样缓存是有了，新 session 的
+    注册表里依旧没有这个组件，等于把同一个 bug 换了个地方犯。注册是幂等的
+    （同名同内容重复注册不报错），而 js/css 文本已在 module 级读好，
+    所以每次调用的成本只是一次注册，不重读文件。
+    """
+    return components.component(_COMPONENT_NAME, js=_JS, html='<div></div>')
 
 
 def render(
@@ -52,6 +72,8 @@ def render(
     *,
     height: int = 620,
     anchor: str | None = None,
+    positions: dict | None = None,
+    bands: list | None = None,
     rankdir: str = "LR",
     nodesep: int = 18,
     ranksep: int = 96,
@@ -62,6 +84,11 @@ def render(
     anchor 是起点节点 id：图比容器大时初始视图对准它，否则用户开局可能
     看到的是图的中段、找不到自己选的服务。
 
+    positions={id: {"x": .., "y": ..}} 传外部坐标时**跳过 dagre**。给
+    Graph_Explorer 用：它的布局是二维编码（y = 依赖层级、x = scope 泳道），
+    而 dagre 只排一个方向，表达不了「属于哪个簇」这一维。
+    bands=[{"x": .., "y": .., "title": ..}] 是配套的泳道标题。
+
     nodes 每项：id（必需）、label、type、group、degree、accent（左侧色条）、
                 fill、stroke、badge、badge_fill
     edges 每项：source、target（必需）、color、width、title
@@ -71,11 +98,13 @@ def render(
     """
     prev = st.session_state.get(f"_gs_{key}", {})
 
-    result = _component(
+    result = _renderer()(
         data={
             "nodes": nodes,
             "edges": edges,
             "anchor": anchor,
+            "positions": positions or {},
+            "bands": bands or [],
             "rankdir": rankdir,
             "nodesep": nodesep,
             "ranksep": ranksep,

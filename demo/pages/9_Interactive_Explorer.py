@@ -1,31 +1,33 @@
+"""9_Interactive_Explorer.py —— 从一个服务出发，顺着依赖走。
+
+## 这一页回答的问题
+
+「petsite 挂了会影响谁」/「它依赖谁」—— 锚点 + 有界邻域 + 按需展开。
+和 3_Graph_Explorer 的分工：那一页是**系统全貌**（二维编码：依赖层级 × scope
+簇），这一页是**从一个点出发的牵连**。两页共用 `components/graph_svg` 渲染，
+所以样式与交互一致，区别只在信息组织。
+
+## 为什么换掉了 st-link-analysis
+
+上一版用它（Cytoscape 封装）做双向交互，因为 pyvis 单向、选中拿不回 Python。
+但它把 Cytoscape 的 `min-zoomed-font-size` 硬编码为 10 且不暴露 font-size、
+不透传 cy 实例：fit 后缩放落在 0.625 以下时**节点标签被整体隐藏**，一张依赖图
+连节点叫什么都读不出来，而封装内没有任何入口能绕开（收紧布局跨不过阈值，
+关掉 fit 则视图不再对准内容）。
+
+Streamlit 1.51.0 起的 Components v2 让「选中回传」成为原生能力——免 npm 构建、
+frameless、双向——所以当初选那个封装的前提已经不成立。现在的渲染是自绘 SVG，
+字号就是 graph.css 里的一条声明，没有别人能改它。
+
+## 实现的交互模式（对应调研里 10 个成熟产品的共同做法）
+
+1. **搜索优先入口** —— 先选锚点，不渲染全图
+2. **渐进披露** —— 双击展开下一跳；高度数节点可「展开全部邻居」绕开每层上限
+3. **选中 → 侧栏详情** —— 节点属性 + 还有多少邻居没显示 + 可下钻查询
+4. **展开路径** —— 记录走过哪些节点，可一键清空回到基础图
+5. **相邻高亮** —— hover / 键盘聚焦时点亮相连的边与邻居，压暗其余
 """
-9_Interactive_Explorer.py — 交互式依赖探索（B 档）。
 
-## 为什么单独一页，而不是替换 3_Graph_Explorer
-
-两者解决不同的事，调研里也是分开的两类工具：
-
-| | 3_Graph_Explorer（A 档，pyvis） | 本页（B 档，Cytoscape） |
-|---|---|---|
-| 定位 | **静态分层总览** —— 一眼看清方向与层次 | **交互探索** —— 点着走 |
-| 布局 | vis-network hierarchical | dagre（Sugiyama 分层，交叉更少） |
-| 选中回传 Python | ❌ pyvis 单向 | ✅ 这是本页存在的理由 |
-| 点节点展开邻居 | ❌ 做不到 | ✅ 内置 expand 动作 |
-| 侧栏详情 | ❌ | ✅ |
-
-pyvis 的硬天花板是**单向**：选中的节点拿不回 Python，所以「点节点 → 展开 /
-出详情」这套成熟产品的标准模式在它上面根本做不了。本页用
-`st-link-analysis`（目前唯一还在维护的 Cytoscape 封装，v0.4.0 / 2025-09）
-补上这一段。
-
-## 实现的交互模式（对应调研里 10 个产品的共同做法）
-
-1. **搜索优先入口** —— 先选锚点，不渲染全图（Bloom / graph-explorer 都是空画布 + 搜索种子）
-2. **渐进披露** —— 双击节点展开它的邻居，而不是一次铺开
-3. **选中 → 侧栏详情** —— 节点属性 + 该节点依赖边的验证状态 + 可下钻查询
-4. **面包屑** —— 记录展开路径，可回退到任一步
-5. **高度数节点截断** —— 「显示更多 N 个」而不是一次拉进来几十个
-"""
 import os
 import sys
 
@@ -35,63 +37,18 @@ import _common as C  # noqa: E402
 
 import streamlit as st  # noqa: E402
 
+from components import graph_svg  # noqa: E402
+
 C.page_setup("交互探索", icon="🧭")
 C.sidebar()
 
-try:
-    from st_link_analysis import EdgeStyle, Event, NodeStyle, st_link_analysis
-    HAVE_SLA = True
-
-    # 抑制 st-link-analysis 0.4.0 的一条**无条件**弃用警告。
-    #
-    # 上游 styles.py 里写的是 `if labeled is not None: warn(...)`，
-    # 而签名默认值是 `labeled: bool = False` —— `False is not None` 恒为真，
-    # 所以每构造一个 EdgeStyle 就报一条，无论调用方传不传这个参数。
-    # 实测：不传 / False / True 三种情形各报一条，caption 都不受影响。
-    #
-    # 这一页每次渲染要按关系类型构造 N 个 EdgeStyle，于是每次刷新往日志里
-    # 灌 N 条噪音 —— 噪音会埋掉真信号，所以按**具体警告类**过滤，
-    # 不是 `simplefilter("ignore")` 那种一刀切。
-    # 上游修好或删掉这个参数之后，这个过滤自动变成空操作。
-    import warnings  # noqa: E402
-
-    try:
-        from st_link_analysis.component.styles import (  # noqa: E402
-            LinkAnalysisDeprecationWarning,
-        )
-        warnings.filterwarnings(
-            "ignore", category=LinkAnalysisDeprecationWarning,
-            message=r".*labeled.*deprecated.*")
-    except Exception:  # noqa: BLE001
-        pass       # 上游改了模块结构就算了，噪音不值得为它抛错
-except Exception as _exc:  # noqa: BLE001
-    HAVE_SLA = False
-    _SLA_ERR = f"{type(_exc).__name__}: {_exc}"
-
 st.title("🧭 交互探索")
-
-if not HAVE_SLA:
-    st.error(
-        f"缺少 `st-link-analysis`（{_SLA_ERR}）。\n\n"
-        "安装：`pip install st-link-analysis`\n\n"
-        "这一页需要它来做「点节点 → 展开 / 出详情」——"
-        "pyvis 是单向的，选中的节点拿不回 Python，那套交互在它上面做不了。",
-        icon="📦",
-    )
-    C.page_link("pages/3_Graph_Explorer.py", "→ 先用分层总览页（不需要这个依赖）")
-    st.stop()
-
 st.markdown(
-    "> 从一个服务出发，**双击节点展开它的邻居**，单击看详情。"
-    "这是 Datadog / Neo4j Bloom / AWS graph-explorer / Kiali 的共同模式："
-    "不渲染全图，让你点着走。"
+    "从一个服务出发，**单击**看详情、**双击**展开它的下一跳。这是 Datadog / "
+    "Neo4j Bloom / AWS graph-explorer / Kiali 的共同模式：不渲染全图，让你点着走。"
 )
 
-DEP_EDGES = sorted(C.dependency_edge_labels())
-STRUCT_EDGES = sorted(set((C.contract().get("edge_types") or {}).keys()) - set(DEP_EDGES))
-online = C.neptune_online()
-
-# ── 颜色：与 A 档保持一致的 7 组 Okabe–Ito ────────────────────────────────────
+# ── 同一套分组配色：与 9_Interactive_Explorer 保持一致，便于对比 ──────────────
 GROUPS = [
     ("业务能力", "#E69F00", {"BusinessCapability"}),
     ("入口与路由", "#56B4E9", {"LoadBalancer", "ListenerRule", "TargetGroup"}),
@@ -111,34 +68,34 @@ GROUPS = [
 ]
 
 
-def group_name(label: str) -> str:
-    for name, _c, members in GROUPS:
+#: 分组名 → 颜色，供图例用（GROUPS 是按类型查的，图例按分组名查）
+GROUP_COLOR_BY_NAME = {name: color for name, color, _m in GROUPS}
+GROUP_COLOR_BY_NAME["未归类"] = "#B39DDB"
+
+
+def group_of(label: str) -> tuple[str, str]:
+    for name, color, members in GROUPS:
         if label in members:
-            return name
-    return "未归类"
+            return name, color
+    return "未归类", "#B39DDB"
 
 
-GROUP_COLOR = {name: color for name, color, _m in GROUPS}
-GROUP_COLOR["未归类"] = "#B39DDB"
+# 验证状态 → 边色，与既有两页同一套语义
+VS_COLOR = {
+    "confirmed": ("#2E7D32", "已确认"),
+    "refuted": ("#C62828", "已证伪"),
+    "inconclusive": ("#EF6C00", "未定"),
+    "untested": ("#9E9E9E", "未验证"),
+}
 
-# ── 会话状态：展开集合 + 面包屑 ───────────────────────────────────────────────
-S_EXPANDED = "ie_expanded"     # 已展开过的节点名
-S_CRUMB = "ie_crumbs"          # 面包屑
-S_EDGES = "ie_edges"           # 累积的边
-S_ANCHOR = "ie_anchor"
-
-for k, v in ((S_EXPANDED, set()), (S_CRUMB, []), (S_EDGES, []), (S_ANCHOR, None)):
-    st.session_state.setdefault(k, v)
+DEP_EDGES = sorted(C.dependency_edge_labels())
+online = C.neptune_online()
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def neighbors(name: str, ets: tuple, limit: int) -> dict:
-    """
-    取一个节点的邻居（单跳，无向）。
-
-    刻意用**迭代单跳**而不是变长路径：Neptune 对带谓词的变长路径 +
-    relationships() 支持有限，A 档踩过 400 Bad Request。
-    """
+def _neighbors_live(name: str, ets: tuple, limit: int) -> dict:
+    """单跳邻居（无向）。查询照抄 9_Interactive_Explorer：Neptune 对带谓词的
+    变长路径 + relationships() 支持有限，A 档踩过 400，所以是**迭代单跳**。"""
     if "'" in name:
         return {"results": []}
     ec = ", ".join(f"'{e}'" for e in ets)
@@ -147,379 +104,318 @@ def neighbors(name: str, ets: tuple, limit: int) -> dict:
         "RETURN coalesce(startNode(r).name, startNode(r).tool_key, startNode(r).arn) AS source, "
         "labels(startNode(r))[0] AS source_label, type(r) AS edge_type, "
         "coalesce(endNode(r).name, endNode(r).tool_key, endNode(r).arn) AS target, "
-        "labels(endNode(r))[0] AS target_label, "
-        "coalesce(r.verify_status,'') AS verify_status, coalesce(r.source,'') AS edge_source "
+        "labels(endNode(r))[0] AS target_label, r.verify_status AS verify_status "
         f"LIMIT {int(limit)}"
     )
 
 
-def neighbors_snapshot(name: str, ets: list, limit: int) -> list:
+def _neighbors_snapshot(name: str, ets: list, limit: int) -> list:
     snap = C.fixture("sample_topology")
-    return [
-        e for e in snap.get("edges", [])
+    lab = {n.get("name"): n.get("label") for n in snap.get("nodes", [])}
+    rows = [
+        dict(e, source_label=lab.get(e.get("source"), ""),
+             target_label=lab.get(e.get("target"), ""))
+        for e in snap.get("edges", [])
         if e.get("edge_type") in ets
         and (e.get("source") == name or e.get("target") == name)
-    ][:limit]
+    ]
+    return rows[:limit]
 
 
-def expand(name: str, ets: list, limit: int) -> int:
-    """把某个节点的邻居并进累积边集。返回新增边数。"""
+def neighbors_of(name: str, ets: tuple, limit: int) -> list:
+    """在线走 Neptune，取不到就退到离线快照 —— 与既有两页同一策略。"""
     if online:
-        res = neighbors(name, tuple(ets), limit)
-        rows = res.get("results", []) if "error" not in res else []
-        if "error" in res:
-            st.warning(f"查询失败，改用离线快照：{res['error']}")
-            rows = neighbors_snapshot(name, ets, limit)
-    else:
-        rows = neighbors_snapshot(name, ets, limit)
-
-    have = {(e.get("source"), e.get("edge_type"), e.get("target"))
-            for e in st.session_state[S_EDGES]}
-    added = 0
-    for r in rows:
-        key = (r.get("source"), r.get("edge_type"), r.get("target"))
-        if key not in have:
-            st.session_state[S_EDGES].append(r)
-            have.add(key)
-            added += 1
-    st.session_state[S_EXPANDED].add(name)
-    return added
+        res = _neighbors_live(name, ets, limit)
+        if "error" not in res:
+            return res.get("results", [])
+    return _neighbors_snapshot(name, list(ets), limit)
 
 
-# ── 控制区 ────────────────────────────────────────────────────────────────────
-svc = C.service_names()
-if not svc:
-    st.error("取不到服务清单（图谱不可达且无离线快照）。")
-    st.stop()
+# ── 只沿**一个方向**走 ────────────────────────────────────────────────────────
+#
+# 上面的查询是无向的（`(a)-[r]-(b)`，与既有两页一致），BFS 时如果两个方向都收，
+# 锚点就同时有上游和下游，dagre 会把它排到中间层 —— 用户选了 petsite，开局却
+# 看到图的中段，找不到自己选的那个服务。试过在前端按锚点坐标 scrollLeft 对准，
+# 但那是在补救一个本不该出现的布局：把锚点排在中间本身就不是我们想要的图。
+#
+# 改成按方向筛边：downstream 只留 source==当前节点的边，于是锚点是**唯一的源**，
+# dagre 必然把它放在第 0 层、也就是 rankdir=LR 下的最左端。方向由用户选，
+# 因为「它依赖谁」和「谁依赖它」是两个不同的问题（爆炸半径 vs 根因）。
+def directed_rows(name: str, ets: tuple, limit: int, downstream: bool) -> list:
+    rows = neighbors_of(name, ets, limit)
+    key = "source" if downstream else "target"
+    return [r for r in rows if r.get(key) == name]
 
-c1, c2, c3 = st.columns([2, 3, 1])
-anchor = c1.selectbox(
-    "起点服务", svc,
-    index=svc.index("petsite") if "petsite" in svc else 0,
-    key="ie_anchor_pick",
-)
-edge_types = c2.multiselect(
-    "关系类型", DEP_EDGES + STRUCT_EDGES, default=DEP_EDGES,
-    help=f"默认只看 {len(DEP_EDGES)} 种依赖边；{len(STRUCT_EDGES)} 种结构边（包含/承载）需显式勾选",
-)
-per_expand = c3.number_input("每次展开上限", 3, 40, 12,
-                             help="高度数节点一次拉几十个邻居会立刻变成一团")
 
+# 关系类型筛选：契约把 29 种边分成 6 种依赖边与 23 种结构/包含边
+# （RunsOn / LocatedIn / BelongsTo / Contains…）。只画依赖边是本页的默认，
+# 因为把包含关系也画成箭头正是杂乱的主要来源；但允许操作者按类型再收窄，
+# 「只看 Calls」和「只看 AccessesData」是两个不同的排查问题。
+edge_types = st.multiselect(
+    "关系类型", DEP_EDGES, default=DEP_EDGES,
+    help="只列依赖边（契约里 dependency: true 的那 6 种）。结构/包含边不画 —— "
+         "把它们也画成箭头会让图的杂乱度翻倍，而它们回答的不是「谁依赖谁」。")
 if not edge_types:
-    st.warning("请至少选择一种关系类型。")
+    st.warning("至少选一种关系类型，否则没有边可画。")
     st.stop()
 
-b1, b2, b3 = st.columns([1, 1, 3])
-if b1.button("🎯 从这里开始", type="primary", width="stretch") or \
-        st.session_state[S_ANCHOR] is None:
-    if st.session_state[S_ANCHOR] != anchor or not st.session_state[S_EDGES]:
-        st.session_state[S_EDGES] = []
-        st.session_state[S_EXPANDED] = set()
-        st.session_state[S_CRUMB] = [anchor]
-        st.session_state[S_ANCHOR] = anchor
-        expand(anchor, edge_types, per_expand)
+c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+with c1:
+    services = C.service_names()
+    if not services:
+        st.error("取不到服务清单（图谱不可达且无离线快照）。")
+        st.stop()
+    anchor = st.selectbox("起点服务", services,
+                          index=services.index("petsite") if "petsite" in services else 0)
+with c2:
+    hops = st.number_input(
+        "跳数", min_value=1, max_value=5, value=2,
+        help="层次靠跳数，不靠渲染器。注意依赖图的深度本来就浅：到 AWS 服务端点"
+             "这类叶子就没有下一跳了，所以加大跳数到某一步之后不会再多出节点"
+             "（离线快照上从 petsite 沿「它依赖谁」走，3 跳即到底）。"
+             "真正影响规模的通常是下面的「每层上限」。")
+with c3:
+    limit = st.number_input(
+        "每层上限", min_value=4, max_value=60, value=14,
+        help="真正卡住规模的是这个，不是跳数：度数高的节点在低上限下不会全展开 —— "
+             "选中它之后，侧栏会告出它还有多少个邻居没显示，并给一个"
+             "「展开全部邻居」绕开这个上限。"
+             "代价是取数走**迭代单跳**（Neptune 对带谓词的变长路径支持有限，"
+             "A 档踩过 400），查询次数随前沿节点数增长，而线上是跨 VPC 访问。")
+with c4:
+    direction = st.radio("方向", ["它依赖谁", "谁依赖它"], index=0,
+                         help="两个不同的问题：前者是爆炸半径，后者是根因方向。"
+                              "沿单一方向走，锚点才会落在最左端。")
+downstream = direction == "它依赖谁"
 
-if b2.button("🔄 重置", width="stretch"):
-    st.session_state[S_EDGES] = []
+# ── 手动展开的节点集合 ───────────────────────────────────────────────────────
+#
+# 双击一个节点 = 把它加进这个集合，取数时对集合里的每个节点**额外再走一跳**。
+# 这才是「渐进披露」：先看锚点附近，顺着依赖一步步走下去，而不是一次铺开
+# 所有跳数。10 个成熟依赖图产品的共同做法都是锚点 + 有界邻域 + 按需展开。
+#
+# 换锚点 / 换方向 / 换跳数时必须清空：那三个参数一变，图就是另一张图了，
+# 留着上一张图的展开集合会把无关节点带进来，而用户看不出它们为什么在那儿。
+S_EXPANDED = "_svgproto_expanded"
+S_FULL = "_svgproto_full"
+S_SHAPE = "_svgproto_shape"
+shape = (anchor, downstream, int(hops), tuple(sorted(edge_types)))
+if st.session_state.get(S_SHAPE) != shape:
+    st.session_state[S_SHAPE] = shape
     st.session_state[S_EXPANDED] = set()
-    st.session_state[S_CRUMB] = [anchor]
-    st.session_state[S_ANCHOR] = anchor
-    expand(anchor, edge_types, per_expand)
-    st.rerun()
+    st.session_state[S_FULL] = set()
+expanded: set = st.session_state.setdefault(S_EXPANDED, set())
+# 「展开全部邻居」的节点单独记一个集合：它和双击展开的区别只在**上限**——
+# 双击受「每层上限」约束（那是用来防止高度数节点一次灌进几十个的），
+# 而这个按钮是用户明确要求「全都要」，所以绕开那个上限。
+# 分成两个集合而不是一个带标记的字典，是因为取数时它们用的 limit 不同。
+full_expanded: set = st.session_state.setdefault(S_FULL, set())
 
-C.mode_badge("live" if online else ("snapshot" if C.fixture("sample_topology") else "none"),
-             "拓扑数据")
+# 全量展开的安全上限：绕开「每层上限」不等于无上限。单个节点的邻居数在这个
+# 图里最多几十个，200 足够覆盖，同时挡住某个意外的超高度数节点把图撑爆。
+_FULL_CAP = 200
 
-edges = st.session_state[S_EDGES]
-if not edges:
-    st.info("点「🎯 从这里开始」载入起点的邻居。")
-    st.stop()
+# ── 取数：锚点 BFS + 展开集合各自再走一跳 ────────────────────────────────────
+seen_nodes: dict[str, str] = {}
+seen_edges: list[dict] = []
+_edge_keys: set = set()
 
-# ── 面包屑 ────────────────────────────────────────────────────────────────────
-crumbs = st.session_state[S_CRUMB]
-if len(crumbs) > 1:
-    st.caption("展开路径（点任一步可回退到那时的状态）：")
-    ccols = st.columns(min(len(crumbs), 8))
-    for i, (col, name) in enumerate(zip(ccols, crumbs[-8:])):
-        if col.button(f"{i + 1}. {name[:14]}", key=f"crumb_{i}_{name}",
-                      width="stretch"):
-            # 回退：只保留到该步为止展开过的节点
-            keep = crumbs[: crumbs.index(name) + 1]
-            st.session_state[S_CRUMB] = keep
-            st.session_state[S_EDGES] = []
-            st.session_state[S_EXPANDED] = set()
-            for n in keep:
-                expand(n, edge_types, per_expand)
-            st.rerun()
 
-# ── 组装 Cytoscape elements ───────────────────────────────────────────────────
-node_map: dict = {}
-for e in edges:
-    for nm, lb in ((e.get("source"), e.get("source_label")),
-                   (e.get("target"), e.get("target_label"))):
-        if nm:
-            node_map[nm] = lb
+def absorb(rows: list) -> list:
+    """把一批边并进累积集合，返回这批边通向的下一层节点。"""
+    out = []
+    for r in rows:
+        s, t = r.get("source"), r.get("target")
+        if not s or not t:
+            continue
+        seen_nodes.setdefault(s, r.get("source_label") or "")
+        seen_nodes.setdefault(t, r.get("target_label") or "")
+        key = (s, r.get("edge_type"), t)
+        if key not in _edge_keys:
+            _edge_keys.add(key)
+            vs = r.get("verify_status") or "untested"
+            color, vs_text = VS_COLOR.get(vs, VS_COLOR["untested"])
+            seen_edges.append({
+                "source": s, "target": t, "color": color,
+                "width": 2.0 if vs == "confirmed" else 1.5,
+                "title": f"{r.get('edge_type')} · {vs_text}",
+            })
+        out.append(t if downstream else s)
+    return out
 
-# 度数：用来给「显示更多」和节点大小提供依据
-deg: dict = {}
-for e in edges:
-    deg[e.get("source")] = deg.get(e.get("source"), 0) + 1
-    deg[e.get("target")] = deg.get(e.get("target"), 0) + 1
 
-anchor_now = st.session_state[S_ANCHOR]
-nodes_payload = []
-for nm, lb in node_map.items():
-    g = group_name(lb)
-    expanded = nm in st.session_state[S_EXPANDED]
-    nodes_payload.append({"data": {
-        "id": nm,
-        "label": g,                     # NodeStyle 按 label 匹配 → 用分组名着色
-        "name": (("★ " if nm == anchor_now else "") + str(nm)[:26]),
-        "type": lb,
-        "degree": deg.get(nm, 0),
-        "expanded": "已展开" if expanded else "双击展开",
-    }})
+frontier = [anchor]
+visited = {anchor}
+for _ in range(int(hops)):
+    nxt = []
+    for name in frontier:
+        nxt += absorb(directed_rows(name, tuple(edge_types), int(limit), downstream))
+    frontier = [n for n in nxt if n not in visited]
+    visited.update(frontier)
 
-VS_STYLE = {
-    "confirmed": ("#2E7D32", "已确认"),
-    "refuted": ("#C62828", "已证伪"),
-    "inconclusive": ("#EF6C00", "未定"),
-    "untested": ("#9E9E9E", "未验证"),
-}
-edges_payload = []
-for i, e in enumerate(edges):
-    vs = e.get("verify_status") or "untested"
-    edges_payload.append({"data": {
-        "id": f"e{i}",
-        "source": e.get("source"),
-        "target": e.get("target"),
-        "label": vs if vs in VS_STYLE else "untested",   # 按验证状态着色
-        "rel": e.get("edge_type"),
-        "src_of_edge": e.get("edge_source") or "—",
-    }})
+# 手动展开：每个只走一跳。放在基础 BFS 之后，这样它们带出来的边是**增量**，
+# 而不是把跳数整体调大 —— 后者会让所有分支一起膨胀，正是要避免的。
+for name in sorted(expanded):
+    absorb(directed_rows(name, tuple(edge_types), int(limit), downstream))
 
-elements = {"nodes": nodes_payload, "edges": edges_payload}
+# 全量展开：同样只走一跳，但不受「每层上限」约束。放在最后，所以它补齐的正是
+# 前面被上限截掉的那些邻居。
+for name in sorted(full_expanded):
+    absorb(directed_rows(name, tuple(edge_types), _FULL_CAP, downstream))
 
-present_groups = sorted({group_name(lb) for lb in node_map.values()})
-node_styles = [NodeStyle(g, GROUP_COLOR.get(g, "#B39DDB"), "name") for g in present_groups]
-present_vs = sorted({(e["data"]["label"]) for e in edges_payload})
-# 不要传 `labeled=` —— 它在这里是**死参数**。
-# 上游 styles.py 的逻辑是 `if labeled and not caption: self.caption = "label"`，
-# 而我们已经传了 caption="rel"，所以 labeled 不会改变任何行为。
-#
-# ⚠️ 而且它的弃用警告是**无条件触发**的：条件写成 `if labeled is not None`，
-# 但签名默认值是 `labeled: bool = False` —— `False is not None` 恒为真。
-# 实测三种情形（不传 / False / True）都各报一条警告，caption 都是 'rel'。
-# 所以警告不是我们调用错了，删掉参数也消不掉；见下方 filterwarnings。
-edge_styles = [
-    EdgeStyle(vs, color=VS_STYLE.get(vs, ("#9E9E9E", ""))[0], caption="rel",
-              directed=True, curve_style="bezier")
-    for vs in present_vs
-]
+deg: dict[str, int] = {}
+for e in seen_edges:
+    deg[e["source"]] = deg.get(e["source"], 0) + 1
+    deg[e["target"]] = deg.get(e["target"], 0) + 1
 
-# ── 指标 ──────────────────────────────────────────────────────────────────────
-over = len(node_map) > 50
+nodes = []
+for nid, lb in seen_nodes.items():
+    gname, gcolor = group_of(lb)
+    n = {
+        "id": nid,
+        "label": (("★ " if nid == anchor else "") + nid)[:34],
+        "type": lb, "group": gname, "degree": deg.get(nid, 0),
+        "accent": gcolor,
+        "stroke": "#3759ce" if nid == anchor else "#c8d1de",
+    }
+    # 已展开的标个记号：不然用户双击过之后看不出哪些走过了，
+    # 会重复双击同一个节点并以为没生效。两种展开分开标，因为它们的含义不同：
+    # ✓ = 走过一跳（仍受每层上限），✦ = 该节点的邻居已全部拉进来。
+    if nid in full_expanded:
+        n["badge"] = "✦"
+        n["badge_fill"] = "#3759ce"
+        n["fill"] = "#f2f5fd"
+    elif nid in expanded:
+        n["badge"] = "✓"
+        n["badge_fill"] = "#2E7D32"
+        n["fill"] = "#f4fbf5"
+    nodes.append(n)
+
 m = st.columns(5)
-m[0].metric("节点", len(node_map),
-            help=("⚠️ **超预算** —— 实测节点超过约 50 个，判断准确率掉到一半以下。"
-                  "收起几个已展开的节点。"
-                  if over else "在认知预算内（约 50 个节点以下）。"))
-m[1].metric("关系", len(edges))
-m[2].metric("已展开", len(st.session_state[S_EXPANDED]))
-m[3].metric("可继续展开", len([n for n in node_map if n not in st.session_state[S_EXPANDED]]))
-vs_counts: dict = {}
-for e in edges:
-    k = e.get("verify_status") or "untested"
-    vs_counts[k] = vs_counts.get(k, 0) + 1
-m[4].metric("已验证关系", vs_counts.get("confirmed", 0) + vs_counts.get("refuted", 0),
-            help=f"当前视图里共 {len(edges)} 条关系，"
-                 "其中判定为 confirmed 或 refuted 的算「已验证」—— "
-                 "即真正做过主动干预并得出结论的。"
-                 "inconclusive 与 untested 都不算。")
+m[0].metric("节点", len(nodes))
+m[1].metric("依赖边", len(seen_edges))
+m[2].metric("基础跳数", int(hops))
+m[3].metric("手动展开", len(expanded) + len(full_expanded))
+m[4].metric("分组", len({n["group"] for n in nodes}))
 
-if over:
-    st.warning(
-        f"{len(node_map)} 个节点已超过约 50 的可读上限（IEEE TVCG 2020）。"
-        "建议点面包屑回退，或用「重置」重新开始。", icon="🧠",
-    )
+if expanded or full_expanded:
+    if st.button("↺ 清空手动展开", help="回到只有基础跳数的那张图"):
+        st.session_state[S_EXPANDED] = set()
+        st.session_state[S_FULL] = set()
+        st.rerun()
 
-# ── 图 ────────────────────────────────────────────────────────────────────────
-layout_name = st.radio(
-    "布局", ["dagre（分层，推荐）", "fcose（力导向）", "breadthfirst（广度树）", "cola"],
-    horizontal=True, index=0,
-)
-layout_key = {"dagre（分层，推荐）": "dagre", "fcose（力导向）": "fcose",
-              "breadthfirst（广度树）": "breadthfirst", "cola": "cola"}[layout_name]
+res = graph_svg.render(nodes, seen_edges, height=640, anchor=anchor, key="proto")
 
-# dagre 走**自定义 dict 而不是字符串键**，为了拿到 `rankDir`。
-#
-# 上游 LAYOUTS["dagre"] 只有 {name: "dagre"} + 默认属性，不设 rankDir，于是用
-# cytoscape-dagre 的默认 "TB"：层自上而下、**同层节点横向铺开**。一个锚点带
-# 12 个一跳邻居就是两层，第二层把 12 个节点摊成一行，横向撑得很宽、要大量横向
-# 拖动才看得完。"LR" 让它们纵向排开，横向只占「层数」这一个维度；横向流向也是
-# Datadog / Dynatrace 表达依赖方向的做法。
-#
-# ## 已知未解决：节点标签在这个封装里不显示
-#
-# st-link-analysis 0.4.0 的前端 bundle 把 Cytoscape 的 `min-zoomed-font-size`
-# 硬编码成 **10**（裸 Cytoscape 默认 0，即从不因缩放隐藏文字）。它的含义是
-# 「字号 × 缩放低于该值就不画文字」。组件既不暴露 font-size 也不暴露 cy 选项，
-# 字号固定为 Cytoscape 默认 16px，于是标签可见的条件是 **缩放 > 0.625**，
-# 而 fit 后的缩放落在 0.6 附近 —— 差一点点，13 个节点全成了无标签的圆点。
-#
-# 用同一份 elements + style 喂裸 cytoscape.js 复现过：`min-zoomed-font-size`
-# 为 0 时标签全部正常显示。所以数据、selector、caption 都是对的，
-# 问题只在这个阈值与 fit 的组合。
-#
-# 试过且无效：改 rankDir 让布局更紧凑（缩放没跨过 0.625）；关掉 fit
-# （缩放确实变了，但视图不再对准内容，锚点被推到容器边缘，是更糟的结果）。
-# 在不改这个封装的前提下没有别的入口 —— 它不接受 style 覆盖，
-# 也没有透传 Cytoscape 实例的通道。**这一条是换掉该封装的具体理由。**
-_LAYOUTS_WITH_RANKDIR = {
-    "dagre": {
-        "name": "dagre",
-        "rankDir": "LR",
-        "rankSep": 120,      # 层间距：留给最长的节点名
-        "nodeSep": 26,       # 同层间距：12 个邻居纵向排开不粘连
-        "padding": 20,
-        "fit": True,
-        "animate": True,
-        "animationDuration": 500,
-        "nodeDimensionsIncludeLabels": True,
-    },
-}
-layout_arg = _LAYOUTS_WITH_RANKDIR.get(layout_key, layout_key)
-
-result = st_link_analysis(
-    elements=elements,
-    layout=layout_arg,
-    node_styles=node_styles,
-    edge_styles=edge_styles,
-    height=620,
-    key="ie_graph",
-    node_actions=["expand", "remove"],
-    events=[Event("node_click", "click tap", "node")],
-)
-
-st.caption(
-    "**单击**节点看详情（下方侧栏）　**双击 / 用节点上的 expand 动作**展开它的邻居。"
-    "边颜色 = 故障注入验证状态：🟢 已确认　🔴 已证伪　🟠 未定　⚫ 未验证。"
-)
-st.caption(
-    "⚠️ 节点名在这张图上不显示：所用组件把 Cytoscape 的 `min-zoomed-font-size` "
-    "硬编码为 10，而自动缩放后的比例落在阈值下方，文字被整体隐藏 —— "
-    "它不接受字号覆盖，所以在换掉这个组件之前只能靠**颜色分组 + 单击看详情**辨认节点。"
-    "颜色对应的分组见下方「图例与设计说明」。"
-)
-
-# ── 选中回传：这是 pyvis 做不到的部分 ─────────────────────────────────────────
-#
-# 载荷形状取自 st-link-analysis 0.4.0 的前端 bundle（index.*.bundle.js），
-# 那里只有一个出口：`setComponentValue({action, data, timestamp})`，三种 action：
-#
-#   自定义事件  {action: "<Event.name>", data: {type, target_id, target_group}}
-#   expand     {action: "expand",       data: {node_ids: [id]}}
-#   remove     {action: "remove",       data: {node_ids: [...]}}
-#
-# 两个键名的坑都在 `data` 里面而不是顶层：单击给的是 **target_id**（单数），
-# 双击展开给的是 **node_ids**（复数、数组）。按顶层 `node_id` 去找永远是 None，
-# 于是双击展开的那个节点拿不到，只有单击这条路能通。
-selected = None
-expanded_hit = None
-if isinstance(result, dict):
-    action = result.get("action")
-    blob = result.get("data")
-    if isinstance(blob, dict):
-        # 单击/tap：自定义事件的 target_id
-        tid = blob.get("target_id")
-        if isinstance(tid, str) and tid:
-            selected = tid
-        # 双击/expand 按钮：node_ids 是数组，取第一个
-        ids = blob.get("node_ids")
-        if isinstance(ids, list) and ids and isinstance(ids[0], str):
-            if action == "expand":
-                expanded_hit = ids[0]
-            # 展开的节点同时就是用户当前关注的那个，没有单击事件时用它兜底
-            if not selected:
-                selected = ids[0]
-
-# 双击展开等价于按下「展开」，所以走**同一个** expand()：它才会把邻居边并进
-# 累积边集。只往 S_EXPANDED 里塞个名字的话，Python 侧的「已展开」计数会动，
-# 图上却不会多出任何节点 —— 那是把状态和内容改成不一致，比不接更糟。
-if expanded_hit and expanded_hit not in st.session_state[S_EXPANDED]:
-    expand(expanded_hit, edge_types, per_expand)
+# 双击展开：把节点并进集合并重画。
+# 只在它**还不在集合里**时才 rerun —— setTriggerValue 是一次性的，但同一个
+# 值在 rerun 后若仍被读到就会形成无限循环，这个判断同时也是那道防线。
+hit = res.get("expand")
+if hit and hit not in expanded:
+    expanded.add(hit)
+    st.session_state[S_EXPANDED] = expanded
     st.rerun()
+
+st.caption(
+    "**单击**节点看下方详情与可做的操作，**双击**展开它的下一跳。"
+    "记号：**✓** 走过一跳（仍受每层上限）／**✦** 邻居已全部拉进来。"
+    "键盘：`Tab` 逐个聚焦节点、`Enter` 选中，聚焦时同样点亮相邻。"
+    "左侧色条 = 分组，边色 = 故障注入验证状态。节点名恒定 13px —— "
+    "不做「缩到装下」，图比容器大时滚动浏览。"
+)
 
 st.markdown("---")
-detail_col, action_col = st.columns([3, 2])
+d1, d2 = st.columns([3, 2])
+with d1:
+    st.subheader("选中节点")
+    sel = res.get("selected")
+    if sel:
+        n = next((x for x in nodes if x["id"] == sel), None)
+        st.write(f"**{sel}**")
+        if n:
+            st.caption(f"类型 `{n['type']}` · 分组 {n['group']} · 图上已连 {n['degree']} 条边")
 
-with detail_col:
-    st.subheader("节点详情")
-    target = selected or anchor_now
-    if selected:
-        st.caption(f"来自图上的选中事件：`{selected}`")
+        # 「展开全部邻居」：查一次不受上限的邻居，和图上已有的比对，
+        # 把差值放在按钮旁边 —— 一个不说明会发生什么的按钮，用户只能盲点。
+        all_rows = directed_rows(sel, tuple(edge_types), _FULL_CAP, downstream)
+        peers = {(r.get("target") if downstream else r.get("source")) for r in all_rows}
+        peers.discard(None)
+        on_graph = peers & set(seen_nodes)
+        hidden = len(peers) - len(on_graph)
+
+        if sel in full_expanded:
+            st.caption(f"已展开全部邻居（共 {len(peers)} 个）。")
+        elif hidden > 0:
+            if st.button(f"⤢ 展开全部邻居（还有 {hidden} 个没显示）", key="btn_full"):
+                full_expanded.add(sel)
+                st.session_state[S_FULL] = full_expanded
+                st.rerun()
+            st.caption(
+                f"这个节点沿当前方向共有 {len(peers)} 个邻居，图上已有 {len(on_graph)} 个 —— "
+                f"差的 {hidden} 个是被「每层上限」({int(limit)}) 截掉的。"
+                "这个按钮绕开那个上限，只对这一个节点。"
+            )
+        else:
+            st.caption(f"它的邻居（{len(peers)} 个）都已经在图上了。")
+
+        st.markdown("**下钻查询**")
+        st.caption("拿这个节点去跑预置查询——确定性 Cypher，不经过 AI。")
+        for qname, why in (
+            ("q22_edge_verification_verdicts", "这个服务的依赖边验证判定"),
+            ("q1_blast_radius", "它挂了会影响什么"),
+            ("q3_upstream_deps", "谁依赖它"),
+        ):
+            st.caption(f"　`{qname}` — {why}")
+        C.page_link("pages/2_Query_Catalog.py", "→ 去查询库执行")
     else:
-        st.caption(f"（未捕获到选中事件，默认显示起点 `{anchor_now}`）")
-
-    st.markdown(f"**`{target}`**　类型 `{node_map.get(target, '?')}`　"
-                f"分组 {group_name(node_map.get(target, ''))}　度数 {deg.get(target, 0)}")
-
-    inc = [e for e in edges if e.get("target") == target]
-    out = [e for e in edges if e.get("source") == target]
-    t1, t2 = st.tabs([f"⬅️ 被依赖 / 被调用（{len(inc)}）", f"➡️ 依赖 / 调用（{len(out)}）"])
-    with t1:
-        st.dataframe(C.df([
-            {"来源": e["source"], "类型": e.get("source_label"), "关系": e["edge_type"],
-             "验证": e.get("verify_status") or "untested"} for e in inc
-        ]), width="stretch", hide_index=True)
-    with t2:
-        st.dataframe(C.df([
-            {"目标": e["target"], "类型": e.get("target_label"), "关系": e["edge_type"],
-             "验证": e.get("verify_status") or "untested"} for e in out
-        ]), width="stretch", hide_index=True)
-
-with action_col:
-    st.subheader("下一步")
-    if target not in st.session_state[S_EXPANDED]:
-        if st.button(f"➕ 展开 `{target}` 的邻居", type="primary", width="stretch"):
-            n = expand(target, edge_types, per_expand)
-            if target not in st.session_state[S_CRUMB]:
-                st.session_state[S_CRUMB].append(target)
-            st.toast(f"新增 {n} 条关系")
-            st.rerun()
+        st.caption("还没点过节点。单击图上任意节点，这里会显示它的信息与可做的操作。")
+with d2:
+    st.subheader("展开路径")
+    if expanded or full_expanded:
+        for name in sorted(full_expanded):
+            st.markdown(f"- ✦ `{name}` —— 全部邻居")
+        for name in sorted(expanded - full_expanded):
+            st.markdown(f"- ✓ `{name}` —— 下一跳")
+        st.caption(
+            "这些是**增量**，不是把基础跳数调大 —— 后者会让所有分支一起膨胀。"
+            "✦ 绕开了「每层上限」，✓ 仍受它约束。"
+        )
     else:
-        st.success(f"`{target}` 已展开", icon="✅")
-        if st.button(f"🔎 再多拉 {per_expand} 条", width="stretch"):
-            n = expand(target, edge_types, min(per_expand * 3, 60))
-            st.toast(f"新增 {n} 条关系")
-            st.rerun()
+        st.caption(
+            "还没手动展开过。双击一个节点会把它的下一跳并进这张图，"
+            "而不是重画一张 —— 这是「顺着依赖走」和「换一张快照」的区别。"
+            "要一次看完某个节点的全部邻居，单击它、用左边的「展开全部邻居」。"
+        )
 
-    st.markdown("**下钻查询**")
-    st.caption("拿这个节点去跑预置查询——确定性 Cypher，不经过 AI。")
-    for qname, why in (
-        ("q22_edge_verification_verdicts", "这个服务的依赖边验证判定"),
-        ("q1_blast_radius", "它挂了会影响什么"),
-        ("q3_upstream_deps", "谁依赖它"),
-    ):
-        st.caption(f"　`{qname}` — {why}")
-    C.page_link("pages/2_Query_Catalog.py", "→ 去查询库执行")
 
 # ── 图例 ──────────────────────────────────────────────────────────────────────
 with st.expander("图例与设计说明"):
-    st.markdown("**节点颜色 = 分组**（7 组，Okabe–Ito 色盲安全）")
-    for g in present_groups:
-        types = sorted({lb for lb in node_map.values() if group_name(lb) == g})
+    st.markdown("**左侧色条 = 分组**（7 组，Okabe–Ito 色盲安全配色）")
+    present = sorted({n["group"] for n in nodes})
+    for gname in present:
+        types = sorted({n["type"] for n in nodes if n["group"] == gname and n["type"]})
         st.markdown(
             f"<span style='display:inline-block;width:13px;height:13px;border-radius:3px;"
-            f"background:{GROUP_COLOR.get(g)};margin-right:8px'></span>**{g}**　"
-            + "　".join(f"`{t}`" for t in types),
+            f"background:{GROUP_COLOR_BY_NAME.get(gname, '#B39DDB')};margin-right:8px'></span>"
+            f"**{gname}**　" + "　".join(f"`{t}`" for t in types),
             unsafe_allow_html=True,
         )
     st.markdown("---")
     st.markdown(
-        "**为什么颜色只到 7 组**：感知研究给出的可区分上限约 7 种颜色、5 种形状"
-        "（arXiv:2103.06084），而契约里有 39 种节点类型——"
-        "一类一色在首屏是不可能读出来的。具体类型放在节点详情里。\n\n"
-        "**为什么边按验证状态着色而不是按关系类型**：关系类型有 29 种，同样超上限；"
-        "而「这条依赖到底成立吗」才是本平台的核心信息。关系类型显示在边标签上。"
+        "**边颜色 = 故障注入验证状态**，不是关系类型：\n\n"
+        "- 🟢 已确认 —— 注入故障后下游确实受影响\n"
+        "- 🔴 已证伪 —— 注入了但下游没反应，这条边存疑\n"
+        "- 🟠 未定 —— 注入过但结论不明确\n"
+        "- ⚫ 未验证 —— 还没注入过\n\n"
+        "关系类型（Calls / AccessesData / …）在**悬停边**时显示，"
+        "因为颜色这一维已经给了更稀缺的信息：这条依赖是否被证据支持。"
+    )
+    st.markdown("---")
+    st.markdown(
+        "**为什么不渲染全图**：本仓 `todo/webui/05-图谱展示方案调研_20260905-0645.md` "
+        "记录的调研里，10 个成熟依赖图产品（Datadog / Dynatrace / Bloom / "
+        "graph-explorer / Kiali / Grafana …）没有一个默认渲染全图。"
+        "认知上也有硬数字：Yoghourdjian 等（IEEE TVCG 2020，EEG + 眼动对照）测得"
+        "**节点超过约 50 个时，被试答错或不确定的比例超过一半**。"
+        "所以默认是锚点 + 有界邻域，要看更远靠**双击展开**顺着一条路径走，"
+        "而不是把跳数或每层上限拉满 —— 后者会让所有分支一起膨胀。"
     )

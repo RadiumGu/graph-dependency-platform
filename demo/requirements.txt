@@ -11,30 +11,24 @@
 #   streamlit         用到 width="stretch" / st.tabs / AppTest 等版本敏感 API；
 #                     线上与本地必须同版本才谈得上复现（2026-09-06 为此把线上
 #                     从旧版升到 1.62.0）。
-#   pyvis             3_Graph_Explorer 自己算坐标、绕开 hierarchical，
-#                     强耦合到 build_html 的具体行为。
-#   st-link-analysis  0.4.0 正在弃用 EdgeStyle 的 labeled 参数（见下方）。
-#
 #   boto3             **刻意不钉**：必须保持新，否则拿不到新服务 ——
 #                     本项目用的 `aws devops-agent` 就需要较新的 botocore。
 #                     钉死它是主动制造故障。
 streamlit==1.62.0
-pyvis==0.3.2
-networkx>=3.0
 boto3>=1.34.0
 requests>=2.31.0
 pandas>=2.0.0
 pyyaml>=6.0
 pydantic>=2.0
-# st-link-analysis —— 交互探索页（9_Interactive_Explorer）用它做
-#   dagre 分层布局 + 双击展开邻居 + **选中回传 Python**。
-#   pyvis 是单向的，拿不回选中事件，那套交互在它上面做不了。
-#   这是目前唯一还在维护的 Cytoscape 封装（v0.4.0 / 2025-09）；
-#   streamlit-cytoscapejs (2022) / st-cytoscape (2023) 均已废弃。
+# ── 2026-09-13：pyvis / networkx / st-link-analysis 三个都删了 ──────────────
 #
-# 钉死版本，不用 >= ：2026-09-07 发现这个包**声明了但没装**，
-# 于是那一页在线上只显示一个错误框、零控件 —— 而且不报错、不告警，
-# 看起来就像「这页就是长这样」。开区间还会让某天的新版本静默改掉
-# EdgeStyle/NodeStyle 的参数（0.4.0 已经在弃用 labeled 了）。
-# 门禁 tests/test_59_demo_requirements_importable.py。
-st-link-analysis==0.4.0
+# 两个图谱页现在都用 `demo/components/graph_svg`：dagre 布局（本地 UMD 文件，
+# 不装 Python 包）+ 自绘 SVG，跑在 Streamlit Components v2 内联组件里，
+# 所以既不需要 pyvis 生成 HTML，也不需要 Cytoscape 封装做双向通信。
+#
+# 为什么不是「留着以防万一」：st-link-analysis 把 Cytoscape 的
+# min-zoomed-font-size 硬编码为 10 且不暴露 font-size，fit 后缩放低于 0.625 时
+# **节点标签会整体消失**，那是把这一页的核心信息弄丢；pyvis 则是单向的，
+# 选中的节点拿不回 Python。留着它们只会让人以为还有第二条可走的路。
+#
+# networkx 是当年配合 pyvis 建图用的，现在图结构就是节点/边两个 list，用不上。

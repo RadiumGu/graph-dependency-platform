@@ -53,34 +53,67 @@ export default function (component) {
   const widthOf = (n) =>
     Math.max(MIN_W, Math.min(MAX_W, labelOf(n).length * CHAR_W + PAD_X * 2));
 
-  // ── 布局：dagre ────────────────────────────────────────────────────────────
-  const g = new dagre.graphlib.Graph({ multigraph: true });
-  g.setGraph({
-    rankdir: data.rankdir || "LR", // 依赖方向走横向：左=起点，右=它依赖的
-    nodesep: data.nodesep ?? 18,
-    ranksep: data.ranksep ?? 96,
-    marginx: 16,
-    marginy: 16,
-  });
-  g.setDefaultEdgeLabel(() => ({}));
+  // ── 布局：外部坐标优先，否则 dagre ─────────────────────────────────────────
+  //
+  // 两页共用这个渲染器，但布局来源不同：
+  //   Interactive_Explorer 交给 dagre 自动分层（锚点邻域，层数由数据决定）；
+  //   Graph_Explorer 自己算坐标（y = 依赖层级、x = scope 泳道），那是二维编码，
+  //   dagre 只排一个方向，表达不了「哪个簇」这一维。
+  // 所以传了 positions 就用它，不再跑 dagre —— 不是「让 dagre 尽量贴近」，
+  // 那种做法两边都不对。
+  const ext = data.positions && Object.keys(data.positions).length ? data.positions : null;
 
   const byId = new Map();
-  data.nodes.forEach((n) => {
-    byId.set(n.id, n);
-    g.setNode(n.id, { width: widthOf(n), height: NODE_H });
-  });
-  (data.edges || []).forEach((e, i) => {
-    if (byId.has(e.source) && byId.has(e.target)) {
-      g.setEdge(e.source, e.target, {}, "e" + i);
-    }
-  });
+  data.nodes.forEach((n) => byId.set(n.id, n));
 
-  dagre.layout(g); // acyclic 预处理在内部完成：有环也不会算乱
+  let posOf; // id -> {x, y, width}
+  let edgePts; // 边 -> [{x,y}, ...]
 
-  // viewBox 必须按**实际 bbox**算，不能用 `0 0 width height`：
-  // dagre 断环时会反转边，边的控制点可以落在负坐标，节点也不保证从 0 起。
-  // 用 graph().width/height 当视口会把最左那一层推到视口外 —— 表现为
-  // 「起点不见了，只有几条线从边缘伸进来」。
+  if (ext) {
+    posOf = new Map();
+    data.nodes.forEach((n) => {
+      const p = ext[n.id];
+      if (p) posOf.set(n.id, { x: p.x, y: p.y, width: widthOf(n) });
+    });
+    // 外部坐标没有边的路径，用直线连两端中心。这一页的边本来就是「谁指向谁」，
+    // 不需要绕开节点的正交布线（那是 ELK 才做的事）。
+    edgePts = (e) => {
+      const a = posOf.get(e.source);
+      const b = posOf.get(e.target);
+      return a && b ? [{ x: a.x, y: a.y }, { x: b.x, y: b.y }] : null;
+    };
+  } else {
+    const g = new dagre.graphlib.Graph({ multigraph: true });
+    g.setGraph({
+      rankdir: data.rankdir || "LR",
+      nodesep: data.nodesep ?? 18,
+      ranksep: data.ranksep ?? 96,
+      marginx: 16,
+      marginy: 16,
+    });
+    g.setDefaultEdgeLabel(() => ({}));
+    data.nodes.forEach((n) => g.setNode(n.id, { width: widthOf(n), height: NODE_H }));
+    (data.edges || []).forEach((e, i) => {
+      if (byId.has(e.source) && byId.has(e.target)) {
+        g.setEdge(e.source, e.target, {}, "e" + i);
+      }
+    });
+    dagre.layout(g); // acyclic 预处理在内部完成：有环也不会算乱
+    posOf = new Map();
+    g.nodes().forEach((id) => {
+      const p = g.node(id);
+      if (p) posOf.set(id, { x: p.x, y: p.y, width: p.width });
+    });
+    edgePts = (e, i) => {
+      const ed = g.edge(e.source, e.target, "e" + i);
+      return ed && ed.points && ed.points.length >= 2 ? ed.points : null;
+    };
+  }
+
+  // viewBox 必须按**实际 bbox**算，不能用 dagre 的 graph().width/height：
+  // dagre 断环时会反转边，边的控制点可以落在负坐标，节点也不保证从 0 起；
+  // 外部坐标更是完全由调用方决定，负值很正常。用固定原点会把最左那一层推到
+  // 视口外 —— 表现为「起点不见了，只有几条线从边缘伸进来」。
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   const bump = (x, y) => {
     if (x < minX) minX = x;
@@ -88,15 +121,16 @@ export default function (component) {
     if (x > maxX) maxX = x;
     if (y > maxY) maxY = y;
   };
-  g.nodes().forEach((id) => {
-    const p = g.node(id);
-    if (!p) return;
-    bump(p.x - p.width / 2, p.y - p.height / 2);
-    bump(p.x + p.width / 2, p.y + p.height / 2);
+  posOf.forEach((p) => {
+    bump(p.x - p.width / 2, p.y - NODE_H / 2);
+    bump(p.x + p.width / 2, p.y + NODE_H / 2);
   });
-  g.edges().forEach((e) => {
-    const ed = g.edge(e);
-    (ed && ed.points ? ed.points : []).forEach((pt) => bump(pt.x, pt.y));
+  (data.edges || []).forEach((e, i) => {
+    (edgePts(e, i) || []).forEach((pt) => bump(pt.x, pt.y));
+  });
+  (data.bands || []).forEach((b) => {
+    bump(b.x, b.y);
+    bump(b.x, b.y - 24);
   });
   if (!isFinite(minX)) { minX = 0; minY = 0; maxX = 1; maxY = 1; }
 
@@ -152,6 +186,16 @@ export default function (component) {
   });
   svg.appendChild(defs);
 
+  // 泳道标题（Graph_Explorer 的 scope 簇）。画在最底层，只是背景标注，
+  // 不参与 hover 高亮也不可点 —— 它标的是「这一列属于哪个 scope」，不是实体。
+  const gBands = el("g", { class: "gs-bands" });
+  svg.appendChild(gBands);
+  (data.bands || []).forEach((b) => {
+    const t = el("text", { class: "gs-band-t", x: b.x, y: b.y });
+    t.textContent = b.title;
+    gBands.appendChild(t);
+  });
+
   const gEdges = el("g", { class: "gs-edges" });
   const gNodes = el("g", { class: "gs-nodes" });
   svg.appendChild(gEdges);
@@ -159,11 +203,20 @@ export default function (component) {
 
   const arrowFor = (c) => "gs-ar-" + btoa(c).replace(/[^a-zA-Z0-9]/g, "");
 
+  // 邻接索引：hover 高亮要在几十条边里瞬间挑出「与这个节点相连的那些」，
+  // 每次遍历全部边在 100+ 边时会掉帧，所以建一次索引。
+  const edgesOf = new Map(); // node id -> [<path>, ...]
+  const peersOf = new Map(); // node id -> Set<node id>
+  const touch = (m, k, v) => {
+    if (!m.has(k)) m.set(k, m === peersOf ? new Set() : []);
+    m === peersOf ? m.get(k).add(v) : m.get(k).push(v);
+  };
+
   (data.edges || []).forEach((e, i) => {
-    const ed = g.edge(e.source, e.target, "e" + i);
-    if (!ed || !ed.points || ed.points.length < 2) return;
-    const p = ed.points;
-    // 贝塞尔平滑：dagre 给的是折线控制点，直连会有明显折角
+    const p = edgePts(e, i);
+    if (!p || p.length < 2) return;
+    // 贝塞尔平滑：dagre 给的是折线控制点，直连会有明显折角。
+    // 只有两点时（外部坐标）自然退化成一条直线。
     let d = `M ${p[0].x},${p[0].y}`;
     for (let k = 1; k < p.length - 1; k++) {
       const mx = (p[k].x + p[k + 1].x) / 2;
@@ -185,16 +238,21 @@ export default function (component) {
       path.appendChild(t);
     }
     gEdges.appendChild(path);
+    touch(edgesOf, e.source, path);
+    touch(edgesOf, e.target, path);
+    touch(peersOf, e.source, e.target);
+    touch(peersOf, e.target, e.source);
   });
 
   let selectedId = (data._state && data._state.selected_node) || null;
 
   data.nodes.forEach((n) => {
-    const p = g.node(n.id);
+    const p = posOf.get(n.id);
     if (!p) return;
     const w = p.width;
     const grp = el("g", {
       class: "gs-node" + (n.id === selectedId ? " is-selected" : ""),
+      "data-id": n.id,
       transform: `translate(${p.x - w / 2},${p.y - NODE_H / 2})`,
       tabindex: "0",
       role: "button",
@@ -273,6 +331,29 @@ export default function (component) {
       setTriggerValue("expand", n.id);
     });
 
+    // hover / 聚焦时高亮这个节点的边与邻居，其余压暗。
+    // 几十条边一旦交叉，靠眼睛沿着一条线走是不可靠的 —— 这是 Kiali、Grafana
+    // 等依赖图产品的共同做法，也是本页「看清一个服务连到谁」的主要手段。
+    // 键盘聚焦同样触发，否则只用键盘的人拿不到这个信息。
+    const spot = (on) => {
+      wrap.classList.toggle("gs-spotlight", on);
+      if (!on) {
+        gEdges.querySelectorAll(".is-lit").forEach((p) => p.classList.remove("is-lit"));
+        gNodes.querySelectorAll(".is-lit").forEach((p) => p.classList.remove("is-lit"));
+        return;
+      }
+      (edgesOf.get(n.id) || []).forEach((p) => p.classList.add("is-lit"));
+      grp.classList.add("is-lit");
+      (peersOf.get(n.id) || new Set()).forEach((pid) => {
+        const g2 = gNodes.querySelector(`[data-id="${CSS.escape(pid)}"]`);
+        if (g2) g2.classList.add("is-lit");
+      });
+    };
+    grp.addEventListener("mouseenter", () => spot(true));
+    grp.addEventListener("mouseleave", () => spot(false));
+    grp.addEventListener("focus", () => spot(true));
+    grp.addEventListener("blur", () => spot(false));
+
     gNodes.appendChild(grp);
   });
 
@@ -282,7 +363,7 @@ export default function (component) {
   // 图的中段，找不到自己选的那个服务。所以按锚点坐标显式对准。
   const anchorId = data.anchor;
   if (anchorId && byId.has(anchorId)) {
-    const ap = g.node(anchorId);
+    const ap = posOf.get(anchorId);
     if (ap) {
       requestAnimationFrame(() => {
         wrap.scrollLeft = Math.max(0, ap.x - VX - wrap.clientWidth * 0.28);

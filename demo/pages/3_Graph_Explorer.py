@@ -29,11 +29,20 @@
    6 种语义依赖边与 23 种结构/包含边。把包含边（RunsOn / LocatedIn / BelongsTo /
    Contains…）也画成箭头正是杂乱的主要来源。现在结构边默认关闭。
 
-## 已知天花板
+## 2026-09-13：渲染换成自绘 SVG，坐标不变
 
-pyvis 是**单向**的 —— 选中的节点拿不回 Python，所以做不了「点节点展开」。
-本页用 Streamlit 侧的选择器指定锚点来绕开这一点。要做真正的点击展开需要迁到
-st-link-analysis（dagre + 选中回传），那是下一步。
+原来用 pyvis，它有两条挡路的缺陷：**单向**（选中的节点拿不回 Python，所以
+「点节点 → 出详情」做不了，本页只能用 Streamlit 侧的选择器指定锚点绕开），
+以及导航按钮固定在容器四角、会盖住贴边节点的名字。
+
+现在交给 `components/graph_svg`（Streamlit Components v2 内联组件，免 npm 构建），
+与 `9_Interactive_Explorer` 共用同一套渲染与样式。**本页的坐标仍然自己算**并通过
+`positions` 传进去：布局是二维编码（y = 依赖层级、x = scope 泳道），而组件默认的
+dagre 只排一个方向、表达不了「属于哪个簇」。组件收到 positions 时跳过 dagre，
+所以上面那些分层与分簇的设计一条都没变，变的只是画它的人。
+
+另外，自绘之后不再有「缩放到装下全图导致标签变糊」这个取舍：字号固定 13px，
+图比容器大就在框内滚动。
 """
 import colorsys
 import hashlib
@@ -44,6 +53,8 @@ import tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import _common as C  # noqa: E402
+
+from components import graph_svg  # noqa: E402
 
 import streamlit as st  # noqa: E402
 
@@ -172,6 +183,12 @@ st.markdown(
     "> 默认**不渲染全图**——从一个服务出发看它的 1 跳邻域。"
     "这是 Datadog / Neo4j Bloom / Kiali / Grafana 等成熟工具的共同做法："
     "全图渲染在认知上不可读（实测节点超过约 50 个，判断准确率就掉到一半以下）。"
+)
+st.caption(
+    "这一页看的是**结构**：纵向是依赖层级，横向是 scope 分簇。"
+    "**悬停**节点点亮它相连的边与邻居，**单击**看它在图上的位置"
+    "（键盘：`Tab` 逐个聚焦、`Enter` 选中，聚焦同样会点亮）。"
+    "要从某个节点顺着依赖一步步走下去，用 **交互探索**。"
 )
 
 # ── 视图模式 ──────────────────────────────────────────────────────────────────
@@ -618,9 +635,9 @@ for key in nodes:
     level_width[lv] = level_width.get(lv, 0) + 1
 widest = max(level_width.values()) if level_width else 1
 # 画布高度：**不能**按最宽层无限加高。
-# 之前按 widest*46 长到 1600px，iframe 比视口还高，于是纵向拖动被页面滚动吃掉、
+# 早先按 widest*46 长到 1600px，画布比视口还高，于是纵向拖动被页面滚动吃掉、
 # 横向又没有可滚的方向 —— 表现就是「只能上下拖，不能左右拖」。
-# 正确做法与 Grafana / Datadog 一致：画布固定在视口内，图靠 fit + 平移缩放浏览。
+# 正确做法与 Grafana / Datadog 一致：画布固定在视口内，超出的部分在框内滚动浏览。
 auto_height = min(900, max(height, 560))
 
 over = len(nodes) > 50
@@ -660,294 +677,125 @@ if over:
     )
 # ── 画布会不会超出视口：用真实 x 跨度判断，不用「最宽一层几个节点」代理 ──────
 #
-# 原来这里写的是：
+# ── 横向跨度提示 ─────────────────────────────────────────────────────────────
 #
-#     if layered and widest > 12:
-#         st.caption("画布已自动缩放到能装下全图，可用滚轮缩放…")
+# scope 分簇把 x 轴用掉了，所以横向跨度会随簇的数量增长，很容易超过容器宽度。
+# 自绘 SVG **不做 fit-to-container**：字号固定 13px，超出的部分靠在框内滚动 ——
+# 这是刻意的，上一版 pyvis 为了装下全图会把缩放压到 0.56 倍、节点标签变成糊点，
+# 而缩到看不清的图等于没画。
 #
-# **那句话是错的。** `fitReadable()`（见下方注入的 JS）先调 `network.fit()`，
-# 但如果结果缩放低于 `MIN_SCALE = 0.75`，它会**放弃装下全图** ——
-# 改为保持可读比例并对准锚点，剩下靠平移。理由是 fit() 为了装下全图会无限缩小，
-# 节点标签变成糊点，那样图就白画了。这个取舍是对的，但提示说了反话。
-#
-# 而且触发条件也不对：`widest > 12` 是个代理量。实测一个 20 节点的 petsite
-# 视图最宽层只有 10 个节点（提示不出现），x 跨度却有 1615px —— 主容器约 900px，
-# fit 需要 0.56 倍、低于下限，于是钳到 0.75，约 26% 的内容在视口外。
-# **需要拖动的时候提示反而不显示。**
-#
-# 改用真实 x 跨度：内容宽度 × MIN_SCALE 超过一个保守的容器宽度就提示。
-_MIN_SCALE = 0.75          # 与下方 JS 里的 MIN_SCALE 必须一致
+# 判据用**真实 x 跨度**而不是「最宽一层几个节点」：实测一个 20 节点的 petsite
+# 视图最宽层只有 10 个节点，x 跨度却有 1615px，用节点数当代理量会在真正需要
+# 提示的时候不提示。
 _ASSUMED_CANVAS_PX = 900   # 保守估计：1280 视口减去侧栏与留白
-if layered and positions:
+if positions:
     _xs = [p[0] for p in positions.values()]
     _span = max(_xs) - min(_xs)
-    if _span * _MIN_SCALE > _ASSUMED_CANVAS_PX:
-        _visible = _ASSUMED_CANVAS_PX / _MIN_SCALE
+    if _span > _ASSUMED_CANVAS_PX:
         st.caption(
             f"ℹ️ 图的横向跨度约 {_span:.0f}px，比画布宽 —— "
-            f"**约 {max(0, 1 - _visible / _span) * 100:.0f}% 的内容在视口外，"
-            "按住空白处拖动即可看到。**\n\n"
-            f"这是刻意的取舍：自动缩放到装下全图会让缩放降到 "
-            f"{_ASSUMED_CANVAS_PX / _span:.2f} 倍，节点标签变成糊点、图就白画了。"
-            f"所以缩放保持在可读下限 {_MIN_SCALE} 并对准锚点，"
-            "剩下靠平移。也可用滚轮缩放或按住空白处拖动。"
-        )
-    elif widest > 12:
-        st.caption(
-            f"ℹ️ 最宽的一层有 {widest} 个节点，画布已缩放到能装下全图。"
-            "可用滚轮缩放、按住空白处拖动平移。"
+            f"**约 {max(0, 1 - _ASSUMED_CANVAS_PX / _span) * 100:.0f}% 的内容在视口外，"
+            "在图框内横向滚动即可看到。**　"
+            "节点名保持 13px 不缩小：缩到装下全图会让标签变糊，那样图就白画了。"
+            "要减小跨度，可在左侧「范围（scope）」里少选几个簇。"
         )
 
 
-# ── 渲染 ──────────────────────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False)
-def build_html(nodes_t: tuple, edges_t: tuple, h: int, use_layered: bool,
-               labels: bool, anchor_name, bands_t: tuple = ()) -> str:
-    import json
+# ── 渲染：交给 components/graph_svg，与交互探索页共用 ─────────────────────────
+#
+# 换掉 pyvis 的理由不是「新的更好看」，是两条具体缺陷：
+#   1. pyvis 是**单向**的，选中的节点拿不回 Python，所以「点节点 → 出详情」
+#      这套模式在它上面做不了，本页只能用 Streamlit 侧的选择器指定锚点来绕开。
+#   2. 它的导航按钮固定在容器四角，而本页最外层节点就贴在画布边缘，
+#      按钮会盖住节点名（为此曾把 navigationButtons 关掉，等于砍功能换可读）。
+#
+# 坐标仍然由本页自己算并通过 positions 传进去：布局是**二维编码**
+# （y = 依赖层级、x = scope 泳道），而 dagre 只排一个方向，表达不了「属于哪个簇」。
+# 组件在收到 positions 时跳过 dagre，所以这一页的信息组织一点没变，
+# 变的只是画它的人。
+_pos = {
+    nm: {"x": float(positions.get((lb, nm), (0.0, 0.0))[0]),
+         "y": float(positions.get((lb, nm), (0.0, 0.0))[1])}
+    for (lb, nm) in nodes
+}
+_bands = [{"x": float(cx), "y": float(cy), "title": title}
+          for _b, title, cx, cy in bands_meta]
 
-    from pyvis.network import Network
+_VS_EDGE = {
+    "confirmed": "#2E7D32",
+    "refuted": "#C62828",
+    "inconclusive": "#EF6C00",
+    "untested": "#9E9E9E",
+}
+_VS_TEXT = {"confirmed": "已确认", "refuted": "已证伪",
+            "inconclusive": "未定", "untested": "未验证"}
 
-    net = Network(height=f"{h}px", width="100%", bgcolor="#ffffff",
-                  font_color="#222222", directed=True)
+_svg_nodes = []
+for (lb, nm) in nodes:
+    gname, gcolor, _shape = group_of(lb)
+    _svg_nodes.append({
+        "id": nm,
+        "label": (("★ " if nm == anchor else "") + str(nm))[:34] if show_labels else "",
+        "type": lb,
+        "group": gname,
+        "degree": sum(1 for e in edges if nm in (e["source"], e["target"])),
+        "accent": gcolor,
+        "stroke": "#3759ce" if nm == anchor else "#c8d1de",
+    })
 
-    # 簇标题：用 shape='text' 的哑节点当作泳道表头。
-    # 没有它，横向的留白只是留白；有了它，留白才读得出「左边是业务、右边是设施」。
-    if use_layered:
-        for band, title, cx, cy in bands_t:
-            net.add_node(
-                f"__band__::{band}", label=f"{title}",
-                shape="text", x=float(cx), y=float(cy), physics=False,
-                font={"size": 20, "face": "sans-serif", "color": "#8a94a6",
-                      "strokeWidth": 4, "strokeColor": "#ffffff"},
-                title=f"scope = {band}",
-            )
+_svg_edges = []
+for e in edges:
+    vs = e.get("verify_status") or "untested"
+    _svg_edges.append({
+        "source": e["source"], "target": e["target"],
+        "color": _VS_EDGE.get(vs, _VS_EDGE["untested"]),
+        "width": 2.2 if vs == "confirmed" else 1.5,
+        "title": f"{e.get('edge_type')} · {_VS_TEXT.get(vs, '未验证')}",
+    })
 
-    ids = set()
-    for label, name, lvl, band, px, py in nodes_t:
-        nid = f"{label}::{name}"
-        ids.add(nid)
-        gname, color, shape = group_of(label)
-        is_anchor = anchor_name is not None and name == anchor_name
-        extra = {}
-        if use_layered:
-            # 显式坐标 + physics 关：节点停在算好的位置，但没有 fixed 锁，
-            # 所以上下左右都能拖（拖完也不会被物理引擎弹回去）。
-            extra = {"x": float(px), "y": float(py), "physics": False}
-        net.add_node(
-            nid,
-            label=(str(name)[:18] if labels else " "),
-            title=f"{label}\n{name}\n分组：{gname}"
-                  f"\nscope：{band}"
-                  + ("\n（锚点）" if is_anchor else ""),
-            # 锚点用 AWS 品牌橙 + Squid Ink 描边：明确是「焦点」，
-            # 不用红色——红在本页已经表示「已证伪」，两种含义不能撞。
-            color={"background": "#ff9900" if is_anchor else color,
-                   "border": "#232f3e" if is_anchor else "#ffffff",
-                   "highlight": {"background": "#ff9900" if is_anchor else color,
-                                 "border": "#232f3e"}},
-            shape="star" if is_anchor else shape,
-            size=32 if is_anchor else 16,
-            borderWidth=3 if is_anchor else 1,
-            level=int(lvl),
-            **extra,
-        )
-
-    # 边色 = AWS Cloudscape 图表状态色（status-positive / high / medium / neutral）
-    for src, sl, tgt, tl, et, vs in edges_t:
-        a, b = f"{sl}::{src}", f"{tl}::{tgt}"
-        if a not in ids or b not in ids:
-            continue
-        if vs == "confirmed":
-            net.add_edge(a, b, color="#67a353", width=3,
-                         title=f"{et} · 故障注入已确认")
-        elif vs == "refuted":
-            net.add_edge(a, b, color="#ba2e0f", width=3, dashes=True,
-                         title=f"{et} · 已证伪，不成立")
-        elif vs == "inconclusive":
-            net.add_edge(a, b, color="#cc5f21", width=2,
-                         title=f"{et} · 未定")
-        else:
-            net.add_edge(a, b, color="#b4b4bb", width=1,
-                         title=f"{et} · 未验证", label="")
-
-    if use_layered:
-        # 坐标已在 Python 侧算好（纵轴=依赖方向，横轴=scope 簇），
-        # 所以**不启用 vis 的 hierarchical**：
-        #   1. 它只有一个排序维度，装不下「方向 × scope」；
-        #   2. 它会在节点上写死 fixed.y，害得节点只能左右拖 —— 不用它，
-        #      这个毛病就从根上不存在了。
-        opts = {
-            "layout": {"hierarchical": {"enabled": False},
-                       # 关掉随机种子扰动，保证同样的数据画出同样的图
-                       "randomSeed": 7},
-            "physics": {"enabled": False},
-            # 竖直贝塞尔：依赖方向是纵向的，边也顺着纵向走，读起来才连贯。
-            "edges": {"smooth": {"enabled": True, "type": "cubicBezier",
-                                 "forceDirection": "vertical", "roundness": 0.5},
-                      "arrows": {"to": {"enabled": True, "scaleFactor": 0.6}},
-                      "font": {"size": 11, "face": "sans-serif", "color": "#5f6b7a",
-                               "strokeWidth": 3, "strokeColor": "#ffffff",
-                               "align": "middle"}},
-            # dragView / zoomView 显式打开：默认虽为 true，但写明可避免被别处覆盖。
-            # ⚠️ 「节点拖不动」不要从这里查 —— dragNodes 只管交互层的总开关，
-            # 而分层布局是在每个节点上写 fixed.y/fixed.x 来锁轴的，这里配什么都
-            # 覆盖不了。本页已改为自算坐标，不再启用 hierarchical，故无此问题。
-            # navigationButtons 关闭：vis-network 把它们固定在容器四角，而本页
-            # 的最外层节点就贴在画布边缘（y 是依赖层级、x 是 scope 分簇，两端都
-            # 会顶到边），于是那几个圆形按钮直接盖在节点名上 —— 实测最下面一行
-            # 的名字被 ⇦ ⇧ ⊞ ⊖ ⊕ 压掉一半，读不出是哪个服务。
-            # 按钮的位置不可配，能留的只有「关掉」。缩放与平移一点没少：
-            # zoomView 给滚轮、dragView 给空白处拖动，两者都在下面显式打开。
-            # 用节点名换一组重复的缩放入口，是划算的。
-            "interaction": {"hover": True, "tooltipDelay": 200,
-                            "navigationButtons": False, "keyboard": False,
-                            "dragView": True, "zoomView": True,
-                            "dragNodes": True, "multiselect": False},
-            "nodes": {"font": {"size": 13, "face": "sans-serif", "color": "#16191f",
-                               "strokeWidth": 3, "strokeColor": "#ffffff"}},
-        }
-    else:
-        opts = {
-            "physics": {"barnesHut": {"gravitationalConstant": -9000,
-                                      "centralGravity": 0.35, "springLength": 150},
-                        "enabled": True},
-            # 同上关闭。压标签是在**分层视图**实测到的；这里是力导向，节点位置
-            # 每次不同，我没有实测到同样的遮挡。一起关是为了两个视图行为一致 ——
-            # 下面那句「滚轮缩放 / 拖动平移」的提示是两个视图共用的，
-            # 如果一个有按钮一个没有，那句话就必须分情况写，或者对一半的人是错的。
-            "interaction": {"hover": True, "navigationButtons": False,
-                            "dragView": True, "zoomView": True},
-            "edges": {"font": {"size": 11, "color": "#5f6b7a",
-                               "strokeWidth": 3, "strokeColor": "#ffffff"}},
-            "nodes": {"font": {"size": 13, "color": "#16191f",
-                               "strokeWidth": 3, "strokeColor": "#ffffff"}},
-        }
-    net.set_options(json.dumps(opts))
-
-    tmp = tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w", encoding="utf-8")
-    try:
-        net.save_graph(tmp.name)
-        with open(tmp.name, encoding="utf-8") as fh:
-            html = fh.read()
-    finally:
-        tmp.close()
-        try:
-            os.unlink(tmp.name)
-        except OSError:
-            pass
-
-    # pyvis 不带 .vis-tooltip 的样式，浏览器于是用默认字号渲染 title——
-    # 表现是一个巨大的白框（截图里那个盖住半张图的 "AccessesData"）。
-    # 这里显式补样式，并在渲染完成后 fit() 一次，保证全图入画。
-    patch = """
-<style>
-  html, body { margin:0; padding:0; overflow:hidden; }
-  div.vis-tooltip {
-    position:absolute; visibility:hidden; padding:6px 9px;
-    white-space:pre; font-family:-apple-system,"Segoe UI",Roboto,sans-serif;
-    font-size:12px; line-height:1.45; color:#16191f;
-    background:#ffffff; border:1px solid #c6c6cd; border-radius:6px;
-    box-shadow:0 2px 8px rgba(0,0,0,.16); pointer-events:none; z-index:9;
-  }
-  #mynetwork { border:1px solid #e9ebed !important; border-radius:8px; }
-</style>
-<script>window.__anchorId__ = __ANCHOR_ID__;</script>
-<script>
-  window.addEventListener('load', function () {
-    if (typeof network === 'undefined') return;
-    // fit() 会为了装下全图无限缩小，节点标签随之变成糊点。
-    // 这里给缩放设可读下限：装不下就保持可读比例并对准锚点，
-    // 剩下的靠平移看（dragView 已显式打开）。
-    var MIN_SCALE = 0.75;
-    function fitReadable() {
-      try {
-        network.fit({animation: false});
-        if (network.getScale() < MIN_SCALE) {
-          var focus = window.__anchorId__;
-          if (focus && network.body.nodes[focus]) {
-            network.moveTo({scale: MIN_SCALE,
-                            position: network.getPositions([focus])[focus],
-                            animation: false});
-          } else {
-            network.moveTo({scale: MIN_SCALE, animation: false});
-          }
-        }
-      } catch (e) {}
-    }
-    // ── 解开分层布局在节点上写死的轴锁 ─────────────────────────────
-    // vis-network 的 LayoutEngine 启用 hierarchical 时，会直接在每个节点上
-    // 写 fixed.y=true（direction UD/DU）或 fixed.x=true（LR/RL），
-    // 好让节点不脱离自己那一层。表现就是「只能左右拖，不能上下拖」。
-    //
-    // 这个锁 interaction.dragNodes 管不到 —— 它是布局引擎下在节点属性上的，
-    // 不是交互开关，所以调 interaction 那一段永远无效（曾在此排查过）。
-    //
-    // 做法：等布局把坐标算完，取下坐标 → 关掉 hierarchical（否则它会持续
-    // 重新加锁）→ 解开两个轴 → 把坐标显式写回。physics 本来就是关的，
-    // 所以节点不会飘：分层外观完整保留，而四个方向都能拖了。
-    function unlockNodeDragging() {
-      try {
-        if (typeof network === 'undefined') return;
-        var lay = (network.options && network.options.layout) || {};
-        var h = lay.hierarchical;
-        var layered = (h === true) || (h && h.enabled === true);
-        // 自由布局（physics 档）本来就四向可拖，别去碰它的 physics。
-        if (!layered) return;
-
-        var pos = network.getPositions();          // 分层算出的坐标
-        network.setOptions({layout: {hierarchical: {enabled: false}},
-                            physics: {enabled: false}});
-        // 用 network.body.data.nodes 而不是全局 nodes：后者的变量名随
-        // pyvis 模板版本变化，前者是 vis 自己持有的 DataSet，稳定。
-        var ds = network.body.data.nodes;
-        var upd = Object.keys(pos).map(function (id) {
-          return {id: id, x: pos[id].x, y: pos[id].y,
-                  fixed: {x: false, y: false}};
-        });
-        if (ds && upd.length) ds.update(upd);
-      } catch (e) {}
-    }
-
-    network.once('afterDrawing', function () {
-      unlockNodeDragging();   // 先解锁，再 fit：解锁不动坐标，fit 只调视野
-      fitReadable();
-    });
-    // 分层布局下 physics 关闭，不触发 stabilized，故再兜底一次
-    setTimeout(function () { unlockNodeDragging(); fitReadable(); }, 350);
-  });
-</script>
-"""
-    anchor_id = ""
-    if anchor_name is not None:
-        for label, name, *_rest in nodes_t:
-            if name == anchor_name:
-                anchor_id = f"{label}::{name}"
-                break
-    # json.dumps 负责转义，避免节点名里的引号破坏脚本
-    patch = patch.replace("__ANCHOR_ID__", json.dumps(anchor_id or None))
-    return html.replace("</head>", patch + "</head>", 1) if "</head>" in html else html + patch
-
-
-html = build_html(
-    tuple((lb, nm, levels.get((lb, nm), 9),
-           nodes[(lb, nm)].get("band", "unknown"),
-           positions.get((lb, nm), (0.0, 0.0))[0],
-           positions.get((lb, nm), (0.0, 0.0))[1]) for (lb, nm) in nodes),
-    tuple((e["source"], e.get("source_label"), e["target"], e.get("target_label"),
-           e["edge_type"], e.get("verify_status", "")) for e in edges),
-    auto_height, layered, show_labels, anchor,
-    tuple(bands_meta),
+_res = graph_svg.render(
+    _svg_nodes, _svg_edges,
+    height=auto_height,
+    anchor=anchor,
+    positions=_pos,
+    bands=_bands,
+    key="ge_graph",
 )
-C.embed_html(html, auto_height + 20)
+
+# 选中回传：pyvis 时代做不到这件事（单向），所以本页原来只能用 Streamlit 侧的
+# 选择器指定锚点。现在单击节点能拿回 Python，就该给出它值得给的信息 ——
+# 这一页的定位是「系统全貌」，所以详情只回答「这个节点在图上处于什么位置」，
+# 逐条边的验证判定与下钻查询留在交互探索页，不在总览里重复一份。
+_sel = _res.get("selected")
+if _sel:
+    _n = next((x for x in _svg_nodes if x["id"] == _sel), None)
+    _ins = [e for e in edges if e["target"] == _sel]
+    _outs = [e for e in edges if e["source"] == _sel]
+    with st.container(border=True):
+        st.markdown(f"**{_sel}**")
+        if _n:
+            st.caption(
+                f"类型 `{_n['type']}` · 分组 {_n['group']} · "
+                f"层级 {levels.get((_n['type'], _sel), '—')} · "
+                f"图上被 {len(_ins)} 个依赖、依赖 {len(_outs)} 个"
+            )
+        if _outs:
+            st.caption("**它依赖**：" + "　".join(
+                f"`{e['target']}`（{e.get('edge_type')}）" for e in _outs[:8]))
+        if _ins:
+            st.caption("**依赖它**：" + "　".join(
+                f"`{e['source']}`（{e.get('edge_type')}）" for e in _ins[:8]))
+        C.page_link("pages/9_Interactive_Explorer.py",
+                    "→ 在交互探索里从这个节点走下去")
 
 lc1, lc2 = st.columns([3, 2])
 lc1.caption(
-    "🟢 绿粗线 = 故障注入**已确认**　🔴 红虚线 = 已**证伪**　🟠 橙线 = 未定　"
-    "⚫ 灰细线 = 未验证。★ 橙色星 = 锚点。"
+    "🟢 绿粗线 = 故障注入**已确认**　🔴 红线 = 已**证伪**　🟠 橙线 = 未定　"
+    "⚫ 灰细线 = 未验证。★ = 锚点，左侧色条 = 分组。"
     "**上→下 = 依赖方向**（上游调用方在上、下游被依赖方在下）；"
     "**横向分簇 = `scope`**（左起：业务系统 → 外部服务 → 可观测性 → 平台自身 → "
     "集群底座），簇间留白就是业务与运维设施的分界。"
-    "配色取自 AWS Cloudscape 图表令牌。滚轮缩放、空白处拖动平移、节点可上下左右任意拖动。"
+    "**悬停节点**会点亮它相连的边与邻居、压暗其余；图比容器大时在框内滚动浏览。"
 )
 lc2.caption("拖拽可重排；右下角有缩放按钮；悬停看类型与分组。")
 
