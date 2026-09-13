@@ -231,6 +231,67 @@ def test_t73_07_完全切断必须被前后夹住才算生效():
     assert "不写 confirmed" in why, why
 
 
+def test_t73_08_同对多边必须全部写回且绑定切断作用域():
+    """同一对节点之间的多条边要么全写、要么全不写，且理由必须写在代码里。
+
+    ## 为什么从「>1 条就拒绝」改成「全部写回」
+
+    2026-09-13 实测 `petsite -> SQSQueue`：同一对节点之间有 2 条边，
+    来源不同、都是真的 ——
+
+        DependsOn    source=xray,   dependency_kind=dynamic,
+                     xray_call_count=562        观测到的
+        PublishesTo  source=aws-etl,
+                     evidence=PaymentController.cs#PostMessageToSqs
+                                                声明的（已与 X-Ray 交叉核对）
+
+    原先一律拒绝写回，理由是「写错一条边比不写更糟」。那条理由防的是**猜**，
+    而这里不需要猜：**IAM deny 的作用域是整个资源**（`sqs:*` on 这个队列），
+    切断的是这一对节点之间的全部交互，证据同等覆盖每一条边。
+
+    ## 这条门禁盯的是那个推理前提
+
+    结论绑定于「切断手段是资源级」。若换成更窄的手段（只 deny
+    `sqs:SendMessage`），证据就只覆盖发送那条边，必须回到拒绝写回。
+    所以要求代码里显式写出这个前提 —— 前提丢了，结论就成了没根据的放宽。
+    """
+    src = _src()
+
+    # 1) 定位函数必须返回全部命中，而不是 >1 就放弃
+    assert "def _edge_ids" in src, (
+        "边定位函数没有改成返回多条（_edge_ids）。")
+    body = _body_of(src, "def _edge_ids")
+    assert "全部" in body, "_edge_ids 没有说明它返回全部同对边"
+    # 前提与反例都必须写出来：证据范围绑定于切断手段的作用域
+    assert "SendMessage" in body, (
+        "_edge_ids 没有写出反例（更窄的切断手段只覆盖一条边），"
+        "下一个人无法判断这个推理何时失效。")
+    # 命中 0 条仍必须响
+    assert "空结果必须响" in body, (
+        "找不到边时不再报警。空结果与「名字对不上」在日志里长得一样，"
+        "后者会被当成前者放过。")
+
+    # 2) 写回必须遍历全部边，且理由里绑定「资源级」这个前提
+    pbody = _body_of(src, "def _persist_verdict")
+    assert "for h in hits" in pbody, "写回没有遍历全部边"
+    assert ("资源" in pbody and "全部交互" in pbody), (
+        "写回全部边的理由没有绑定「IAM deny 作用于整个资源」这个前提。"
+        "前提丢了，结论就成了没根据的放宽 —— 换成更窄的切断手段时"
+        "必须回到拒绝写回。")
+    assert "SendMessage" in pbody or "更窄" in pbody, (
+        "没有写出反例（更窄的切断手段），下一个人无法判断这个推理何时失效。")
+
+    # 3) observation_only 仍然不写回
+    assert 'verdict not in ("confirmed", "inconclusive")' in pbody, (
+        "observation_only 的拦截被改掉了 —— 它的含义是「信号不足以判定」，"
+        "写进 verify_status 会让它看起来像结论。")
+
+    # 4) 部分失败必须报出来，不能把 2 条里写成 1 条报成成功
+    assert "部分写回失败" in pbody, (
+        "多条边部分写回失败时没有单独报告。"
+        "2 条里只成功 1 条却报「已写回」，会让报告声称一条无证据的边已确证。")
+
+
 def test_t73_05_探针必须按源服务取且未登记时拒绝():
     """业务探针由**源服务**决定，没登记探针的服务必须拒绝开跑。
 
