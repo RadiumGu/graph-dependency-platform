@@ -903,7 +903,56 @@ def _verdict(base: dict, during: dict | None, post: dict | None,
     「这条依赖不影响可用性」并在预案里降级 —— 比 untested 危险得多。
     """
     if during is None or not during.get("ok"):
-        return "observation_only", "被测边故障期采集失败（ok=False），无法判定"
+        # ── 完全切断：边从服务图上**消失**而不是带错误出现 ──
+        #
+        # 2026-09-13 实测 `petsite -> SNSTopic`：基线 43 次 → 故障期 0 次且
+        # ok=False → 回滚后 32 次。原因是 deny 让 SDK 调用抛异常，而 petsite
+        # 的埋点不为失败的 SDK 调用发子段，于是这条边整个不出现在服务图里。
+        #
+        # 这**不是偶发**，是「IAM deny + 这套埋点」的固有性质：托管服务类依赖
+        # 被完全切断时，边通道永远会是 ok=False。若一律判 observation_only，
+        # 这一整类边（SNS / SQS / StepFunction）就永远不可确认。
+        #
+        # 判据不是放宽，而是认出同一证据的另一种形态。边通道的职责是证明
+        # **注入真的生效**，而「被前后夹住的消失」比成功率下降更强地满足它：
+        #
+        #   基线窗口有 ≥MIN 次调用   —— 这条边本来在跑（不是零流量边）
+        #   故障期窗口完全消失       —— 调用停止了
+        #   回滚后窗口重新出现       —— **这一环排除「聚合延迟/采样波动」**，
+        #                              因为同一套采集在前后两个窗口都看得见它
+        #
+        # 缺了第三环就仍然是 observation_only：单看「消失」无法与「X-Ray 这个
+        # 窗口没聚合到」区分。
+        b_req = (base.get("total_requests") or 0)
+        p_ok = bool(post and post.get("ok"))
+        p_req = (post or {}).get("total_requests") or 0
+        bracketed = (b_req >= MIN_BASELINE_REQUESTS and p_ok and p_req > 0)
+        if not bracketed:
+            return "observation_only", (
+                "被测边故障期采集失败（ok=False），且未被前后夹住"
+                "（基线 %d 次 / 回滚后 ok=%s、%d 次）—— "
+                "无法区分「调用停止」与「本窗口没聚合到」" % (b_req, p_ok, p_req))
+        if biz_during is None or not biz_during.get("ok"):
+            return "observation_only", (
+                "被测边完全消失且前后夹住，但业务探针故障期采集失败 —— "
+                "缺业务侧证据，不出 confirmed")
+        degraded, broke, biz_note = _biz_degraded(biz_base, biz_during)
+        rec = ("；回滚后恢复" if (biz_post or {}).get("recovered")
+               else "；⚠️ 回滚后未在预算内恢复")
+        if broke:
+            return "confirmed", (
+                "完全切断：被测边基线 %d 次 → 故障期从服务图消失 → 回滚后 %d 次"
+                "（前后夹住，排除聚合延迟），且业务归零（%s）%s"
+                % (b_req, p_req, biz_note, rec))
+        if degraded:
+            return "confirmed", (
+                "完全切断：被测边基线 %d 次 → 故障期消失 → 回滚后 %d 次，"
+                "且业务退化（%s）%s" % (b_req, p_req, biz_note, rec))
+        return "inconclusive", (
+            "完全切断（基线 %d 次 → 消失 → 回滚后 %d 次）但业务探针全部未退化"
+            "（%s）—— 消费方存在降级路径，该依赖非业务关键路径。"
+            "**不写 confirmed**：证明了调用停止，没证明业务受损"
+            % (b_req, p_req, biz_note))
     if biz_during is None or not biz_during.get("ok"):
         return "observation_only", "业务探针故障期全部请求失败，无法区分「依赖被切断」与「探针本身不可达」"
 

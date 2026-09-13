@@ -108,12 +108,18 @@ def test_t73_03_基线闸门必须存在():
     src = _src()
     assert "MIN_BASELINE_REQUESTS" in src, "缺少基线请求数下限"
     assert "MIN_BASELINE_SUCCESS_RATE" in src, "缺少基线成功率下限"
-    # 两个闸门都必须真的拦（在 apply 之前 return）
+    # 两个闸门都必须真的拦（在 apply 之前 return）。
+    #
+    # 判据是「**至少有一处**用于拦截」，不是「任取一处都拦截」——
+    # 原先用 `rindex` 取最后一处，而 `MIN_BASELINE_REQUESTS` 后来也被
+    # `_verdict` 的完全切断分支用来判断基线是否有量（那里不该 return 3）。
+    # 门禁于是指着一处正当用法报违规。这是本项目第五次门禁假阳性，
+    # 成因与前四次同族：**判据比意图严/松，都会误报**。
     for name in ("MIN_BASELINE_REQUESTS", "MIN_BASELINE_SUCCESS_RATE"):
-        i = src.rindex(name)
-        seg = src[i:i + 400]
-        assert "return 3" in seg, (
-            "%s 只定义了没有用于拦截（附近没有 return 3）" % name)
+        spots = [m.start() for m in re.finditer(re.escape(name), src)]
+        assert any("return 3" in src[i:i + 400] for i in spots), (
+            "%s 的 %d 处出现里没有任何一处用于拦截（附近没有 return 3）"
+            % (name, len(spots)))
     # 采集失败（ok=False）必须中止
     assert 'if not base["ok"]' in src, (
         "没有处理基线 ok=False。`ok=False / success_rate=100 / requests=0` "
@@ -154,6 +160,75 @@ def test_t73_04_判定不得用max且混淆时必须拒绝():
     dbody = _body_of(src, "def _biz_degraded")
     assert "min(" in dbody, "_biz_degraded 没有按最小值比较"
     assert "max(" not in dbody, "_biz_degraded 出现了 max —— 会盖掉退化样本"
+
+
+def test_t73_07_完全切断必须被前后夹住才算生效():
+    """边从服务图消失时，只有「基线有量 → 消失 → 回滚后重现」三环齐全才算生效。
+
+    ## 为什么需要这条分支
+
+    2026-09-13 实测 `petsite -> SNSTopic`：基线 43 次 → 故障期 ok=False/0 次
+    → 回滚后 32 次。原因是 deny 让 SDK 抛异常，而埋点不为失败的 SDK 调用发
+    子段，边就整个不出现在服务图里。这是「IAM deny + 这套埋点」的固有性质，
+    不是偶发 —— 一律判 observation_only 会让 SNS / SQS / StepFunction
+    这一整类边永远不可确认。
+
+    ## 为什么这不是放宽闸门
+
+    闸门的职责是证明**注入真的生效**。「被前后夹住的消失」比成功率下降更强地
+    满足它：同一套采集在故障前后两个窗口都看得见这条边，唯独故障期看不见。
+    **第三环（回滚后重现）是排除「聚合延迟/采样波动」的那一环**，缺了它就必须
+    退回 observation_only —— 单看「消失」与「本窗口没聚合到」无法区分。
+
+    而且业务侧证据仍然必需：完全切断也不能只凭边通道出 confirmed。
+    """
+    src = _src()
+    body = _body_of(src, "def _verdict")
+
+    # 必须检查回滚后窗口，而不是只看故障期 ok=False 就下结论
+    assert "post" in body, "_verdict 没有使用回滚后窗口"
+    assert ("MIN_BASELINE_REQUESTS" in body), (
+        "完全切断分支没有要求基线达到请求数下限 —— "
+        "零流量边「消失」毫无意义，它本来就不在跑。")
+
+    # 用 spec_from_file_location 而不是裸 ModuleType + SourceFileLoader：
+    # 脚本模块级用到 `__file__`（算 _ROOT），裸模块没有这个属性会 NameError。
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("vd_t7", str(_SCRIPT))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    v = mod._verdict
+
+    base_ok = {"ok": True, "success_rate": 100.0, "total_requests": 43}
+    gone = {"ok": False, "success_rate": 100.0, "total_requests": 0}
+    post_ok = {"ok": True, "success_rate": 100.0, "total_requests": 32}
+    bizb = {"ok": True, "no_probe": False,
+            "per_probe": {"adopt": [1, 1, 1], "home": [26, 26, 26]}}
+    bizd_broke = {"ok": True, "no_probe": False,
+                  "per_probe": {"adopt": [0, 0, 0, 0], "home": [26, 26, 26, 26]}}
+    bizd_fine = {"ok": True, "no_probe": False,
+                 "per_probe": {"adopt": [1, 1, 1], "home": [26, 26, 26]}}
+    bizp = {"recovered": True}
+
+    # 三环齐全 + 业务归零 → confirmed
+    verdict, why = v(base_ok, gone, post_ok, bizb, bizd_broke, bizp)
+    assert verdict == "confirmed", (verdict, why)
+    assert "前后夹住" in why, why
+
+    # 缺第三环（回滚后仍采不到）→ 必须退回 observation_only
+    verdict, _ = v(base_ok, gone, {"ok": False, "total_requests": 0},
+                   bizb, bizd_broke, bizp)
+    assert verdict == "observation_only", verdict
+
+    # 基线量不足（零流量边）→ observation_only，即便业务归零
+    verdict, _ = v({"ok": True, "success_rate": 100.0, "total_requests": 3},
+                   gone, post_ok, bizb, bizd_broke, bizp)
+    assert verdict == "observation_only", verdict
+
+    # 三环齐全但业务未退化 → inconclusive，不得 confirmed
+    verdict, why = v(base_ok, gone, post_ok, bizb, bizd_fine, bizp)
+    assert verdict == "inconclusive", (verdict, why)
+    assert "不写 confirmed" in why, why
 
 
 def test_t73_05_探针必须按源服务取且未登记时拒绝():
