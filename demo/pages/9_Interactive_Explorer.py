@@ -268,6 +268,52 @@ for e in seen_edges:
     deg[e["source"]] = deg.get(e["source"], 0) + 1
     deg[e["target"]] = deg.get(e["target"], 0) + 1
 
+# ── 属地（infra 位置）─────────────────────────────────────────────────────────
+#
+# 「这个 pod 在哪台 EC2、哪个 AZ」是值班时的高频问题，而这条链在图里走的是
+# **结构边**（RunsOn / LocatedIn），不是依赖边 —— 本页只画依赖边，所以位置信息
+# 不在图形里。这是刻意的：把包含边也画成箭头会让杂乱翻倍，而且 pod→ec2→az 是
+# 树状包含、不是依赖，画成同样的箭头会被读成「pod 依赖 ec2」，语义就错了。
+#
+# 所以位置以**属性**的形式给出：选中节点看完整属地链，指标区给 AZ 分布汇总。
+# 后者才是 SRE 真正要判断的那件事 —— 这堆东西有没有跨 AZ 冗余。
+#
+# 一次查询拿全图的属地，不是每个节点查一次：迭代单跳已经让查询次数随前沿增长，
+# 再叠一层会把跨 VPC 的延迟放大到有感。
+@st.cache_data(ttl=120, show_spinner=False)
+def placements(names: tuple) -> dict:
+    """{name: {"host":…, "az":…, "region":…, "subnet":…}}，取不到就留空。"""
+    if not names or not online:
+        return {}
+    # 单引号会破坏下面的字面量列表 —— 名字里带引号的直接排除，不做转义：
+    # 这一层只是展示属地，少一个节点的位置远好过拼出一条可注入的查询。
+    safe = [n for n in names if isinstance(n, str) and "'" not in n]
+    if not safe:
+        return {}
+    lst = ", ".join(f"'{n}'" for n in safe[:400])
+    # 显式两跳而不是变长路径：Neptune 对带谓词的变长路径支持有限（A 档踩过 400）。
+    # pod 的 AZ 要经 EC2 才拿到，而 EC2/其他资源自己就直连 AZ，所以两条 OPTIONAL
+    # 都写上、用 coalesce 取先有的那个。
+    q = (
+        f"MATCH (n) WHERE n.name IN [{lst}] "
+        "OPTIONAL MATCH (n)-[:RunsOn]->(h) "
+        "OPTIONAL MATCH (h)-[:LocatedIn]->(hz:AvailabilityZone) "
+        "OPTIONAL MATCH (n)-[:LocatedIn]->(nz:AvailabilityZone) "
+        "OPTIONAL MATCH (n)-[:LocatedIn]->(sn:Subnet) "
+        "RETURN n.name AS name, h.name AS host, "
+        "coalesce(hz.name, nz.name) AS az, sn.name AS subnet, n.region AS region"
+    )
+    res = C.gquery(q)
+    if "error" in res:
+        return {}
+    out = {}
+    for r in res.get("results", []):
+        nm = r.get("name")
+        if nm:
+            out[nm] = {k: r.get(k) for k in ("host", "az", "subnet", "region")}
+    return out
+
+
 nodes = []
 for nid, lb in seen_nodes.items():
     gname, gcolor = group_of(lb)
@@ -291,12 +337,41 @@ for nid, lb in seen_nodes.items():
         n["fill"] = "#f4fbf5"
     nodes.append(n)
 
-m = st.columns(5)
+_place = placements(tuple(sorted(seen_nodes)))
+
+m = st.columns(6)
 m[0].metric("节点", len(nodes))
 m[1].metric("依赖边", len(seen_edges))
 m[2].metric("基础跳数", int(hops))
 m[3].metric("手动展开", len(expanded) + len(full_expanded))
 m[4].metric("分组", len({n["group"] for n in nodes}))
+
+# AZ 分布：值班时真正要判断的不是「这个 pod 在哪台机器」，而是「这堆东西有没有
+# 跨 AZ 冗余」。全落在一个 AZ 就是个藏起来的单点，所以这里显示**几个 AZ**
+# 而不是列出机器，并在只有一个 AZ 时明确警示。
+_az_count: dict = {}
+for _nm in seen_nodes:
+    _az = (_place.get(_nm) or {}).get("az")
+    if _az:
+        _az_count[_az] = _az_count.get(_az, 0) + 1
+_placed = sum(_az_count.values())
+m[5].metric(
+    "AZ", len(_az_count) if _az_count else "—",
+    help=("图上有属地信息的 " + str(_placed) + " 个节点分布在："
+          + "、".join(f"{a}({c})" for a, c in sorted(_az_count.items()))
+          if _az_count else
+          "取不到属地信息。位置走的是结构边（RunsOn / LocatedIn），"
+          "离线快照里没有这部分，需要连上 Neptune 活图谱。"),
+)
+if len(_az_count) == 1 and _placed >= 3:
+    _only = next(iter(_az_count))
+    st.warning(
+        f"⚠️ 图上 {_placed} 个有属地的节点**全部**在 `{_only}` —— "
+        "这一层没有跨 AZ 冗余，该 AZ 故障会一起失效。"
+        "（位置来自 `RunsOn` / `LocatedIn` 结构边，不画在图上：那是包含关系，"
+        "画成箭头会被读成依赖。）",
+        icon="🏗️",
+    )
 
 if expanded or full_expanded:
     if st.button("↺ 清空手动展开", help="回到只有基础跳数的那张图"):
@@ -333,6 +408,20 @@ with d1:
         st.write(f"**{sel}**")
         if n:
             st.caption(f"类型 `{n['type']}` · 分组 {n['group']} · 图上已连 {n['degree']} 条边")
+
+        # 属地：从结构边（RunsOn / LocatedIn）取，不画在图上。
+        # 顺序按「从近到远」排：宿主 → 子网 → AZ → Region，这也是排查时的收敛顺序。
+        _p = _place.get(sel) or {}
+        _chain = [(lab, _p.get(k)) for lab, k in
+                  (("宿主", "host"), ("子网", "subnet"), ("AZ", "az"), ("Region", "region"))]
+        _chain = [(lab, v) for lab, v in _chain if v]
+        if _chain:
+            st.caption("**属地**　" + "　→　".join(f"{lab} `{v}`" for lab, v in _chain))
+        elif online:
+            st.caption(
+                "属地：图里没有这个节点的 `RunsOn` / `LocatedIn` 边 —— "
+                "它可能是逻辑实体（业务能力、Agent 工具）而非部署实体。"
+            )
 
         # 「展开全部邻居」：查一次不受上限的邻居，和图上已有的比对，
         # 把差值放在按钮旁边 —— 一个不说明会发生什么的按钮，用户只能盲点。
