@@ -28,9 +28,16 @@ from typing import Any
 
 REGION = os.environ.get("REGION", "ap-northeast-1")
 
-#: 两次真实调用之间的最小间隔（秒）。页面上任何人都能按那个按钮，
+#: 两次**成功**调用之间的最小间隔（秒）。页面上任何人都能按那个按钮，
 #: 没有这个闸门，一次围观就能把 agent space 打满、把账单拉高。
-_RATE_LIMIT_SECONDS = 90
+#:
+#: 定成 60 是因为一次调用本身要 50 秒左右，期间界面是阻塞的（转圈），
+#: 所以闸门真正防的不是连点、而是反复发起 —— 比一次调用略长就够了。
+#: 原来定 90 秒偏长：调一次要等一分半才能再调，正常试用被当成滥用对待。
+#:
+#: **失败的调用不计入**（时间戳由调用方在拿到回答后才写）。失败没有产生推理
+#: 成本，罚它没有意义 —— 而且 API 参数报错这类失败恰恰需要马上改一改再试。
+_RATE_LIMIT_SECONDS = 60
 
 
 def client():
@@ -75,17 +82,30 @@ def ask(
 
         # SendMessage 返回 EventStream。把它读干是拿到回答的前提 ——
         # 不读就直接去 ListPendingMessages 会拿到空的。
+        #
+        # 2026-09-13：这里原来写 `resp.get("body") or resp.get("stream")`，
+        # 那是照别的流式 AWS API 的惯例猜的键名。实测这个 API 把流放在 `events`
+        # 下，于是流从没被读过、answer 恒空 —— 而 ask() 刻意不抛异常，
+        # 这个 bug 就静默通过了（1.4s 返回空回答，判定给出 used_graph=None，
+        # 页面把「调用失败」显示成了「判不出来」）。
+        # 改为**按类型**找：EventStream 有 __iter__ 而不是 dict/str，
+        # 键名再变一次也不用改这里。
         resp = c.send_message(**kw)
-        chunks: list[str] = []
-        stream = resp.get("body") or resp.get("stream")
-        if stream is not None:
-            deadline = time.time() + timeout_s
-            for event in stream:
-                if time.time() > deadline:
-                    out["error"] = f"读流超过 {timeout_s}s，截断"
-                    break
-                chunks.append(_text_of(event))
-        out["answer"] = "".join(chunks).strip()
+        stream = None
+        for k, v in resp.items():
+            if k == "ResponseMetadata" or isinstance(v, (str, bytes, dict, list)):
+                continue
+            if hasattr(v, "__iter__"):
+                stream = v
+                break
+
+        if stream is None:
+            out["error"] = ("SendMessage 的响应里找不到 EventStream，"
+                            f"只有 {sorted(k for k in resp if k != 'ResponseMetadata')}")
+        else:
+            out["answer"], err = _read_stream(stream, timeout_s)
+            if err:
+                out["error"] = err
 
         # 流里取不到正文时按文档退到 ListPendingMessages。
         if not out["answer"] and exec_id:
@@ -96,6 +116,69 @@ def ask(
     except Exception as exc:                                     # noqa: BLE001
         out["error"] = f"{type(exc).__name__}: {exc}"
     return out
+
+
+def _read_stream(stream: Any, timeout_s: int) -> tuple[str, str | None]:
+    """读干 EventStream，返回 (回答正文, 错误)。
+
+    ## 事件契约（2026-09-13 实测）
+
+    ```
+    responseCreated     {responseId, sequenceNumber}
+    contentBlockStart   {index, type, id, sequenceNumber}      type: text|chat_title|context_usage
+    contentBlockDelta   {index, delta:{textDelta:{text}}, …}
+    contentBlockStop    {index, type, text, last, …}
+    responseCompleted   {responseId, usage:{inputTokens,…}, …}
+    responseFailed      {responseId, errorCode, errorMessage, …}
+    ```
+
+    ## 为什么必须按 index 追踪块类型
+
+    第一版把每个事件递归找出的字符串全拼进正文，结果 **26.6% 是噪音**：响应 ID、
+    UUID、事件类型名，以及整段 `context_usage` 遥测 JSON（context_window、
+    utilization）。原因是 `chat_title` 和 `context_usage` 这两类块**也走
+    textDelta** —— 它们和正文在事件层面长得一模一样，只能靠所属块的 type 区分。
+
+    所以这里只取 `type == "text"` 的块。白名单而不是黑名单：将来多一种遥测块，
+    黑名单会把它漏进正文里，而白名单只会漏掉正文的新形式 —— 后者看得见（回答变空），
+    前者看不见（用户读到一堆 JSON 却以为是 agent 的话）。
+
+    ## 为什么错误要单独返回
+
+    `responseFailed` 不返回出来的话，调用失败会表现成「回答为空」，判定器给出
+    used_graph=None，页面显示「这次判不出来」—— 把 API 拒绝伪装成判定不确定。
+    实际踩到过：assetIds 传了 SKILL 型资产，API 报
+    `Asset '…' is type 'SKILL', expected 'ATTACHMENT'`。
+    """
+    kinds: dict[int, str] = {}       # block index -> type
+    parts: list[str] = []
+    errs: list[str] = []
+    deadline = time.time() + timeout_s
+
+    for event in stream:
+        if time.time() > deadline:
+            errs.append(f"读流超过 {timeout_s}s，截断")
+            break
+        if not isinstance(event, dict):
+            continue
+
+        start = event.get("contentBlockStart")
+        if isinstance(start, dict):
+            kinds[start.get("index", 0)] = str(start.get("type") or "")
+
+        delta = event.get("contentBlockDelta")
+        if isinstance(delta, dict):
+            if kinds.get(delta.get("index", 0), "text") == "text":
+                td = (delta.get("delta") or {}).get("textDelta") or {}
+                if isinstance(td.get("text"), str):
+                    parts.append(td["text"])
+
+        failed = event.get("responseFailed")
+        if isinstance(failed, dict):
+            errs.append("%s: %s" % (failed.get("errorCode") or "ERROR",
+                                    failed.get("errorMessage") or "(无消息)"))
+
+    return "".join(parts).strip(), ("；".join(errs) if errs else None)
 
 
 def _text_of(obj: Any) -> str:

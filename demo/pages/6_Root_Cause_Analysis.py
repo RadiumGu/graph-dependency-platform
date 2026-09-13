@@ -1018,7 +1018,6 @@ with tab_agent:
     st.markdown("#### 6　自己按一次")
 
     _space = rec.get("agent_space_id")
-    _asset = rec.get("skill_asset_id")
     _agent_ok, _agent_why = C.devops_agent_available()
 
     if not _space:
@@ -1035,7 +1034,7 @@ with tab_agent:
         _wait = C.devops_agent_wait(st.session_state)
         st.caption(
             "会发起一次**真实**的 `aws devops-agent` 调用：产生 Bedrock 推理费用，"
-            "通常要几十秒。返回后自动按 `detection_rule` 判定这次有没有查依赖图谱，"
+            "通常要五十秒左右。返回后自动按 `detection_rule` 判定这次有没有查依赖图谱，"
             "并把命中的证据列出来。"
         )
 
@@ -1051,36 +1050,42 @@ with tab_agent:
         with st.expander("看这次要发出去的问题原文"):
             st.code(_q, language="text")
 
-        _confirm = st.checkbox(
-            "我知道这会产生真实调用与费用", key="rca_agent_confirm",
-            help="刻意做成两步：这一页任何访客都能按，没有这个勾选，"
-                 "一次围观就能把 agent space 打满。")
-
         _c1, _c2 = st.columns([1, 3])
         with _c1:
             _go = st.button(
-                "▶ 发起调用", type="primary", disabled=not _confirm or _wait > 0,
+                "▶ 发起调用", type="primary", disabled=_wait > 0,
                 key="rca_agent_go")
         with _c2:
             if _wait > 0:
-                st.caption(f"冷却中，还需 {_wait:.0f} 秒 —— 频率闸门，避免连点。")
-            elif not _confirm:
-                st.caption("先勾上左边的确认。")
+                # 只有**成功**的调用才会开始计时（见下），所以看到这行说明上一次
+                # 真的问出了回答。失败不占闸门 —— 参数报错正需要立刻改了再试。
+                st.caption(f"上次调用成功，冷却中，还需 {_wait:.0f} 秒。")
 
         if _go:
-            with st.spinner("正在调用 DevOps Agent，通常几十秒…"):
-                _res = C.devops_agent_ask(
-                    _space, _q, asset_ids=[_asset] if _asset else None)
+            with st.spinner("正在调用 DevOps Agent，通常五十秒左右…"):
+                # 不传 assetIds：那个参数要的是 ATTACHMENT，而 fixture 里的
+                # skill_asset_id 是 SKILL 型，传进来 API 直接报
+                # `is type 'SKILL', expected 'ATTACHMENT'` 并且整个响应失败。
+                # skill 本来就是注册在 agent space 上的（上面 plain_after_skill
+                # 那组 8/8 靠的就是 space 侧注册），不该由每次调用带。
+                _res = C.devops_agent_ask(_space, _q)
             st.session_state["rca_agent_result"] = _res
-            st.session_state["_devops_agent_last_ts"] = time.time()
+            if (_res.get("answer") or "").strip():
+                # 拿到回答才开始计冷却。失败没有产生推理成本，罚它没有意义。
+                st.session_state["_devops_agent_last_ts"] = time.time()
             st.rerun()
 
         _res = st.session_state.get("rca_agent_result")
         if _res:
-            if _res.get("error") and not _res.get("answer"):
-                st.error(f"调用失败：{_res['error']}")
+            _ans = (_res.get("answer") or "").strip()
+            if not _ans:
+                # 没有回答就是调用失败，必须说是失败。
+                # 早先这里落到了判定分支，把 API 报错显示成「这次判不出来」——
+                # 那是把失败伪装成判定不确定，比判错更糟：读者会以为 agent 答了
+                # 一段无法归类的话，实际上它一个字都没答。
+                st.error(f"**调用失败，没有拿到回答。** {_res.get('error') or '（无错误信息）'}")
             else:
-                _j = C.devops_agent_judge(_res.get("answer") or "")
+                _j = C.devops_agent_judge(_ans)
                 _used = _j.get("used_graph")
                 if _used is True:
                     st.success(
@@ -1139,29 +1144,27 @@ with tab_agent:
             placeholder="例如：这些候选根因里，哪几条的依赖边其实还没被验证过？",
             help="问题会连同上面那份事实一起发出。范围限定在这一页已收齐的材料内。")
         _wait2 = C.devops_agent_wait(st.session_state)
-        _confirm2 = st.checkbox(
-            "我知道这会产生真实调用与费用", key="rca_followup_confirm")
         _go2 = st.button(
-            "▶ 带上下文追问", disabled=not (_q2.strip() and _confirm2) or _wait2 > 0,
+            "▶ 带上下文追问", disabled=not _q2.strip() or _wait2 > 0,
             key="rca_followup_go")
         if _wait2 > 0:
-            st.caption(f"冷却中，还需 {_wait2:.0f} 秒。")
+            st.caption(f"上次调用成功，冷却中，还需 {_wait2:.0f} 秒。")
 
         if _go2:
-            with st.spinner("正在调用（带上下文），通常几十秒…"):
-                _r2 = C.devops_agent_ask(
-                    _space, _q2.strip(), context=_ctx,
-                    asset_ids=[_asset] if _asset else None)
+            with st.spinner("正在调用（带上下文），通常五十秒左右…"):
+                _r2 = C.devops_agent_ask(_space, _q2.strip(), context=_ctx)
             st.session_state["rca_followup_result"] = _r2
-            st.session_state["_devops_agent_last_ts"] = time.time()
+            if (_r2.get("answer") or "").strip():
+                st.session_state["_devops_agent_last_ts"] = time.time()
             st.rerun()
 
         _r2 = st.session_state.get("rca_followup_result")
         if _r2:
-            if _r2.get("error") and not _r2.get("answer"):
-                st.error(f"调用失败：{_r2['error']}")
+            _a2 = (_r2.get("answer") or "").strip()
+            if not _a2:
+                st.error(f"**调用失败，没有拿到回答。** {_r2.get('error') or '（无错误信息）'}")
             else:
-                st.markdown(_r2.get("answer") or "_（空）_")
+                st.markdown(_a2)
                 if _r2.get("execution_id"):
                     st.caption(f"executionId `{_r2['execution_id']}`")
                 st.caption(
