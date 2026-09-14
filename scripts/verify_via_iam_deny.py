@@ -499,6 +499,20 @@ class _LoadDriver:
                 with self._lock:
                     self._failed += 1
             finally:
+                # ── 顺带驱动读路径 ──
+                #
+                # 领养只压 petsite → payforadoption → postgres 这条写链路。
+                # `petlistadoptions` 与 `pethistory` 的 RDS 边要靠各自的页面
+                # 才有流量：实测 petlistadoptions 的 `PGSQL Query` 边在 30 分钟里
+                # 只有 48 次（≈11 次/420s），够不到闸门的 20 次。
+                # 不驱动它们，就只能验 payforadoption 那 2 条 RDS 边。
+                for path in ("/PetListAdoptions?userId=" + uid,
+                             "/pethistory?userId=" + uid):
+                    try:
+                        with urllib.request.urlopen(base + path, timeout=20):
+                            pass
+                    except Exception:
+                        pass
                 # ── 必须把宠物「放回去」，否则库存单调消耗 ──
                 #
                 # 2026-09-13 踩到：我以为 `/housekeeping?userId=X` 会释放宠物，

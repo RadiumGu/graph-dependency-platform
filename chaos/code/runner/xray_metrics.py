@@ -138,7 +138,8 @@ class XRayEdgeMetrics:
 
     def _edge_stats(self, src: str, dst: str,
                     start_ts: int, end_ts: int,
-                    dst_type_prefixes: tuple = ()) -> tuple[int, int, float] | None:
+                    dst_type_prefixes: tuple = (),
+                    dst_names: tuple = ()) -> tuple[int, int, float] | None:
         """返回 (total_count, ok_count, total_response_time_seconds) 或 None。
 
         `dst_type_prefixes` 非空时，目标按 X-Ray 节点的 **Type 前缀**匹配
@@ -191,9 +192,21 @@ class XRayEdgeMetrics:
             for edge in svc.get('Edges', []) or []:
                 peer = by_ref.get(edge.get('ReferenceId')) or {}
                 peer_name = peer.get('Name') or ''
-                if dst_type_prefixes:
+                if dst_names or dst_type_prefixes:
+                    # 名字命中 **或** 类型前缀命中都算这条边。
+                    #
+                    # 为什么需要按名字这一路：2026-09-13 实测同一种依赖在
+                    # X-Ray 里可能有完全不同的节点形态 ——
+                    #     payforadoption(Go)   -> `postgres`     type=Database::SQL
+                    #     petlistadoptions(.NET)-> `PGSQL Query`  type=remote
+                    # 后者的 Type 是泛化的 `remote`，而 `HTTP GET` 也是 remote，
+                    # 只按类型匹配会把 HTTP 调用一起算进 SQL 边里。
+                    # 所以这种形态只能按**节点名**认。
                     peer_type = str(peer.get('Type') or '')
-                    if not any(peer_type.startswith(p) for p in dst_type_prefixes):
+                    hit = (any(peer_name == n for n in (dst_names or ()))
+                           or any(peer_type.startswith(p)
+                                  for p in (dst_type_prefixes or ())))
+                    if not hit:
                         continue
                 else:
                     if not _name_matches(dst, peer_name):
@@ -219,6 +232,7 @@ class XRayEdgeMetrics:
         window_seconds: int = 180,
         end_ts: int | None = None,
         dst_type_prefixes: tuple = (),
+        dst_names: tuple = (),
     ) -> MetricsSnapshot:
         """取 `client_service -> server_service` 在窗口内的调用统计。
 
@@ -229,7 +243,8 @@ class XRayEdgeMetrics:
         now = int(end_ts or time.time())
         start = now - int(window_seconds)
         stats = self._edge_stats(client_service, server_service, start, now,
-                                 dst_type_prefixes=dst_type_prefixes)
+                                 dst_type_prefixes=dst_type_prefixes,
+                                 dst_names=dst_names)
         if stats is None:
             return MetricsSnapshot(timestamp=now, success_rate=100.0,
                                    latency_p99_ms=0.0, total_requests=0, ok=False)
