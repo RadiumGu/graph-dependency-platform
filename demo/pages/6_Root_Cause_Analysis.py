@@ -1038,42 +1038,53 @@ with tab_agent:
             "并把命中的证据列出来。"
         )
 
-        _mode = st.radio(
-            "问哪一版",
-            ["不点名要求查图谱（原样 A 组）", "点名要求查图谱（原样 B 组）"],
-            horizontal=True, key="rca_agent_mode",
-            help="两版问题文本就是上面 A/B 两组用的原文，一字未改 —— "
-                 "所以你这次的结果可以直接和上面的统计并列看。")
-        _use_explicit = _mode.startswith("点名")
-        _q = (rec.get("question_explicit") if _use_explicit else rec.get("question")) or ""
+        # 两个按钮而不是「单选 + 发起」两步。
+        #
+        # 2026-09-14：原来是 st.radio 选版本、再按发起。选一下就触发一次 rerun，
+        # 而 Streamlit 每次 rerun 都会把滚动位置扔回页面顶部 —— 这一段在页面很
+        # 靠下，表现就是「刚点一下，页面自己跳走了」。
+        # 一个动作对应一个按钮既少一次重跑，也少一步操作。
+        _qa = rec.get("question") or ""
+        _qb = rec.get("question_explicit") or ""
 
-        with st.expander("看这次要发出去的问题原文"):
-            st.code(_q, language="text")
-
-        _c1, _c2 = st.columns([1, 3])
+        _c1, _c2, _c3 = st.columns([1.15, 1.15, 1.7])
         with _c1:
-            _go = st.button(
-                "▶ 发起调用", type="primary", disabled=_wait > 0,
-                key="rca_agent_go")
+            _go_a = st.button("▶ 不点名要求查图谱", disabled=_wait > 0,
+                              key="rca_agent_go_a",
+                              help="原样 A 组的问题文本，一字未改。"
+                                   "上面的统计里这一组 8 次只有 2 次去查了图谱。")
         with _c2:
+            _go_b = st.button("▶ 点名要求查图谱", type="primary", disabled=_wait > 0,
+                              key="rca_agent_go_b",
+                              help="原样 B 组的问题文本，一字未改。"
+                                   "上面的统计里这一组 4 次全部查了图谱。")
+        with _c3:
             if _wait > 0:
                 # 只有**成功**的调用才会开始计时（见下），所以看到这行说明上一次
                 # 真的问出了回答。失败不占闸门 —— 参数报错正需要立刻改了再试。
                 st.caption(f"上次调用成功，冷却中，还需 {_wait:.0f} 秒。")
 
-        if _go:
+        with st.expander("看两版问题的原文"):
+            st.markdown("**A：不点名要求查图谱**")
+            st.code(_qa, language="text")
+            st.markdown("**B：点名要求查图谱**")
+            st.code(_qb, language="text")
+
+        if _go_a or _go_b:
             with st.spinner("正在调用 DevOps Agent，通常五十秒左右…"):
                 # 不传 assetIds：那个参数要的是 ATTACHMENT，而 fixture 里的
                 # skill_asset_id 是 SKILL 型，传进来 API 直接报
                 # `is type 'SKILL', expected 'ATTACHMENT'` 并且整个响应失败。
                 # skill 本来就是注册在 agent space 上的（上面 plain_after_skill
                 # 那组 8/8 靠的就是 space 侧注册），不该由每次调用带。
-                _res = C.devops_agent_ask(_space, _q)
+                _res = C.devops_agent_ask(_space, _qb if _go_b else _qa)
+            _res["asked"] = "点名要求查图谱" if _go_b else "不点名要求查图谱"
             st.session_state["rca_agent_result"] = _res
             if (_res.get("answer") or "").strip():
                 # 拿到回答才开始计冷却。失败没有产生推理成本，罚它没有意义。
                 st.session_state["_devops_agent_last_ts"] = time.time()
-            st.rerun()
+            # 不调 st.rerun()：结果已经在 session_state 里，同一次渲染往下走就能
+            # 显示。多调一次 rerun 只是再把滚动位置扔回顶部一遍。
 
         _res = st.session_state.get("rca_agent_result")
         if _res:
@@ -1108,6 +1119,7 @@ with tab_agent:
                         "判据需要按新的实录补一条。", icon="❓")
                 if _res.get("execution_id"):
                     st.caption(
+                        f"问的是「{_res.get('asked') or '?'}」那一版　·　"
                         f"executionId `{_res['execution_id']}` —— 可以用 "
                         "`aws devops-agent list-pending-messages` 取回原始消息核对。")
                 if _res.get("error"):
@@ -1156,7 +1168,7 @@ with tab_agent:
             st.session_state["rca_followup_result"] = _r2
             if (_r2.get("answer") or "").strip():
                 st.session_state["_devops_agent_last_ts"] = time.time()
-            st.rerun()
+            # 同上，不 rerun —— 少一次滚动位置被扔回顶部。
 
         _r2 = st.session_state.get("rca_followup_result")
         if _r2:
