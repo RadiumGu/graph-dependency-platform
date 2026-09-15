@@ -41,6 +41,7 @@ import re
 import time
 import urllib.parse
 import urllib.request
+import uuid
 
 PETSITE_URL = os.environ.get(
     "PETSITE_INTERNAL_URL",
@@ -253,8 +254,42 @@ def probe_waggle() -> dict:
     HTTP 调用无论委派成功与否都返回 200 —— petsite 在 AgentCore 调用失败时
     返回 200 + 兜底文案。只看状态码永远看不出 agent 依赖断没断，
     只有**回答内容**会变。这是 agent 依赖唯一可行的观测通道。
+
+    ## ⚠️ 两个已实测的缺陷（2026-09-15 修）
+
+    ### 1. 固定 SessionId 会与**别的调用方**自撞
+
+    原实现用常量 `chaos-probe-xxxx…`。AgentCore 按 `runtimeSessionId` **串行**，
+    于是任意两个并发使用本探针的人共用一个会话、互相顶掉：
+
+        {"error": "Agent is already processing a request.
+                   Concurrent invocations are not supported.",
+         "error_type": "ConcurrencyException", ...}
+
+    实测 5 连发全部 0.2s 返回该错误（正常调用 20~22 秒）—— 因为另一个会话
+    正在用同一个常量 SessionId 跑实验。**每次调用必须用独立会话。**
+
+    ### 2. 判据把 JSON 错误体当成真实回答
+
+    原判据是：
+
+        good = st == 200 and len(text.strip()) >= 40 and not fallback
+
+    上面那个 `ConcurrencyException` 体：状态码 200 ✓、180 字符 ≥ 40 ✓、
+    不含 `connection was interrupted` / `please try again` ✗
+    —— 于是**一个硬错误被判为健康**（`ok=True, value=1`）。
+
+    这一条尤其危险：`SERVICE_PROBES` 里三个 AgentRuntime 服务把本探针当作
+    **唯一**证据通道（`_semantic_only` 那条路径），判据有洞就会在合规产物上
+    落下「依赖完好」的假结论。语义判据的门槛不能只是「不是那句兜底文案」，
+    必须是「**确实是一个回答**」。
+
+    与本模块另两处同族缺陷一致（`probe_adopt` 把表单页当成功、
+    首页错误页被当成空目录页）：**200 + 有内容 ≠ 业务正常。**
     """
-    sid = "chaos-probe-%s" % ("x" * 40)      # runtimeSessionId 必须 >= 33 字符
+    # 每次调用独立会话 —— 既避免自撞，也避免与并发实验共用会话。
+    # 仍须 >= 33 字符（petsite 原样透传给 runtimeSessionId，不做校验）。
+    sid = "chaos-probe-%s" % uuid.uuid4().hex          # 12 + 32 = 44 字符
     body = json.dumps({"Message": "Which dogs are available for adoption?",
                        "SessionId": sid}).encode()
     req = urllib.request.Request(
@@ -265,11 +300,25 @@ def probe_waggle() -> dict:
             st, text = r.status, r.read().decode("utf-8", "replace")
     except Exception as e:
         return {"ok": False, "value": None, "detail": "请求失败 %r" % e}
+    stripped = text.strip()
     fallback = any(m in text.lower() for m in
-                   ("connection was interrupted", "please try again"))
-    good = st == 200 and len(text.strip()) >= 40 and not fallback
+                   ("connection was interrupted", "please try again",
+                    "couldn't generate a response",     # 空流兜底，此前漏判
+                    "service is currently busy"))       # ServiceException 兜底
+    # 结构化错误体：petsite 把它透传成 200，只看长度与兜底文案看不出来
+    err = None
+    if stripped.startswith("{"):
+        try:
+            d = json.loads(stripped)
+            if isinstance(d, dict) and (d.get("error") or d.get("error_type")):
+                err = str(d.get("error_type") or d.get("error"))[:60]
+        except ValueError:
+            pass
+    good = (st == 200 and len(stripped) >= 40 and not fallback and not err)
     return {"ok": True, "value": 1 if good else 0,
-            "detail": "HTTP %d，%d 字符，兜底文案 %s" % (st, len(text), fallback)}
+            "detail": "HTTP %d，%d 字符，兜底文案 %s%s"
+                      % (st, len(text), fallback,
+                         ("，错误体 %s" % err) if err else "")}
 
 
 #: 源服务 → 该服务提供的业务功能探针。**声明式**，由 test_74 校验。

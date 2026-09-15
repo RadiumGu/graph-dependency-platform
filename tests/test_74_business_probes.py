@@ -152,3 +152,45 @@ def test_t74_05_waggle探针必须看回答内容而不是状态码():
     assert "200" not in body.split('"value"')[0] or "兜底" in body or "fallback" in body.lower(), (
         "probe_waggle 似乎只看状态码。委派失败时 HTTP 仍是 200，"
         "必须检查回答内容（是否是兜底文案）。")
+
+def test_t74_11_waggle判据必须拒绝结构化错误体():
+    """200 + 有内容 ≠ 业务正常 —— 实测被判为健康的一个硬错误。
+
+    petsite 把 AgentCore 的错误体原样透传成 HTTP 200：
+
+        {"error": "Agent is already processing a request. ...",
+         "error_type": "ConcurrencyException",
+         "message": "An error occurred during streaming"}
+
+    180 字符、不含任何已知兜底文案，于是旧判据
+    （`st == 200 and len >= 40 and not fallback`）判为 `value=1`。
+
+    这一条尤其危险：`SERVICE_PROBES` 里三个 AgentRuntime 服务把 `probe_waggle`
+    当作**唯一**证据通道，判据有洞就会在合规产物上落下「依赖完好」的假结论。
+    """
+    src = pathlib.Path("chaos/code/runner/business_probes.py").read_text(
+        encoding="utf-8")
+    body = _body_of(src, "def probe_waggle")
+    assert "error_type" in body, (
+        "probe_waggle 没有识别结构化错误体 —— ConcurrencyException 会被判为健康")
+    assert "json.loads" in body, "没有真的解析应答体，只靠子串匹配会漏判"
+    # 空流与 ServiceException 两条兜底也必须在判据里
+    for marker in ("couldn't generate a response", "service is currently busy"):
+        assert marker in body, (
+            "probe_waggle 漏判兜底文案 %r —— petsite 有三条兜底路径，"
+            "只认其中一条会把另两条判为健康。" % marker)
+
+
+def test_t74_12_waggle会话必须每次独立():
+    """固定 SessionId 会与并发调用方互撞，实测 5 连发全部 ConcurrencyException。
+
+    AgentCore 按 `runtimeSessionId` 串行。原实现用常量 `chaos-probe-xxxx…`，
+    于是任意两个并发使用本探针的人共用一个会话、互相顶掉 —— 而那个错误体
+    又恰好被旧判据判为健康，两个缺陷叠起来就是一个静默的假阳性。
+    """
+    src = pathlib.Path("chaos/code/runner/business_probes.py").read_text(
+        encoding="utf-8")
+    body = _body_of(src, "def probe_waggle")
+    assert '"x" * 40' not in body, "SessionId 仍是常量 —— 会与并发调用方互撞"
+    assert "uuid" in body, "SessionId 不是每次调用独立生成"
+    assert "import uuid" in src, "用了 uuid 但没导入 —— 运行时 NameError"
