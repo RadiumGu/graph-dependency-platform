@@ -519,3 +519,35 @@ def test_t73_12_两个cron都要有运行日志():
         assert src.count("_runlog(") <= reports, (
             "看起来是逐分支插的（_runlog 调用数接近 raise Report 数），"
             "应当由包装层统一记账。")
+
+def test_t73_13_stepfn验证器不得在缺环时写回判定():
+    """执行历史是新证据通道，判据仍须三环 —— 缺环时不许写回。
+
+    2026-09-15 实测：3 次 bunny 领养全部触发 StartExecution（StatusCode=OK），
+    而 X-Ray 服务图**永远**没有 StepFunctions 节点 —— petsite 日志原文
+    `Service name doesn't exist in AWSServiceHandlerManifest:
+    serviceName = StepFunctions`。所以这条边只能换通道。
+
+    换通道**不等于**降门槛：仍要基线→故障→回滚三环，且注入生效性与业务退化
+    分开记录。执行归零而业务照常 = 这条边不承重 = inconclusive，不是 confirmed。
+    """
+    src = pathlib.Path("scripts/verify_stepfn_edge.py").read_text(encoding="utf-8")
+    code = "\n".join(ln for ln in src.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    # 尚未实现故障/回滚阶段时，不得存在任何写回调用
+    has_fault = "deny" in code.lower() and "put_role_policy" in code
+    if not has_fault:
+        assert "write_verdict" not in code, (
+            "故障/回滚阶段还没实现，却已经能写回判定 —— "
+            "那会落下一个只有基线的 confirmed")
+    # 归因必须双重过滤，只按时间窗会把别的触发路径算进来
+    assert "_EXEC_NAME_PREFIX" in src and "startswith" in code, (
+        "执行归因没有按名字前缀过滤 —— 只按时间窗会把别的触发路径算进来，"
+        "那正是把 API Gateway 的 1547 次当成状态机流量时犯的错")
+    # 必须归还宠物：4 只 bunny 极易耗光，而耗光的表现与依赖被切断一样
+    assert "_return_pets" in code, (
+        "没有归还宠物 —— 库存只有 4 只 bunny，耗光的表现与依赖被切断完全一样")
+    # 业务退化与注入生效性必须分开
+    assert "inconclusive" in src, (
+        "没有说明「执行归零但业务照常」该判 inconclusive —— "
+        "那种情况写 confirmed 是过度声称")
