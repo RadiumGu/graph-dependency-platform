@@ -481,6 +481,30 @@ def neptune_online() -> bool:
         return False
 
 
+def dr_query_module():
+    """拿到 dr-plan-generator 的查询模块（含 `q_articulation_chokepoints`）。
+
+    为什么要走 `query_catalog.load_module('dr')` 而不是自己改 sys.path：
+        `dr-plan-generator` 目录名带连字符，**不能当包导入**；而它内部写的是
+        `from graph import neptune_client`，所以把该目录塞进 sys.path 会引入一个
+        叫 `graph` 的顶层包 —— 在 Streamlit 进程里这是很容易撞名的污染。
+        `rca/neptune/query_catalog.py` 就是为跨这道边界而存在的桥。
+
+    为什么不把 chokepoint 的 cypher 抄一份到页面里：
+        抄一份之后两边会各自漂移。本仓库已经栽过同形的两次
+        （依赖边清单抄了一份 → `aead7e1` 改成契约驱动；
+        scope 类型映射抄了一份 → `93e3120` 搬回契约）。
+
+    ⚠️ `q_articulation_chokepoints` **没有**注册进 query_catalog 的目录
+        （`qc.get_query()` 会报「未知查询」），所以这里取模块后直接调函数。
+    """
+    nc = _neptune_module()          # 复用它已经建好的 sys.path 与凭据前置
+    if nc is None:
+        raise RuntimeError("Neptune 未配置（NEPTUNE_ENDPOINT 未设置）")
+    from neptune import query_catalog as qc      # noqa: PLC0415
+    return qc.load_module("dr")
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def gquery(cypher: str) -> dict:
     """

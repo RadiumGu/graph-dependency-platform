@@ -294,6 +294,95 @@ else:
             "离线模式下无法算判伪覆盖 —— 这一段需要逐条查边的观测标记属性。"
             "在线时它会回答「那个 0 到底是没测过，还是测不了」。")
 
+# ── 决策承重边：把覆盖目标从「全部边」收敛到「错了会改变结论的边」 ──────────────
+#
+# 为什么要换分母：
+#
+# 「已验证覆盖率 14.5%」这个数字容易被读成「86% 的图没验过，很糟」。但分母里
+# 有一半的边**有直接观测证据**（X-Ray / NFM 看到过真实流量），对它们做故障注入
+# 只是复核观测已经证明的事。而且更要紧的是：**并非每条边错了都会改变一个决策。**
+#
+# 实测过一次错误的收敛方式：先试「能被决策查询触达的边」——
+# `q3_upstream_deps` 逐个服务跑下来触达了**全部 110 条**，占 100%。
+# 那个定义筛不掉任何东西，因为 q3 只是「列出依赖」，列错一项的代价
+# 远低于判错一个单点故障。
+#
+# 所以判据换成**产出结论的查询**：`q_articulation_chokepoints`（割点分析）
+# 给出的 10 个割点，它们的关联边错了，`blocked` 数就错 —— 也就是
+# **爆炸半径直接算错**。再叠加「零独立观测」（图在断言无法靠观测核实的事），
+# 得到的就是真正该攻的清单。
+#
+# ⚠️ 判据只用 `q_articulation_chokepoints`，**不用 `q16_single_point_of_failure`**：
+#    q16 的判据是「只在单个 AZ 且被 >=2 个服务依赖」，它返回的是 EC2 实例，
+#    与依赖边不直接相关（见 tests/test_59_chokepoint_spof.py 的记录）。
+if C.neptune_online() and _labels:
+    st.markdown("---")
+    st.subheader("🎯 该攻哪些边：把覆盖目标收敛到「错了会改变结论」的那些")
+
+    # 割点分析住在 dr-plan-generator 里，目录名带连字符不能当包导入。
+    # `query_catalog.load_module('dr')` 就是为这件事存在的桥 ——
+    # 刻意不把 chokepoint 的 cypher 抄一份到页面里（抄一份就会各自漂移）。
+    _choke_names: list = []
+    try:
+        _dr = C.dr_query_module()
+        _choke_names = [c.get("chokepoint")
+                        for c in (_dr.q_articulation_chokepoints() or [])
+                        if c.get("chokepoint")]
+    except Exception as _exc:                       # noqa: BLE001
+        st.caption(f"割点分析取不到（{type(_exc).__name__}: {_exc}），本段跳过。")
+
+    if _choke_names:
+        _inc = C.gquery(
+            f"MATCH (a)-[r]->(b) WHERE type(r) IN [{_L}] "
+            f"AND (coalesce(a.name,a.arn) IN {_choke_names} "
+            f"OR coalesce(b.name,b.arn) IN {_choke_names}) "
+            "RETURN coalesce(a.name,a.arn) AS 源, type(r) AS 边类型, "
+            "coalesce(b.name,b.arn) AS 目标, "
+            "coalesce(r.verify_status,'untested') AS 判定, "
+            f"({_no_obs}) AS 零观测")
+        _rows = (_inc.get("results") if isinstance(_inc, dict) else _inc) or []
+        _core = [r for r in _rows if r.get("零观测")]
+        _core_conf = [r for r in _core if r.get("判定") == "confirmed"]
+        _core_todo = [r for r in _core if r.get("判定") == "untested"]
+
+        cc = st.columns(4)
+        cc[0].metric("割点数", len(_choke_names))
+        cc[0].caption("失效会阻断下游的节点")
+        cc[1].metric("割点关联边", len(_rows))
+        cc[1].caption(f"占全部 {_dist['全部']} 条的 "
+                      f"{len(_rows) / max(_dist['全部'], 1) * 100:.0f}%")
+        cc[2].metric("承重且零观测", len(_core))
+        cc[2].caption("错了会改变爆炸半径，且观测证明不了")
+        cc[3].metric("其中已确认",
+                     f"{len(_core_conf)}/{len(_core)}" if _core else "—")
+        cc[3].caption(
+            f"{len(_core_conf) / len(_core) * 100:.0f}% 承重覆盖率" if _core else "")
+
+        st.info(
+            f"**这 {len(_core_todo)} 条才是待办队列的实质，不是那 "
+            f"{_dist['零观测']} 条零观测边。** 判据是两道叠加：\n\n"
+            "1. **位于割点关联路径上** —— 割点失效会阻断下游，这些边错了，"
+            "`blocked` 数就错，也就是爆炸半径算错\n"
+            "2. **零独立观测** —— 有观测证据的边，注入只是复核观测已证明的事\n\n"
+            "试过一个更宽的判据并否掉了：「能被决策查询触达」——"
+            "`q3_upstream_deps` 逐服务跑下来触达**全部 "
+            f"{_dist['全部']} 条**，占 100%，筛不掉任何东西。"
+            "因为 q3 只是列依赖，列错一项的代价远低于判错一个单点故障。",
+            icon="🎯")
+
+        if _core_todo:
+            import collections as _c
+            _by_target = _c.Counter(str(r.get("目标")) for r in _core_todo)
+            st.markdown("**按目标排序的待攻清单**（同一目标可一次注入验多条边）：")
+            st.dataframe(
+                [{"目标": t, "承重待测边数": n} for t, n in _by_target.most_common()],
+                width="stretch", hide_index=True)
+            with st.expander(f"逐条展开这 {len(_core_todo)} 条"):
+                st.dataframe(
+                    [{k: v for k, v in r.items() if k != "零观测"}
+                     for r in _core_todo],
+                    width="stretch", hide_index=True)
+
 # ── 已确认的边 ────────────────────────────────────────────────────────────────
 confirmed = [e for e in decided if e.get("status") == "confirmed"]
 st.markdown("---")
