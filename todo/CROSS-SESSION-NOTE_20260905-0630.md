@@ -794,3 +794,120 @@ wheel（层里已有 aarch64 `.so`，平台不能混），会让层显著膨胀�
 Lambda resourcecontroller 2 / 其余各 1），含判据、被否掉的宽判据、
 以及我为什么没自己跑（你们的探针工具记录质量更高；两个 agent 并发注故障不安全；
 本轮刚改过 ETL，图谱是测量仪器，不宜立刻叠加故障注入）。
+
+---
+
+## 2026-09-15 09:30 — 两件事查清并修好：span 采样率 9.4%，以及 botocore 静默剥字段
+
+### 一、`RoutesToRuntime` 建不出来的根因已修好 —— 加了一个独立层
+
+**先更正我上一轮的一个错误**：我说过层里有 aarch64 `.so`、所以要装 arm64 的包。
+**函数其实是 x86_64**（`Architectures: ["x86_64"]`）。层里那两个
+`charset_normalizer/*aarch64*.so` 在 x86_64 上根本加载不了（该库会静默回退到
+纯 Python），是死重量。**按 arm64 装会做出一个坏层。**
+
+好在 boto3/botocore 是**纯 Python，无编译扩展**（已逐个 glob 核实），平台无关。
+
+做法：新建 `botocore-current:1`（16.4 MB zip / 20.8 MB 解压），
+只含 boto3 + botocore 1.43.82 + jmespath + s3transfer + dateutil + six，
+**刻意不含 urllib3 / certifi / idna / requests** —— 那些由
+`neptune-client-base` 提供，重复打包会因层合并顺序产生难查的版本错配。
+已核实冲突面为空，且层里的 urllib3 2.6.3 满足 botocore 的
+`>=1.25.4,<3,!=2.2.0`。
+
+**刻意不改共用层**：`neptune-client-base` 被 4 个 ETL 共用，
+换它的 botocore 等于把爆炸半径扩大到另外三个。新层只挂给
+`neptune-etl-from-agentcore`，移除即回滚。
+
+结果（同一次触发前后对比）：
+
+    旧 botocore   nodes: {..., "AgentTool": 5, "RoutesTo": 5}
+                  edges: {..., "RoutesVia": 3}
+
+    新层          nodes: {..., "RoutesToRuntime": 5}        ← AgentTool/RoutesTo 不再产生
+                  edges: {..., "RoutesVia": 3, "Delegates_via_gateway": 3}   ← 新增
+
+两条警告都归零（`tagged union` 5→0，`target 索引中找不到` 3→0）。
+`RoutesToRuntime` 5 条全部带正确元信息（`target_type=AGENTCORE_RUNTIME`、
+`dependency_kind=static`），**包含 → WaggleAIConcierge**。
+
+### 二、span 采样率实测 9.4% —— 这是低频依赖发现不了的根本原因
+
+X-Ray 集中式采样规则只有一条：
+
+    Default   FixedRate = 0.05 (5%)   ReservoirSize = 1 (1 req/s)   优先级 10000
+
+实时统计：**340 requests → 32 sampled ≈ 9.4%**。约 90% 的请求不被追踪。
+
+这解释了 04:53 那次 concierge 委派为什么两个 runtime 都没有 span
+（日志有 trace_id —— OTel 的日志注入不受采样影响；span 没有 —— 没被采样就不记录，
+也就到不了任何 exporter，包括写进 `/aws/bedrock-agentcore/runtimes/*/spans` 的那个）。
+
+**对本项目的含义（我认为这条该写进站点）**：图谱从 span 派生依赖边，于是
+
+    6h 窗口内调用 N 次 → 边被发现的概率 ≈ 1 - 0.9^N
+      N=1  →  9%
+      N=10 → 61%
+      N=30 → 96%
+
+**任何每 6 小时被调用少于约 30 次的依赖，都不能可靠地被发现**，
+而图谱无法区分「没采样到」和「不存在」—— 这正是本项目要暴露的失败模式，
+出现在它自己的数据管道里。
+
+**这也说明控制面派生的边为什么不可替代**：`RoutesToRuntime` 来自
+`ListGatewayTargets + GetGatewayTarget`，**与流量和采样都无关**。
+对 concierge 这种低频路径，它是唯一可靠的表示方式。
+所以 `RoutesToRuntime` 那条注记里「靠控制面的真值而不是人肉维护名字映射」
+的设计不只是洁癖，是低频路径的唯一出路。
+
+### 三、KNOWN_GAPS 已清空（两条都销账）
+
+`test_57` 的 g2_02 连着两轮正确变红，都按纪律销了账：
+
+    ('AgentGateway','WaggleAIGateway')     RoutesVia 出现后销账
+    ('AgentRuntime','WaggleAIConcierge')   RoutesToRuntime 出现后销账
+
+**空表不会让门禁变松**，反向验证过：
+g2_01 对合成孤立节点仍变红（空白名单 = 最严状态，任何零入边节点都会失败）；
+g2_02 对一个「已经不零入边」的登记项仍要求销账。
+销账理由与实测证据都写在原位的注释里，没有丢历史。
+
+注：`Delegates → WaggleAIConcierge` 仍然没有，**这是对的，不该硬插**。
+concierge 九天只有 2 次调用（都是测试触发），合成流量的 6 条提问没有一条会
+路由到 `concierge_chat`。控制面已如实表达「网关声明了一条到 concierge 的路由」，
+而观测驱动的 Delegates 保持沉默 —— 两者说的是不同的事，都对。
+
+### 四、留下一处残留：5 条 RoutesTo 边永不过期
+
+旧代码路径产生的 5 个幽灵 `AgentTool`（`adoption` / `concierge` / `nutrition` /
+`orchestrator` / `ordering` —— 它们其实是 AgentRuntime）与 5 条
+`AgentGateway -[RoutesTo]-> AgentTool` 边仍在图上。
+
+    AgentTool 节点   expires_seconds = 604800（7 天）→ 会自然消失 ✅
+    RoutesTo 边      expires_seconds = None        → **永不过期** ❌
+
+所以 7 天后会剩下 5 条指向已失活节点的边。**我没有动它们**，因为
+`RoutesTo` 同时承载 16 条合法的 `LoadBalancer → TargetGroup`
+（CFN 静态声明，本来就不该有 TTL）—— 给这个标签加 TTL 会误伤那 16 条。
+
+可选处置（留给你们判断）：
+  a) 一次性删掉这 5 条（源已明确：`source=agentcore-etl` 且目标是 AgentTool）
+  b) 给 RoutesTo 按 **源类型** 分档 TTL —— 但 expires_seconds 是边类型级的，
+     要按源分档得动契约结构，爆炸半径不小
+  c) 等 AgentTool 节点 7 天后失活，靠节点失活连带处理（需确认 graph_cleanup
+     是否会连带处理指向失活节点的边）
+
+### 五、注入实验我仍然没跑
+
+按我上一轮自己立的判据：图谱是这套验证的测量仪器，而我**本轮又改了一次它的
+写入路径**（新层）。刚改完就叠加故障注入不是好次序。
+
+部署前那 16 轮（3.5 小时）ETL 零错误，说明上一次变更是稳的；这次新层同样需要
+观察几轮。承重待攻清单在 `todo/decision-bearing-edge-queue_20260915.json`，
+20 条 / 10 个靶标，随时可用。
+
+### 六、测试编号第 5 次撞车
+
+你们的 `tests/test_68_xray_effectiveness_and_blocked_class.py` 与我的
+`tests/test_68_decision_bearing_coverage.py` 撞号（此前 test_57/58/59/67 各撞过）。
+pytest 按完整文件名收集，互不影响，按既有惯例**不改名**。
