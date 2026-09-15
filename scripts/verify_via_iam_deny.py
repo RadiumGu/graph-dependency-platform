@@ -427,7 +427,8 @@ _PETSITE_URL = os.environ.get(
 _PETID_RE = __import__("re").compile(r'class="ps-petid">Pet #([^<]+)<')
 
 
-def _probe_business(service: str, n: int = 3) -> dict:
+def _probe_business(service: str, n: int = 3,
+                    probe_kwargs: dict | None = None) -> dict:
     """跑**该源服务**登记的全部业务探针。
 
     ## 为什么探针由源服务决定
@@ -449,7 +450,8 @@ def _probe_business(service: str, n: int = 3) -> dict:
     if not probes_for(service):
         return {"ok": False, "no_probe": True, "per_probe": {},
                 "detail": "源服务 %s 未登记业务探针" % service}
-    raw = run_probes(service, n=n, gap=3.0)
+    raw = run_probes(service, n=n, gap=3.0,
+                     probe_kwargs=probe_kwargs)
     per: dict[str, list] = {}
     all_ok = True
     for name, results in raw.items():

@@ -145,11 +145,22 @@ def probe_home() -> dict:
     return {"ok": True, "value": n, "detail": "首页宠物 %d 个" % n}
 
 
-def probe_adopt() -> dict:
+def probe_adopt(pet: dict | None = None) -> dict:
     """领养支付：能否完成一次领养提交。
 
     覆盖 payforadoption、SQSQueue、StepFunction、以及 petsite 侧的
     DynamoDBTable —— 支付链路会写这些。
+
+    ## `pet` 参数：把支付路径与发现路径隔离开
+
+    默认从首页现取宠物。但**首页本身调 petsearch** —— 验证
+    `payforadoption -> Microservice(petsearch)` 这条边时，一旦切断 petsearch，
+    探针会卡在「取不到 petId」这个前置条件上返回 `ok=False`，
+    于是**测不到支付本身是否还能成**，而那正是要验证的东西。
+
+    传入故障**之前**预取好的宠物即可绕开这个耦合：此时探针只问一件事 ——
+    「支付这一步还能不能成」。这不是放宽判据，而是把两条路径分开测：
+    发现路径由 `probe_home` 负责，支付路径由这里负责。
 
     ## 选哪只宠物是这个探针的正确性关键
 
@@ -166,12 +177,15 @@ def probe_adopt() -> dict:
     """
     uid = "%s-adopt" % _UID
     try:
-        st, html = _get("/?userId=%s" % uid)
-        if st != 200:
-            return {"ok": False, "value": None,
-                    "detail": "前置失败：首页 HTTP %d" % st}
-        pets = parse_pets(html)
-        usable = [p for p in pets if p["available"]]
+        if pet is not None:
+            usable, pets = [pet], [pet]
+        else:
+            st, html = _get("/?userId=%s" % uid)
+            if st != 200:
+                return {"ok": False, "value": None,
+                        "detail": "前置失败：首页 HTTP %d" % st}
+            pets = parse_pets(html)
+            usable = [p for p in pets if p["available"]]
         if not usable:
             return {"ok": False, "value": None,
                     "detail": "前置失败：%d 只宠物全部已被领养，无可领养对象"
@@ -281,13 +295,27 @@ def probes_for(service: str) -> tuple:
     return SERVICE_PROBES.get(service, ())
 
 
-def run_probes(service: str, n: int = 3, gap: float = 3.0) -> dict:
-    """跑该服务的全部探针各 n 次，返回 {探针名: [结果…]}。"""
+def run_probes(service: str, n: int = 3, gap: float = 3.0,
+               probe_kwargs: dict | None = None) -> dict:
+    """跑该服务的全部探针各 n 次，返回 {探针名: [结果…]}。
+
+    `probe_kwargs` 形如 `{"adopt": {"pet": {...}}}`，按探针名透传额外参数。
+
+    ## 为什么需要透传
+
+    验证 `payforadoption -> Microservice(petsearch)` 时，`probe_adopt` 默认
+    从首页取宠物，而**首页本身调 petsearch** —— 切断 petsearch 后探针会卡在
+    「取不到 petId」这个前置条件上返回 `ok=False`，于是测不到支付本身。
+    调用方在故障**之前**预取好宠物、经这里传进去，才能把发现路径与支付路径
+    分开测。2026-09-15 第一版给 `probe_adopt` 加了 `pet` 参数却**没接到调用链上**，
+    结果整轮实验的业务通道全是「无有效采样」，白跑一轮。
+    """
+    kw = probe_kwargs or {}
     out: dict[str, list] = {}
     for name, fn in probes_for(service):
         out[name] = []
         for i in range(n):
-            out[name].append(fn())
+            out[name].append(fn(**kw.get(name, {})))
             if i < n - 1:
                 time.sleep(gap)
     return out
