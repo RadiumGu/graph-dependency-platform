@@ -298,6 +298,115 @@ def _irsa_role_for(service: str) -> tuple[str | None, str]:
                   % (service, sorted(aliases), sorted({c[0] for c in cands})))
 
 
+def _lambda_role_for(name: str) -> tuple[str | None, str]:
+    """Lambda 执行角色。现取，不维护映射表。
+
+    2026-09-15 实测：`get-function-configuration` 的 `Role` 就是执行角色，
+    每个函数独立（`neptune-etl-trigger -> NeptuneEtlTriggerRole`）。
+    """
+    r = subprocess.run(
+        ["aws", "lambda", "get-function-configuration",
+         "--function-name", name, "--region", REGION,
+         "--query", "Role", "--output", "text"],
+        capture_output=True, text=True)
+    if r.returncode != 0 or not r.stdout.strip() or r.stdout.strip() == "None":
+        return None, ("取不到 Lambda %s 的执行角色：%s"
+                      % (name, (r.stderr or r.stdout).strip()[:160]))
+    return r.stdout.strip().split("/")[-1], "由 lambda get-function-configuration 现取"
+
+
+def _agentcore_role_for(name: str) -> tuple[str | None, str]:
+    """AgentCore 运行时的执行角色。
+
+    ## 为什么可以用它做 IAM deny 的源（2026-09-15 实测）
+
+    `bedrock-agentcore-control get-agent-runtime` 返回 `roleArn`，而且
+    **每个运行时都有独占角色**：
+
+        WaggleAIOrchestrator -> WaggleAIAgents-RoleWaggleAIOrchestrator...
+        WaggleAINutrition    -> WaggleAIAgents-RoleWaggleAINutrition...
+        WaggleAIAdoption     -> WaggleAIAgents-RoleWaggleAIAdoption...
+
+    独占是本手段的前提 —— 半径纪律要求"恰好一个服务"。
+    共用角色时加 deny 会连带切掉别的运行时，那就超出了被测的那条边。
+    所以这里**逐个核对角色是否被别的运行时共用**，共用就拒绝。
+
+    图谱里的 AgentRuntime 名（`WaggleAIOrchestrator`）与 AWS 的
+    `agentRuntimeName` 一致，不需要过别名表 —— 与 K8s 那一侧不同
+    （那边 `petsearch` / `search-service` 对不上，必须过 service_names）。
+    """
+    r = subprocess.run(
+        ["aws", "bedrock-agentcore-control", "list-agent-runtimes",
+         "--region", REGION,
+         "--query", "agentRuntimes[].[agentRuntimeName,agentRuntimeId]",
+         "--output", "text"],
+        capture_output=True, text=True)
+    if r.returncode != 0:
+        return None, ("list-agent-runtimes 失败：%s"
+                      % (r.stderr or "").strip()[:160])
+    pairs = [ln.split("\t") for ln in r.stdout.strip().splitlines() if "\t" in ln]
+
+    roles: dict[str, list[str]] = {}
+    mine = None
+    for rt_name, rt_id in pairs:
+        g = subprocess.run(
+            ["aws", "bedrock-agentcore-control", "get-agent-runtime",
+             "--agent-runtime-id", rt_id, "--region", REGION,
+             "--query", "roleArn", "--output", "text"],
+            capture_output=True, text=True)
+        arn = g.stdout.strip()
+        if g.returncode != 0 or not arn or arn == "None":
+            continue
+        role = arn.split("/")[-1]
+        roles.setdefault(role, []).append(rt_name)
+        if rt_name == name:
+            mine = role
+
+    if mine is None:
+        return None, ("AgentCore 里找不到运行时 %r。已知: %s"
+                      % (name, sorted(n for n, _ in pairs)))
+    sharers = [n for n in roles.get(mine, []) if n != name]
+    if sharers:
+        return None, ("运行时 %s 的角色 %s 被 %s 共用 —— 拒绝用 IAM deny："
+                      "加 deny 会连带切断它们，半径超出被测的那条边"
+                      % (name, mine, sharers))
+    return mine, "由 bedrock-agentcore-control get-agent-runtime 现取（角色独占）"
+
+
+def _execution_role_for(service: str, src_label: str = "") -> tuple[str | None, str]:
+    """按源类型解析可加 deny 策略的角色。
+
+    ## 为什么要分派而不是只查 K8s（2026-09-15）
+
+    第一版只有 `_irsa_role_for`，它从 K8s ServiceAccount 的注解取角色 ——
+    于是**只有集群内服务能作源**。而 `chaos/code/runner/injectability.py`
+    的第四轴据此把源侧清单限制为 `POD_BACKED_LABELS`，
+    结果 3 条 `Delegates AgentRuntime -> AgentRuntime` 被判为
+    `unreachable_by_any_backend`（目标类型在能力表内，源侧不支持）。
+
+    那不是能力边界，是**解析没实现**。补上之后这些边回到可验状态。
+
+    `src_label` 为空时退回按名字猜：先试 K8s（历史行为），
+    再试 Lambda、AgentCore。**猜的顺序有意如此** —— K8s 那一支
+    有别名表兜底、误命中风险最低。
+    """
+    order = {
+        "Microservice": (_irsa_role_for,),
+        "Pod": (_irsa_role_for,),
+        "Deployment": (_irsa_role_for,),
+        "LambdaFunction": (_lambda_role_for,),
+        "AgentRuntime": (_agentcore_role_for,),
+    }.get(src_label) or (_irsa_role_for, _lambda_role_for, _agentcore_role_for)
+
+    whys = []
+    for fn in order:
+        role, why = fn(service)
+        if role:
+            return role, why
+        whys.append(why)
+    return None, " / ".join(whys)
+
+
 def _deny_document(label: str, target: str, acct: str) -> dict | None:
     m = SEVERANCE_METHODS.get(label)
     if not m:
@@ -598,17 +707,19 @@ def _measure(client: str, server: str, window: int,
 def run_probe(service: str, label: str, target: str,
               observer: str, hold_seconds: int, window: int,
               apply: bool, propagation_budget: int = 300,
-              warmup: int = 210) -> int:
+              warmup: int = 210, src_label: str = "") -> int:
     acct = _account_id()
     if not acct:
         print("✗ 取不到账号 ID —— 中止（ARN 构造不能猜）")
         return 2
 
-    role, how = _irsa_role_for(service)
+    # 按源类型分派：集群内服务走 IRSA，Lambda 走执行角色，
+    # AgentCore 运行时走 get-agent-runtime（2026-09-15 补入）。
+    role, how = _execution_role_for(service, src_label)
     if not role:
         print("✗ %s" % how)
         return 2
-    print("IRSA 角色: %s\n  （%s）" % (role, how))
+    print("可加 deny 的角色: %s\n  （%s）" % (role, how))
 
     doc = _deny_document(label, target, acct)
     if doc is None:

@@ -32,7 +32,17 @@ import pytest
 from paths import PROJECT_ROOT
 
 ROOT = pathlib.Path(PROJECT_ROOT)
-for _p in (ROOT / 'chaos' / 'code' / 'runner',):
+# 导入约定照 `tests/test_47` 的注释（它早就写清了）：
+# **必须以 `runner.xxx` 形式导入** —— 该包内模块用相对 import，
+# 把 `runner/` 本身加进 sys.path 再 `import xxx` 会报
+# 「attempted relative import with no known parent package」。
+#
+# 所以只加包的父目录 `chaos/code`，另加 Layer（graph_contract 等在那里）。
+# 2026-09-15 实测：自插 `chaos/code/runner` 会让 `runner` 优先解析成模块，
+# 连带把 test_47 的 18 个 fixture setup 全打成 error，
+# 而单独跑各文件都是绿的。
+for _p in (ROOT / 'infra' / 'lambda' / 'shared' / 'python',
+           ROOT / 'chaos' / 'code'):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -46,7 +56,7 @@ def test_t68_01_窗口必须按6小时分段():
     而 None 在模块语义里是「测不出生效性」，
     于是一个纯粹的参数越界被读成「X-Ray 看不到这条边」。
     """
-    from xray_metrics import XRAY_MAX_WINDOW_SECONDS, _segments
+    from runner.xray_metrics import XRAY_MAX_WINDOW_SECONDS, _segments
 
     assert XRAY_MAX_WINDOW_SECONDS == 6 * 3600
 
@@ -74,7 +84,7 @@ def test_t68_02_同名双节点必须聚合而不是取第一个():
     在它的 Edges 里找不到目标、返回 None —— 一条**明明测得出**的边
     被误判成测不出，而这正是本模块要消灭的失败模式。
     """
-    from xray_metrics import XRayEdgeMetrics
+    from runner.xray_metrics import XRayEdgeMetrics
 
     services = [
         {'ReferenceId': 1, 'Name': 'trigger', 'Type': 'AWS::Lambda',
@@ -111,7 +121,7 @@ def test_t68_03_同名内部调用边不得被当成依赖():
     它表示「调用进入函数执行」，不是一条依赖。把它算进去会让
     「源到自己」凭空出现流量，从而让一条自环边看起来可测。
     """
-    from xray_metrics import XRayEdgeMetrics
+    from runner.xray_metrics import XRayEdgeMetrics
 
     services = [
         {'ReferenceId': 1, 'Name': 'fn', 'Type': 'AWS::Lambda',
@@ -138,7 +148,7 @@ def test_t68_03_同名内部调用边不得被当成依赖():
 
 def test_t68_04_采集失败必须ok为False():
     """与 DeepFlow 同一约定：采集不到不得伪装成「健康且零流量」。"""
-    from xray_metrics import XRayEdgeMetrics
+    from runner.xray_metrics import XRayEdgeMetrics
 
     class _Boom:
         def get_paginator(self, _n):
@@ -157,7 +167,7 @@ def test_t68_05_零基线不得判生效():
     「已确认注入未生效」而放行到 refuted 判定之外；
     但零流量的真相是**什么都没证明**。
     """
-    from xray_metrics import XRayEdgeMetrics
+    from runner.xray_metrics import XRayEdgeMetrics
 
     class _FakePaginator:
         def paginate(self, **_kw):
@@ -222,7 +232,7 @@ def test_t68_08_覆盖率必须把两类阻断分开报():
 @pytest.mark.neptune
 def test_t68_09_阻断类别取值必须是injectability的判定常量(neptune_rca):
     """类别不得是自由文本 —— 它是给机器读的。"""
-    import injectability as inj
+    from runner import injectability as inj
 
     allowed = {inj.NO_OBSERVER, inj.NEEDS_COMPOUND, inj.PRECONDITION_UNMET,
                inj.UNREACHABLE, inj.INJECTABLE}

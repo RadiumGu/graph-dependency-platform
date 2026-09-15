@@ -108,17 +108,28 @@ REASON_TOKEN_CLASS = {
 
 #: IAM deny 能加 deny 策略的**源**类型。
 #:
-#: 取值依据是**实现真能做到的**，不是理论上有 IAM 角色的：
-#: `scripts/verify_via_iam_deny.py::_irsa_role_for` 只从
-#: **K8s ServiceAccount 的注解**（`eks.amazonaws.com/role-arn`）取角色。
-#: 所以目前只有集群内服务能作源。
+#: 取值依据是**实现真能做到的**，不是理论上有 IAM 角色的。
+#: `scripts/verify_via_iam_deny.py::_execution_role_for` 按源类型分派：
 #:
-#: `LambdaFunction` / `StepFunction` / `AgentRuntime` 理论上都有执行角色，
-#: 但脚本没有解析它们的路径 —— **刻意不登记**。
+#:   Microservice / Pod / Deployment -> _irsa_role_for（K8s SA 的注解）
+#:   LambdaFunction   -> _lambda_role_for（get-function-configuration 的 Role）
+#:   AgentRuntime     -> _agentcore_role_for（get-agent-runtime 的 roleArn）
+#:
+#: 2026-09-15 补入后两支。实测依据：
+#:   · Lambda 每个函数独立角色（neptune-etl-trigger -> NeptuneEtlTriggerRole）
+#:   · AgentCore 每个运行时**独占**角色（WaggleAIOrchestrator ->
+#:     WaggleAIAgents-RoleWaggleAIOrchestrator…），5 个 WaggleAI 运行时
+#:     两两不共用。独占是本手段的前提 —— 半径纪律要求"恰好一个服务"，
+#:     共用角色时加 deny 会连带切掉别的运行时。
+#:     `_agentcore_role_for` 会逐个核对是否共用，共用就拒绝。
+#:
+#: 仍然**不**登记：`StepFunction`（状态机执行角色的解析未实现）、
+#: `SNSTopic`（不是调用主体，发布由发布方的角色鉴权）。
 #: 登记一个做不到的源类型比不登记更糟：判定会说"能打"，
 #: 然后在选靶之后、真要加策略那一刻失败，而此时窗口与人力都花掉了。
-#: 要加它们，先在 `_irsa_role_for` 里补对应的角色解析，再来动这个集合。
-IAM_DENY_SOURCE_LABELS = frozenset(POD_BACKED_LABELS)
+IAM_DENY_SOURCE_LABELS = frozenset(POD_BACKED_LABELS) | {
+    'LambdaFunction', 'AgentRuntime',
+}
 
 _matrix_cache: dict | None = None
 _iam_deny_cache: frozenset | None = None
@@ -132,33 +143,55 @@ def iam_deny_targets() -> frozenset:
     就等着两边漂移。本仓库为这件事付过代价（rca 那份依赖边清单少 Invokes，
     线上漏 16 条边）。
 
-    读不到时返回空集，并**记一条 warning**：
-    静默返回空集会让判定器悄悄退回到「没有第四轴」的旧行为，
-    于是可验的边重新被判成永久不可达 —— 那正是本轮要修的 bug。
+    ## 为什么用 AST 解析而不是 import（2026-09-15 实测）
+
+    第一版 `import verify_via_iam_deny`。它内部有 `from runner import
+    service_names`，需要 `runner` 是**包**（`chaos/code/runner/`）。
+    但本模块经常被当**顶层模块**导入（sys.path 上是 `chaos/code/runner`），
+    此时 `runner` 解析成 `runner.py` 这个模块，它的
+    `from .experiment import ...` 立刻炸：
+
+        ImportError: attempted relative import with no known parent package
+
+    症状很阴：单独跑 `tests/test_74` 或 `tests/test_67` 都绿，
+    **组合跑才红**，取决于哪个测试先污染了 sys.path。
+
+    AST 只读源码、不执行导入，所以不受调用方的 path 布局影响。
+    这也不是新发明的手法 —— `tests/test_73_iam_deny_probe.py` 已经用
+    `ast` 定位这个赋值，并钉着它必须是**模块级赋值**，
+    所以这里解析它的形状是有门禁保护的。
     """
     global _iam_deny_cache
     if _iam_deny_cache is not None:
         return _iam_deny_cache
+    import ast
     import pathlib
-    import sys
-    root = pathlib.Path(__file__).resolve().parents[3]
-    sp = str(root / 'scripts')
-    added = False
-    if sp not in sys.path:
-        sys.path.insert(0, sp)
-        added = True
+    src_path = (pathlib.Path(__file__).resolve().parents[3]
+                / 'scripts' / 'verify_via_iam_deny.py')
     try:
-        import verify_via_iam_deny as _m           # noqa: PLC0415
-        _iam_deny_cache = frozenset(_m.SEVERANCE_METHODS)
+        tree = ast.parse(src_path.read_text(encoding='utf-8'))
+        node = None
+        for n in tree.body:
+            targets = ([n.target] if isinstance(n, ast.AnnAssign)
+                       else getattr(n, 'targets', []))
+            if any(getattr(t, 'id', '') == 'SEVERANCE_METHODS' for t in targets):
+                node = n.value
+                break
+        if node is None or not isinstance(node, ast.Dict):
+            raise ValueError('SEVERANCE_METHODS 不是模块级的 dict 字面量')
+        keys = [k.value for k in node.keys if isinstance(k, ast.Constant)]
+        if not keys:
+            raise ValueError('SEVERANCE_METHODS 里没有字面量键')
+        _iam_deny_cache = frozenset(keys)
     except Exception as exc:                        # noqa: BLE001
+        # 读不到时返回空集，但**必须响一声**：静默返回空集会让判定器
+        # 悄悄退回到「没有第四轴」的旧行为，于是可验的托管服务边
+        # 重新被判成永久不可达 —— 那正是本轮要修的 bug。
         logger.warning(
-            '读不到 scripts/verify_via_iam_deny.py 的 SEVERANCE_METHODS（%r）—— '
-            'IAM deny 轴失效，判定器会退回到只有三轴的旧行为，'
-            '可验的托管服务边会被重新判成永久不可达。', exc)
+            '解析不到 %s 的 SEVERANCE_METHODS（%r）—— IAM deny 轴失效，'
+            '判定器会退回到只有三轴的旧行为，可验的托管服务边会被重新判成'
+            '永久不可达。', src_path, exc)
         _iam_deny_cache = frozenset()
-    finally:
-        if added and sp in sys.path:
-            sys.path.remove(sp)
     return _iam_deny_cache
 
 
