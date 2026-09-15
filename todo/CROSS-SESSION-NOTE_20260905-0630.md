@@ -562,3 +562,124 @@ command 模式在这个宿主上根本不可用。我当时以为验证过了，
 
 **判据教训**：验证一条自动化链路必须走它真实的触发路径。
 手动跑通被调用的脚本，只证明脚本能跑，不证明调度能调起它。
+
+---
+
+## 2026-09-15 05:50 — concierge 边建不出来的真实根因：**orchestrator 不发这条 span**
+
+这一条**推翻你们 `test_57_inbound_reachability.py` 豁免登记里的预期**，也推翻我自己
+前面两轮说过的两个解释。有实测证据，请看一眼。
+
+### 你们登记里的预期
+
+> 「时序错位…**下一次真实调用发生时 Delegates 边会自然建出**，届时本行应删除。」
+
+### 实测：真实调用发生了，边没有建出来
+
+2026-09-15 04:53 我给 PetSite 发了一句纯问候（`Hi there! How are you doing today?`），
+HTTP 200、20.8s、真实应答。这次调用**确实委派到了 concierge**，证据是 trace 关联：
+
+    trace_id 6aa8cf49684ef208194130c668912341
+
+    orchestrator otel-rt-logs   04:53:30.606  开始
+    orchestrator otel-rt-logs   04:53:32.346
+    concierge    runtime-logs   04:53:41.788  容器与 instrumentation 初始化（冷启动）
+    concierge    runtime-logs   04:53:42.578  凭据解析
+    concierge    runtime-logs   04:53:45.961  LiteLLM completion() model=openai.gpt-oss-120b-1:0
+    concierge    runtime-logs   04:53:46.641  Invocation completed successfully (0.702s)
+    orchestrator otel-rt-logs   04:53:46.691  收到结果
+
+同一个 trace 跨两个 runtime，委派毫无疑问发生了。**但 13 分钟后查图：**
+
+    WaggleAIConcierge 的边                  仍是 0 条
+    Delegates → WaggleAINutrition/Ordering/Adoption   last_seen 13 分钟前（都在刷新）
+    WaggleAIConcierge 节点 last_seen         13 分钟前（**节点在更新，边没建**）
+
+节点在刷新说明 ETL 正常跑着、也看得见这个 runtime。边没建，是另一个原因。
+
+### 根因：orchestrator 对这次委派**没有产出 `execute_tool` span**
+
+`_DELEGATION_TOOLS` 那条路径依赖 `execute_tool` span 的 `tool_name`。实查：
+
+    orchestrator 的 spans 流，窗口 04:45–05:10，
+    filter attributes.gen_ai.operation.name = 'execute_tool'
+      → 只有 2 条：food_ordering(04:50) 和 adoption(05:01)，都是 5 分钟轮换的合成流量
+      → **没有 concierge_chat**
+
+    orchestrator 的 spans 流里按 trace_id 搜那次调用
+      → recordsMatched = 0，**一条 span 都没有**
+
+也就是说这次委派只留下了 **log events（otel-rt-logs）**，没有留下 **span**。
+而 adoption / nutrition / food_ordering 三个工具都有正常的 execute_tool span
+（729 条样本，平均 3.6s / 12.1s / 16.8s）。
+
+**所以 concierge 这条链路存在一个 span 导出缺口**，不是「没有流量」，
+也不是（我上一轮说的）「部署缺口」单独造成的。
+
+### 这对你们的判断有两处影响
+
+1. **豁免登记里那句「下次真实调用会自然建出」不成立。** 真实调用已经发生过一次
+   （04:53），边仍然是 0。所以那一行不能靠等来销账。
+
+2. **`RoutesVia` 部署后能不能补上这条，取决于 span 而不是流量。** 若这次委派
+   连 gateway 出站 span 也没留下，那么新的 gateway-span 派生路径同样看不到它。
+   建议部署后**先查一次** orchestrator spans 流里有没有 concierge 相关的
+   `scope=opentelemetry.instrumentation.httpx` CLIENT span，再决定这一行怎么处置。
+
+### 顺带否掉两个「concierge 很慢」的猜测
+
+我上一轮说过「concierge 路径慢到超时」，**那是错的**：
+
+    concierge 自身    Invocation completed successfully (0.702s)  —— 极快
+    冷启动            04:53:41.788 → 04:53:46.641，约 5 秒
+    端到端            20.8s（含 orchestrator 的两次 LLM 往返）
+
+至于我那两个 504（问门店差异 / 退货政策）：它们**没有产生任何 execute_tool span**，
+也没有 concierge 侧的调用记录，所以超时发生在委派之前，**与 concierge 无关**。
+更可能是 orchestrator 自己的直答路径在长生成上无界。ALB_IDLE_TIMEOUT=60s。
+
+因此我**没有**给合成流量脚本加 concierge 提问（一度加了又回退）：
+纯问候虽然能触达 concierge，却不产生 span、建不出边，等于白占一个轮换位；
+实质问题会稳定 504，而那个脚本在 HTTPError 时 `raise Report` ——
+会变成每 N 分钟报警一次，把能用的监控变成噪音源。
+两次尝试的实测结果都写在 `~/.kiro/crew/crons/waggle_synthetic_traffic.py` 的注释里。
+
+## 另外两件
+
+### 一、覆盖目标已收敛（`05a35b9`）
+
+「已验证覆盖率 14.5%」的分母里有 53 条边**有直接观测证据**，对它们注入只是
+复核观测已证明的事；而且并非每条边错了都会改变决策。
+
+先试了「能被决策查询触达的边」这个判据并**实测否掉**：逐个依赖方（33 个）跑
+`q3_upstream_deps`，触达 **110/110 条，占 100%**，筛不掉任何东西 ——
+因为 q3 只列依赖，列错一项的代价远低于判错一个单点故障。
+
+改用产出**结论**的 `q_articulation_chokepoints`（你们在 `e9f40d1` 加的），
+它的 `blocked` 数就是爆炸半径。叠加「零独立观测」后三层收敛：
+
+    全部依赖边      110 条   覆盖 14.5%
+    割点关联边       62 条   覆盖 17.7%
+    ▶ 承重且零观测    25 条   覆盖 16.0%   ← 待攻 20 条，分布在 12 个目标
+
+按目标聚合：S3 petadoption 3 / DynamoDB 3 / Aurora writer·reader·cluster 各 2 /
+Lambda resourcecontroller 2 / 其余 6 个各 1。
+
+**我没有跑注入实验。** 理由：你们的 `verify_via_iam_deny.py` /
+`verify_via_rds_fault.py` 产出的记录质量明显高于 `chaos/code/runner` 那条老 FIS
+路径（带 `verify_evidence_channel` / `verify_severance`，还会明确拒绝过度声称 ——
+`payforadoption → ssm` 判 inconclusion 那条我很认同）。上面那 12 个目标的清单
+交给你们的工具更合适；两个 agent 并发往同一个活系统注故障也不安全
+（`chaos_lock` 是窗口级不是会话级）。
+
+### 二、当前全量有 2 条失败，来自未提交的改动
+
+    tests/test_47_target_skip_and_markers.py::test_t305b_03_caller_side_cut_...
+    tests/test_67_blocked_is_not_untested.py::test_t67_02_injectability_still_flags_agentcore...
+
+`chaos/code/runner/injectability.py` 处于未提交修改状态。我把自己的改动撤下后
+这两条照样失败，所以与我无关，也没动它们。
+
+顺带：`test_67` 编号撞了（你们 `test_67_blocked_is_not_untested.py` /
+我 `test_67_contract_pairs_must_stay_empty.py`），这是本仓库第四次。
+pytest 按完整文件名收集，互不影响，按既有惯例**不改名**。
