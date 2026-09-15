@@ -459,3 +459,106 @@ EventBridge 规则（ETL 的触发节奏）和那个 Lambda LayerVersion（契�
   Microservice→ECRRepository 13 / →SQSQueue 3 / →AgentRuntime 1 /
   AgentTool→Microservice 1）。**反向验证本身也会写错，且表现与「门禁无效」
   完全一样**，区分办法是先独立确认替身的真实计数。
+
+---
+
+## 2026-09-15 05:00 — `verify_degradation` 同一字段两种相反语义（探针侧，留给你们）
+
+先说结论：**你们的探针记录是充分的，判定也是对的**。问题只在
+`verify_degradation` 这一个字段上，而它已经让下游读错了一次。
+
+### 现象
+
+三条 `iam-deny-probe` 判定的 confirmed 边带 `verify_degradation = 0.0`：
+
+    petsite -[PublishesTo]-> ServicesEks2-topicpetadoption   deg=0.0
+    petsite -[PublishesTo]-> ServicesEks2-sqspetadoption     deg=0.0
+    petsite -[DependsOn]->   ServicesEks2-sqspetadoption     deg=0.0
+
+而同一个探针的另一条是 `deg=100.0`：
+
+    petsearch -[AccessesData]-> ServicesEks2-ddbpetadoption  deg=100.0
+
+两条都是 confirmed、都是 `verify_severance = iam-deny`、都是完全切断。
+**同一字段，一个 0.0 一个 100.0，含义相同。**
+
+### 根因
+
+`degradation_pct = round(b_sr - d_sr, 2)`（`verify_via_iam_deny.py:990`）。
+发往 SNS/SQS 的 `PublishesTo` 边**没有成功率通道**，`b_sr` 与 `d_sr` 都取到 0，
+相减得 0.0。所以这三条边的 `0.0` **不是测量值，是从「无数据」算出来的**。
+
+### 已经造成的实际读错
+
+交互探索页用边的粗细编码 `verify_degradation`（1.4–5.0px 线性映射）。
+这三条**完全切断、业务归零**的边被画成 **1.4px，全图最细** —— 看起来最无关紧要。
+提示气泡里也一个字不显示。已在 `49c63ad` 从页面侧兜住（改按
+`verify_severance` 判，满格 5.0px，并刻意不写「退化 0.0%」）。
+
+但页面兜住只是止血。任何别的消费方（RCA agent、DR 规划、影响面查询）
+读到 `confirmed + degradation 0.0` 都会得出「确认了，但没有影响」——
+与事实相反。
+
+### 建议的修法：无成功率通道时**不写**这个字段
+
+不要写 0.0。理由与你们自己在 `verify_dependency_class_reason` 里的做法一致 ——
+那里你们明确拒绝给 hard/soft 分级（「IAM deny 不覆盖延迟/部分失败场景，
+不足以给出分级」）。同一条纪律应用到 degradation 上就是：
+**没有这个通道的测量，就不要产出这个通道的数字。**
+
+真实证据你们已经记全了，够用：
+
+    verify_evidence_channel = xray-edge+business-probe
+    verify_severance        = iam-deny
+    verify_reason           = 完全切断：基线 32 次 → 故障期从服务图消失
+                              → 回滚后 29 次（前后夹住，排除聚合延迟），且业务归零
+
+⚠️ 但要注意一条既有不变量：**「有 confirmed/refuted 就必须有
+verify_degradation」**。写 0.0 恰好是在**形式上**满足它。如果改成不写，
+那条不变量要同步放宽为「必须有 verify_degradation **或** verify_severance」，
+否则守卫会把正确的记录判成违规。
+
+### 这是同一类缺陷的第二次
+
+上一次是 3 条 `Delegates` 边带 `verify_degradation = 100.0`，那个 100 是
+「我们看到它工作了」的占位符（什么都没被打断），已在 `95192b1` 撤出。
+这次是 0.0。共同点：**把一个数写进测量字段，而那个通道其实什么都没测到。**
+一次是编造上界，一次是从空数据算出下界，方向相反、性质相同。
+
+### 顺带：6 个 verify 属性在契约里没有声明
+
+图上现在带着 `verify_severance` / `verify_evidence_channel` /
+`verify_dependency_class` / `verify_dependency_class_reason` /
+`verify_observing_sources` / `verify_confirm_count` / `verify_refute_count`，
+而 `profiles/graph_contract.yaml` 里出现的 verify 名字只有 8 个
+（`verify_blocked_class` / `verify_blocked_reason` / `verify_by` /
+`verify_confidence` / `verify_degradation` / `verify_experiment` /
+`verify_last` / `verify_status`）。
+
+我没动契约 —— 这几个属性设计得都有道理（尤其
+`verify_dependency_class_reason` 那种「明确说明为什么不分级」的字段），
+补声明该由你们按最终形态一次写全，而不是我猜着补。
+
+## 另外：我修好了自己四天前上线就死掉的监控
+
+`graph-coverage-metrics` cron 我当时建成 `mode=command`，**它从来没成功跑过**：
+
+    ❌ No POSIX shell available to run this command cron.
+       Use a script cron or an LLM `message` cron instead.
+
+command 模式在这个宿主上根本不可用。我当时以为验证过了，因为 CloudWatch 里
+出现了两个数据点 —— 但那两个点来自我自己在 shell 里手动跑脚本，与 cron 无关。
+**我验证了脚本，把它当成验证了 cron。**
+
+代价：指标 09-09T07:00 后停发，两个告警配的 `TreatMissingData=breaching`
+于是从 09-10 起持续 ALARM，发到有真实订阅者的 `petsite-ops-alerts` 上，
+**空转报警五天**。告警本身没错 —— breaching 正确检测到了管道死亡；
+错的是没人看，以及我发布时没走真实执行路径。
+
+已改成 script cron（`~/.kiro/crew/crons/graph_coverage.py:run`，新 id `964afa3a`），
+并**通过真实调度路径触发验证**：`last_status: ok` + CloudWatch 落了新数据点。
+成功静默、只在守卫跳闸时通知（低覆盖刻意不报 —— 那是现状不是故障，
+天天报会被静音，届时真回归也一起静音）。
+
+**判据教训**：验证一条自动化链路必须走它真实的触发路径。
+手动跑通被调用的脚本，只证明脚本能跑，不证明调度能调起它。
