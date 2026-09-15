@@ -70,27 +70,91 @@ def test_t67_01_contract_declares_blocked_reason_attr():
 
 
 def test_t67_02_injectability_still_flags_agentcore_as_unreachable():
-    """AgentCore 层必须仍被判为后端不可达 —— 这是那 13 条标注的依据。
+    """AgentCore 层仍被判为不可达 —— 但**理由变了**，而理由比结论重要。
 
-    这条会红的场景：有人给 `fault_catalog.yaml` 加了 AgentCore 动作，
-    或者把 AgentRuntime 误加进 `POD_BACKED_LABELS`。
-    **两种都是好事**，但都要求重新评估那 13 条标注（去掉 blocked_reason 再跑验证），
-    所以必须有人看见。
+    ## 2026-09-15：补了第四轴（IAM deny），结论没变，诊断变精确了
+
+    9-13 另一个会话用 IAM deny 把 `petsearch -> DynamoDBTable` 验成
+    confirmed / 退化 100%（`iam-deny-probe_20260913-155349`）。
+    机制是 **SigV4 授权按每次 API 调用评估，不是按每个连接评估** ——
+    DNS 缓存、连接池、端点 IP 轮换在这一层全部不成立。
+
+    补轴之后我一度以为 3 条 `Delegates AgentRuntime -> AgentRuntime`
+    的标注是错的（目标类型 `AgentRuntime` **确实在**能力表里），
+    清掉过一次。但 `tests/test_47::t305b_03` 立刻抓出第四轴的实现 bug：
+    **它只判目标、没判源**，于是连 `BusinessCapability -> SQSQueue`
+    都被判成可注入。
+
+    IAM deny 的做法是给**调用方的角色**加 deny 内联策略，所以两侧都要判。
+    而源侧清单取**实现真能做到的**：
+    `scripts/verify_via_iam_deny.py::_irsa_role_for` 只从 K8s ServiceAccount
+    的注解取角色，AgentCore 执行角色的解析**没有实现**。
+
+    所以那 3 条已按新理由重新标注（留痕
+    `todo/marked-unreachable-edges_20260915-0526.json`）。
+    新理由自带诊断：`目标在能力表内=True，源有可加策略的角色=False` ——
+    它直接告出下一个人该补什么，而原来那句「无任何后端能打到」不告诉任何事。
     """
     import injectability as inj
 
     for src, dst in (('AgentRuntime', 'AgentTool'),
                      ('AgentRuntime', 'AgentRuntime'),
-                     ('AgentRuntime', 'KnowledgeBase')):
+                     ('AgentRuntime', 'KnowledgeBase'),
+                     ('LambdaFunction', 'NeptuneCluster')):
         verdict, why = inj.injectability(src, dst)
         assert verdict == inj.UNREACHABLE, (
             f'{src} -> {dst} 的可注入性判定变成了 {verdict}（{why}）。\n'
             f'若确实获得了新的注入能力，请：\n'
-            f'  1. 清掉这些边的 verify_blocked_reason\n'
-            f'  2. 把它们放回验证队列\n'
+            f'  1. 用 scripts/reclassify_blocked_edges.py 清掉这些边的标注\n'
+            f'  2. 让它们回到验证队列\n'
             f'  3. 更新本用例\n'
-            f'不要只改本用例 —— 那会让 13 条边永久停在「打不到」而实际已可打。'
+            f'不要只改本用例 —— 那会让这些边永久停在「打不到」而实际已可打。'
         )
+
+
+def test_t67_02b_IAM_deny_轴必须两侧都判():
+    """第四轴只判目标就会把没有 IAM 主体的源也判成可注入。
+
+    实测：第一版只看 `dst_label in iam_deny_targets()`，
+    于是 `BusinessCapability -> SQSQueue`（抽象节点，没有任何 IAM 角色）
+    被判成 injectable。`tests/test_47::t305b_03` 抓到了它。
+    """
+    import injectability as inj
+
+    # 目标在能力表内、但源没有可加策略的角色 —— 必须仍判不可达
+    v, why = inj.injectability('BusinessCapability', 'SQSQueue')
+    assert v == inj.UNREACHABLE, (
+        f'BusinessCapability -> SQSQueue 判成了 {v} —— '
+        f'IAM deny 要给调用方的角色加 deny 策略，'
+        f'而 BusinessCapability 是抽象节点、没有 IAM 主体。')
+    # 理由必须把两侧条件都摊开，否则诊断不出是哪一侧不满足
+    assert '目标在能力表内' in why and '源有可加策略的角色' in why, (
+        f'不可达的理由没有摊开两侧条件，无从诊断: {why}')
+
+
+def test_t67_02c_IAM_deny_能力表必须真的读到():
+    """能力表读不到时 `iam_deny_targets()` 静默返回空集。
+
+    静默退化会让判定器悄悄回到"只有三轴"的旧行为，
+    于是可验的托管服务边重新被判成永久不可达。
+    """
+    import injectability as inj
+
+    targets = inj.iam_deny_targets()
+    assert targets, (
+        'iam_deny_targets() 返回空集 —— '
+        '读不到 scripts/verify_via_iam_deny.py 的 SEVERANCE_METHODS。')
+    for t in ('DynamoDBTable', 'S3Bucket', 'AgentRuntime'):
+        assert t in targets, (
+            f'IAM deny 能力表里缺 {t} —— 它是实测验证过的类型'
+            f'（petsearch -> DynamoDBTable 在 iam-deny-probe_20260913-155349 '
+            f'里拿到 100% 退化）')
+    # 源侧清单不得悄悄扩大到实现做不到的类型
+    assert 'AgentRuntime' not in inj.IAM_DENY_SOURCE_LABELS, (
+        'AgentRuntime 被加进了 IAM deny 的源侧清单，但 '
+        '_irsa_role_for 只解析 K8s ServiceAccount 注解 —— '
+        '要加它先去补 AgentCore 执行角色的解析，否则判定会说能打、'
+        '真要加策略那一刻才失败。')
 
 
 def test_t67_03_pod_backed_labels_do_not_include_managed_runtimes():

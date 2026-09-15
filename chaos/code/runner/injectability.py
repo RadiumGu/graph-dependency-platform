@@ -106,7 +106,60 @@ REASON_TOKEN_CLASS = {
     'chaos-mesh-cannot-target-lambda': UNREACHABLE,
 }
 
+#: IAM deny 能加 deny 策略的**源**类型。
+#:
+#: 取值依据是**实现真能做到的**，不是理论上有 IAM 角色的：
+#: `scripts/verify_via_iam_deny.py::_irsa_role_for` 只从
+#: **K8s ServiceAccount 的注解**（`eks.amazonaws.com/role-arn`）取角色。
+#: 所以目前只有集群内服务能作源。
+#:
+#: `LambdaFunction` / `StepFunction` / `AgentRuntime` 理论上都有执行角色，
+#: 但脚本没有解析它们的路径 —— **刻意不登记**。
+#: 登记一个做不到的源类型比不登记更糟：判定会说"能打"，
+#: 然后在选靶之后、真要加策略那一刻失败，而此时窗口与人力都花掉了。
+#: 要加它们，先在 `_irsa_role_for` 里补对应的角色解析，再来动这个集合。
+IAM_DENY_SOURCE_LABELS = frozenset(POD_BACKED_LABELS)
+
 _matrix_cache: dict | None = None
+_iam_deny_cache: frozenset | None = None
+
+
+def iam_deny_targets() -> frozenset:
+    """IAM deny 能打到的目标类型集合。
+
+    **单一来源**：读 `scripts/verify_via_iam_deny.py` 的 `SEVERANCE_METHODS`。
+    那个脚本是这个手段的实现方，能力边界由它定义 —— 在这里复制一份清单，
+    就等着两边漂移。本仓库为这件事付过代价（rca 那份依赖边清单少 Invokes，
+    线上漏 16 条边）。
+
+    读不到时返回空集，并**记一条 warning**：
+    静默返回空集会让判定器悄悄退回到「没有第四轴」的旧行为，
+    于是可验的边重新被判成永久不可达 —— 那正是本轮要修的 bug。
+    """
+    global _iam_deny_cache
+    if _iam_deny_cache is not None:
+        return _iam_deny_cache
+    import pathlib
+    import sys
+    root = pathlib.Path(__file__).resolve().parents[3]
+    sp = str(root / 'scripts')
+    added = False
+    if sp not in sys.path:
+        sys.path.insert(0, sp)
+        added = True
+    try:
+        import verify_via_iam_deny as _m           # noqa: PLC0415
+        _iam_deny_cache = frozenset(_m.SEVERANCE_METHODS)
+    except Exception as exc:                        # noqa: BLE001
+        logger.warning(
+            '读不到 scripts/verify_via_iam_deny.py 的 SEVERANCE_METHODS（%r）—— '
+            'IAM deny 轴失效，判定器会退回到只有三轴的旧行为，'
+            '可验的托管服务边会被重新判成永久不可达。', exc)
+        _iam_deny_cache = frozenset()
+    finally:
+        if added and sp in sys.path:
+            sys.path.remove(sp)
+    return _iam_deny_cache
 
 
 def _load_catalog() -> dict:
@@ -202,9 +255,45 @@ def injectability(src_label: str, dst_label: str, reason_text: str = '') -> tupl
                 f"目标类型 {dst_label} 无后端可直接打，但源 {src_label} 在集群内，"
                 f"可由 {'/'.join(sorted(cutters))} 在源侧切断出向流量")
 
+    # ── 轴四：IAM deny（2026-09-15 补入）──────────────────────────────
+    #
+    # 前三轴都是**网络层或控制面**的手段，它们对 AWS 托管服务大面积失效
+    # （区域端点多 IP 轮换、S3 是 Gateway 端点、长连接 + DNS 缓存、
+    # FIS API 注入只支持 ec2/kinesis）。
+    #
+    # IAM deny 绕开全部这些障碍，靠的是一条性质：
+    # **SigV4 授权是每次 API 调用评估的，不是每个连接评估的。**
+    # 所以 deny 在下一个请求上立即生效，即使该请求跑在已建立的 keep-alive
+    # 连接上。DNS 缓存、连接池、端点 IP 轮换在这一层全部不成立。
+    #
+    # 实测代价：2026-09-09 我把 13 条边标成 `unreachable_by_any_backend`，
+    # 而 9-13 另一个会话用 IAM deny 把 `petsearch -> DynamoDBTable`
+    # 验成了 confirmed / 退化 100%（实验 `iam-deny-probe_20260913-155349`）。
+    #
+    # ## 这一轴**两侧都要判**（第一版只判目标，被 test_47 抓到）
+    #
+    # 第一版只看 `dst_label in iam_deny_targets()`，于是
+    # `BusinessCapability -> SQSQueue` 也被判成可注入。**错了** ——
+    # IAM deny 的做法是给**调用方的角色**加 deny 内联策略，
+    # 而 `BusinessCapability` 是抽象节点、没有 IAM 主体，无从加。
+    # 这与 `POD_BACKED_LABELS` 那一轴检查源是同一个道理，我漏了。
+    #
+    # 源侧清单取**实现真能做到的**，不是理论上有角色的：
+    # `scripts/verify_via_iam_deny.py::_irsa_role_for` 只从
+    # **K8s ServiceAccount 的注解**取角色，所以目前只支持集群内服务作源。
+    # 登记一个做不到的源类型比不登记更糟 —— 判定会说"能打"，
+    # 然后在选靶后、真要加策略那一刻失败。
+    if src_label in IAM_DENY_SOURCE_LABELS and dst_label in iam_deny_targets():
+        return INJECTABLE, (
+            f'目标类型 {dst_label} 可由 IAM deny 切断（SigV4 授权按每次调用'
+            f'评估，不受 DNS 缓存与长连接影响），且源 {src_label} 有可加'
+            f'deny 策略的 IRSA 角色，见 scripts/verify_via_iam_deny.py')
+
     return UNREACHABLE, (
-        f'无任何后端能打到目标类型 {dst_label}，且源 {src_label} 不在集群内、'
-        f'无法在源侧切断')
+        f'无任何后端能打到目标类型 {dst_label}，源 {src_label} 不在集群内、'
+        f'无法在源侧切断，也不满足 IAM deny 的两侧条件'
+        f'（目标在能力表内={dst_label in iam_deny_targets()}，'
+        f'源有可加策略的角色={src_label in IAM_DENY_SOURCE_LABELS}）')
 
 
 def should_skip_target(src_label: str, dst_label: str, reason_text: str = '') -> tuple[bool, str]:
