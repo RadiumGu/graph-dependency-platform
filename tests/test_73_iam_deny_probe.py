@@ -231,6 +231,50 @@ def test_t73_07_完全切断必须被前后夹住才算生效():
     assert "不写 confirmed" in why, why
 
 
+def test_t73_10_cron侧必须真的读得到互锁():
+    """互锁两侧都要能用：实验器置位，cron 读得到并跳过。
+
+    ## 实测依据：这段判据此前从未生效过
+
+    2026-09-15：cron 里是裸 `import chaos_lock`，**没有设置 `sys.path`**。
+    而 cron 运行器用 `spec_from_file_location` 加载脚本，那种方式不会把脚本
+    所在目录加进 `sys.path` —— 导入必然 ImportError，然后被
+    `except Exception` 静默吞掉，于是实验期照常跑并按设计报警。
+
+    **两侧都坏**：两个新实验器从没置位（t73_09 管这一侧），
+    cron 则从来读不到（本条管这一侧）。合起来解释了本轮全部归因不明的告警：
+    两轮 Service 黑洞实验共产出 4 条假警报。
+
+    ## 判据
+
+    1. cron 必须显式把自身目录加进 `sys.path` —— 不能依赖执行环境凑巧正确
+    2. 读不到互锁时**必须留痕**。原注释写着「宁可多报也不要静默」，
+       而代码恰恰是静默的：既不跳过也不说自己读不到。
+       静默失效的机制等于不存在的机制。
+    """
+    cron = pathlib.Path(
+        "~/.kiro/crew/crons/adoption_synthetic_traffic.py").expanduser()
+    if not cron.exists():
+        pytest.skip("合成流量 cron 不在此环境")
+    src = cron.read_text(encoding="utf-8")
+
+    assert "import chaos_lock" in src, "cron 没有检查实验期互锁"
+    # 导入前必须自己补路径
+    i = src.index("import chaos_lock")
+    head = src[max(0, i - 600):i]
+    assert "sys.path" in head, (
+        "cron 在 import chaos_lock 之前没有设置 sys.path —— "
+        "cron 运行器用 spec_from_file_location 加载脚本，"
+        "那种方式不会把脚本目录加进 sys.path，导入必然失败。")
+    # 读不到必须留痕，不能静默
+    tail = src[i:i + 900]
+    assert ("interlock-unreadable" in tail or "WARN" in tail), (
+        "读不到互锁时没有留痕 —— 静默失效的机制等于不存在的机制。"
+        "本项目正是因此让互锁在两侧都失效了很久而无人发现。")
+    assert "SKIP interlock" in src, (
+        "跳过时没有写运行日志 —— 无法区分「因互锁跳过」与「根本没跑」。")
+
+
 def test_t73_09_每个注入实验器都必须置位实验期互锁():
     """注入故障的脚本必须置位互锁，且只能有一份互锁实现。
 
