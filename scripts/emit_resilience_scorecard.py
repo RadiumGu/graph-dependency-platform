@@ -54,7 +54,6 @@ from __future__ import annotations
 
 import argparse
 import datetime
-import glob
 import json
 import os
 import pathlib
@@ -67,104 +66,189 @@ for _p in (ROOT / 'chaos' / 'code', ROOT / 'rca', ROOT):
 
 NAMESPACE = 'GraphDependency/Resilience'
 
-#: 演练记录的来源：我们自己的实验留痕，不另建 DynamoDB 表。
+#: 演练记录的**唯一来源是图谱**（2026-09-15 改）。
 #:
-#: 工作坊用 DynamoDB 是因为它的闭环由 EventBridge 串联、各阶段分别写表。
-#: 我们的实验是单进程跑完并落 JSON 留痕，再引入一张表只会多一处
-#: 需要同步的真相来源 —— 本仓库已经因为「同类清单各处一份」踩过坑。
-_DRILL_GLOBS = (
-    'todo/chaos-external-edge-run_*.json',
-)
+#: 第一版读 `todo/chaos-external-edge-run_*.json`，也就是某一轮实验的留痕文件。
+#: 后果是偏悲观得离谱：那次成功的 `iam-deny-probe_20260913-155349`
+#: （退化 100%）根本不在那个 glob 里，于是评分卡报「8 条演练全部证据不可信」。
+#:
+#: 图谱是唯一权威来源 —— 所有探针（chaos runner / iam-deny / rds-fault /
+#: active-probe）都往边上写 `verify_*`。读留痕文件等于只看见其中一支。
+_GRAPH_IS_SOURCE = True
+
+#: ⚠️ **不要**拿 `verify_degradation` 当恢复信号。
+#:
+#: 跨会话台账（2026-09-15 05:00）记下它有**两种相反语义**：
+#: `degradation_pct = 基线成功率 - 故障期成功率`，而发往 SNS/SQS 的
+#: `PublishesTo` 边没有成功率通道，两侧都取到 0，相减得 `0.0` ——
+#: 那不是测量值，是从空数据算出的下界。
+#:
+#: 这已经造成过一次实际读错：交互探索页按 deg 编码边粗细，于是三条
+#: **完全切断、业务归零**的 iam-deny 边被画成全图最细。
+#: 拿它当"退化 0 = 已恢复"，就是把同一个读错搬进评分卡。
+#:
+#: 根因已在 `chaos/code/runner/edge_verification.py::write_verdict` 修掉
+#: （无成功率通道时不写该字段），但**存量数据里还有 0.0**，
+#: 所以这里必须按 `verify_evidence_channel` 判断它可不可信。
+_DEG_UNTRUSTWORTHY_CHANNELS = {'none', 'unknown', ''}
 
 
 def _load_drills() -> list[dict]:
-    out = []
-    for pat in _DRILL_GLOBS:
-        for f in sorted(glob.glob(str(ROOT / pat))):
-            try:
-                data = json.loads(pathlib.Path(f).read_text(encoding='utf-8'))
-            except Exception:                                  # noqa: BLE001
-                continue
-            for rec in (data if isinstance(data, list) else [data]):
-                if isinstance(rec, dict):
-                    out.append({**rec, '_source': os.path.basename(f)})
-    return out
+    """从图谱读所有有判定的依赖边。
+
+    图谱是唯一权威来源：chaos runner / iam-deny / rds-fault / active-probe
+    四支探针都往边上写 `verify_*`。读某一支的留痕文件只能看见其中一部分。
+    """
+    import os
+    os.environ.setdefault(
+        'NEPTUNE_ENDPOINT',
+        'petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com')
+    os.environ.setdefault('REGION', 'ap-northeast-1')
+    from neptune import neptune_client as nc
+
+    import yaml
+    gc = yaml.safe_load((ROOT / 'profiles' / 'graph_contract.yaml')
+                        .read_text(encoding='utf-8'))
+    labels = sorted(k for k, v in (gc.get('edge_types') or {}).items()
+                    if isinstance(v, dict) and v.get('dependency'))
+    return nc.results(f"""
+MATCH (a)-[r:{'|'.join(labels)}]->(b)
+WHERE r.verify_status IS NOT NULL AND r.verify_status <> 'untested'
+RETURN type(r) AS edge, a.name AS src, b.name AS dst,
+       r.verify_status AS verify_status,
+       r.verify_degradation AS degradation,
+       r.verify_evidence_channel AS channel,
+       r.verify_severance AS severance,
+       r.verify_injection_confirmed AS injection_confirmed,
+       r.verify_experiment AS experiment,
+       r.verify_dependency_class AS dep_class
+""")
 
 
 def classify_drill(rec: dict) -> tuple[str, str]:
-    """一条演练记录的评分卡归类。返回 (类别, 理由)。
+    """一条判定的评分卡归类。返回 (类别, 理由)。
 
     类别:
-        valid_recovered    注入生效、信号可信、系统恢复 —— 计入分子与分母
-        valid_not_recovered 注入生效、信号可信、未恢复 —— 只计入分母
-        inconclusive       证据不足 —— **两边都不计**
+        load_bearing    证据可信、依赖承重（切断它消费方受损）
+        not_load_bearing 证据可信、依赖不承重（refuted / soft）
+        inconclusive    证据不足 —— **两边都不计**
+
+    ## ⚠️ 这里**不**算"恢复率"，理由是概念性的
+
+    第一版想照 AWS 工作坊算 `DrillRecoveryRate`：把 `confirmed` 且退化低的
+    边算成"调用方吸收了故障 = 恢复"。**那是错的，两层错。**
+
+    **第一层**：`confirmed` 在本项目的定义就是「切断这条依赖导致消费方
+    可测量地受损」。所以每一条 confirmed 本身就意味着**故障传导了**、
+    没有被吸收。被吸收的边会判成 `soft` 或 inconclusive，不会是 confirmed。
+    拿 confirmed 去算恢复率，等于把"依赖承重"读成"系统恢复"。
+
+    **第二层**：即使想用退化值区分，`verify_degradation` 也担不起。
+    实测三条 iam-deny 边 `deg=0.0` 而 `verify_reason` 明写
+    **「完全切断…且业务归零（adopt 1 → 0）」** ——
+    它们的 `evidence_channel='xray-edge+business-probe'`，
+    退化字段量的是 SQL/成功率通道，而业务证据在另一条通道上。
+    第一版把这三条判成"调用方吸收了故障"，**正是跨会话台账警告过的那个读错**
+    （交互页曾按 deg 把这三条完全切断的边画成全图最细）。
+
+    **结论**：图谱存的是**依赖承重判定**，不是**恢复观测**。
+    恢复率需要 `steady_state_after` 那一段的观测数据，而图谱不存它。
+    所以本评分卡报「依赖承重率」与「证据质量」，
+    并明确说明恢复率**不可从图谱计算** —— 而不是算一个看起来像的数字。
     """
-    # ── 门禁一：注入是否确实生效 ──────────────────────────────────
-    eff = rec.get('injection_confirmed')
-    if eff is not True:
-        why = rec.get('injection_confirmed_why') or rec.get('reason') or ''
-        return 'inconclusive', (
-            f'注入生效性 = {eff!r}（{why[:120]}）—— '
-            f'没有打断就没有验证。这类记录进分母会把「没做成的实验」'
-            f'算成「系统没恢复」，两者的处置动作完全不同。')
+    status = str(rec.get('verify_status') or '')
+    exp = str(rec.get('experiment') or '')
+    sev = str(rec.get('severance') or '')
+    chan = str(rec.get('channel') or '')
+    inj = str(rec.get('injection_confirmed') or '')
 
-    # ── 门禁二：观测方信号是否被混淆 ──────────────────────────────
-    # 复合模式删过 Pod，观测方吞吐必然塌陷 —— 该信号没有判别力。
-    if rec.get('pods_deleted') or rec.get('verdict') == 'observation_only':
+    # ── 门禁一：注入生效性 ────────────────────────────────────────────
+    #
+    # `confirmed` 已**隐含**注入生效：判定链的 `classify_intervention` 在写
+    # confirmed 之前就要求 `injection_confirmed is True`
+    # （graph_confidence.py，2026-08-31 加入）。所以不必再单独查。
+    #
+    # `inconclusive` 恰恰是那道门禁挡下来的结果。
+    if status == 'inconclusive':
         return 'inconclusive', (
-            '复合手法删过 Pod：观测方吞吐必然塌陷，'
-            '分不清「连不上目标」与「Pod 在重启」。'
-            '需要对照臂（同样删 Pod 但不切断）才能判定。')
+            f'判定为 inconclusive（{exp[:40]}）—— 判定链的注入生效门禁没放行。'
+            f'进任何分母都会把「实验没做成」算成一种系统属性，'
+            f'而两者的下一步完全相反：前者修实验方法，后者修系统。')
+    if inj == 'False':
+        return 'inconclusive', '注入已确认未生效 —— 没有打断就没有验证'
 
-    # ── 门禁三：基线窗与注入窗是否等长 ────────────────────────────
-    w = rec.get('observer_window_seconds')
-    if w is None:
+    # ── 门禁二：证据锚点必须存在 ──────────────────────────────────────
+    #
+    # 跨会话台账建议的不变量：必须有 `verify_degradation` **或**
+    # `verify_severance`。两个都没有，无从判断这个判定凭什么下的。
+    deg = rec.get('degradation')
+    has_sev = bool(sev) and sev != 'unspecified'
+    if deg is None and not has_sev:
         return 'inconclusive', (
-            '记录没有 observer_window_seconds —— '
-            '无法确认基线窗与注入窗等长。不等长时计数不可比，'
-            '这个坑本项目踩过两次。')
+            f'既无 verify_degradation 也无 verify_severance（{exp[:40]}）—— '
+            f'无从判断这个判定凭什么下的结论。')
 
-    # ── 恢复判定 ─────────────────────────────────────────────────
-    # 用既有的 verdict：confirmed 表示干预确实传导到了观测方，
-    # 也就是说这条依赖是真的、且系统**没有**吸收掉故障。
-    verdict = str(rec.get('verdict') or '')
-    deg = rec.get('observer_degradation_pct')
-    if verdict == 'confirmed':
-        return 'valid_not_recovered', (
-            f'注入生效且观测方退化 {deg}% —— 故障传导到了调用方，'
-            f'说明这条路径上没有有效的降级保护')
-    if verdict in ('inconclusive', ''):
-        return 'inconclusive', f'判定为 {verdict or "无"}，不计入'
-    return 'valid_recovered', (
-        f'注入生效（已确认打断）但观测方退化 {deg}% —— '
-        f'调用方吸收了故障')
+    if status == 'refuted':
+        return 'not_load_bearing', (
+            f'refuted —— 图谱曾声称这条依赖存在，干预证明不成立（{exp[:40]}）')
+    if status != 'confirmed':
+        return 'inconclusive', f'未识别的 verify_status={status!r}'
+
+    # ── confirmed：依赖承重。用 dependency_class 区分强度 ──────────────
+    dc = str(rec.get('dep_class') or 'unclassified')
+    if dc == 'soft':
+        return 'not_load_bearing', (
+            f'confirmed 但强度分级为 soft —— 边真实存在，'
+            f'打断它不影响调用方（{exp[:40]}）')
+    return 'load_bearing', (
+        f'confirmed —— 切断后消费方受损（手段 {sev or "未声明"}，'
+        f'通道 {chan or "未声明"}，强度 {dc}）')
 
 
 def scorecard() -> dict:
     drills = _load_drills()
-    buckets: dict[str, list] = {'valid_recovered': [],
-                                'valid_not_recovered': [],
+    buckets: dict[str, list] = {'load_bearing': [],
+                                'not_load_bearing': [],
                                 'inconclusive': []}
+    methods: dict[str, int] = {}
     for rec in drills:
         cat, why = classify_drill(rec)
-        buckets[cat].append({'edge': rec.get('edge'), 'why': why,
-                             'source': rec.get('_source')})
+        buckets[cat].append({
+            'edge': f"{rec.get('edge')} {rec.get('src')} -> {rec.get('dst')}",
+            'why': why, 'exp': rec.get('experiment')})
+        if cat != 'inconclusive':
+            m = str(rec.get('severance') or 'unspecified')
+            methods[m] = methods.get(m, 0) + 1
 
-    scored = len(buckets['valid_recovered']) + len(buckets['valid_not_recovered'])
+    scored = len(buckets['load_bearing']) + len(buckets['not_load_bearing'])
     return {
-        'drills_total': len(drills),
-        'drills_scored': scored,
-        'drills_inconclusive': len(buckets['inconclusive']),
-        # 分母刻意只用**证据可信**的那些。掺进 inconclusive 会让
-        # 「没做成的实验」看起来像「系统没恢复」，而两者的处置完全不同：
-        # 前者要修实验方法，后者要修系统。
-        'recovery_rate_pct': (
-            round(len(buckets['valid_recovered']) / scored * 100, 2)
+        'verdicts_total': len(drills),
+        'verdicts_scored': scored,
+        'verdicts_inconclusive': len(buckets['inconclusive']),
+        # 依赖承重率：证据可信的判定里，有多少条依赖被证明是承重的。
+        # 这是图谱能诚实支撑的口径 —— 它答的是 DORA Art. 8(4) /
+        # SYSC 15A.4.1R 关心的「哪些依赖是关键的」。
+        'load_bearing_rate_pct': (
+            round(len(buckets['load_bearing']) / scored * 100, 2)
             if scored else None),
-        # 这个数掉下去比恢复率掉下去更值得警觉：它意味着
-        # 我们的实验方法本身在退化，产出的都是不可用的证据。
+        # 这个数掉下去比承重率变化更值得警觉：它意味着实验方法本身在退化，
+        # 产出的都是不可用的证据。
         'evidence_quality_pct': (
             round(scored / len(drills) * 100, 2) if drills else None),
+        # ⚠️ **恢复率不在这里**，而且不是漏了。
+        #
+        # 图谱存的是**依赖承重判定**，不是**恢复观测**。
+        # `confirmed` 的定义就是「切断它导致消费方受损」= 故障传导了，
+        # 拿它算恢复率等于把「依赖承重」读成「系统恢复」。
+        # 恢复率需要 `steady_state_after` 那一段的观测，图谱不存它。
+        'recovery_rate_pct': None,
+        'recovery_rate_note': (
+            '不可从图谱计算：图谱存依赖承重判定，不存恢复观测。'
+            'confirmed 本身就意味着故障传导到了消费方。'
+            '要算恢复率需把 steady_state_after 的观测也落盘。'),
+        # 切断手段分布：不同手段证明的范围不同（IAM deny 只证明依赖承重，
+        # 不覆盖延迟劣化与部分失败），合规披露要据此说明证据的适用边界。
+        'severance_methods': dict(sorted(methods.items(), key=lambda x: -x[1])),
         'buckets': buckets,
     }
 
@@ -176,9 +260,12 @@ def main() -> int:
 
     sc = scorecard()
     print('=== 韧性评分卡（判据：我们的注入生效性门禁）===')
-    for k in ('drills_total', 'drills_scored', 'drills_inconclusive',
-              'recovery_rate_pct', 'evidence_quality_pct'):
-        print(f'  {k:<24} {sc[k]}')
+    for k in ('verdicts_total', 'verdicts_scored', 'verdicts_inconclusive',
+              'load_bearing_rate_pct', 'evidence_quality_pct'):
+        print(f'  {k:<26} {sc[k]}')
+    print(f"  {'severance_methods':<26} {sc['severance_methods']}")
+    print(f"  {'recovery_rate_pct':<26} {sc['recovery_rate_pct']}"
+          f"  ← {sc['recovery_rate_note']}")
     print()
     for cat, items in sc['buckets'].items():
         if not items:
@@ -190,23 +277,23 @@ def main() -> int:
             print(f"      {it['why'][:150]}")
     print()
 
-    if sc['recovery_rate_pct'] is None:
-        print('⚠️  没有任何证据可信的演练记录 —— 恢复率无从计算。')
-        print('   这不是「恢复率 0%」：0% 表示试了都没恢复，')
+    if sc['load_bearing_rate_pct'] is None:
+        print('⚠️  没有任何证据可信的判定 —— 承重率无从计算。')
+        print('   这不是「承重率 0%」：0% 表示验了都不承重，')
         print('   而现在是**一次都没有拿到可信证据**。两者的下一步完全不同。')
 
     data = [
-        {'MetricName': 'DrillsScored', 'Value': sc['drills_scored'],
+        {'MetricName': 'VerdictsScored', 'Value': sc['verdicts_scored'],
          'Unit': 'Count'},
-        {'MetricName': 'DrillsInconclusive', 'Value': sc['drills_inconclusive'],
-         'Unit': 'Count'},
+        {'MetricName': 'VerdictsInconclusive',
+         'Value': sc['verdicts_inconclusive'], 'Unit': 'Count'},
     ]
     if sc['evidence_quality_pct'] is not None:
         data.append({'MetricName': 'EvidenceQualityPct',
                      'Value': sc['evidence_quality_pct'], 'Unit': 'Percent'})
-    if sc['recovery_rate_pct'] is not None:
-        data.append({'MetricName': 'DrillRecoveryRate',
-                     'Value': sc['recovery_rate_pct'], 'Unit': 'Percent'})
+    if sc['load_bearing_rate_pct'] is not None:
+        data.append({'MetricName': 'LoadBearingRate',
+                     'Value': sc['load_bearing_rate_pct'], 'Unit': 'Percent'})
 
     if args.dry_run:
         print(f'[dry-run] 本会发 {len(data)} 个指标到 {NAMESPACE}')

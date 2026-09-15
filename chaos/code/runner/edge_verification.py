@@ -341,6 +341,40 @@ def write_verdict(v: dict) -> bool:
     # 未声明时写 'unspecified' 而不是留空：属性缺失与「没说」在查询上无法区分，
     # 这与节点过期那次踩的是同一个坑。
     sev = str(v.get('severance') or 'unspecified').replace("'", "")[:40]
+
+    # ── verify_degradation：无成功率通道时**不写** ────────────────────────
+    #
+    # 2026-09-15 跨会话台账记下一个已造成实际读错的缺陷：
+    # `degradation_pct = 基线成功率 - 故障期成功率`。而发往 SNS/SQS 的
+    # `PublishesTo` 边**没有成功率通道**，两侧都取到 0，相减得 `0.0` ——
+    # **那不是测量值**，是从空数据算出来的下界。
+    #
+    # 后果不是理论上的：交互探索页按 deg 编码边粗细，于是三条
+    # **完全切断、业务归零**的 iam-deny 边被画成全图最细
+    # （已在 49c63ad 从页面侧兜住，但根因在这里）。
+    # 而同一支探针的 `petsearch -> ddb` 是 100.0 —— 两者都是完全切断，
+    # 含义相同，数字相反。
+    #
+    # 同类缺陷这是第二次：上次是 Delegates 边的 100.0 占位符（95192b1 撤出）。
+    # 一次编造上界、一次从空数据算下界，方向相反、性质相同 ——
+    # **都是在没有测量的地方给出了一个看起来是测量的数字。**
+    #
+    # 修法与本仓库既有纪律一致（`dependency_class_reason` 那条：
+    # 不足以分级就不分级）：拿不到就不写，让查询能区分
+    # 「测到 0」与「没有这个通道」。
+    #
+    # 不变量随之放宽为「必须有 verify_degradation **或** verify_severance」——
+    # 后者说明用了什么手段切断，是这类边唯一可靠的证据锚点。
+    _chan = str(v.get('evidence_channel') or '')
+    _deg = v.get('degradation_pct')
+    _write_deg = _chan != 'none' and _deg is not None
+    _deg_prop = (".property('verify_degradation', %s)" % _deg) if _write_deg else ''
+    if not _write_deg:
+        logger.info(
+            '边 %s 不写 verify_degradation：evidence_channel=%r —— '
+            '没有成功率通道时那个数字是从空数据算出来的，不是测量值。'
+            '证据锚点用 verify_severance=%r。',
+            v.get('edge_id'), _chan, sev)
     q = (
         "g.E('%s')"
         ".property('verify_status', '%s')"
@@ -348,20 +382,26 @@ def write_verdict(v: dict) -> bool:
         ".property('verify_last', %d)"
         ".property('verify_by', '%s')"
         ".property('verify_experiment', '%s')"
-        ".property('verify_degradation', %s)"
+        "%s"
         ".property('verify_reason', '%s')"
         ".property('verify_confirm_count', %d)"
         ".property('verify_refute_count', %d)"
         ".property('verify_evidence_channel', '%s')"
         ".property('verify_severance', '%s')"
+        ".property('verify_injection_confirmed', '%s')"
         ".property('verify_dependency_class', '%s')"
         ".property('verify_dependency_class_reason', '%s')"
         ".property('verify_observing_sources', %d)"
         % (v['edge_id'], v['status'], v['confidence'], v['verified_at'],
            v.get('verifier') or VERIFIER, v['experiment_id'],
-           v['degradation_pct'], esc,
+           _deg_prop, esc,
            v['confirm_count'], v['refute_count'],
            v.get('evidence_channel', 'unknown'), sev,
+           # 三态落盘成字符串：'True' / 'False' / 'None'。
+           # 不用布尔是因为 None 与 False 在图上要能区分 ——
+           # 「注入没生效」与「生效性未知」是两个不同的结论，
+           # 而本项目已经为把这两者混同付过两次代价。
+           str(v.get('injection_confirmed')),
            v.get('dependency_class') or 'unclassified', dep_esc,
            int(v.get('observing_sources') or 0))
     )
