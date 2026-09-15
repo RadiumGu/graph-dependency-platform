@@ -947,7 +947,7 @@ def _edge_ids(service: str, target: str) -> tuple[list[dict], str]:
 
 def _persist_verdict(service: str, label: str, target: str,
                      verdict: str, why: str, base: dict, during: dict,
-                     record_id: str) -> str:
+                     record_id: str, severance: str = "iam-deny") -> str:
     """把判定写回图谱边属性。只有 confirmed / inconclusive 才写。
 
     `observation_only` **刻意不写** —— 它的含义是「采集到的信号不足以判定」，
@@ -993,8 +993,15 @@ def _persist_verdict(service: str, label: str, target: str,
             "verified_at": int(time.time()),
             # 双通道：被测边的 X-Ray 统计 + 源服务的业务功能探针
             "evidence_channel": "xray-edge+business-probe",
-            # 切断手段必须落在边上，报告据此披露证据的适用范围
-            "severance": "iam-deny",
+            # ⚠️ 切断手段必须由调用方传入，**不能硬编码**。
+            #
+            # 2026-09-14 踩到：RDS 故障注入实验器复用了这个函数，于是把
+            # `severance=iam-deny` 写到了一条实际用 FIS 重启验证的边上。
+            # 这是在合规产物上**错标证据来源** —— 两种手段的证据范围差得很远：
+            # IAM deny 期间调用一直失败（覆盖「依赖不可用」），
+            # 而实例重启只是瞬时中断（**明确不覆盖「数据库彻底不可用」**）。
+            # 报告按 severance 披露适用范围，标错就是虚假陈述。
+            "severance": severance,
             "verifier": "iam-deny-probe",
             "experiment_id": record_id,
             "confirm_count": 1 if verdict == "confirmed" else 0,
@@ -1008,8 +1015,8 @@ def _persist_verdict(service: str, label: str, target: str,
         (done if ok else failed).append("%s(%s)" % (eid[:12], elabel))
     if failed:
         return "部分写回失败：成功 %s / 失败 %s" % (done or "无", failed)
-    return "已写回 %d 条边 %s（%s，severance=iam-deny）" % (
-        len(done), done, how)
+    return "已写回 %d 条边 %s（%s，severance=%s）" % (
+        len(done), done, how, severance)
 
 
 def _verdict(base: dict, during: dict | None, post: dict | None,
