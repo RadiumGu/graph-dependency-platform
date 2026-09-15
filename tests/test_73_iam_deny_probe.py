@@ -120,10 +120,29 @@ def test_t73_03_基线闸门必须存在():
         assert any("return 3" in src[i:i + 400] for i in spots), (
             "%s 的 %d 处出现里没有任何一处用于拦截（附近没有 return 3）"
             % (name, len(spots)))
-    # 采集失败（ok=False）必须中止
-    assert 'if not base["ok"]' in src, (
+    # 采集失败（ok=False）必须中止。
+    #
+    # ⚠️ 判据盯**语义**不盯字面：2026-09-15 并发会话把它改成了
+    # `if not _semantic_only and not base["ok"]` —— 闸门没被删，而是为
+    # `AgentRuntime -> AgentRuntime` 这一类**结构性测不出**的边开了一个窄口
+    # （委派经 AgentCore 网关，X-Ray 里只有一条合流边，测不出目标粒度），
+    # 那类边改用 `probe_waggle` 的语义判据（看回答内容而非状态码）。
+    # 那个推理是对的，也与本文件其他地方的原则一致：主通道结构性不可用时
+    # 改走有据可查的替代通道，而**不是**放宽闸门。
+    #
+    # 我第一版把断言钉在字面 `if not base["ok"]` 上，于是指着一处正当改动报违规
+    # —— 本会话第四次同族失误（前三次见 t73_04 / t73_10 的说明）。
+    assert 'base["ok"]' in src, (
         "没有处理基线 ok=False。`ok=False / success_rate=100 / requests=0` "
         "这个形态与「真的健康」结构上无法区分。")
+    # 若存在逃逸口，它必须由**声明式判据**驱动，不能是一个自由开关
+    if "_semantic_only" in src:
+        assert "def edge_flow_measurable" in src, (
+            "有 _semantic_only 逃逸口却没有声明式判据函数 —— "
+            "自由开关会被用来绕过任何一次闸门失败，"
+            "而窄的声明式判据（哪类边结构性测不出）才是可审计的。")
+        assert "AgentRuntime" in src, (
+            "逃逸口没有写明它适用于哪类边。范围不明的逃逸口等于没有闸门。")
 
 
 def test_t73_04_判定不得用max且混淆时必须拒绝():
@@ -252,13 +271,23 @@ def test_t73_10_cron侧必须真的读得到互锁():
        而代码恰恰是静默的：既不跳过也不说自己读不到。
        静默失效的机制等于不存在的机制。
     """
-    cron = pathlib.Path(
-        "~/.kiro/crew/crons/adoption_synthetic_traffic.py").expanduser()
-    if not cron.exists():
+    # **两个**合成流量 cron 都要检 —— 它们是同一个 bug 的两份拷贝。
+    # 只检一个的话，另一个会继续静默失效（waggle cron 实测也是裸 import）。
+    crons = [pathlib.Path("~/.kiro/crew/crons/%s" % n).expanduser()
+             for n in ("adoption_synthetic_traffic.py",
+                       "waggle_synthetic_traffic.py")]
+    crons = [c for c in crons if c.exists()]
+    if not crons:
         pytest.skip("合成流量 cron 不在此环境")
+    for cron in crons:
+        _assert_interlock_readable(cron)
+
+
+def _assert_interlock_readable(cron) -> None:
     src = cron.read_text(encoding="utf-8")
 
-    assert "import chaos_lock" in src, "cron 没有检查实验期互锁"
+    assert "import chaos_lock" in src, (
+        "%s 没有检查实验期互锁" % cron.name)
     # 判据是「**至少有一处**真实导入前设了 sys.path」。
     #
     # 第一版用 `src.index()` 取首次出现，而首次出现落在**注释里**
@@ -274,8 +303,11 @@ def test_t73_10_cron侧必须真的读得到互锁():
     assert "interlock-unreadable" in src, (
         "读不到互锁时没有留痕 —— 静默失效的机制等于不存在的机制。"
         "本项目正是因此让互锁在两侧都失效了很久而无人发现。")
-    assert "SKIP interlock" in src, (
-        "跳过时没有写运行日志 —— 无法区分「因互锁跳过」与「根本没跑」。")
+    # 跳过留痕：领养 cron 有运行日志（_runlog），waggle cron 用 print。
+    # 两种都接受 —— 判据是「跳过这件事能被看见」，不是用哪个函数。
+    assert ("SKIP interlock" in src or "skipped: chaos experiment" in src), (
+        "%s 跳过时没有任何痕迹 —— 无法区分「因互锁跳过」与「根本没跑」。"
+        % cron.name)
 
 
 def test_t73_09_每个注入实验器都必须置位实验期互锁():
