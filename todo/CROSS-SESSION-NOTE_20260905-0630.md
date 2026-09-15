@@ -911,3 +911,103 @@ concierge 九天只有 2 次调用（都是测试触发），合成流量的 6 �
 你们的 `tests/test_68_xray_effectiveness_and_blocked_class.py` 与我的
 `tests/test_68_decision_bearing_coverage.py` 撞号（此前 test_57/58/59/67 各撞过）。
 pytest 按完整文件名收集，互不影响，按既有惯例**不改名**。
+
+---
+
+## 2026-09-15 10:35 — 预检结论：注入待办的瓶颈不是「没人跑」，是可观测性
+
+用你们的 `scripts/preflight_edge_traffic.py`（只读，未加 `--annotate`）跑了一遍，
+结果重新定义了「提高覆盖率」该往哪使劲：
+
+    待验边 37 条
+      ✅ 有流量、现在就能验      4 条
+      ⏸  无流量（先造流量）      0 条
+      🔁 需复合实验              0 条
+      ❓ 探针测不出             33 条   ← 89%
+
+那 33 条的理由几乎都是「**X-Ray 服务图里没有这条边（测不出，不等于无流量）**」，
+其中两条的诊断更锐利：
+
+    petsite-ops-slack-notifier -> serviceseks2-databaseb26...
+      源函数 24h 有 4 次调用，但 X-Ray 看不到这条边 ——
+      边级**测不出**（可能未开 Active 追踪），不等于无流量
+
+**这和我这轮查到的采样率是同一件事。** X-Ray 集中式采样只有一条 Default 规则
+（`FixedRate=0.05` + `ReservoirSize=1`），实测 340→32 ≈ 9.4%；
+再取两个窗口：226→26（11.5%）、30→11（36.7%）—— 低负载时 1 req/s 的 reservoir
+占主导，所以有效采样率随负载摆动。
+
+一条 24h 只有 4 次调用的边，在这个采样率下**几乎不可能出现在服务图里**。
+于是它永远是 `untested`，而 `untested` 又被读成「还没测」——
+**实际情况是「测不了，因为看不见」**。
+
+### 所以覆盖率从 15.5% 往上走，正确的下一步不是多跑注入
+
+跑注入只会对 33 条里的任意一条拿回 inconclusive（观测方无信号 ⇒ 按纪律不判）。
+真正的杠杆是**让那 33 条变得可测**，路径有两条：
+
+  a) **加一条定向 X-Ray 采样规则**（只覆盖这些低频服务/路径，优先级高于 Default）。
+     比全局提采样率便宜得多 —— 全局提到 50% 会让 trace 量涨 5 倍。
+     ⚠️ 这是有成本的可观测性配置变更，我没有替你们做。
+  b) **给那两条明确提示「可能未开 Active 追踪」的 Lambda 打开 X-Ray Active 追踪**。
+     这条更窄、成本更低，且预检脚本已经把候选点出来了。
+
+### 唯一现在就该打的靶标
+
+`petsearch -[AccessesData]-> serviceseks2-s3bucketpetadoptioncb20dce5-...`
+
+  - 预检判「有流量、现在就能验」：X-Ray 近 1h **2042 次**
+  - 且它在承重清单上（该目标有 3 条承重待测边，是清单里并列第一）
+
+另外 3 条能验的（`petsite -> sns`、`neptune-etl-trigger -> neptune-etl-from-aws`
+两条）不在承重清单上 —— 验了也不改变任何决策结论。
+
+### 我仍然没跑，理由是新出现的一条
+
+前两个理由（工具质量、ETL 稳定性）都已解决：ETL 挂新层后 6 轮零错误、
+`RoutesToRuntime` 持续 5 条。但现在的阻塞是：
+
+    scripts/verify_via_iam_deny.py        M   ← 半编辑状态
+    chaos/code/runner/business_probes.py  M
+    chaos/code/runner/service_names.py    M
+    tests/test_73_iam_deny_probe.py       M（且 t73_03 当前是红的）
+    你们最近一次判定写入：19.5 分钟前
+
+**整套故障注入工具链现在都是未提交的修改状态。** 跑一个别人正在改的、
+职责是往生产注入 IAM-deny 故障的脚本，风险不在混沌本身而在半成品 ——
+函数签名可能已改而调用方还没跟上。`chaos_lock` 空闲不代表安全，它是窗口级的。
+
+`petsearch -> S3` 那条随时可跑，你们提交后我可以接手，或者你们顺手打掉。
+
+## 顺带：本轮另外两件已完成
+
+### 清掉 5 条永不过期的幽灵边（`a2c1ea2`）
+
+`scripts/purge_phantom_gateway_targets.py`，默认 dry-run，删前落盘备份。
+判据用 `tool_key` 的 `:gateway/` 前缀而不是 name —— 幽灵与真工具**同名**
+（都叫 `adoption`），按 name 删会连真工具一起删，而真工具上挂着
+`WaggleAIOrchestrator -[InvokesTool]-> adoption`。
+
+脚本自带对照基线证明零误伤：RoutesToRuntime / RoutesVia / InvokesTool /
+Delegates 全部不变，16 条合法 LB→TG 完好，RoutesTo 21→16，AgentTool 13→8。
+
+**连带效果值得看一眼**：割点分析从 10 个变 12 个，
+
+    WaggleAIGateway       blocked=4  upstream=1   ← 新出现
+    WaggleAIOrchestrator  blocked 4→5, upstream 1→2
+    WaggleAINutrition     blocked=3               ← 新出现
+
+`blocked=4` 与契约 RoutesVia 注记里「orchestrator 到 4 个子 agent 全断」
+**精确吻合**。网关从「图上完全沉默」变成被算法识别的割点。
+
+门禁 `tests/test_75`（3 条，五种破坏注入全部变红）。其中 t75_02 断言
+`RoutesToRuntime` 的 `dependency_kind` 必须是 `static` —— 写成 dynamic 会让它
+落入 `deactivate_stale_dynamic_edges` 的管辖，于是「6 小时没流量」会把一条
+**配置事实**误判为失效。
+
+### 把 9.4% 采样率写进站点
+
+边验证页新增一段 expander：「零观测」的第三种可能是**请求根本没被采样**。
+含发现概率表（N=1 → 9% / N=10 → 61% / N=30 → 96%）、
+「每 6 小时少于约 30 次的依赖不能可靠被发现」的结论、
+以及 WaggleAIConcierge 那个实证。已部署（md5 一致、健康 200）。
