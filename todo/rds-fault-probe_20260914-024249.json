@@ -1,0 +1,87 @@
+{
+  "taken_at": "20260914-024249",
+  "service": "petlistadoptions",
+  "target_label": "RDSInstance",
+  "target": "serviceseks2-databasereader1f54479b8-hpyukqlufzus",
+  "fis_template": "EXT3X5eDqkg57hzg",
+  "fis_experiment": "EXPLAguhL2DBpZjkRQ",
+  "rebooted_instance": "serviceseks2-databasereader1f54479b8-hpyukqlufzus",
+  "severance": "rds-reboot",
+  "channel_edge": {
+    "baseline": {
+      "ok": true,
+      "success_rate": 100.0,
+      "total_requests": 279
+    },
+    "during": {
+      "ok": true,
+      "success_rate": 100.0,
+      "total_requests": 277
+    },
+    "post": {
+      "ok": true,
+      "success_rate": 100.0,
+      "total_requests": 265
+    }
+  },
+  "channel_business": {
+    "baseline": {
+      "ok": true,
+      "no_probe": false,
+      "per_probe": {
+        "list": [
+          1,
+          1,
+          1
+        ]
+      },
+      "detail": "list=[1, 1, 1]"
+    },
+    "during": {
+      "ok": true,
+      "no_probe": false,
+      "per_probe": {
+        "list": [
+          1,
+          1,
+          1
+        ]
+      },
+      "detail": "list=[1, 1, 1]"
+    },
+    "post": {
+      "ok": true,
+      "history": [
+        {
+          "list": 1
+        },
+        {
+          "list": 1
+        },
+        {
+          "list": 1
+        },
+        {
+          "list": 1
+        },
+        {
+          "list": 1
+        },
+        {
+          "list": 1
+        },
+        {
+          "list": 1
+        },
+        {
+          "list": 1
+        }
+      ],
+      "recovered": true,
+      "detail": "连续 8 次全部探针回到基线"
+    }
+  },
+  "verdict": "observation_only",
+  "why": "SQL 边未见明显失败（降 0.0pp）且业务未退化（list 未退化（1））—— 重启可能未落在测量窗口内，或连接池把它整个吸收了。信号不足以判定，拒绝出结论",
+  "caveat": "瞬时写实例重启，不覆盖「数据库彻底不可用」；X-Ray 只有一个 SQL 节点，reader/writer 分不开，边计数是该服务对集群的 SQL 调用"
+}

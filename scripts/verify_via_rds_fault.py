@@ -82,8 +82,12 @@ SQL_NODE_TYPES = ("Database::SQL",)
 MIN_BASELINE_REQUESTS = 20
 MIN_BASELINE_SUCCESS_RATE = 95.0
 
-#: 故障期业务轮询：重启约 30~60s，轮询要密到能抓住它。
-_FAULT_POLL_SECONDS = 10
+#: 故障期业务轮询间隔。
+#:
+#: ⚠️ 实测真实中断只有约 **18 秒**（RDS 事件 02:25:02 shutdown →
+#: 02:25:20 restarted），比我原先假设的 30~60 秒短得多。10 秒一轮很可能整段错过，
+#: 于是把一次真实的业务中断读成「未退化」。取 3 秒以保证窗口内有多次采样。
+_FAULT_POLL_SECONDS = 3
 _FAULT_POLL_BUDGET = 300
 
 _RECOVERY_STREAK = 8
@@ -147,6 +151,63 @@ def template_target(tpl_id: str) -> str | None:
     return None
 
 
+def rds_reboot_evidence(instance: str, since_epoch: float) -> dict:
+    """从 RDS 事件取实例重启的**权威**证据。
+
+    ## 为什么需要这个通道
+
+    有些消费方在 X-Ray 里没有 SQL 边（实测 `pethistory` 在服务图上完全没有
+    节点），于是「注入是否生效」这个问题没有消费方侧的遥测可用。
+    但对**资源级故障**来说，资源自己的事件是更强的证据：
+    AWS 直接记录 `DB instance shutdown` / `DB instance restarted`。
+
+    实测该事件对可靠（2026-09-14 与 09-15 的三次重启都成对留痕），
+    并且能算出**真实中断时长** —— 实测约 18 秒，比我原先假设的 30~60 秒短得多，
+    这解释了为什么 180 秒窗口里边成功率只降 0.3pp。
+
+    ## 这不能成为绕过闸门的后门
+
+    只有在消费方**完全没有** SQL 边遥测（`ok=False`）时才允许改用这个通道。
+    边存在但闸门不过（例如请求数不足）时**不许**退到这里 ——
+    否则任何一次闸门失败都能用「没有遥测」绕过去。判据写在 `run()` 里。
+
+    ⚠️ 注意 `--duration` 的单位是**分钟**。我一度用 720（12 小时）去查一次
+    27 小时前的重启，拿到空结果并差点判定「事件通道不可靠」——
+    空结果的成因是窗口算错，不是通道有问题。
+    """
+    minutes = max(5, int((time.time() - since_epoch) / 60) + 10)
+    out, err = _aws("rds", "describe-events",
+                    "--source-identifier", instance,
+                    "--source-type", "db-instance",
+                    "--duration", str(minutes))
+    if not out:
+        return {"ok": False, "detail": "取 RDS 事件失败: %s" % err}
+    down = up = None
+    for e in out.get("Events") or []:
+        msg = str(e.get("Message") or "")
+        ts = e.get("Date")
+        try:
+            t = datetime.datetime.fromisoformat(str(ts)).timestamp()
+        except Exception:
+            continue
+        if t < since_epoch:
+            continue
+        if "shutdown" in msg.lower() and down is None:
+            down = t
+        elif "restarted" in msg.lower():
+            up = t
+    if down is None:
+        return {"ok": False,
+                "detail": "窗口内没有 `DB instance shutdown` 事件 —— "
+                          "无法证明实例真的被重启（不是通道问题就是注入没生效）"}
+    outage = (up - down) if up else None
+    return {"ok": True, "shutdown_at": down, "restarted_at": up,
+            "outage_seconds": round(outage, 1) if outage else None,
+            "detail": ("RDS 事件：shutdown → %s，中断 %s 秒"
+                       % ("restarted" if up else "（未见 restarted）",
+                          round(outage, 1) if outage else "?"))}
+
+
 def _measure_sql(svc: str, target: str, window: int, m=None) -> dict:
     """量 `svc -> SQL` 这条边。目标名只用于日志 —— 匹配靠节点形态。
 
@@ -165,7 +226,8 @@ def _measure_sql(svc: str, target: str, window: int, m=None) -> dict:
 
 def _verdict(base: dict, during: dict, post: dict,
              biz_note: str, degraded: bool, broke: bool,
-             recovered: bool, instance: str, role: str) -> tuple[str, str]:
+             recovered: bool, instance: str, role: str,
+             ev: dict | None = None) -> tuple[str, str]:
     """瞬时故障的**不对称**判定。见模块 docstring。
 
     ⚠️ `role` 必须传入并写进证据范围文案，**不能写死「写实例」**。
@@ -178,6 +240,28 @@ def _verdict(base: dict, during: dict, post: dict,
     scope = ("；证据范围＝瞬时%s丢失（重启 %s，当时角色 %s），"
              "**不覆盖「数据库彻底不可用」**" % (role_cn, instance, role))
     rec = "；故障后恢复" if recovered else "；⚠️ 未在预算内恢复"
+
+    # ── 事件通道分支 ──
+    #
+    # 消费方没有 SQL 边遥测时，生效性由 RDS 自身事件证明（shutdown→restarted）。
+    # 归因的另一半仍然必须来自业务探针，且探针必须**退化后恢复** ——
+    # 只有事件没有业务反应，只能说明「实例重启过」，说明不了这条依赖承重。
+    if ev is not None:
+        if not ev.get("ok"):
+            return "observation_only", (
+                "消费方无 SQL 边遥测，且 RDS 事件通道也未取到重启证据（%s）—— "
+                "无法证明注入生效" % ev.get("detail"))
+        chan = ("；生效证据＝RDS 事件（%s）。⚠️ 消费方侧无 SQL 边遥测，"
+                "本判定的生效性由资源自身事件证明，非消费方观测"
+                % ev.get("detail"))
+        if broke or degraded:
+            return "confirmed", (
+                "重启期间业务退化（%s）%s%s%s" % (biz_note, chan, rec, scope))
+        return "observation_only", (
+            "RDS 事件证实实例重启（%s）但业务未退化（%s）—— "
+            "中断仅约 %s 秒，可能整个被连接池吸收。"
+            "只有事件没有业务反应，说明不了这条依赖承重，拒绝出结论%s"
+            % (ev.get("detail"), biz_note, ev.get("outage_seconds"), scope))
 
     if not during.get("ok"):
         return "observation_only", (
@@ -266,20 +350,32 @@ def run(service: str, target: str, tpl_id: str, expect_role: str,
     print("   SQL 边: %s" % base)
     biz_base = dm._probe_business(service)
     print("   业务探针: %s" % biz_base["detail"])
-    if not base["ok"]:
-        print("✗ SQL 边基线采集失败（ok=False）—— 中止")
-        load.stop()
-        return 3
-    if (base["total_requests"] or 0) < MIN_BASELINE_REQUESTS:
-        print("✗ 基线请求数 %s < %d —— 拒绝出判定"
-              % (base["total_requests"], MIN_BASELINE_REQUESTS))
-        load.stop()
-        return 3
-    if (base["success_rate"] or 0) < MIN_BASELINE_SUCCESS_RATE:
-        print("✗ 基线成功率 %.2f%% < %.0f%% —— 拒绝开跑（基线本身是坏的）"
-              % (base["success_rate"] or 0, MIN_BASELINE_SUCCESS_RATE))
-        load.stop()
-        return 3
+
+    # ── 生效通道的选择 ──
+    #
+    # 默认用消费方的 SQL 边（`ok=True` 时）。只有当消费方**完全没有**这条边的
+    # 遥测（`ok=False`，即服务图上根本没有这条边）时，才改用 RDS 事件通道。
+    #
+    # **闸门失败不许退到事件通道** —— 请求数不足或基线成功率低都说明测量本身
+    # 不可信，退到另一个通道就等于用「换个说法」绕过闸门。
+    # 这条判据是这个回退唯一不变成后门的保证。
+    use_event_channel = not base["ok"]
+    if use_event_channel:
+        print("   ⚠️ 该服务在 X-Ray 里没有 SQL 边遥测 —— 生效证据改用 RDS 事件通道。")
+        print("      报告会据此披露：消费方侧遥测缺失，生效性由资源自身事件证明。")
+    else:
+        if (base["total_requests"] or 0) < MIN_BASELINE_REQUESTS:
+            print("✗ 基线请求数 %s < %d —— 拒绝出判定"
+                  % (base["total_requests"], MIN_BASELINE_REQUESTS))
+            print("  注意：**不会**因此退到 RDS 事件通道 —— "
+                  "闸门失败说明测量不可信，换通道等于绕过闸门。")
+            load.stop()
+            return 3
+        if (base["success_rate"] or 0) < MIN_BASELINE_SUCCESS_RATE:
+            print("✗ 基线成功率 %.2f%% < %.0f%% —— 拒绝开跑（基线本身是坏的）"
+                  % (base["success_rate"] or 0, MIN_BASELINE_SUCCESS_RATE))
+            load.stop()
+            return 3
     ok, why = dm._biz_baseline_ok(biz_base)
     if not ok:
         print("✗ 业务探针基线不可用：%s" % why)
@@ -301,9 +397,12 @@ def run(service: str, target: str, tpl_id: str, expect_role: str,
 
     exp_id = None
     biz_during = None
+    ev = None
+    t_inject = time.time()
     try:
         print()
         print("── 2. 注入（FIS 重启当前 %s 实例 %s）──" % (expect_role, writer))
+        t_inject = time.time()
         out, err = _aws("fis", "start-experiment",
                         "--experiment-template-id", tpl_id)
         if not out:
@@ -332,6 +431,8 @@ def run(service: str, target: str, tpl_id: str, expect_role: str,
         time.sleep(window)
         during = _measure_sql(service, target, window)
         print("   SQL 边（故障期）: %s" % during)
+        ev = rds_reboot_evidence(writer, t_inject)
+        print("   RDS 事件证据: %s" % ev["detail"])
     finally:
         print()
         print("── 3. 收尾（finally）──")
@@ -355,7 +456,8 @@ def run(service: str, target: str, tpl_id: str, expect_role: str,
 
     degraded, broke, biz_note = dm._biz_degraded(biz_base, biz_during)
     verdict, why = _verdict(base, during, post, biz_note, degraded, broke,
-                            recovered, writer, expect_role)
+                            recovered, writer, expect_role,
+                            ev if use_event_channel else None)
     print()
     print("── 判定 ──")
     print("   %s：%s" % (verdict, why))
@@ -368,6 +470,9 @@ def run(service: str, target: str, tpl_id: str, expect_role: str,
         "target": target, "fis_template": tpl_id, "fis_experiment": exp_id,
         "rebooted_instance": writer, "rebooted_role": expect_role,
         "severance": "rds-reboot",
+        "evidence_channel": ("rds-event+business-probe" if use_event_channel
+                             else "xray-edge+business-probe"),
+        "rds_event_evidence": ev,
         "channel_edge": {"baseline": base, "during": during, "post": post},
         "channel_business": {"baseline": biz_base, "during": biz_during,
                              "post": biz_post},
@@ -381,7 +486,11 @@ def run(service: str, target: str, tpl_id: str, expect_role: str,
     # severance 必须传 —— 默认值是 iam-deny，不传就会在边上错标证据来源。
     persisted = dm._persist_verdict(service, "RDSInstance", target, verdict,
                                     why, base, during, out_p.stem,
-                                    severance="rds-reboot")
+                                    severance="rds-reboot",
+                                    evidence_channel=(
+                                        "rds-event+business-probe"
+                                        if use_event_channel
+                                        else "xray-edge+business-probe"))
     print("   写回: %s" % persisted)
     if lock:
         try:

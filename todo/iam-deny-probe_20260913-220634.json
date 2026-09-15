@@ -1,0 +1,104 @@
+{
+  "taken_at": "20260913-220634",
+  "service": "payforadoption",
+  "target_label": "AWSServiceEndpoint",
+  "target": "ssm",
+  "irsa_role": "ServicesEks2-payforadoptionServiceAccountRole40AF89-oEilVHOTwr8m",
+  "severance": "iam-deny",
+  "deny_document": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Deny",
+        "Action": [
+          "ssm:*"
+        ],
+        "Resource": [
+          "*"
+        ]
+      }
+    ]
+  },
+  "channel_edge": {
+    "baseline": {
+      "ok": true,
+      "success_rate": 100.0,
+      "total_requests": 635,
+      "p99_ms": 31.8
+    },
+    "during": {
+      "ok": true,
+      "success_rate": 0.0,
+      "total_requests": 635,
+      "p99_ms": 27.9
+    },
+    "post": {
+      "ok": true,
+      "success_rate": 5.99,
+      "total_requests": 618,
+      "p99_ms": 28.8
+    }
+  },
+  "channel_business": {
+    "baseline": {
+      "ok": true,
+      "no_probe": false,
+      "per_probe": {
+        "adopt": [
+          1,
+          1,
+          1
+        ]
+      },
+      "detail": "adopt=[1, 1, 1]"
+    },
+    "during": {
+      "ok": true,
+      "no_probe": false,
+      "per_probe": {
+        "adopt": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      "detail": "adopt=[1, 1, 1, 1]"
+    },
+    "post": {
+      "ok": true,
+      "history": [
+        {
+          "adopt": 1
+        },
+        {
+          "adopt": 1
+        },
+        {
+          "adopt": 1
+        },
+        {
+          "adopt": 1
+        },
+        {
+          "adopt": 1
+        },
+        {
+          "adopt": 1
+        },
+        {
+          "adopt": 1
+        },
+        {
+          "adopt": 1
+        }
+      ],
+      "recovered": true,
+      "detail": "连续 8 次全部探针回到基线"
+    }
+  },
+  "policy_removed": true,
+  "verdict": "inconclusive",
+  "why": "注入生效（边成功率降 100.0pp）但业务探针全部未退化（adopt 未退化（1））—— 消费方存在降级路径，该依赖非业务关键路径。**不写 confirmed**：证明了调用失败，没证明业务受损",
+  "caveat": "IAM deny 证明依赖承重，不等于延迟/部分失败场景测试"
+}

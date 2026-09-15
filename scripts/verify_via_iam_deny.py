@@ -947,7 +947,8 @@ def _edge_ids(service: str, target: str) -> tuple[list[dict], str]:
 
 def _persist_verdict(service: str, label: str, target: str,
                      verdict: str, why: str, base: dict, during: dict,
-                     record_id: str, severance: str = "iam-deny") -> str:
+                     record_id: str, severance: str = "iam-deny",
+                     evidence_channel: str = "xray-edge+business-probe") -> str:
     """把判定写回图谱边属性。只有 confirmed / inconclusive 才写。
 
     `observation_only` **刻意不写** —— 它的含义是「采集到的信号不足以判定」，
@@ -991,8 +992,10 @@ def _persist_verdict(service: str, label: str, target: str,
             # `verified_at` 是 write_verdict 的必填字段（epoch 秒）。
             # 少了它是 KeyError 而不是静默写错，这个失效形状是好的。
             "verified_at": int(time.time()),
-            # 双通道：被测边的 X-Ray 统计 + 源服务的业务功能探针
-            "evidence_channel": "xray-edge+business-probe",
+            # ⚠️ 证据通道同样必须由调用方传入，**不能硬编码**。
+            # 这是与 `severance` 同一族的第三次错标：用 RDS 事件证明生效性的边
+            # 若标成「xray-edge」，报告就声称有消费方侧观测，而那正是缺失的东西。
+            "evidence_channel": evidence_channel,
             # ⚠️ 切断手段必须由调用方传入，**不能硬编码**。
             #
             # 2026-09-14 踩到：RDS 故障注入实验器复用了这个函数，于是把

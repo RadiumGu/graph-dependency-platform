@@ -1,0 +1,85 @@
+{
+  "taken_at": "20260914-022850",
+  "service": "payforadoption",
+  "target_label": "RDSInstance",
+  "target": "serviceseks2-databasereader1f54479b8-hpyukqlufzus",
+  "fis_template": "EXT3X5eDqkg57hzg",
+  "fis_experiment": "EXPp47qEddFEXR3iwt",
+  "rebooted_instance": "serviceseks2-databasereader1f54479b8-hpyukqlufzus",
+  "severance": "rds-reboot",
+  "channel_edge": {
+    "baseline": {
+      "ok": true,
+      "success_rate": 100.0,
+      "total_requests": 1652
+    },
+    "during": {
+      "ok": true,
+      "success_rate": 99.72,
+      "total_requests": 1422
+    },
+    "post": {
+      "ok": true,
+      "success_rate": 100.0,
+      "total_requests": 1610
+    }
+  },
+  "channel_business": {
+    "baseline": {
+      "ok": true,
+      "no_probe": false,
+      "per_probe": {
+        "adopt": [
+          1,
+          1,
+          1
+        ]
+      },
+      "detail": "adopt=[1, 1, 1]"
+    },
+    "during": {
+      "ok": true,
+      "no_probe": false,
+      "per_probe": {
+        "adopt": [
+          0
+        ]
+      },
+      "detail": "adopt=[0]"
+    },
+    "post": {
+      "ok": true,
+      "history": [
+        {
+          "adopt": 1
+        },
+        {
+          "adopt": 1
+        },
+        {
+          "adopt": 1
+        },
+        {
+          "adopt": 1
+        },
+        {
+          "adopt": 1
+        },
+        {
+          "adopt": 1
+        },
+        {
+          "adopt": 1
+        },
+        {
+          "adopt": 1
+        }
+      ],
+      "recovered": true,
+      "detail": "连续 8 次全部探针回到基线"
+    }
+  },
+  "verdict": "confirmed",
+  "why": "重启期间业务退化（adopt 归零（1 → 0，采样 [0]）），SQL 边成功率 100.0% → 99.7%（降 0.3pp）；故障后恢复；证据范围＝瞬时写实例丢失（重启 serviceseks2-databasereader1f54479b8-hpyukqlufzus），**不覆盖「数据库彻底不可用」**",
+  "caveat": "瞬时写实例重启，不覆盖「数据库彻底不可用」；X-Ray 只有一个 SQL 节点，reader/writer 分不开，边计数是该服务对集群的 SQL 调用"
+}

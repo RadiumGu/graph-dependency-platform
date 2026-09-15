@@ -1,0 +1,161 @@
+{
+  "taken_at": "20260913-212633",
+  "service": "petsite",
+  "target_label": "SQSQueue",
+  "target": "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+  "irsa_role": "Applications-PetSiteServiceAccount6A1851C9-y5J6EGm1X5bM",
+  "severance": "iam-deny",
+  "deny_document": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Deny",
+        "Action": [
+          "sqs:*"
+        ],
+        "Resource": [
+          "arn:aws:sqs:ap-northeast-1:926093770964:ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj"
+        ]
+      }
+    ]
+  },
+  "channel_edge": {
+    "baseline": {
+      "ok": true,
+      "success_rate": 100.0,
+      "total_requests": 32,
+      "p99_ms": 10.9
+    },
+    "during": {
+      "ok": false,
+      "success_rate": 100.0,
+      "total_requests": 0,
+      "p99_ms": 0.0
+    },
+    "post": {
+      "ok": true,
+      "success_rate": 100.0,
+      "total_requests": 29,
+      "p99_ms": 11.0
+    }
+  },
+  "channel_business": {
+    "baseline": {
+      "ok": true,
+      "no_probe": false,
+      "per_probe": {
+        "home": [
+          26,
+          26,
+          26
+        ],
+        "adopt": [
+          1,
+          1,
+          1
+        ],
+        "list": [
+          1,
+          1,
+          1
+        ],
+        "waggle": [
+          1,
+          1,
+          1
+        ]
+      },
+      "detail": "adopt=[1, 1, 1]; home=[26, 26, 26]; list=[1, 1, 1]; waggle=[1, 1, 1]"
+    },
+    "during": {
+      "ok": true,
+      "no_probe": false,
+      "per_probe": {
+        "home": [
+          26,
+          26,
+          26,
+          26
+        ],
+        "adopt": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "list": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "waggle": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      "detail": "adopt=[0, 0, 0, 0]; home=[26, 26, 26, 26]; list=[1, 1, 1, 1]; waggle=[1, 1, 1, 1]"
+    },
+    "post": {
+      "ok": true,
+      "history": [
+        {
+          "home": 26,
+          "adopt": 1,
+          "list": 1,
+          "waggle": 1
+        },
+        {
+          "home": 26,
+          "adopt": 1,
+          "list": 1,
+          "waggle": 1
+        },
+        {
+          "home": 26,
+          "adopt": 1,
+          "list": 1,
+          "waggle": 1
+        },
+        {
+          "home": 26,
+          "adopt": 1,
+          "list": 1,
+          "waggle": 1
+        },
+        {
+          "home": 26,
+          "adopt": 1,
+          "list": 1,
+          "waggle": 1
+        },
+        {
+          "home": 26,
+          "adopt": 1,
+          "list": 1,
+          "waggle": 1
+        },
+        {
+          "home": 26,
+          "adopt": 1,
+          "list": 1,
+          "waggle": 1
+        },
+        {
+          "home": 26,
+          "adopt": 1,
+          "list": 1,
+          "waggle": 1
+        }
+      ],
+      "recovered": true,
+      "detail": "连续 8 次全部探针回到基线"
+    }
+  },
+  "policy_removed": true,
+  "verdict": "confirmed",
+  "why": "完全切断：被测边基线 32 次 → 故障期从服务图消失 → 回滚后 29 次（前后夹住，排除聚合延迟），且业务归零（adopt 归零（1 → 0，采样 [0, 0, 0, 0]）；home 未退化（26）；list 未退化（1）；waggle 未退化（1））；回滚后恢复",
+  "caveat": "IAM deny 证明依赖承重，不等于延迟/部分失败场景测试"
+}
