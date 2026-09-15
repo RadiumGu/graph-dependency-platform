@@ -158,6 +158,8 @@ def fetch_function_mapping(nc, dep_labels: List[str]) -> List[Dict[str, Any]]:
         "       d.source AS source, "
         "       d.drift_status AS drift_status, "
         "       d.last_seen AS last_seen, "
+        "       d.verify_severance AS verify_severance, "
+        "       d.verify_evidence_channel AS verify_evidence_channel, "
         "       d.verify_experiment AS verify_experiment "
         "ORDER BY capability, service, edge_type, target"
     )

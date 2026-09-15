@@ -63,20 +63,20 @@ APPLICABLE_CRITERIA: Tuple[Tuple[str, str, str], ...] = (
     ("DORA (EU) 2022/2554 Art. 8(4)",
      "map the links and interdependencies", "§5 依赖关系映射"),
     ("DORA (EU) 2022/2554 Art. 8(5)",
-     "识别与第三方的 interconnections", "§6 第三方范围分列"),
+     "识别与第三方的 interconnections", "§7 第三方范围分列"),
     ("FCA SYSC 15A.4.1R",
      "identify and document people/processes/technology/facilities/information",
-     "§5、§10"),
+     "§5、§11"),
     ("FCA SYSC 15A.5.3R",
      "carry out scenario testing 的测试证据", "§5 取证方法与结论"),
     ("FCA SYSC 15A.2.5R",
-     "must set an impact tolerance for each IBS", "§9（本报告披露为未设定）"),
+     "must set an impact tolerance for each IBS", "§10（本报告披露为未设定）"),
     ("FCA SYSC 15A.2.7G(10)",
-     "common operational resources 的聚合影响", "§7 技术集中度"),
+     "common operational resources 的聚合影响", "§8 技术集中度"),
     ("FCA SYSC 15A.6.1R(3)",
      "mapping 方法与如何支撑测试的书面记录", "附录 A"),
     ("FCA SYSC 15A.6.1R(7)",
-     "vulnerabilities 及整改行动与时限理由", "§10"),
+     "vulnerabilities 及整改行动与时限理由", "§11"),
     ("FCA SYSC 15A.6.2R",
      "retain each version …… at least 6 years", "文档控制（文件名带快照时刻）"),
     ("FCA SYSC 15A.7.1R",
@@ -86,22 +86,33 @@ APPLICABLE_CRITERIA: Tuple[Tuple[str, str, str], ...] = (
     ("《关键信息基础设施安全保护条例》第九条",
      "识别关键业务及其依赖的网络设施与信息系统", "§5"),
     ("ITS (EU) 2024/2956 B_06.01",
-     "functions identification 的字段与枚举词汇（借用词汇，非报送）", "§4、§9"),
+     "functions identification 的字段与枚举词汇（借用词汇，非报送）", "§4、§10"),
     ("NIST OSCAL observation.method",
      "TEST / EXAMINE / INTERVIEW 取证方法受控词汇", "§4、§5"),
     ("ISAE 3000 (Revised) §69(e)",
-     "重大固有局限性的描述", "§10"),
+     "重大固有局限性的描述", "§11"),
 )
 
 #: 术语与取值定义。正式文档必须定义自己用的每个取值 —— 否则读者只能猜。
 GLOSSARY: Tuple[Tuple[str, str], ...] = (
+    ("切断手段（severance）",
+     "得出 `Confirmed` 所使用的故障注入手段，决定该结论的**适用范围**。"
+     "本轮出现两种：`iam-deny`（注入期间该依赖调用全程返回 AccessDenied）与 "
+     "`rds-reboot`（数据库实例重启，实测中断仅约 16~18 秒）。"
+     "**两者不等价** —— 后者不支撑「数据库长时间或彻底不可用」场景下的结论。"
+     "逐手段的范围定义见 §6。未记录该字段的 `Confirmed` 视为范围不明。"),
+    ("证据通道（evidence channel）",
+     "判定所依据的观测来源。`xray-edge+business-probe` 为消费方侧调用统计加"
+     "业务功能探针的双通道；`rds-event+business-probe` 表示**消费方侧没有调用"
+     "遥测**，注入生效性改由资源自身事件（RDS `DB instance shutdown`/"
+     "`restarted`）证明。后者是一个已披露的观测缺口，不是等价替代。"),
     ("依赖对象标识符",
      "AWS 物理资源 ID、Kubernetes 服务名、AWS 服务端点名或 agent 工具键，"
      "按对象类型而定。本平台**不生成**另一套展示名 —— 图谱里没有的名称不会被"
      "编造出来，标识符即该对象在其所属系统中的真实身份键。"),
     ("依赖类型",
      "契约定义的依赖边类型，来源为 `graph_contract.dependency_edge_labels()`。"
-     "承载/放置类关系不在此列，单列于 §8。"),
+     "承载/放置类关系不在此列，单列于 §9。"),
     ("取证方法 TEST",
      "主动故障注入实测。对应 NIST OSCAL `observation.method=TEST`，"
      "也对应 SYSC 15A.5.3R 的 scenario testing。证据强度最高。"),
@@ -166,6 +177,74 @@ def _md_table(headers: List[str], rows: List[List[Any]]) -> str:
     return "\n".join(out)
 
 
+#: 切断手段 → (中文名, 证据范围, 是否瞬时)。
+#:
+#: ## 为什么必须逐手段披露而不是一律写 confirmed
+#:
+#: 2026-09-15 之前，`_evidence()` 对每一条 confirmed 都返回同一句
+#: `Confirmed — no exceptions noted`。而这 16 条 confirmed 的证据是**异质**的：
+#:
+#:   iam-deny    deny 期间调用**全程**失败 —— 覆盖「依赖不可用」
+#:   rds-reboot  实例重启，实测中断仅约 **16~18 秒** —— **不覆盖**「数据库彻底不可用」
+#:
+#: 用 SOC 2 的「no exceptions noted」去描述一次 16 秒的重启测试，读者会以为
+#: 这条依赖被完整验证过。那是过度声称 —— 存 `verify_severance` 的全部意义
+#: 就是让报告披露这个差别，不披露就等于没存。
+SEVERANCE_SCOPE: Dict[str, Tuple[str, str, bool]] = {
+    "iam-deny": (
+        "IAM 拒绝",
+        "注入期间该依赖的调用**全程**返回 AccessDenied，覆盖「依赖不可用」场景；"
+        "不覆盖延迟升高与部分失败",
+        False),
+    "rds-reboot": (
+        "数据库实例重启",
+        "实例重启造成的**瞬时**中断（实测约 16~18 秒），覆盖「短暂丢失」场景；"
+        "**不覆盖**「数据库长时间或彻底不可用」，亦不覆盖延迟升高",
+        True),
+    "unspecified": (
+        "未声明",
+        "⚠️ 边上未记录切断手段 —— 无法判断该结论的适用范围",
+        True),
+}
+
+#: 证据通道 → 说明。
+#:
+#: ## ⚠️ 这个字段里存着**两套不兼容的词汇**
+#:
+#: 2026-09-15 实测发现，`verify_evidence_channel` 同时承载两个不同问题的答案：
+#:
+#:   旧词汇（`chaos/code/runner/result.py`，Chaos Mesh 期）
+#:       success_rate / throughput_only / both / none
+#:       回答「**哪个指标**显示了退化」
+#:   新词汇（IAM deny 与 RDS 故障实验器）
+#:       xray-edge+business-probe / rds-event+business-probe
+#:       回答「用了**哪个观测来源**」
+#:
+#: 这是一个应当上报的数据模型缺陷。**但不能靠改写历史值来消除** ——
+#: 那些判定不是本轮采集的，重写它们等于伪造证据来源。
+#: 正确做法是两套都登记、按其本义解读，并在 §11 披露该字段语义不统一。
+EVIDENCE_CHANNEL_NOTE: Dict[str, str] = {
+    # 新词汇：观测来源
+    "xray-edge+business-probe":
+        "【观测来源】消费方侧调用统计（X-Ray）＋ 源服务业务功能探针，双通道",
+    "rds-event+business-probe":
+        "【观测来源】⚠️ **消费方侧无调用遥测**；生效性由资源自身事件（RDS "
+        "`DB instance shutdown`/`restarted`）证明，业务影响由探针证明",
+    # 旧词汇：退化体现在哪个指标（语义与上面两项**不同轴**）
+    "both":
+        "【退化指标】成功率与吞吐**同时**塌陷。注意：该取值来自早期实验的另一套"
+        "词汇，描述的是指标而非观测来源，与本节前两项不同轴",
+    "throughput_only":
+        "【退化指标】仅吞吐塌陷、成功率未变（`abort` 类故障不产生响应行）。"
+        "同属早期词汇，描述指标而非观测来源",
+    "success_rate":
+        "【退化指标】仅成功率下降。同属早期词汇，描述指标而非观测来源",
+    "none":
+        "⚠️ 【退化指标】两个指标都未见退化 —— 该 `confirmed` 的依据需人工复核",
+    "unknown": "⚠️ 未记录证据通道",
+}
+
+
 #: verify_status 取值 → (取证方法, 结论措辞)。
 #: 取证方法用 NIST OSCAL `observation.method` 的受控词汇；结论措辞用 SOC 2
 #: Section IV 的惯例。未测试的边若有观测来源，其取证方法是 EXAMINE 而非「无」——
@@ -173,7 +252,13 @@ def _md_table(headers: List[str], rows: List[List[Any]]) -> str:
 def _evidence(row: Dict[str, Any]) -> Tuple[str, str]:
     status = row.get("verify_status")
     if status == "confirmed":
-        return "TEST", "Confirmed — no exceptions noted"
+        sev = (row.get("verify_severance") or "unspecified")
+        name, _scope, transient = SEVERANCE_SCOPE.get(
+            sev, (sev, "未登记的切断手段", True))
+        # 瞬时手段不得用「no exceptions noted」—— 那是「已完整验证」的措辞。
+        if transient:
+            return "TEST", ("Confirmed（%s，范围受限）" % name)
+        return "TEST", ("Confirmed（%s）— no exceptions noted" % name)
     if status == "inconclusive":
         return "TEST", "Inconclusive — 已注入故障，观测退化不足以判定"
     if status:
@@ -187,11 +272,30 @@ def _note(row: Dict[str, Any]) -> str:
     """例外与备注列。只在确有内容时写，避免产出一整列空值。
 
     一整列 `—` 比没有这一列更糟 —— 读者会以为渲染坏了，或以为该字段永远无值。
+
+    ## confirmed 的范围限制必须落在这一列
+
+    SOC 2 Section IV 的「例外」列正是披露「结论成立但适用范围有限」的地方。
+    一条用 16 秒实例重启验证出来的 confirmed，如果这一列是空的，
+    读者只会看到结论、看不到边界 —— 那是过度声称。
+    所以瞬时手段与缺失消费方遥测这两件事，都必须在这里写明。
     """
     bits = []
     drift = row.get("drift_status")
     if drift and drift != "ok":
         bits.append("漂移 `%s`" % drift)
+
+    if row.get("verify_status") == "confirmed":
+        sev = row.get("verify_severance") or "unspecified"
+        name, scope, transient = SEVERANCE_SCOPE.get(
+            sev, (sev, "未登记的切断手段，适用范围不明", True))
+        if transient:
+            bits.append("**范围限制**：%s" % scope)
+        chan = row.get("verify_evidence_channel") or "unknown"
+        if chan != "xray-edge+business-probe":
+            bits.append(EVIDENCE_CHANNEL_NOTE.get(
+                chan, "⚠️ 未登记的证据通道 `%s`" % chan))
+
     exp = row.get("verify_experiment")
     if exp:
         bits.append("实验 `%s`" % exp)
@@ -364,8 +468,78 @@ def _mapping_section(snap, tn: _TableNumberer) -> str:
     return "\n".join(parts)
 
 
+def _severance_section(snap, tn: "_TableNumberer") -> str:
+    """切断手段与证据范围 —— 让读者能查到每条 confirmed 到底覆盖了什么。
+
+    ## 为什么这一节必须存在
+
+    §5 里每条 confirmed 都注明了手段，但手段的**适用范围**需要一处集中定义，
+    否则读者要靠猜。这一节做三件事：
+    列出本次实际用过的手段、说明每种手段覆盖与**不覆盖**什么、
+    统计各手段各验证了多少条边。
+
+    ## 「不覆盖」比「覆盖」更重要
+
+    监管审查问的是「你凭什么说这条依赖已验证」，而最容易被挑的正是
+    「你的测试没覆盖到的场景被你算作已验证」。所以每一行都必须写出边界：
+    `rds-reboot` 实测中断仅约 16~18 秒，它**不能**支撑「数据库彻底不可用」
+    这一场景下的结论。
+    """
+    confirmed = [r for r in snap.function_mapping
+                 if r.get("verify_status") == "confirmed"]
+    if not confirmed:
+        return ""
+
+    counts: Dict[str, int] = {}
+    chans: Dict[str, int] = {}
+    for r in confirmed:
+        counts[r.get("verify_severance") or "unspecified"] = counts.get(
+            r.get("verify_severance") or "unspecified", 0) + 1
+        chans[r.get("verify_evidence_channel") or "unknown"] = chans.get(
+            r.get("verify_evidence_channel") or "unknown", 0) + 1
+
+    unspec = counts.get("unspecified", 0)
+    parts = [
+        "## 6 切断手段与证据范围", "",
+        "本节回答「凭什么说这条依赖已验证，以及该结论**不**适用于什么」。"
+        "§5 每条 `Confirmed` 都注明了手段，手段的边界在此定义。", "",
+        "**已验证的 %d 条边并非同质证据。**「已验证」不等于「已覆盖全部中断场景」——"
+        "下表的「不覆盖」一列是本报告刻意突出的部分。" % len(confirmed), "",
+    ]
+    if unspec:
+        parts += [
+            "> **⚠️ %d / %d 条 `Confirmed` 未记录切断手段。** 这些判定由早期实验写入，"
+            "边上没有 `verify_severance`，因此**无法判断其结论的适用范围** ——"
+            "读者不应假定它们与本轮实验同等强度。本报告不为这些边补写手段："
+            "那不是本轮采集的证据，追认手段等于伪造来源。整改方向见 §11。"
+            % (unspec, len(confirmed)), "",
+        ]
+    parts += [
+        tn.caption("切断手段的证据范围与覆盖边数"), "",
+        _md_table(
+            ["切断手段", "中文名", "验证边数", "该手段的证据范围与不覆盖之处"],
+            [["`%s`" % k, SEVERANCE_SCOPE.get(k, (k, "", True))[0], n,
+              SEVERANCE_SCOPE.get(k, (k, "未登记的切断手段，适用范围不明",
+                                      True))[1]]
+             for k, n in sorted(counts.items(), key=lambda kv: -kv[1])]),
+        "",
+        tn.caption("证据通道分布"), "",
+        _md_table(
+            ["证据通道", "边数", "说明"],
+            [["`%s`" % k, n, EVIDENCE_CHANNEL_NOTE.get(
+                k, "⚠️ 未登记的证据通道")]
+             for k, n in sorted(chans.items(), key=lambda kv: -kv[1])]),
+        "",
+        "**共同限制（适用于全部手段）**：本轮取证均为**可用性**维度的切断实验，"
+        "不覆盖延迟升高、部分失败、数据正确性与容量耗尽等场景。"
+        "因此本报告不对依赖做 hard／soft 分级 —— 分级需要延迟与部分失败场景的证据，"
+        "而那些实验尚未进行。", "",
+    ]
+    return "\n".join(parts)
+
+
 def _breakdown_section(bd: Breakdown, tn: _TableNumberer) -> str:
-    parts = ["## 6 证据状态分列统计", "",
+    parts = ["## 7 证据状态分列统计", "",
              "三个维度回答三个不同问题，**刻意不合并成单一比率**："
              "平均会让「已声明但从未观测」与「已观测但从未验证」互相抵消，"
              "而那是监管审查最容易挑的点。", ""]
@@ -384,7 +558,7 @@ def _breakdown_section(bd: Breakdown, tn: _TableNumberer) -> str:
 #: 让页面硬编码一份标题字符串，就是又抄了一份清单 —— 本仓库因此吃过亏（同一份
 #: 依赖边清单四处各抄一份，其中两处漂移到实际错误）。这里的失效形状更隐蔽：
 #: 标题改了而页面没改，页面会**静默显示「（未生成）」**，既不报错也不缺页。
-LIMITATIONS_HEADING = "## 10 重大固有局限性与范围排除"
+LIMITATIONS_HEADING = "## 11 重大固有局限性与范围排除"
 
 
 def _limitations(snap, bd: Breakdown, tn: _TableNumberer) -> str:
@@ -404,24 +578,68 @@ def _limitations(snap, bd: Breakdown, tn: _TableNumberer) -> str:
     missing_verify = bd.bucket("verify_status", MISSING_LABEL)
     n_missing = missing_verify.count if missing_verify else 0
     lines += [
-        "**10.1 证据覆盖率 %s。** %d 条依赖里经实测确证（TEST/Confirmed）仅 %d 条，"
+        "**11.1 证据覆盖率 %s。** %d 条依赖里经实测确证（TEST/Confirmed）仅 %d 条，"
         "%d 条未测试。整改方向为扩大故障注入覆盖，"
         "当前受限于注入手段对 agent 层与部分托管服务的可达性。"
         % (pct, bd.total, n_conf, n_missing),
         "",
     ]
 
+    # ── 证据来源缺口：比覆盖率数字更容易被审查挑到 ──
+    #
+    # 「16 条已验证」这个数字会被读成 16 条同等强度的证据。实际不是：
+    # 一部分只做过约 16~18 秒的瞬时中断，一部分没有记录手段，
+    # 还有一个字段承载了两套不同轴的词汇。这三件事都必须在这里说，
+    # 而不是留给读者从 §5 的备注列里自己拼出来。
+    conf_rows = [r for r in snap.function_mapping
+                 if r.get("verify_status") == "confirmed"]
+    unspec = [r for r in conf_rows if not r.get("verify_severance")]
+    transient = [r for r in conf_rows
+                 if SEVERANCE_SCOPE.get(r.get("verify_severance") or "", (None,
+                                        None, False))[2]
+                 and r.get("verify_severance")]
+    legacy_chan = [r for r in conf_rows
+                   if (r.get("verify_evidence_channel") or "") in
+                   ("both", "throughput_only", "success_rate", "none")]
+    if unspec or transient or legacy_chan:
+        lines += [
+            "**11.2 已验证的 %d 条边并非同等强度证据。** 「已验证」这一个计数掩盖了"
+            "三个不同的缺口，逐项披露如下（详见 §6）：" % len(conf_rows),
+            "",
+        ]
+        if unspec:
+            lines += [
+                "- **%d 条未记录切断手段**，因此其结论的适用范围不明。这些判定由早期"
+                "实验写入。**本报告不为它们追认手段** —— 那不是本轮采集的证据。"
+                "整改方向：重跑这些边的切断实验并记录手段，或将其降级回未评估。"
+                % len(unspec), "",
+            ]
+        if transient:
+            lines += [
+                "- **%d 条仅做过瞬时中断测试**（数据库实例重启，实测中断约 16~18 秒）。"
+                "该证据**不支撑**「数据库长时间或彻底不可用」场景下的结论。"
+                "整改方向：补充长时中断场景的实验。" % len(transient), "",
+            ]
+        if legacy_chan:
+            lines += [
+                "- **`verify_evidence_channel` 字段语义不统一。** %d 条边的取值来自早期"
+                "词汇（描述「哪个指标退化」），与本轮词汇（描述「哪个观测来源」）"
+                "**不在同一语义轴上**。同一字段承载两套词汇会让筛选与统计失真。"
+                "整改方向：拆成两个字段，或为历史值补记来源 —— 但不得靠推测回填。"
+                % len(legacy_chan), "",
+            ]
+
     missing_kind = bd.bucket("dependency_kind", MISSING_LABEL)
     if missing_kind:
         lines += [
-            "**10.2 %d 条边的 `dependency_kind` 为未评估。** 这些是边类型分类新近"
+            "**11.3 %d 条边的 `dependency_kind` 为未评估。** 这些是边类型分类新近"
             "变更、尚待下轮 ETL 补标的边。该取值表示「尚未打标」，"
             "不表示「不适用」。" % missing_kind.count,
             "",
         ]
 
     lines += [
-        "**10.3 SYSC 15A.4.1R 的六要素只覆盖两项。** 该条原文要求 identify and "
+        "**11.4 SYSC 15A.4.1R 的六要素只覆盖两项。** 该条原文要求 identify and "
         "document the people, processes, technology, facilities and information "
         "necessary to deliver each important business service：",
         "",
@@ -436,7 +654,7 @@ def _limitations(snap, bd: Breakdown, tn: _TableNumberer) -> str:
                     if r.get("impact_tolerance_seconds") is None]
     if no_tolerance:
         lines += [
-            "**10.4 impact tolerance 未设定（%d/%d 个业务功能）。** SYSC 15A.2.5R "
+            "**11.5 impact tolerance 未设定（%d/%d 个业务功能）。** SYSC 15A.2.5R "
             "要求 firm *must* set an impact tolerance for each important business "
             "service。**本报告不得出现任何「未越界」表述** —— 没有阈值就是没有"
             "阈值，不能用「没检测到越界」掩盖「压根没有阈值可比」。"
@@ -445,20 +663,20 @@ def _limitations(snap, bd: Breakdown, tn: _TableNumberer) -> str:
         ]
 
     lines += [
-        "**10.5 承载层不在依赖表内（范围排除）。** 承载/放置类关系普遍为真、"
+        "**11.6 承载层不在依赖表内（范围排除）。** 承载/放置类关系普遍为真、"
         "不携带判别信息，算进依赖会让 Region 成为所有东西的咽喉点。代价是 EKS "
         "集群与负载均衡器不出现在依赖表中，而它们在 DORA 视角下确实是关键 ICT "
         "服务 —— 故单列于 §8 并注明性质。",
         "",
-        "**10.6 集中度是技术集中度，不是供应商集中度（范围排除）。** DORA "
+        "**11.7 集中度是技术集中度，不是供应商集中度（范围排除）。** DORA "
         "Art. 29/31 要的是供应商层面的集中度与分包链，需要法人实体节点才能回答；"
         "本平台当前只有技术对象。第四方分包链在埋点边界外，结构上做不到。",
         "",
-        "**10.7 未采用 ITS B_05.02 的 `Rank` 分层（范围排除）。** 法定模版用 "
+        "**11.8 未采用 ITS B_05.02 的 `Rank` 分层（范围排除）。** 法定模版用 "
         "`Rank`（直接第三方=1，分包商逐级>1）表达供应链层级。本报告的多跳可达数"
         "是技术依赖深度，与 Rank 的法人分包语义不同，**刻意不混用该字段名**。",
         "",
-        "**10.8 无历史版本查询能力。** SYSC 15A.6.2R 要求保存 each version 满 "
+        "**11.9 无历史版本查询能力。** SYSC 15A.6.2R 要求保存 each version 满 "
         "6 年。本报告通过「文件名带快照时刻、不覆盖历史」满足留存，"
         "但图谱本身无双时态，无法回答「三个月前这条依赖是什么状态」。",
     ]
@@ -510,13 +728,14 @@ def render_markdown(snap, bd: Breakdown,
         _criteria_section(tn), "",
         _glossary_section(tn), "",
         _mapping_section(snap, tn), "",
+        _severance_section(snap, tn), "",
         _breakdown_section(bd, tn), "",
     ]
 
     # ── §7 技术集中度 ──
     total_caps = snap.capability_count
     parts += [
-        "## 7 技术集中度",
+        "## 8 技术集中度",
         "",
         "对应 SYSC 15A.2.7G(10) 的原文要求：评估 *the potential aggregate impact "
         "of disruptions to multiple important business services, in particular "
@@ -536,7 +755,7 @@ def render_markdown(snap, bd: Breakdown,
 
     # ── §8 承载层 ──
     parts += [
-        "## 8 基础设施承载层（单列，非服务消费关系）",
+        "## 9 基础设施承载层（单列，非服务消费关系）",
         "",
         "本节所列边**不是**依赖。它们普遍为真、不携带判别信息，故不进依赖表；"
         "但 EKS 集群与负载均衡器在 DORA 视角下确实是关键 ICT 服务，故在此列出，"
@@ -555,7 +774,7 @@ def render_markdown(snap, bd: Breakdown,
         return "未设定（Not defined）" if v is None else str(v)
 
     parts += [
-        "## 9 业务功能与容忍度阈值",
+        "## 10 业务功能与容忍度阈值",
         "",
         "阈值取值词汇对齐 ITS (EU) 2024/2956 B_06.01.0080/0090 的口径（见 §4）。",
         "",
@@ -589,6 +808,10 @@ CSV_COLUMNS = (
     "capability", "tier", "service", "service_label", "edge_type",
     "target", "target_label", "target_scope",
     "dependency_kind", "verify_status", "confidence",
+    # 切断手段与证据通道必须进 CSV：审计取证要能按手段筛选与复核。
+    # 只写进 Markdown 不够 —— 审阅者拿到的明细表若缺这两列，
+    # 就无法回答「哪些 confirmed 只做过瞬时中断测试」。
+    "verify_severance", "verify_evidence_channel",
     "source", "drift_status", "last_seen", "verify_experiment",
 )
 

@@ -313,11 +313,15 @@ def test_m08_样例产出必须存在且结构与当前代码一致():
                     "## 3 适用标准",
                     "## 4 术语与取值定义",
                     "## 5 依赖关系映射",
-                    "## 6 证据状态分列统计",
-                    "## 7 技术集中度",
-                    "## 8 基础设施承载层",
-                    "## 9 业务功能与容忍度阈值",
-                    "## 10 重大固有局限性与范围排除",
+                    # §6 是 2026-09-15 新增：这 16 条 confirmed 的证据是异质的
+                    # （iam-deny 全程失败 vs rds-reboot 仅约 16~18 秒瞬时中断），
+                    # 不逐手段披露范围就是过度声称。
+                    "## 6 切断手段与证据范围",
+                    "## 7 证据状态分列统计",
+                    "## 8 技术集中度",
+                    "## 9 基础设施承载层",
+                    "## 10 业务功能与容忍度阈值",
+                    "## 11 重大固有局限性与范围排除",
                     "## 附录 A"):
         assert section in md_text, (
             "样例 Markdown 缺少章节 %r —— 模板改了但样例没重生成。" % section)
@@ -503,6 +507,73 @@ def test_m13_表格与章节必须编号():
     for n in range(1, 11):
         assert re.search(r"^## %d " % n, md_text, re.M), (
             "缺少编号章节 `## %d `。" % n)
+
+
+def test_m15_confirmed必须逐手段披露证据范围():
+    """`Confirmed` 不能是一个同质标签 —— 手段与适用范围必须落在报告里。
+
+    ## 实测依据
+
+    2026-09-15 的 16 条 confirmed 里：
+      4 条 `iam-deny`   注入期间调用全程失败，覆盖「依赖不可用」
+      3 条 `rds-reboot` 实例重启，实测中断仅约 **16~18 秒**
+      9 条 未记录手段   适用范围不明（早期实验写入）
+
+    此前 `_evidence()` 对全部 confirmed 返回同一句
+    `Confirmed — no exceptions noted`。用 SOC 2 这句措辞描述一次 16 秒的重启
+    测试，读者会以为该依赖被完整验证过 —— 那是过度声称，而且存
+    `verify_severance` 的全部意义就是让报告披露这个差别。
+
+    这条门禁盯三件事：瞬时手段不得用「no exceptions noted」；
+    §6 必须存在且写出每种手段**不覆盖**什么；未记录手段的 confirmed
+    必须在局限节里被点出数量。
+    """
+    from compliance_export.report import (
+        SEVERANCE_SCOPE, EVIDENCE_CHANNEL_NOTE, _evidence, _note)
+
+    # 1) 瞬时手段不得用「已完整验证」的措辞
+    for sev, (_name, scope, transient) in SEVERANCE_SCOPE.items():
+        _m, concl = _evidence({"verify_status": "confirmed",
+                               "verify_severance": sev})
+        if transient:
+            assert "no exceptions noted" not in concl, (
+                "瞬时手段 %r 的结论用了 SOC 2 的「no exceptions noted」—— "
+                "那是「已完整验证」的措辞，会让读者以为覆盖了长时中断。" % sev)
+            assert "范围受限" in concl, (
+                "瞬时手段 %r 的结论没有标出范围受限。" % sev)
+        assert scope, "%r 没有定义证据范围" % sev
+        assert ("不覆盖" in scope or "无法判断" in scope), (
+            "%r 的范围定义只说了覆盖什么、没说**不**覆盖什么。"
+            "监管审查挑的正是「没覆盖到的场景被算作已验证」。" % sev)
+
+    # 2) 瞬时手段与非标准通道必须写进备注列
+    n = _note({"verify_status": "confirmed", "verify_severance": "rds-reboot",
+               "verify_evidence_channel": "rds-event+business-probe"})
+    assert "范围限制" in n, "备注列没有写出瞬时手段的范围限制"
+    assert "无调用遥测" in n, "备注列没有披露消费方侧遥测缺失"
+
+    # 3) 报告必须有 §6，且未记录手段的 confirmed 要被点数
+    md = _SAMPLES / "SAMPLE-compliance-dependency-report.md"
+    if not md.exists():
+        pytest.skip("样例不存在，由 m08 报错")
+    md_text = md.read_text(encoding="utf-8")
+    assert "## 6 切断手段与证据范围" in md_text, "缺少切断手段与证据范围节"
+    assert "不覆盖" in md_text, "报告没有任何「不覆盖」的范围声明"
+    # 样例里若存在未记录手段的 confirmed，报告必须点出来
+    if "`unspecified`" in md_text or "未声明" in md_text:
+        assert "未记录切断手段" in md_text, (
+            "样例里有未记录手段的 confirmed，报告却没有披露 —— "
+            "读者会把它们与实测同等看待。")
+
+    # 4) 两套词汇都要登记，且新旧必须能区分
+    assert "throughput_only" in EVIDENCE_CHANNEL_NOTE, (
+        "早期词汇 throughput_only 未登记 —— 会被报告标成「未登记通道」，"
+        "而它其实是有定义的，只是与本轮词汇不同轴。")
+    assert "【退化指标】" in EVIDENCE_CHANNEL_NOTE["throughput_only"], (
+        "没有标明早期词汇描述的是「哪个指标退化」而非「哪个观测来源」。"
+        "同一字段承载两套不同轴的词汇，不标明就会被误读。")
+    assert "【观测来源】" in EVIDENCE_CHANNEL_NOTE["xray-edge+business-probe"], (
+        "没有标明本轮词汇描述的是观测来源。")
 
 
 def test_m14_章节标题不得在页面里硬编码():
