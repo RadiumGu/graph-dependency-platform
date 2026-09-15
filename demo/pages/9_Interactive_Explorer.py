@@ -107,6 +107,7 @@ def _neighbors_live(name: str, ets: tuple, limit: int) -> dict:
         "coalesce(endNode(r).name, endNode(r).tool_key, endNode(r).arn) AS target, "
         "labels(endNode(r))[0] AS target_label, r.verify_status AS verify_status, "
         "r.verify_degradation AS deg, r.verify_last AS verify_last, "
+        "r.verify_severance AS severance, r.verify_evidence_channel AS ev_channel, "
         "r.nfm_cross_az AS nfm_cross_az, r.drift_status AS drift, "
         "r.unobserved_since AS unobserved_since, r.last_seen AS last_seen, "
         "r.p99_latency_ms AS p99, r.error_rate AS error_rate, r.calls AS calls "
@@ -245,13 +246,43 @@ def absorb(rows: list) -> list:
             # 断掉时下游坏到什么程度。实测分布很宽（10% / 62% / 64%），
             # 而「确认与否」只有两档：把粗细给二值化的信息，就浪费了真正的爆炸半径。
             # 1.4–5.0px 之间线性映射，未确认或无退化数据的保持最细。
+            #
+            # ⚠️ 2026-09-15：`verify_degradation` 承载了**两种相反的语义**，
+            #    照字面用会把最严重的边画成最细。实测三条：
+            #
+            #      petsite -[PublishesTo]-> ServicesEks2-topicpetadoption   deg=0.0
+            #      petsite -[PublishesTo]-> ServicesEks2-sqspetadoption     deg=0.0
+            #      petsite -[DependsOn]->   ServicesEks2-sqspetadoption     deg=0.0
+            #
+            #    它们全是 confirmed，`verify_reason` 写的是「**完全切断**：基线 32 次
+            #    → 故障期从服务图消失 → 回滚后 29 次（前后夹住，排除聚合延迟），
+            #    且业务归零」。也就是说这是**最大**爆炸半径，不是零。
+            #
+            #    根因在探针侧：degradation 算的是 `baseline_sr - during_sr`
+            #    （成功率百分点差）。这几条 PublishesTo 边**没有成功率通道**，
+            #    基线与故障期都取到 0，于是 `0 - 0 = 0.0` —— 一个从「无数据」
+            #    算出来的值，恰好长得像「毫无退化」。
+            #    真实证据在 `verify_evidence_channel = xray-edge+business-probe`。
+            #
+            #    所以这里**不能只看 deg**：`verify_severance` 有值就说明干预方式是
+            #    「切断」且判定成立，那是满格宽度。已把探针侧的语义问题写进
+            #    todo/CROSS-SESSION-NOTE，修在那边之前，这里的读法必须自己兜住。
             _deg = r.get("deg")
-            if vs == "confirmed" and isinstance(_deg, (int, float)) and _deg > 0:
+            _sev = r.get("severance")
+            _severed = vs == "confirmed" and bool(_sev)
+            if _severed:
+                width = 5.0                      # 完全切断 = 满格，不是最细
+            elif vs == "confirmed" and isinstance(_deg, (int, float)) and _deg > 0:
                 width = 1.6 + min(float(_deg), 100.0) / 100.0 * 3.4
             else:
                 width = 1.4
             _bits = [f"{r.get('edge_type')} · {vs_text}"]
-            if isinstance(_deg, (int, float)) and _deg > 0:
+            if _severed:
+                # 刻意不写「退化 0.0%」—— 那个 0 不是测量值。
+                _bits.append(f"⛔ 完全切断（{_sev}）：故障期该边从服务图消失")
+                if r.get("ev_channel"):
+                    _bits.append(f"证据通道 {r.get('ev_channel')}")
+            elif isinstance(_deg, (int, float)) and _deg > 0:
                 _bits.append(f"下游退化 {_deg:.1f}%")
             # 验证时效：一条边「确认过」不等于「现在还成立」。
             # 把距今天数摆出来，让读者自己判断这个结论有多新。
@@ -589,6 +620,11 @@ with st.expander("图例与设计说明"):
         "**边的粗细 = 实测退化率**（`verify_degradation`）：注入故障后观测方退化的"
         "百分比，也就是这条依赖断掉时下游坏到什么程度。实测分布很宽（10% 到 64%），"
         "所以粗细给了它而不是给「确认与否」那两档。未确认的边一律最细。\n\n"
+        "**满格粗 = 完全切断**：有些边没有成功率通道可测（比如发往 SNS/SQS 的"
+        "`PublishesTo`），注入时它直接**从服务图消失**、业务归零。这类边的"
+        "`verify_degradation` 会算成 `0.0`（基线与故障期都没有样本，相减得零），"
+        "**那个 0 不是测量值**。所以这里按 `verify_severance` 判定，画满格宽度 —— "
+        "照字面读 0.0 会把爆炸半径最大的边画成最细，正好反了。\n\n"
         "关系类型、退化率数值、**距今多久验证过**都在**悬停边**时显示。"
         "时效值得单独看一眼：一条边确认过，不等于它现在还成立。\n\n"
         "**虚线 = 跨可用区**。优先用边上 `nfm_cross_az`（Network Flow Monitor 实测，"
