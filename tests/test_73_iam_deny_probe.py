@@ -259,16 +259,19 @@ def test_t73_10_cron侧必须真的读得到互锁():
     src = cron.read_text(encoding="utf-8")
 
     assert "import chaos_lock" in src, "cron 没有检查实验期互锁"
-    # 导入前必须自己补路径
-    i = src.index("import chaos_lock")
-    head = src[max(0, i - 600):i]
-    assert "sys.path" in head, (
+    # 判据是「**至少有一处**真实导入前设了 sys.path」。
+    #
+    # 第一版用 `src.index()` 取首次出现，而首次出现落在**注释里**
+    # （注释正写着「原实现是裸 import chaos_lock」），于是往前的窗口全是注释、
+    # 断言必红。这是本会话第三次同族失误：**切片判据比意图松**
+    # （前两次：t73_03 用 rindex 取到正当用法、t73_04 把紧随的 class 圈进函数体）。
+    spots = [m.start() for m in re.finditer(r"import chaos_lock", src)]
+    assert any("sys.path" in src[max(0, i - 800):i] for i in spots), (
         "cron 在 import chaos_lock 之前没有设置 sys.path —— "
         "cron 运行器用 spec_from_file_location 加载脚本，"
         "那种方式不会把脚本目录加进 sys.path，导入必然失败。")
     # 读不到必须留痕，不能静默
-    tail = src[i:i + 900]
-    assert ("interlock-unreadable" in tail or "WARN" in tail), (
+    assert "interlock-unreadable" in src, (
         "读不到互锁时没有留痕 —— 静默失效的机制等于不存在的机制。"
         "本项目正是因此让互锁在两侧都失效了很久而无人发现。")
     assert "SKIP interlock" in src, (
