@@ -483,3 +483,39 @@ def test_t73_11_cron告警必须自带事件时刻():
         assert stamped >= alarms, (
             "%s 有 %d 处 raise Report 但只有 %d 处带时刻 —— "
             "漏戳的那处重放时无法分辨。" % (name, alarms, stamped))
+
+def test_t73_12_两个cron都要有运行日志():
+    """告警可判的前提是有运行日志 —— 判据是「同时刻有无 alarm= 行」。
+
+    领养 cron 一直有，waggle **没有**，于是 2026-09-15 收到两条 waggle 告警时
+    无法重建它的报警历史。`crons.json` 的 `last_result_ts` 重建不出中间那些
+    成功的轮次（该字段只在 raise Report 时写入）。
+
+    并且要求 waggle 侧是**包装层**而不是逐分支插日志：内层有 6 处
+    raise Report，逐处插漏一处、那一处就永远不可判，而漏了哪处最难自查。
+    """
+    import re
+    logs = {"adoption_synthetic_traffic.py": "adoption-traffic-runs.log",
+            "waggle_synthetic_traffic.py": "waggle-traffic-runs.log"}
+    for name, logname in logs.items():
+        cron = pathlib.Path("~/.kiro/crew/crons/%s" % name).expanduser()
+        if not cron.exists():
+            continue
+        src = cron.read_text(encoding="utf-8")
+        assert "def _runlog" in src, "%s 没有运行日志 —— 告警无法判真伪" % name
+        assert logname in src, "%s 的日志路径不是 %s" % (name, logname)
+        assert "START" in src and "alarm=" in src, (
+            "%s 的日志没有 START / alarm= 两类记录 —— "
+            "缺 START 分不出「没跑」与「跑了没报」" % name)
+    # waggle 侧必须是包装层：内层单独成函数，run 只负责记账
+    w = pathlib.Path(
+        "~/.kiro/crew/crons/waggle_synthetic_traffic.py").expanduser()
+    if w.exists():
+        src = w.read_text(encoding="utf-8")
+        assert "def _run_inner" in src, (
+            "waggle 的运行日志不是包装层 —— 逐分支插日志会漏，"
+            "而漏了哪个分支最难自查。")
+        reports = len(re.findall(r"raise Report\(", src))
+        assert src.count("_runlog(") <= reports, (
+            "看起来是逐分支插的（_runlog 调用数接近 raise Report 数），"
+            "应当由包装层统一记账。")
