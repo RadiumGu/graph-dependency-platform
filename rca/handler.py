@@ -103,6 +103,25 @@ def lambda_handler(event, context):
                 f"AlertBuffer: buffered fingerprint={unified.fingerprint[:8]}... "
                 f"svc={unified.service_name} first_in_window={is_first}"
             )
+            # ── 首次进窗时发起 DevOps Agent 调查（2026-09-15 接入）──────
+            #
+            # 接在 `is_first` 而不是每条告警：同一个故障只发一次调查。
+            # 不去重的话一次告警风暴会打满 agent task 配额，
+            # 而后面那些任务查的是同一件事。
+            #
+            # 为什么不用 `aws devops-agent create-trigger`：它的 condition
+            # 是 tagged union 且**只支持 schedule**，没有告警条件
+            # （2026-09-15 实测 + CLI 文档原文）。工作坊也说生产环境
+            # 的 alarm-driven investigation 由 Lambda 调用。
+            #
+            # 默认关闭（DEVOPS_AGENT_INVESTIGATE_ENABLED），
+            # 且任何异常都在模块内吞掉 —— 发起调查是增强，不是主链路。
+            if is_first:
+                try:
+                    from actions.devops_agent_trigger import on_first_alert
+                    on_first_alert(unified)
+                except Exception as _e:             # noqa: BLE001
+                    logger.warning("DevOps Agent 调查发起跳过: %r", _e)
             return {
                 'statusCode': 202,
                 'body': json.dumps({
