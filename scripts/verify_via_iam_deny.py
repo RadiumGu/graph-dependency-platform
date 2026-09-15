@@ -812,21 +812,10 @@ def run_probe(service: str, label: str, target: str,
     #
     # 标记模块刻意从 `~/.kiro/crew/crons/` 导入而不在这里复制一份路径与格式 ——
     # 本仓库有过「同一份清单四处各抄一份、其中两处漂移到实际错误」的记录。
-    _lock = None
-    try:
-        sys.path.insert(0, os.path.expanduser("~/.kiro/crew/crons"))
-        import chaos_lock as _lock  # type: ignore
-    except Exception as _e:
-        print("⚠️ 取不到实验期互锁模块（%r）—— 合成流量 cron 可能在故障期报假警报"
-              % _e)
-
     # 预算给足余量：restart + 生效轮询 + hold + 恢复确认，宁可多标一会儿。
     budget = 240 + propagation_budget + hold_seconds + _RECOVERY_BUDGET_SECONDS
-    if _lock:
-        _lock.begin("%s -> %s" % (service, target), budget,
-                    note="iam-deny probe")
-        print("已置位实验期互锁（%ds 后自动失效）—— 合成流量 cron 本期间整轮跳过"
-              % budget)
+    _lock = acquire_chaos_lock("%s -> %s" % (service, target), budget,
+                               "iam-deny probe")
 
     policy_name = "%s-%s" % (POLICY_PREFIX, int(time.time()))
     during = biz_during = post = None
@@ -987,9 +976,7 @@ def run_probe(service: str, label: str, target: str,
                                  base, during or {}, out.stem)
     print("   写回: %s" % persisted)
 
-    if _lock:
-        _lock.end()
-        print("   已释放实验期互锁 —— 合成流量 cron 下一轮恢复正常。")
+    release_chaos_lock(_lock)
     # 恢复确认期间刻意保留负载（更贴近真实），到这里才停。
     load.stop()
     print("   背景流量已停：%s" % load.stats)
@@ -1056,6 +1043,52 @@ def _edge_ids(service: str, target: str) -> tuple[list[dict], str]:
     return hits, ("%d 条边（%s）—— IAM deny 作用于整个资源，"
                   "切断覆盖这一对节点之间的全部交互，故全部写回"
                   % (len(hits), "、".join(labels)))
+
+
+def acquire_chaos_lock(target: str, budget_seconds: int, note: str):
+    """置位实验期互锁，返回句柄（`None` 表示取不到模块）。
+
+    ## 为什么必须每个注入实验都置位
+
+    合成流量 cron 会在故障期发现链路坏了并**按设计报警**。那是实验的预期副作用，
+    不该进用户的通知渠道 —— **假警报会训练人忽略真警报**。
+    反向也成立：cron 的突发流量会扰动基线与恢复判定。
+
+    2026-09-15 实测踩过：新写的 Service 黑洞实验器**完全没置位互锁**，
+    RDS 实验器只调了 `end()` 从没 `begin()`。于是黑洞实验的故障窗口里
+    cron 报了一条「连续 3 次首页都取不到 petId」——存证页面是 petsite 的
+    `Oops! Something went wrong` 错误页，正是 petsearch 不可达的形态。
+    那是一条**我自己造出来的假警报**。
+
+    ## 只留一份实现
+
+    这个函数存在的理由就是不让三个实验器各抄一份路径与调用格式。
+    本仓库有过「同一份清单四处各抄一份、其中两处漂移到实际错误」的记录；
+    互锁漂移的失效形状更隐蔽 —— 漏置位不会报错，只会安静地多出假警报。
+    """
+    lock = None
+    try:
+        sys.path.insert(0, os.path.expanduser("~/.kiro/crew/crons"))
+        import chaos_lock as lock  # type: ignore
+    except Exception as e:
+        print("⚠️ 取不到实验期互锁模块（%r）—— 合成流量 cron 可能在故障期报假警报"
+              % e)
+        return None
+    lock.begin(target, budget_seconds, note=note)
+    print("已置位实验期互锁（%ds 后自动失效）—— 合成流量 cron 本期间整轮跳过"
+          % budget_seconds)
+    return lock
+
+
+def release_chaos_lock(lock) -> None:
+    """释放互锁。`None` 安全。必须放在 `finally` 里 —— 漏释放会让 cron 一直跳过。"""
+    if not lock:
+        return
+    try:
+        lock.end()
+        print("已释放实验期互锁 —— 合成流量 cron 下一轮恢复正常。")
+    except Exception as e:
+        print("⚠️ 释放互锁失败 %r —— cron 会跳过到标记自然过期" % e)
 
 
 def _persist_verdict(service: str, label: str, target: str,

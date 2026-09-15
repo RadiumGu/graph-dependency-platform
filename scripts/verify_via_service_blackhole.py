@@ -189,6 +189,12 @@ def run(service: str, target: str, svc_name: str, window: int,
         load.stop()
         return 0
 
+    # 互锁必须在注入**之前**置位 —— 否则 cron 会在故障期报假警报。
+    # 2026-09-15 第一版漏了这一步，实测产生了一条「首页取不到 petId」的假警报。
+    budget = _POLL_BUDGET + hold + window + 420 + 120
+    lock = dm.acquire_chaos_lock("%s -> Microservice(%s)" % (service, target),
+                                 budget, "service-blackhole probe")
+
     biz_during = None
     try:
         print()
@@ -280,6 +286,7 @@ def run(service: str, target: str, svc_name: str, window: int,
         out_p.stem, severance="k8s-service-blackhole",
         evidence_channel="xray-edge+business-probe")
     print("   写回: %s" % persisted)
+    dm.release_chaos_lock(lock)
     load.stop()
     print("   背景流量已停: %s" % load.stats)
     return 0

@@ -388,12 +388,10 @@ def run(service: str, target: str, tpl_id: str, expect_role: str,
         load.stop()
         return 0
 
-    lock = None
-    try:
-        from importlib import import_module
-        lock = import_module("chaos_lock")
-    except Exception:
-        pass
+    # 互锁：预算覆盖注入 + 轮询 + hold + 恢复确认，宁可多标一会儿。
+    budget = _FAULT_POLL_BUDGET + window + _RECOVERY_BUDGET_SECONDS + 120
+    lock = dm.acquire_chaos_lock("%s -> RDSInstance(%s)" % (service, target),
+                                 budget, "rds-fault probe")
 
     exp_id = None
     biz_during = None
@@ -492,11 +490,7 @@ def run(service: str, target: str, tpl_id: str, expect_role: str,
                                         if use_event_channel
                                         else "xray-edge+business-probe"))
     print("   写回: %s" % persisted)
-    if lock:
-        try:
-            lock.end()
-        except Exception:
-            pass
+    dm.release_chaos_lock(lock)
     load.stop()
     print("   背景流量已停: %s" % load.stats)
     return 0

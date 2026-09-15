@@ -231,6 +231,52 @@ def test_t73_07_完全切断必须被前后夹住才算生效():
     assert "不写 confirmed" in why, why
 
 
+def test_t73_09_每个注入实验器都必须置位实验期互锁():
+    """注入故障的脚本必须置位互锁，且只能有一份互锁实现。
+
+    ## 实测依据
+
+    2026-09-15：新写的 Service 黑洞实验器**完全没置位互锁**，RDS 实验器只调了
+    `end()` 从没 `begin()`。黑洞实验的故障窗口里 cron 报出
+    「连续 3 次首页都取不到 petId」—— 存证页面是 petsite 的
+    `Oops! Something went wrong` 错误页，正是 petsearch 不可达的形态。
+    那是一条**实验自己造出来的假警报**。
+
+    **假警报会训练人忽略真警报**，所以这不是卫生问题而是可靠性问题。
+
+    ## 为什么还要求「只有一份实现」
+
+    漏置位不会报错，只会安静地多出假警报 —— 这种失效形状最容易在复制粘贴中
+    漂移。所以互锁的取用格式只允许有一处定义（`acquire_chaos_lock`），
+    其余脚本必须调它，不得各自 `import chaos_lock` 再自己拼调用。
+    """
+    root = _SCRIPT.parent
+    injectors = {
+        "verify_via_iam_deny.py": "IAM deny",
+        "verify_via_rds_fault.py": "RDS 故障注入",
+        "verify_via_service_blackhole.py": "Service 选择器黑洞",
+    }
+    impl = (root / "verify_via_iam_deny.py").read_text(encoding="utf-8")
+    assert "def acquire_chaos_lock" in impl, "缺少统一的互锁取用函数"
+    assert "def release_chaos_lock" in impl, "缺少统一的互锁释放函数"
+
+    for fn, desc in injectors.items():
+        p = root / fn
+        if not p.exists():
+            continue
+        src = p.read_text(encoding="utf-8")
+        assert "acquire_chaos_lock(" in src, (
+            "%s（%s）没有置位实验期互锁 —— 故障期 cron 会报假警报，"
+            "而假警报会训练人忽略真警报。" % (fn, desc))
+        assert "release_chaos_lock(" in src, (
+            "%s（%s）没有释放互锁 —— 漏释放会让 cron 一直跳过到标记过期。"
+            % (fn, desc))
+        if fn != "verify_via_iam_deny.py":
+            assert "import chaos_lock" not in src, (
+                "%s 自己 import 了 chaos_lock —— 互锁的取用格式只允许一处定义，"
+                "各自拼调用就会漂移（漏置位不报错，只是安静地多出假警报）。" % fn)
+
+
 def test_t73_08_同对多边必须全部写回且绑定切断作用域():
     """同一对节点之间的多条边要么全写、要么全不写，且理由必须写在代码里。
 
