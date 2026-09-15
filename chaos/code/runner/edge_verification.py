@@ -407,12 +407,27 @@ def write_verdict(v: dict) -> bool:
     )
     try:
         query_gremlin_parsed(q)
-        logger.info("边 %s (%s->%s) 判定 %s  置信度 %s",
-                    v['label'], v['observer'], '?', v['status'], v['confidence'])
-        return True
     except Exception as e:
         logger.error("写回边判定失败 edge=%s: %s", v['edge_id'], e)
         return False
+    # ⚠️ 日志**不能**和写入共用一个 try。
+    #
+    # 2026-09-15：原实现把 logger.info 放在 try 内，而那行引用 `v['label']`
+    # 与 `v['observer']` —— 两个**可选**键。调用方不传时 KeyError 被同一个
+    # `except Exception` 吞掉，函数在**写入已经成功之后**返回 False。
+    #
+    # 实测后果：源码审计那轮 4 条边全部写成功（图上 modeling_artifact=4、
+    # confirmed 17→16），而脚本报告「已写回 0 条边」——一个与事实相反的
+    # 合规陈述。方向恰好是少报，但少报同样是错的，而且会诱使调用方重试。
+    #
+    # 判据：写入的成败只由写入本身决定；记账失败最多让日志缺一行。
+    try:
+        logger.info("边 %s (%s) 判定 %s  置信度 %s",
+                    v.get('label') or '?', v.get('observer') or v['edge_id'],
+                    v['status'], v['confidence'])
+    except Exception as e:                                   # pragma: no cover
+        logger.warning("写回成功但记日志失败 edge=%s: %s", v['edge_id'], e)
+    return True
 
 
 def coverage(now_epoch: int | None = None) -> dict:

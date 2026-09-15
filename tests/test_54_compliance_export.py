@@ -614,3 +614,71 @@ def test_m14_章节标题不得在页面里硬编码():
     assert LIMITATIONS_HEADING in md.read_text(encoding="utf-8"), (
         "LIMITATIONS_HEADING (%r) 在样例报告里找不到 —— 常量与渲染器已脱节，"
         "页面会静默显示「（未生成）」。" % LIMITATIONS_HEADING)
+
+def test_m16_建模产物分类必须带证据且不得删边():
+    """剔除分母会**抬高被考核的覆盖率** —— 所以这条路径要三重约束。
+
+    一个能自己调整分母的指标不是指标。约束：
+      1. 声明式白名单，每条必带 evidence（file:line）与 searched（搜过哪些模式）
+      2. 绝不删边 —— 只改 verify_status，边仍在图里、仍在总数里
+      3. searched 必填：本项目在「搜了不匹配的模式然后相信空结果」上栽过十次，
+         最近一次差点删掉一条**真实**依赖（payforadoption -> DynamoDB 经
+         guregu/dynamo 的 db.Table 调用，搜 `dynamodb.` 搜不到）
+    """
+    src = pathlib.Path("scripts/classify_modeling_artifacts.py").read_text(
+        encoding="utf-8")
+    # 不得有任何删边操作
+    for bad in ("drop()", ".remove()", "DELETE ", "detach"):
+        assert bad not in src, (
+            "分类器里出现删边操作 %r —— 剔出分母必须靠状态标注，"
+            "删边会让总数也变，读者无法审计剔了什么" % bad)
+    # 证据字段必填由 import 期校验兜住
+    assert "_validate()" in src, "没有 import 期校验 —— 没有证据的条目应当写不进表"
+    assert "searched" in src and "evidence" in src, "证据字段不完整"
+    # 「表里有、图里没有」必须硬失败
+    assert "raise SystemExit" in src, (
+        "定位不到边时没有硬失败 —— 静默跳过的后果是「我以为标了、其实没标」")
+    # 三类语义必须分开，不能一律叫产物
+    for name in ("PLATFORM_PULL", "DESIGNED_TO_FAIL"):
+        assert name in src, (
+            "%s 缺失 —— ECR 拉镜像与「设计成失败」的 S3 调用都是**真边**，"
+            "把它们塞进 modeling_artifact 是用分类掩盖问题" % name)
+
+
+def test_m17_写回成败不得由记日志决定():
+    """写入成功后因日志缺键返回 False，会产出与事实相反的合规陈述。
+
+    2026-09-15 实测：源码审计那轮 4 条边全部写成功（图上 modeling_artifact=4、
+    confirmed 17→16），而脚本报告「已写回 0 条边」—— 原因是 logger.info 引用了
+    两个**可选**键，KeyError 被与写入共用的 except 吞掉。方向是少报，
+    但少报同样是错的，而且会诱使调用方重试。
+    """
+    src = pathlib.Path("chaos/code/runner/edge_verification.py").read_text(
+        encoding="utf-8")
+    # 切到下一个**顶层** def/class，而不是固定字符数窗口。
+    # 第一版用 src[i:i+4000]，而 write_verdict 的 docstring 就超过 4000 字符，
+    # 于是 index() 抛 ValueError —— 又一次「切片判据比意图窄」。
+    i = src.index("def write_verdict")
+    m = re.search(r"\n(?=(?:def |class )\w)", src[i + 1:])
+    body = src[i:i + 1 + m.start()] if m else src[i:]
+    j = body.index("query_gremlin_parsed(q)")
+    # 写入之后到 return True 之间不得再有能抛 KeyError 的必需键下标访问。
+    #
+    # ⚠️ **先剥注释再断言。** 本会话已第五次栽在同一件事上：判据撞在我自己写的
+    # 解释性注释里（这里的注释就必须引用 `v['label']` 才能说明白问题），
+    # 于是指着一段解释报违规。同源的前四次：
+    #   t73_03  docstring 提到 SERVICE_PROBES → hunk 被误分类，暂存出半个修复
+    #   t73_04  '\\ndef ' 找函数体结尾，把紧随的 class 圈进来
+    #   t73_10  index() 取到注释里的 import chaos_lock
+    #   m17     固定 4000 字符窗口比函数体短
+    # 判据要看的是**代码**，不是关于代码的说明。
+    seg = body[j:body.index("return True", j)]
+    code = "\n".join(ln for ln in seg.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    for key in ("label", "observer"):
+        assert "v['%s']" % key not in code and 'v["%s"]' % key not in code, (
+            "写入后仍用必需键下标取可选字段 %r —— 用 v.get()，"
+            "或把日志移出写入的 try。那正是 2026-09-15 那次少报的直接原因。" % key)
+    # 日志必须有自己的 try：记账失败最多让日志缺一行，不能改变写入的成败
+    assert body[j:].count("try:") >= 1, (
+        "日志没有独立的 try —— 记账失败会伪装成写回失败")

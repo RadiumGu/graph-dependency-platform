@@ -191,6 +191,20 @@ def _md_table(headers: List[str], rows: List[List[Any]]) -> str:
 #: 这条依赖被完整验证过。那是过度声称 —— 存 `verify_severance` 的全部意义
 #: 就是让报告披露这个差别，不披露就等于没存。
 SEVERANCE_SCOPE: Dict[str, Tuple[str, str, bool]] = {
+    "source-audit": (
+        "源码/IaC 审计",
+        "**未做故障注入**。结论是「这个调用在代码里不存在」——确定性证据，"
+        "但性质与故障注入完全不同：它证明的是**不存在依赖**，"
+        "不是「依赖存在且承重」。因此这类边被排除在可评估分母之外，"
+        "而不是计入 confirmed。"
+        "**不覆盖**以下情形：(a) 部署镜像与被审源码树不一致 —— "
+        "本审计读的是仓库，不是运行中的镜像，若镜像来自另一个提交则结论可能失效；"
+        "(b) 非源码路径发起的调用（sidecar、自动注入的 agent、运行期加载的插件）；"
+        "(c) 反射或动态构造的调用；"
+        "(d) IaC 层的连线（如由 EventBridge 触发而非被应用代码调用）。"
+        "对具名 RDS 实例的判定还**无法判断**故障转移后的角色变化 —— "
+        "结论只在所附角色快照下成立",
+        False),
     "iam-deny": (
         "IAM 拒绝",
         "注入期间该依赖的调用**全程**返回 AccessDenied，覆盖「依赖不可用」场景；"
@@ -268,6 +282,14 @@ def _evidence(row: Dict[str, Any]) -> Tuple[str, str]:
         return "TEST", ("Confirmed（%s）— no exceptions noted" % name)
     if status == "inconclusive":
         return "TEST", "Inconclusive — 已注入故障，观测退化不足以判定"
+    if status == "modeling_artifact":
+        # 取证方法是 EXAMINE 而非 TEST：源码/IaC 审计是**检查**，不是测试。
+        # 用 TEST 会让读者以为做过故障注入。
+        #
+        # 措辞刻意不写 "not a dependency" 而写「建模产物」：边仍在图里、
+        # 仍在总数里，被排除的只是**可评估分母**。两者的区别必须能从
+        # 措辞上看出来，否则读者会以为图谱被删过。
+        return "EXAMINE", "建模产物 — 源码/IaC 审计证明该调用不存在"
     if status:
         return "TEST", str(status)
     if row.get("source"):
