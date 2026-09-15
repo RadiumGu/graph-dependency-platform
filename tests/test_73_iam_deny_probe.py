@@ -459,3 +459,27 @@ def test_t73_06_方法表必须带xray类型前缀():
         assert "xray_types" in spec, (
             "%s 没有声明 xray_types（按名字能匹配就写空元组，"
             "但必须显式声明 —— 缺失与「空」在读代码时无法区分）" % label)
+
+def test_t73_11_cron告警必须自带事件时刻():
+    """告警文案必须能自证是哪一刻的事件 —— 否则重放无法分辨。
+
+    `crons.json` 里 `last_result` 只在 raise Report 时写入，成功的轮次既不刷新
+    也不清除它。实测 10:32 那轮明明 `last_status=ok`，`last_result_ts` 仍卡在
+    10:07:23，于是通知面把一条 10:02 的旧告警在 10:33 当成当前状态重新推了一遍。
+
+    平台字段语义不由本仓库负责，但告警**自带时刻**是脚本侧能做到的，
+    做到了就能一眼分辨重放，不必每次去翻存证目录和运行日志。
+    """
+    import re
+    for name in ("adoption_synthetic_traffic.py", "waggle_synthetic_traffic.py"):
+        cron = pathlib.Path("~/.kiro/crew/crons/%s" % name).expanduser()
+        if not cron.exists():
+            continue
+        src = cron.read_text(encoding="utf-8")
+        assert "def _stamp" in src, "%s 没有事件时刻辅助函数" % name
+        # 每一处告警都要戳，漏一处那一处就会被误当成当前状态
+        alarms = len(re.findall(r"raise Report\(", src))
+        stamped = src.count("{_stamp()}")
+        assert stamped >= alarms, (
+            "%s 有 %d 处 raise Report 但只有 %d 处带时刻 —— "
+            "漏戳的那处重放时无法分辨。" % (name, alarms, stamped))
