@@ -167,3 +167,44 @@ def xray_aws_type_prefixes(graph_name: str) -> tuple:
     「匹配到但零调用」区分开，否则又是一次把「测不出」当「无流量」。
     """
     return _XRAY_AWS_TYPE_PREFIXES.get((graph_name or '').strip().lower(), ())
+
+
+#: AgentCore 运行时在 X-Ray 服务图里的节点名后缀。
+#:
+#: 实测（2026-09-15）：图谱节点名是 `WaggleAIOrchestrator`，
+#: 而 X-Ray 里是 `WaggleAIOrchestrator.DEFAULT`（endpoint 名附在后面）。
+#: 按名字精确比会全部落空。
+_AGENTCORE_NAME_SUFFIXES = ('.DEFAULT',)
+
+#: AgentCore **运行时之间**的委派在 X-Ray 里的真实形态。
+#:
+#: 实测近 1h 服务图：
+#:
+#:     WaggleAIOrchestrator.DEFAULT -> waggleaigateway-th4m2rp46p.gateway.
+#:                                     bedrock-agentcore.<region>.amazonaws.com
+#:                                     [remote]  4 次
+#:
+#: **委派不是一条到目标运行时的边，而是一条到「AgentCore 网关」的边。**
+#: 所以拿目标运行时名（`WaggleAINutrition`）去服务图里找，永远找不到 ——
+#: 这与本仓库既有记载一致：agent 间调用经网关，网关 span 才是采集点
+#: （8fa841d / 2be2048 那两次的结论）。
+#:
+#: 后果：`Delegates` 边的**边级流量测不出目标粒度**。网关那条边是所有
+#: 委派的合流，切断其中一条子委派时它的总量不会归零。
+#: 所以这类边的生效性证据不能靠边级流量，只能靠**业务探针的语义判据**
+#: （`probe_waggle` 看回答内容而不是状态码）。
+_AGENTCORE_GATEWAY_MARKERS = ('gateway.bedrock-agentcore',)
+
+
+def is_agentcore_gateway(xray_name: str) -> bool:
+    n = (xray_name or '').lower()
+    return any(m in n for m in _AGENTCORE_GATEWAY_MARKERS)
+
+
+def agentcore_name_candidates(graph_name: str) -> list[str]:
+    """图谱 AgentRuntime 名 -> X-Ray 服务图里可能的节点名。"""
+    if not graph_name:
+        return []
+    out = [graph_name]
+    out += [graph_name + s for s in _AGENTCORE_NAME_SUFFIXES]
+    return out

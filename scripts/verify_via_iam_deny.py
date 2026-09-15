@@ -140,8 +140,49 @@ SEVERANCE_METHODS: dict[str, dict] = {
         "xray_types": (),
     },
     "AgentRuntime": {
-        "actions": ["bedrock-agentcore:InvokeAgentRuntime"],
-        "arn": "*",          # runtime ARN 形态多变，先用 * 再收窄
+        # ⚠️⚠️ **实测：这一项目前验不出来**（2026-09-15，三次真跑）。
+        #
+        # 保留它是因为 IAM 层面完全有效，缺的是"让运行时重新取凭证"的手段。
+        # 详见下面的三段实测，别再重跑一遍。
+        #
+        # ## 一、deny 的 action 选错过（已修）
+        #
+        # 第一版只 deny `InvokeAgentRuntime`。业务毫无变化。
+        # 该角色的内联策略同时授了两个 action，资源前缀不同：
+        #     bedrock-agentcore:InvokeAgentRuntime -> arn:...:*
+        #     bedrock-agentcore:InvokeGateway      -> arn:...:gateway/*
+        # 而 X-Ray 显示 Orchestrator 的出边指向
+        # `waggleaigateway-...gateway.bedrock-agentcore...` —— **委派经网关**。
+        # 与本仓库既有记载一致（8fa841d / 2be2048：agent 间调用经网关）。
+        # 我读过那条记载，却只把它用在观测侧、没用在 deny 的 action 选择上。
+        #
+        # ## 二、被测边选错过（不是代码问题，是用法）
+        #
+        # 探针问「Which dogs are available for adoption?」会被路由到
+        # `WaggleAIAdoption`（26 次调用），而我先验的是
+        # `WaggleAINutrition`（5 次）—— **切断了一条被测路径上不存在的委派**。
+        # 验 Delegates 边必须让探针的问题落在那条委派上。
+        #
+        # ## 三、真正的卡点：AgentCore 缓存凭证
+        #
+        # 两个 action 都 deny、改验最忙的那条边之后，业务**仍然**不退化。
+        # 用 `iam simulate-principal-policy` 直接问 IAM：
+        #     无 deny                -> allowed
+        #     加 deny Resource=*     -> explicitDeny
+        # **IAM 层面完全有效。** 所以 deny 生效、业务不退化，只剩一个解释：
+        # AgentCore 运行时缓存了凭证，策略变更在实验窗口内没被重新拉取。
+        #
+        # 脚本自己那条告警说的就是这件事：
+        #     ⚠️ 取不到 <runtime> 的 K8s 工作负载名，未能刷新凭证
+        # 对集群内服务它会 `rollout restart` 强制重取凭证；
+        # 对 AgentCore 托管运行时**没有等价手段** ——
+        # `update-agent-runtime` 可能可以（未验证，会改生产配置）。
+        #
+        # 所以这类边的现状是「有手段但缺一步」，不是「不可注入」。
+        # 补上刷新凭证的路径才算真的解开。
+        "actions": ["bedrock-agentcore:InvokeAgentRuntime",
+                    "bedrock-agentcore:InvokeGateway"],
+        "arn": "*",          # runtime 与 gateway ARN 形态不同，用 * 覆盖两者
         "also": [],
         "xray_types": ("AWS::BedrockAgentCore",),
     },
@@ -706,6 +747,39 @@ def _measure(client: str, server: str, window: int,
             "p99_ms": getattr(snap, "latency_p99_ms", None)}
 
 
+def edge_flow_measurable(src_label: str, dst_label: str) -> tuple[bool, str]:
+    """这条边的**边级流量**能不能测到目标粒度。
+
+    ## AgentCore 运行时之间的委派测不出（2026-09-15 实测）
+
+    近 1h X-Ray 服务图里，Orchestrator 的出边是：
+
+        WaggleAIOrchestrator.DEFAULT
+            -> waggleaigateway-th4m2rp46p.gateway.bedrock-agentcore...  [remote]
+
+    **委派不是一条到目标运行时的边，而是一条到「AgentCore 网关」的边。**
+    拿目标运行时名（`WaggleAINutrition`）去服务图里找永远找不到 ——
+    这与本仓库既有记载一致（8fa841d / 2be2048：agent 间调用经网关）。
+
+    而网关那条边是**所有委派的合流**：切断其中一条子委派时它的总量不会归零。
+    所以这类边的生效性证据不能靠边级流量。
+
+    替代证据是业务探针的**语义判据**：`probe_waggle` 看回答内容而不是
+    状态码 —— petsite 在 AgentCore 调用失败时返回 200 + 兜底文案，
+    只看状态码永远看不出 agent 依赖断没断。
+
+    返回 (可测, 说明)。不可测时调用方应改走语义判据，
+    **而不是**把 `ok=False` 当成"基线采集失败"中止 ——
+    那会让一整类边永远验不了，而它们其实有可靠的替代观测通道。
+    """
+    if src_label == 'AgentRuntime' and dst_label == 'AgentRuntime':
+        return False, (
+            'AgentCore 运行时之间的委派经网关，X-Ray 服务图里只有一条到'
+            '`gateway.bedrock-agentcore` 的合流边，测不出目标粒度。'
+            '改用业务探针的语义判据（回答内容而非状态码）。')
+    return True, ''
+
+
 def run_probe(service: str, label: str, target: str,
               observer: str, hold_seconds: int, window: int,
               apply: bool, propagation_budget: int = 300,
@@ -770,20 +844,50 @@ def run_probe(service: str, label: str, target: str,
     print("   被测边 %s -> %s: %s" % (service, target[:26], base))
     biz_base = _probe_business(service)
     print("   业务探针: %s" % biz_base["detail"])
-    if not base["ok"]:
+
+    # ── 边级流量测不到目标粒度时改走语义判据（2026-09-15 补入）──────────
+    #
+    # AgentCore 运行时之间的委派经网关，X-Ray 服务图里只有一条到
+    # `gateway.bedrock-agentcore` 的**合流**边 —— 拿目标运行时名找不到，
+    # 而合流边的总量在切断单条子委派时也不会归零。
+    #
+    # 此时 `ok=False` 的含义**不是**「基线采集失败」，而是
+    # 「这条边的边级流量本来就测不出」。按前者中止会让一整类边永远验不了，
+    # 而它们其实有可靠的替代观测通道：业务探针的语义判据
+    # （`probe_waggle` 看回答内容而不是状态码 —— petsite 在 AgentCore
+    # 调用失败时返回 200 + 兜底文案）。
+    #
+    # 代价要说清：**没有边级生效性证据**，所以判定的生效性依据是
+    # 「业务功能退化」而不是「被测边流量归零」。写回图谱时
+    # `verify_evidence_channel` 会记成 business-probe-only，
+    # 读的人据此知道证据范围。
+    _flow_ok, _flow_why = edge_flow_measurable(src_label, label)
+    _semantic_only = False
+    if not _flow_ok:
+        _semantic_only = True
+        print("   ⓘ 边级流量不可测：%s" % _flow_why)
+        print("     改用业务探针的语义判据。生效性证据 = 业务功能退化，"
+              "而非被测边流量归零。")
+        if not biz_base["ok"]:
+            print("✗ 业务探针基线不健康 —— 中止。语义判据是这类边唯一的通道，"
+                  "它不可用时没有替代。")
+            load.stop()
+            return 3
+
+    if not _semantic_only and not base["ok"]:
         print("✗ 被测边基线采集失败（ok=False）—— 中止。")
         print("  ok=False 表示这个采样点没有数据，不表示指标为 0。"
               "拿它当基线会把任何后续数字读成退化。")
         load.stop()
         return 3
-    if (base["total_requests"] or 0) < MIN_BASELINE_REQUESTS:
+    if not _semantic_only and (base["total_requests"] or 0) < MIN_BASELINE_REQUESTS:
         print("✗ 基线请求数 %s < 下限 %d —— 拒绝出判定。"
               % (base["total_requests"], MIN_BASELINE_REQUESTS))
         print("  打不断一个没在跑的东西；此时任何退化数字都是噪声。")
         print("  %s" % load.stats)
         load.stop()
         return 3
-    if (base["success_rate"] or 0) < MIN_BASELINE_SUCCESS_RATE:
+    if not _semantic_only and (base["success_rate"] or 0) < MIN_BASELINE_SUCCESS_RATE:
         print("✗ 基线成功率 %.2f%% < 下限 %.0f%% —— 拒绝开跑。"
               % (base["success_rate"] or 0, MIN_BASELINE_SUCCESS_RATE))
         print("  基线本身已经是坏的，拿它算退化 delta 毫无意义。")
@@ -1300,6 +1404,12 @@ def main() -> int:
                     help="背景流量 lead-in 秒数（必须 ≥ --window，"
                          "否则基线窗口跑不满；0 表示不造流量）")
     ap.add_argument("--apply", action="store_true", help="真跑（默认 dry-run）")
+    ap.add_argument("--src-label", default="",
+                    help="源的图谱节点类型（Microservice / LambdaFunction / "
+                         "AgentRuntime）。决定去哪里取可加 deny 的角色："
+                         "集群内服务读 K8s SA 注解，Lambda 读执行角色，"
+                         "AgentCore 读 get-agent-runtime 的 roleArn。"
+                         "不给则按名字依次猜，误命中风险更高。")
     ap.add_argument("--list", action="store_true", help="列出方法表")
     a = ap.parse_args()
 
@@ -1317,7 +1427,8 @@ def main() -> int:
         print("✗ --edge 格式应为 service:TargetLabel:targetName")
         return 2
     return run_probe(parts[0], parts[1], parts[2], a.observer,
-                     a.hold, a.window, a.apply, a.propagation_budget, warmup=a.warmup)
+                     a.hold, a.window, a.apply, a.propagation_budget,
+                     warmup=a.warmup, src_label=a.src_label)
 
 
 if __name__ == "__main__":

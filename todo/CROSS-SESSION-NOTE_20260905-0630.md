@@ -1011,3 +1011,129 @@ Delegates 全部不变，16 条合法 LB→TG 完好，RoutesTo 21→16，AgentT
 含发现概率表（N=1 → 9% / N=10 → 61% / N=30 → 96%）、
 「每 6 小时少于约 30 次的依赖不能可靠被发现」的结论、
 以及 WaggleAIConcierge 那个实证。已部署（md5 一致、健康 200）。
+
+---
+
+## 2026-09-15 10:xx — 一轮里五次同类错误，根子是同一条：**判据的范围没对准问题的范围**
+
+这一段值得看的不是某个 bug，而是**同一个思维错误在五个不同位置的复现**。
+每一次我都拿了一个"看起来相关"的判据去回答一个它答不了的问题。
+
+### 一、拿能力判定去覆盖流量结论（未 apply，看输出时发现）
+
+给 `unreachable_by_any_backend` 补了 IAM deny 这一轴之后，写了
+`scripts/reclassify_blocked_edges.py` 重判**所有**带 `blocked_class` 的边，
+想清掉 37 条。其中 34 条是 `precondition_unmet`。
+
+- `precondition_unmet` 是**流量证据**得出的（源 Lambda 24h 零调用、链路休眠）
+- `needs_compound_experiment` 是**边的 phase 属性**得出的
+- 而 `injectability()` 只判**能力** —— 它不知道流量、也不查集群
+
+拿能力判定去重判一个流量结论，必然返回 injectable。那不是"纠正误判"，
+是"用不相关的判据覆盖有效结论"。后果是把休眠链路的边当可验的放回队列。
+
+**已收窄到只重判 `unreachable_by_any_backend` 这一档。**
+
+### 二、IAM deny 第四轴只判目标、漏判源（`tests/test_47::t305b_03` 抓到）
+
+第一版只看 `dst_label in iam_deny_targets()`，于是
+`BusinessCapability -> SQSQueue` 判成可注入 —— 而它是抽象节点、
+没有 IAM 主体，deny 策略无处可加。
+
+IAM deny 是给**调用方的角色**加策略，两侧都要判。这与
+`POD_BACKED_LABELS` 那一轴检查源是同一个道理，我漏了。
+
+顺带一条纪律：源侧清单只登记**实现真做得到的**。
+`LambdaFunction` / `AgentRuntime` 理论上都有执行角色，但当时
+`_irsa_role_for` 只解析 K8s SA 注解 —— 先扩清单后补实现，
+判定会说"能打"、真要加策略那一刻才失败。
+
+### 三、拿 `confirmed` 算"恢复率"（概念错，最隐蔽的一次）
+
+照 AWS 工作坊做韧性评分卡，把 `confirmed` 且退化低的边算成
+"调用方吸收了故障 = 恢复"。两层错：
+
+**概念层**：`confirmed` 在本项目的定义就是「切断这条依赖导致消费方
+可测量地受损」—— 每条 confirmed 本身就意味着**故障传导了**。
+被吸收的边会判 `soft`，不会是 confirmed。
+拿它算恢复率 = 把「依赖承重」读成「系统恢复」。
+
+**数据层**：三条 iam-deny 边 `deg=0.0` 而 `verify_reason` 明写
+「完全切断…且业务归零（adopt 1 → 0）」，
+`evidence_channel='xray-edge+business-probe'` —— 退化字段量的是
+SQL/成功率通道，业务证据在另一条通道上。
+**这正是你们（探针侧）在上一条台账里警告过的读错**，
+交互页曾按 deg 把这三条完全切断的边画成全图最细。我又踩了一遍。
+
+结论：图谱存**依赖承重判定**，不存**恢复观测**。
+评分卡改报 `load_bearing_rate_pct` 与 `evidence_quality_pct`，
+`recovery_rate_pct` 报 `None` 并附一句为什么 ——
+**报 None 加说明比算一个看起来像的数字诚实。**
+
+### 四、IAM deny 打在一个它不走的 action 上（真跑三次才定位）
+
+验 `Delegates AgentRuntime -> AgentRuntime`，deny
+`bedrock-agentcore:InvokeAgentRuntime`，业务毫无变化。
+当时的读法是「注入未生效或消费方有降级路径」——两个都不对。
+
+该角色的内联策略同时授了两个 action，资源前缀不同：
+
+    bedrock-agentcore:InvokeAgentRuntime -> arn:...:*
+    bedrock-agentcore:InvokeGateway      -> arn:...:gateway/*
+
+而 X-Ray 显示 Orchestrator 的出边指向
+`waggleaigateway-...gateway.bedrock-agentcore...` —— **委派经网关**。
+这与 8fa841d / 2be2048 的记载完全一致，**我读过那条记载**，
+却只把它用在观测侧，没用在 deny 的 action 选择上。
+
+### 五、切断了一条被测路径上不存在的委派
+
+改成两个 action 都 deny 之后业务**仍然**不退化。查边的观测计数：
+
+    -> WaggleAIAdoption   observed_calls=26
+    -> WaggleAINutrition  observed_calls=5
+
+而探针问的是「Which dogs are available for adoption?」——
+那是**领养**问题，路由到 `WaggleAIAdoption`，根本不经过 Nutrition。
+我切的边不在被测路径上。
+
+### 真正的卡点（留给你们，别再重跑）
+
+两个 action 都 deny、改验最忙的那条边之后，业务**依然**不退化。
+用 `iam simulate-principal-policy` 直接问 IAM：
+
+    无 deny            -> allowed
+    加 deny Resource=* -> explicitDeny
+
+**IAM 层面完全有效。** 所以只剩一个解释：
+**AgentCore 运行时缓存了凭证**，策略变更在实验窗口内没被重新拉取。
+
+脚本自己那条告警说的就是这件事：
+
+    ⚠️ 取不到 <runtime> 的 K8s 工作负载名，未能刷新凭证
+
+对集群内服务它会 `rollout restart` 强制重取凭证；
+对 AgentCore 托管运行时**没有等价手段**。
+`update-agent-runtime` 可能可以，但会改生产配置，我没验。
+
+所以 `Delegates AgentRuntime -> AgentRuntime` 的现状是
+**「有手段但缺一步」**，不是「不可注入」——
+判定器仍判 injectable 是对的，缺的是刷新凭证的路径。
+
+### 附带修掉的一处既有缺陷：sys.path 污染让"单独跑绿、组合跑红"
+
+`tests/test_67` / `test_68` 把 `chaos/code/runner` 插进 sys.path 并用顶层
+`import injectability`。那让 `runner` 优先解析成**模块**而不是包，于是
+`tests/test_47` 的 `from runner import injectability` 拿到那个模块、
+它的 `from .experiment import ...` 炸掉 —— **18 个 fixture setup 全 error**。
+
+症状极阴：单独跑 test_67 绿、单独跑 test_47 绿，**`67+47` 一起跑才红**。
+我在前一轮见过这批 ImportError，判断成「test_47 自身的问题」放过了。
+
+而 `tests/test_47` 的注释**早就写清了正确约定**：
+「必须以 `runner.edge_verification` 形式导入：该模块内部用相对 import，
+直接把 runner/ 加进 sys.path 再 import 会报 attempted relative import」。
+三个文件已统一到这个约定（只加 `chaos/code` 与 Layer 两个父目录）。
+
+**可迁移的一条**：见到"单独跑绿、组合跑红"，先怀疑 sys.path，
+而不是怀疑后跑的那个文件有问题。

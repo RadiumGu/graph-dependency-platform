@@ -35,12 +35,30 @@ alarm-driven investigations [are] invoked by a Lambda function"。
 纪律文本与 `scripts/devops_agent_investigate.py` 同源，从那里 import ——
 不在这里复制一份。本仓库为「同类清单各处一份」付过代价。
 
-## 默认关闭
+## 默认关闭，但理由不是"配额会耗尽"
 
-`DEVOPS_AGENT_INVESTIGATE_ENABLED` 默认 `false`。理由：
-它会消耗 agent task 配额（`get-account-usage` 可查），
-而配额耗尽时后续真实故障就发不出调查了。
-开之前应先确认配额与告警量的比例。
+`DEVOPS_AGENT_INVESTIGATE_ENABLED` 默认 `false`。
+
+第一版写的理由是"会消耗 agent task 配额，配额耗尽后真实故障就发不出调查"。
+**实测（2026-09-15）那个理由不成立**：
+
+    aws devops-agent get-account-usage --region ap-northeast-1
+    monthlyAccountInvestigationHours: limit=-1  usage=0.537
+    monthlyAccountSystemLearningHours: limit=-1 usage=4.040
+    （usagePeriod 09-01 ~ 09-15）
+
+`limit=-1` 是**无限制**，半个月只用掉 0.54 调查小时。
+
+保持默认关闭的真实理由改成两条：
+
+1. **每次首告警都会创建一个 backlog task**，任务列表会被真实告警流量填满，
+   而人要在里面找自己关心的那条。开之前应先确认告警噪声水平 ——
+   `list-backlog-tasks` 能看当前积压。
+2. **调查结论会进 agent 的 system learning**（上面 4.04 小时那项）。
+   喂进去的告警质量直接影响它后续的判断，
+   而我们的告警里还有已知的假警报来源（实验期互锁刚在 9531ee0 修好）。
+
+两条都是"先看清再开"，不是"不能开"。
 """
 from __future__ import annotations
 

@@ -332,6 +332,28 @@ SERVICE_PROBES: dict[str, tuple] = {
     "payforadoption": (("adopt", probe_adopt),),
     "petlistadoptions": (("list", probe_list),),
     "pethistory": (("history", probe_history),),
+    # ── AgentCore 运行时（2026-09-15 补入）────────────────────────────
+    #
+    # 2026-09-15 给 IAM deny 补了 AgentCore 执行角色的解析
+    # （`_agentcore_role_for`，读 `get-agent-runtime` 的 roleArn），
+    # 于是 `Delegates AgentRuntime -> AgentRuntime` 变成可注入。
+    # 但 `verify_via_iam_deny.py` 会在**没有业务探针时拒绝开跑** ——
+    # 「没有业务证据的 confirmed 是过度声称：只证明了调用失败，
+    # 没证明业务受损」。所以那三条边当时仍然跑不起来：
+    # 角色解析补了，业务观测没补，**只做了一半**。
+    #
+    # 挂 `probe_waggle` 而不是别的：它是唯一走 agent 委派链的探针，
+    # 而且它的判据是**语义的**（回答内容），不是状态码 ——
+    # petsite 在 AgentCore 调用失败时返回 200 + 兜底文案，
+    # 只看状态码永远看不出 agent 依赖断没断。
+    #
+    # 编排者与被委派者都挂同一个探针：切断 Orchestrator 到任一子 agent 的
+    # 委派，表现都是 Waggle 给不出实质回答。这不是偷懒 ——
+    # 用户可见的业务功能就是这一个。
+    "WaggleAIOrchestrator": (("waggle", probe_waggle),),
+    "WaggleAINutrition": (("waggle", probe_waggle),),
+    "WaggleAIAdoption": (("waggle", probe_waggle),),
+    "WaggleAIOrdering": (("waggle", probe_waggle),),
 }
 
 

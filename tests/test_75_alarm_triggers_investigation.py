@@ -44,14 +44,24 @@ def _alert():
 
 
 def test_t75_01_默认关闭():
-    """默认不开：它消耗 agent task 配额，配额耗尽后真实故障就发不出调查。"""
+    """默认不开。
+
+    ⚠️ 理由不是"配额会耗尽" —— 实测 2026-09-15
+    `get-account-usage` 显示 `monthlyAccountInvestigationHours.limit = -1`
+    （无限制），半月用掉 0.54 小时。那个理由已被推翻。
+
+    真实理由：每次首告警都创建一个 backlog task（任务列表会被真实告警
+    填满），且调查结论会进 agent 的 system learning ——
+    喂进去的告警质量影响它后续判断，而我们的告警里还有已知假警报来源。
+    """
     import os
 
     from actions import devops_agent_trigger as t
     old = os.environ.pop('DEVOPS_AGENT_INVESTIGATE_ENABLED', None)
     try:
         assert t.enabled() is False, (
-            '默认应关闭 —— 开启会在每次首告警时消耗 agent task 配额')
+            '默认应关闭 —— 开启会让每次首告警都创建 backlog task，'
+            '且结论进 agent 的 system learning')
         r = t.on_first_alert(_alert())
         assert 'skipped' in r
     finally:
