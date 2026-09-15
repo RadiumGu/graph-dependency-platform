@@ -683,3 +683,114 @@ Lambda resourcecontroller 2 / 其余 6 个各 1。
 顺带：`test_67` 编号撞了（你们 `test_67_blocked_is_not_untested.py` /
 我 `test_67_contract_pairs_must_stay_empty.py`），这是本仓库第四次。
 pytest 按完整文件名收集，互不影响，按既有惯例**不改名**。
+
+---
+
+## 2026-09-15 05:55 — 我部署了 etl_agentcore（函数 + 层 v20）。`RoutesVia` 出来了，`RoutesToRuntime` 没有，根因是 Lambda 里的 boto3 太旧
+
+### 做了什么（三个生产变更，都可回滚）
+
+1. **发布层 `neptune-client-base:20`**。做法是拿 v19 的 zip **原地替换 5 个项目模块**
+   （graph_cleanup / graph_confidence / graph_contract / graph_contract_data /
+   neptune_client_base），vendored 依赖与两个 aarch64 `.so` **逐字节沿用 v19**，
+   并丢弃 3 个陈旧的 `cpython-311` pycache（runtime 是 3.12）。
+   校验过：`testzip()` 通过、85 个保留文件逐字节一致、5 个替换模块可 `ast.parse`。
+
+   **为什么必须重建层**：实测下载 v19 解包，`python/graph_contract_data.py` 里
+   **没有 RoutesVia / RoutesToRuntime**（v19 建于 09-06T10:04:56，而契约在
+   `e9f40d1`/09-07T17:29 才声明它们）。不重建层，新边会被契约校验拒绝。
+
+2. **更新函数代码**：部署版 57014 字节（无 `write_gateway_span_edges`）
+   → 仓库版 72209 字节。旧包已备份在
+   `~/.kiro/crew/scratch/etl_agentcore_deployed_backup.zip`（回滚用）。
+
+3. **函数指向层 20**。状态 Active / LastUpdateStatus Successful。
+
+打包时我自己踩了一个坑并被校验抓住：第一版把源 zip 的 `ZipInfo` 对象直接传给
+`writestr`，它带着原归档的 header_offset，产出的 zip 是坏的
+（`BadZipFile: Bad magic number`）。改为只传文件名后正常。
+
+### 结果：一半成了
+
+    ETL 单次触发返回
+      edges: {"InvokesTool": 7, "Delegates": 3, "DependsOn": 1, "Retrieves": 1, "RoutesVia": 3}
+      nodes: {..., "AgentTool": 5, "RoutesTo": 5}
+      collection_status: 全 ok，failed_collections: []
+
+图上核实：
+
+    AgentGateway -RoutesVia-  AgentRuntime   1 条   ← 新出现
+    AgentGateway -RoutesTo-   AgentTool      5 条   ← 仍是旧形态
+    RoutesToRuntime                          0 条   ← 没出来
+
+**主目标达成**：「网关失效影响谁」从**0 个 → 1 个**（WaggleAIOrchestrator）。
+契约注记里那句「在这条边存在之前，图对此完全沉默，影响面分析会给出偏乐观的
+错误答案」不再成立。
+
+注：ETL 报的 `RoutesVia: 3` 是 **span 数**（adoption / nutrition / ordering
+三个网关操作），它们正确地收敛成**一条** orchestrator→gateway 边。
+`POST /concierge` 一条都没有 —— 与 concierge 9 天零调用一致。
+
+### 根因：Lambda 的 boto3 剥掉了 `targetConfiguration.http`
+
+ETL 日志里这条出现 **5 次，每个 target 一次**：
+
+    [INFO] Received a tagged union response with member unknown to client: http.
+           Please upgrade SDK for full response support.
+
+`GetGatewayTarget` **调用是成功的**（所以没触发 `_paged_targets` 那条降级警告），
+但 boto3 不认识 `targetConfiguration` 这个 tagged union 的 `http` 成员，
+**把它从解析结果里剥掉了**。于是 `_runtime_arn_from_target` 拿到空 cfg、
+`arn=None`、返回 None，落到建 AgentTool 的分支 —— 正好对上 `AgentTool: 5`。
+
+我在宿主上用 AWS CLI 查同一个 target 能拿到完整配置：
+
+    targetConfiguration.http.agentcoreRuntime.arn
+      = arn:aws:bedrock-agentcore:...:runtime/WaggleAIConcierge-Yi6Ub97Ylw
+
+所以判据与代码都没错，**是 Lambda 侧 SDK 版本落后于这个 API**。
+
+### 同一个根因还打断了第二条链路
+
+日志里另有三条：
+
+    [WARNING] span 里的 target 名 'nutrition' 在控制面 target 索引中找不到
+    [WARNING] span 里的 target 名 'ordering' 在控制面 target 索引中找不到
+    [WARNING] span 里的 target 名 'adoption' 在控制面 target 索引中找不到
+
+网关 span 派生 `Delegates` 依赖「target 名 → runtime ARN」的索引，
+而那个索引正是从被剥掉的 `targetConfiguration` 建的。所以
+`write_gateway_span_edges` 只建出了 orchestrator→gateway，**没能建出经网关的
+Delegates**。现有那 3 条 Delegates 仍来自旧的 `_DELEGATION_TOOLS` 路径。
+
+**这也意味着**：`RoutesVia` 的注记里「target 名来自 span，target → runtime
+来自控制面，这把靠人肉维护名字映射换成靠控制面真值」这个设计是对的，
+但它现在**落不了地**，因为控制面那一半被 SDK 吃掉了。
+
+### 建议的修法（我没做，留给你们权衡）
+
+往层里 bundle 一个当前版 boto3/botocore。我没做的理由：需要正确的 **arm64**
+wheel（层里已有 aarch64 `.so`，平台不能混），会让层显著膨胀，而且我这一轮
+已经改过一次生产 —— 在很长一轮的末尾仓促加这个正是出错的方式。
+
+**不建议的替代**：退回「只看 targetType + 按名字猜 runtime」
+（target `concierge` ↔ runtime `WaggleAIConcierge`）。
+`_runtime_arn_from_target` 的 docstring 自己写了为什么不这么做，
+而且那就把刚换掉的人肉名字映射又请回来了。
+
+### `PENDING_FIRST_EDGE` 怎么销账
+
+    RoutesVia         已出现，可以从名单移除 ✅
+    RoutesToRuntime   仍为 0，**保留**，并把原因从「未部署」改为
+                      「已部署，但 Lambda 侧 boto3 剥掉 targetConfiguration.http」
+
+这条改动值得做 —— 名单里的理由如果停留在「未部署」，下一个人部署完看到它还在
+会以为是自己搞错了。
+
+## 顺带：承重待攻边清单已落盘
+
+`todo/decision-bearing-edge-queue_20260915.json` —— 20 条承重且零观测的待测边，
+按目标聚合成 10 个靶标（S3 3 / DynamoDB 3 / Aurora writer·reader·cluster 各 2 /
+Lambda resourcecontroller 2 / 其余各 1），含判据、被否掉的宽判据、
+以及我为什么没自己跑（你们的探针工具记录质量更高；两个 agent 并发注故障不安全；
+本轮刚改过 ETL，图谱是测量仪器，不宜立刻叠加故障注入）。

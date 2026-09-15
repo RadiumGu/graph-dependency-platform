@@ -58,24 +58,38 @@ LEGITIMATE_ROOTS = {
 #
 # 格式: (节点类型, 节点 name) -> 原因
 KNOWN_GAPS = {
-    ('AgentGateway', 'WaggleAIGateway'):
-        '缺 AgentRuntime -[RoutesVia]-> AgentGateway（agent 间调用经网关）。'
-        '方案见 todo/agentobv/agent-layer-taxonomy-design_20260905-1640.md §3.2(b)，'
-        '待 M1–M6 落地。'
-        '注意：**不是**缺 Microservice -> AgentGateway —— PetSite 直调 runtime，'
-        '不经网关，见该文档 §3.2(a) 的推翻记录。',
+    # ── ('AgentGateway', 'WaggleAIGateway') 已于 2026-09-15 销账 ──────────────
+    # 原因是「缺 AgentRuntime -[RoutesVia]-> AgentGateway，待 M1–M6 落地」。
+    # M1–M6 的 ETL 改动已部署（etl_agentcore 函数代码 + 层 neptune-client-base:20），
+    # 实测 `RoutesVia` 出现 1 条（WaggleAIOrchestrator → WaggleAIGateway），
+    # 「网关失效影响谁」从 0 个变为 1 个。按本表纪律（只减不增）删除该行。
+    #
+    # ⚠️ 层必须一起重建，否则新边会被契约校验拒绝：v19 建于 09-06T10:04:56，
+    #    而契约在 e9f40d1 / 09-07T17:29 才声明 RoutesVia —— 实测下载 v19 解包，
+    #    里面的 graph_contract_data.py 不含这两个标签。
     ('AgentRuntime', 'WaggleAIConcierge'):
-        '2026-09-07 已定性：**时序错位，不是采集缺口、也不是真没调用**，无需改代码。'
-        'etl_agentcore 的 _DELEGATION_TOOLS 表原先只有 concierge / ordering，'
-        '而 orchestrator 实际注册的 tool 名是 concierge_chat / food_ordering，'
-        '查表落空导致 Delegates 边建不出来；该映射已于 2026-09-06 补上。'
-        '修复生效有实证：Delegates -> WaggleAIOrdering 的 first_seen 是 09-06 02:38，'
-        '晚于修复。而 concierge_chat 最后一次被调用是 09-05 09:16（早于修复），'
-        '此后未再调用，其 InvokesTool 边已被正确标为 '
-        'drift_status=observed_then_silent。'
-        '**下一次真实调用发生时 Delegates 边会自然建出**，届时本行应删除。'
-        '刻意不硬插边：Delegates 是观测驱动的，凭「对称性应该有」插边等于'
-        '把未观测到的关系写成观测事实。',
+        '2026-09-15 更正原判定。原文写「时序错位…**下一次真实调用发生时 '
+        'Delegates 边会自然建出**」—— 该预期已被实测证伪：04:53 发一句纯问候，'
+        'trace 6aa8cf49684ef208194130c668912341 同时出现在 orchestrator 与 '
+        'concierge 两个 runtime 的日志里，concierge 侧 '
+        '「Invocation completed successfully (0.702s)」，委派确实发生；'
+        '13 分钟后查图，本节点仍是 **0 条边**。'
+        '根因：**这次委派没有产出 execute_tool span** —— orchestrator 的 spans 流'
+        '按该 trace_id 搜 recordsMatched=0，04:53 那一分钟导出 0 个 span'
+        '（相邻调用分别导出 4–16 个）。而 _DELEGATION_TOOLS 路径依赖该 span。'
+        '另：concierge 在 09-06→09-15 九天里总共只有 2 次调用（都是这次测试触发的），'
+        '因为合成流量的 6 条提问覆盖 adoption/nutrition/ordering 三个工具，'
+        '**没有一条会路由到 concierge_chat**。'
+        '经网关那条新路径也补不上：控制面 target 索引因 Lambda 侧 boto3 剥掉 '
+        'targetConfiguration.http 而建不起来（见下方 RoutesToRuntime 的记录）。'
+        '**刻意不硬插边**（这一点原判定完全正确）：Delegates 是观测驱动的，'
+        '凭「对称性应该有」插边等于把未观测到的关系写成观测事实。'
+        ' ── 原判定里仍然成立的部分保留在此供追溯：_DELEGATION_TOOLS 表原先只有'
+        ' concierge / ordering，而 orchestrator 实际注册的 tool 名是'
+        ' concierge_chat / food_ordering，查表落空曾导致 Delegates 建不出来；'
+        '该映射已于 2026-09-06（提交 9f9b5bf，02:45:38Z）补上，且**早于**当前部署的'
+        ' Lambda（LastModified 09-06T10:05:50Z），所以映射不是现在的瓶颈 ——'
+        ' 瓶颈是 span 没产出。',
 }
 
 _SCOPE_IN_SCOPE = 'observed'
