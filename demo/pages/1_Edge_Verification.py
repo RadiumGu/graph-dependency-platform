@@ -289,6 +289,63 @@ else:
                 "而且它们是少数几类**能**被检验出假的边。"
                 "一条边可以完全真实却零观测（例如 DNS 解析派生的边："
                 "看到了解析，看不到流量）。")
+
+            # ── 采样率：给「零观测」加上第三种解释 ────────────────────────────
+            #
+            # 2026-09-15 实测：本账号 X-Ray 集中式采样只有一条 Default 规则，
+            # FixedRate=0.05 + ReservoirSize=1，实时统计 340 requests → 32 sampled
+            # ≈ 9.4%。也就是**约 90% 的请求不被追踪**。
+            #
+            # 这不是本站的实现细节，而是**改变「零观测」该怎么读**的一层：
+            # 图谱的依赖边有一部分从 span 派生，而 span 只有被采样才会落盘。
+            # 于是低频依赖会被系统性漏掉，且漏掉与不存在在图上同形。
+            #
+            # 实证来源：WaggleAIConcierge。09-15 04:53 一次真实委派
+            # （trace 6aa8cf49… 同时出现在 orchestrator 与 concierge 两个 runtime
+            # 的日志，concierge 侧 Invocation completed successfully (0.702s)），
+            # 但 orchestrator 的 spans 流里按该 trace_id 搜 recordsMatched=0，
+            # 那一分钟导出 0 个 span（相邻调用分别导出 4–16 个）。
+            # 于是观测驱动的 Delegates 边建不出来 —— 直到改用**控制面**派生的
+            # RoutesToRuntime 才把这条路由如实表达出来。
+            with st.expander("⚠️ 「零观测」还有第三种可能：请求根本没被采样", expanded=False):
+                st.markdown(
+                    "上面把「零观测」解释成两类：**边是假的** 或 **真实但采不到流量**。"
+                    "实测发现还有第三类，而它是概率性的：\n\n"
+                    "本账号的 X-Ray 集中式采样只有一条 `Default` 规则 —— "
+                    "**`FixedRate = 5%` + `ReservoirSize = 1 req/s`**。"
+                    "实时统计 **340 requests → 32 sampled ≈ 9.4%**，"
+                    "也就是约 **90% 的请求不被追踪**。\n\n"
+                    "依赖边有一部分从 span 派生，而 span 只有**被采样**才会落盘。"
+                    "所以一条依赖在 6 小时采集窗口内被调用 N 次，"
+                    "它被发现的概率大约是 `1 − 0.9^N`：")
+                st.dataframe(
+                    [{"窗口内调用次数": n,
+                      "边被发现的概率": f"{(1 - 0.9 ** n) * 100:.0f}%"}
+                     for n in (1, 3, 10, 20, 30, 50)],
+                    width="stretch", hide_index=True)
+                st.warning(
+                    "**每 6 小时被调用少于约 30 次的依赖，不能可靠地被发现** —— "
+                    "而图谱无法区分「没采样到」和「不存在」。\n\n"
+                    "这正是本站要暴露的失败模式，出现在它自己的数据管道里。"
+                    "所以本站对「未验证」的读法是**「还没测」而不是「不存在」**，"
+                    "这条纪律不是谨慎，是被这个数逼出来的。",
+                    icon="⚠️")
+                st.markdown(
+                    "**实证来源：`WaggleAIConcierge`。** 2026-09-15 04:53 有一次真实委派"
+                    "（同一个 trace 同时出现在 orchestrator 与 concierge 两个 runtime 的"
+                    "日志里，concierge 侧记录 `Invocation completed successfully "
+                    "(0.702s)`），但 orchestrator 的 `spans` 流里按该 trace 搜"
+                    "**一条 span 都没有**，那一分钟导出 0 个 span"
+                    "（相邻调用分别导出 4–16 个）。于是观测驱动的 `Delegates` 边"
+                    "建不出来。\n\n"
+                    "**这也说明控制面派生的边不可替代。** 后来改用 "
+                    "`ListGatewayTargets + GetGatewayTarget` 派生的 "
+                    "`RoutesToRuntime`，才把「网关声明了一条到 concierge 的路由」"
+                    "如实表达出来 —— 那条边**与流量和采样都无关**，"
+                    "对低频路径是唯一可靠的表示方式。\n\n"
+                    "两种边说的是不同的事，都对：控制面说「声明了这条路由」，"
+                    "观测说「看到过流量」。把它们混成一个「依赖」标签，"
+                    "就再也分不清一条边是配置事实还是运行事实。")
     else:
         st.caption(
             "离线模式下无法算判伪覆盖 —— 这一段需要逐条查边的观测标记属性。"
