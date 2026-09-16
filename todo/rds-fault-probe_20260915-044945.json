@@ -1,0 +1,86 @@
+{
+  "taken_at": "20260915-044945",
+  "service": "petlistadoptions",
+  "target_label": "RDSInstance",
+  "target": "serviceseks2-databasewriter2462cc03-fwgfu4gossqe",
+  "fis_template": "EXTR2tVnPogKf8L",
+  "fis_experiment": "EXProSydSwgiWX4hAa",
+  "rebooted_instance": "serviceseks2-databasewriter2462cc03-fwgfu4gossqe",
+  "severance": "rds-reboot",
+  "channel_edge": {
+    "baseline": {
+      "ok": true,
+      "success_rate": 100.0,
+      "total_requests": 254
+    },
+    "during": {
+      "ok": true,
+      "success_rate": 100.0,
+      "total_requests": 234
+    },
+    "post": {
+      "ok": true,
+      "success_rate": 100.0,
+      "total_requests": 286
+    }
+  },
+  "channel_business": {
+    "baseline": {
+      "ok": true,
+      "no_probe": false,
+      "per_probe": {
+        "list": [
+          1,
+          1,
+          1
+        ]
+      },
+      "detail": "list=[1, 1, 1]"
+    },
+    "during": {
+      "ok": true,
+      "no_probe": false,
+      "per_probe": {
+        "list": [
+          0
+        ]
+      },
+      "detail": "list=[0]"
+    },
+    "post": {
+      "ok": true,
+      "history": [
+        {
+          "list": 1
+        },
+        {
+          "list": 1
+        },
+        {
+          "list": 1
+        },
+        {
+          "list": 1
+        },
+        {
+          "list": 1
+        },
+        {
+          "list": 1
+        },
+        {
+          "list": 1
+        },
+        {
+          "list": 1
+        }
+      ],
+      "recovered": true,
+      "detail": "连续 8 次全部探针回到基线"
+    }
+  },
+  "verdict": "confirmed",
+  "why": "重启期间业务退化（list 归零（1 → 0，采样 [0]）），SQL 边成功率 100.0% → 100.0%（降 0.0pp）；故障后恢复；证据范围＝瞬时读实例丢失（重启 serviceseks2-databasewriter2462cc03-fwgfu4gossqe，当时角色 reader），**不覆盖「数据库彻底不可用」**",
+  "caveat": "瞬时写实例重启，不覆盖「数据库彻底不可用」；X-Ray 只有一个 SQL 节点，reader/writer 分不开，边计数是该服务对集群的 SQL 调用",
+  "rebooted_role": "reader"
+}

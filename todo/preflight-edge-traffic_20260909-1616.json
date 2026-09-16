@@ -1,0 +1,762 @@
+{
+  "verifiable": [
+    {
+      "edge": "AccessesData",
+      "sl": "LambdaFunction",
+      "src": "neptune-etl-trigger",
+      "dl": "LambdaFunction",
+      "dst": "neptune-etl-from-aws",
+      "props": {
+        "xray_window_hours": 24,
+        "dependency_kind": "static",
+        "evidence": "env:ETL_FUNCTION_NAME",
+        "xray_error_count": 0,
+        "active": true,
+        "xray_total_response_time_s": 12726.484,
+        "xray_last_seen": 1788969649,
+        "source": "cfn-etl",
+        "source_backfilled_from": "declared_in",
+        "last_seen": 1788969649,
+        "declared_in": "cfn",
+        "last_scanned": 1775844010,
+        "stack_name": "NeptuneEtlStack",
+        "xray_fault_count": 0,
+        "xray_call_count": 418
+      },
+      "calls": 31,
+      "note": "X-Ray 近 1h 31 次"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petsearch",
+      "dl": "DynamoDBTable",
+      "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "props": {
+        "evidence": "source:SearchController.java#search",
+        "verified_by": "dns+xray",
+        "active": true,
+        "last_drift_check": 1788970004,
+        "last_seen": 1788969649,
+        "xray_fault_count": 0,
+        "xray_window_hours": 24,
+        "dependency_kind": "static",
+        "xray_error_count": 0,
+        "runtime_verified": true,
+        "drift_status": "ok",
+        "xray_total_response_time_s": 2085.615,
+        "xray_last_seen": 1788969649,
+        "source": "aws-etl",
+        "last_updated": 1772712274,
+        "declared_in": "etl_aws",
+        "xray_call_count": 420304
+      },
+      "calls": 16437,
+      "note": "X-Ray 近 1h 16437 次"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petsearch",
+      "dl": "S3Bucket",
+      "dst": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+      "props": {
+        "evidence": "source:SearchController.java#getPetUrl",
+        "verified_by": "dns+xray",
+        "active": true,
+        "last_drift_check": 1788970004,
+        "last_seen": 1788969649,
+        "xray_fault_count": 0,
+        "xray_window_hours": 24,
+        "dependency_kind": "static",
+        "xray_error_count": 62145,
+        "runtime_verified": true,
+        "drift_status": "ok",
+        "xray_total_response_time_s": 26803.988,
+        "xray_last_seen": 1788969649,
+        "source": "aws-etl",
+        "last_updated": 1772712274,
+        "declared_in": "etl_aws",
+        "xray_call_count": 0
+      },
+      "calls": 2406,
+      "note": "X-Ray 近 1h 2406 次"
+    },
+    {
+      "edge": "Invokes",
+      "sl": "LambdaFunction",
+      "src": "neptune-etl-trigger",
+      "dl": "LambdaFunction",
+      "dst": "neptune-etl-from-aws",
+      "props": {
+        "source": "aws-etl",
+        "last_updated": 1788970372,
+        "last_seen": 1788970372,
+        "dependency_kind": "static",
+        "evidence": "env:ETL_FUNCTION_NAME"
+      },
+      "calls": 31,
+      "note": "X-Ray 近 1h 31 次"
+    }
+  ],
+  "no_traffic": [
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petsearch",
+      "dl": "AWSServiceEndpoint",
+      "dst": "ssm",
+      "props": {
+        "xray_window_hours": 24,
+        "observation_window_seconds": 86400,
+        "first_seen": 1787986978,
+        "dependency_kind": "dynamic",
+        "xray_error_count": 0,
+        "active": false,
+        "xray_total_response_time_s": 3.013,
+        "xray_last_seen": 1788678048,
+        "source": "xray",
+        "last_seen": 1788681077,
+        "xray_fault_count": 0,
+        "xray_call_count": 9,
+        "deactivated_at": 1788681398,
+        "appsignals_entries": 1
+      },
+      "calls": 14,
+      "note": "X-Ray 近 1h 14 次"
+    }
+  ],
+  "compound": [],
+  "unknown": [
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "payforadoption",
+      "dl": "StepFunction",
+      "dst": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "props": {
+        "timestamp_backfilled_from": "last_drift_check",
+        "dependency_kind": "dynamic",
+        "verified_by": "none",
+        "runtime_verified": false,
+        "drift_status": "observed_then_silent",
+        "source": "deepflow-dns",
+        "last_drift_check": 1788801458,
+        "last_seen": 1788579104,
+        "unobserved_since": 1788779858
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "StepFunction",
+      "dst": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "props": {
+        "xray_window_hours": 24,
+        "first_seen": 1788016689,
+        "dependency_kind": "dynamic",
+        "verified_by": "none",
+        "xray_error_count": 0,
+        "runtime_verified": false,
+        "active": false,
+        "drift_status": "declared_not_observed",
+        "xray_total_response_time_s": 2.563,
+        "xray_last_seen": 1788663649,
+        "source": "xray",
+        "last_drift_check": 1788970004,
+        "last_seen": 1788663649,
+        "xray_fault_count": 0,
+        "xray_call_count": 47,
+        "deactivated_at": 1788663780
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "order-service",
+      "dl": "RDSCluster",
+      "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "props": {
+        "source": "deepflow-dns",
+        "last_drift_check": 1788801458,
+        "timestamp_backfilled_from": "last_drift_check",
+        "last_seen": 1773907005,
+        "unobserved_since": 1788779858,
+        "dependency_kind": "dynamic",
+        "runtime_verified": true,
+        "drift_status": "observed_then_silent"
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "auth-service",
+      "dl": "RDSCluster",
+      "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "props": {
+        "source": "deepflow-dns",
+        "last_drift_check": 1788801458,
+        "timestamp_backfilled_from": "last_drift_check",
+        "last_seen": 1773907005,
+        "unobserved_since": 1788779858,
+        "dependency_kind": "dynamic",
+        "runtime_verified": true,
+        "drift_status": "observed_then_silent"
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "product-service",
+      "dl": "RDSCluster",
+      "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "props": {
+        "source": "deepflow-dns",
+        "last_drift_check": 1788801458,
+        "timestamp_backfilled_from": "last_drift_check",
+        "last_seen": 1773907005,
+        "unobserved_since": 1788779858,
+        "dependency_kind": "dynamic",
+        "runtime_verified": false,
+        "drift_status": "observed_then_silent"
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "LambdaFunction",
+      "src": "petsite-ops-slack-notifier",
+      "dl": "RDSCluster",
+      "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "props": {
+        "timestamp_backfilled_from": "last_drift_check",
+        "dependency_kind": "dynamic",
+        "verified_by": "none",
+        "runtime_verified": false,
+        "drift_status": "observed_then_silent",
+        "source": "deepflow-dns",
+        "last_drift_check": 1788801458,
+        "last_seen": 1788017205,
+        "unobserved_since": 1788779858
+      },
+      "calls": null,
+      "note": "源函数 24h 有 2 次调用，但 X-Ray 看不到这条边 —— 边级**测不出**（可能未开 Active 追踪），不等于无流量"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "points-service",
+      "dl": "RDSCluster",
+      "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "props": {
+        "source": "deepflow-dns",
+        "last_drift_check": 1788801458,
+        "timestamp_backfilled_from": "last_drift_check",
+        "last_seen": 1773907005,
+        "unobserved_since": 1788779858,
+        "dependency_kind": "dynamic",
+        "runtime_verified": false,
+        "drift_status": "observed_then_silent"
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "payforadoption",
+      "dl": "RDSInstance",
+      "dst": "serviceseks2-databasewriter2462cc03-fwgfu4gossqe",
+      "props": {
+        "first_seen": 1788017187,
+        "dependency_kind": "dynamic",
+        "l4_server_port": 5432,
+        "active": false,
+        "l4_flow_count": 5,
+        "source": "deepflow-l4",
+        "last_seen": 1788589906,
+        "l4_bytes": 3513.0,
+        "deactivated_at": 1788589909,
+        "l4_last_seen": 1788589906
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petlistadoptions",
+      "dl": "RDSInstance",
+      "dst": "serviceseks2-databasewriter2462cc03-fwgfu4gossqe",
+      "props": {
+        "first_seen": 1788017187,
+        "dependency_kind": "dynamic",
+        "l4_server_port": 5432,
+        "active": false,
+        "l4_flow_count": 12,
+        "source": "deepflow-l4",
+        "last_seen": 1788594705,
+        "l4_bytes": 327881.0,
+        "deactivated_at": 1788595229,
+        "l4_last_seen": 1788594705
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "pethistory",
+      "dl": "RDSInstance",
+      "dst": "serviceseks2-databasewriter2462cc03-fwgfu4gossqe",
+      "props": {
+        "first_seen": 1788017187,
+        "dependency_kind": "dynamic",
+        "l4_server_port": 5432,
+        "active": true,
+        "l4_flow_count": 240,
+        "source": "deepflow-l4",
+        "last_seen": 1788970305,
+        "l4_bytes": 4963680.0,
+        "l4_last_seen": 1788970305
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petstatusupdater",
+      "dl": "DynamoDBTable",
+      "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "props": {
+        "source": "manual-fix",
+        "dependency_kind": "static",
+        "evidence": "petstatusupdater/index.js#UpdateCommand"
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "DynamoDBTable",
+      "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "props": {
+        "source": "deepflow-dns",
+        "last_drift_check": 1788970004,
+        "timestamp_backfilled_from": "last_drift_check",
+        "last_seen": 1788801407,
+        "dependency_kind": "dynamic",
+        "verified_by": "none",
+        "runtime_verified": false,
+        "drift_status": "declared_not_observed"
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "LambdaFunction",
+      "src": "petsite-ops-slack-notifier",
+      "dl": "DynamoDBTable",
+      "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "props": {
+        "timestamp_backfilled_from": "last_drift_check",
+        "dependency_kind": "dynamic",
+        "verified_by": "none",
+        "runtime_verified": false,
+        "drift_status": "observed_then_silent",
+        "source": "deepflow-dns",
+        "last_drift_check": 1788801458,
+        "last_seen": 1788017205,
+        "unobserved_since": 1788779858
+      },
+      "calls": null,
+      "note": "源函数 24h 有 2 次调用，但 X-Ray 看不到这条边 —— 边级**测不出**（可能未开 Active 追踪），不等于无流量"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "payforadoption",
+      "dl": "DynamoDBTable",
+      "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "props": {
+        "evidence": "cdk-stack",
+        "verified_by": "none",
+        "active": true,
+        "last_drift_check": 1788579104,
+        "last_seen": 1788627649,
+        "xray_fault_count": 0,
+        "xray_window_hours": 24,
+        "dependency_kind": "static",
+        "xray_error_count": 0,
+        "runtime_verified": false,
+        "drift_status": "declared_not_observed",
+        "xray_total_response_time_s": 5.831,
+        "xray_last_seen": 1788627649,
+        "source": "aws-etl",
+        "last_updated": 1772711405,
+        "declared_in": "etl_aws",
+        "xray_call_count": 342
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petfood",
+      "dl": "DynamoDBTable",
+      "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "props": {
+        "timestamp_backfilled_from": "last_drift_check",
+        "dependency_kind": "dynamic",
+        "verified_by": "dns",
+        "runtime_verified": true,
+        "drift_status": "observed_then_silent",
+        "source": "deepflow-dns",
+        "last_drift_check": 1788801458,
+        "last_seen": 1788592005,
+        "unobserved_since": 1788779858
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "payforadoption",
+      "dl": "S3Bucket",
+      "dst": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+      "props": {
+        "timestamp_backfilled_from": "last_drift_check",
+        "dependency_kind": "dynamic",
+        "verified_by": "none",
+        "runtime_verified": false,
+        "drift_status": "observed_then_silent",
+        "source": "deepflow-dns",
+        "last_drift_check": 1788801458,
+        "last_seen": 1788579104,
+        "unobserved_since": 1788779858
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "S3Bucket",
+      "dst": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+      "props": {
+        "source": "deepflow-dns",
+        "last_drift_check": 1788970004,
+        "timestamp_backfilled_from": "last_drift_check",
+        "last_seen": 1788801407,
+        "dependency_kind": "dynamic",
+        "verified_by": "none",
+        "runtime_verified": false,
+        "drift_status": "declared_not_observed"
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "LambdaFunction",
+      "src": "petsite-ops-slack-notifier",
+      "dl": "S3Bucket",
+      "dst": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+      "props": {
+        "source": "deepflow-dns",
+        "last_drift_check": 1788801458,
+        "timestamp_backfilled_from": "last_drift_check",
+        "last_seen": 1788017205,
+        "unobserved_since": 1788779858,
+        "dependency_kind": "dynamic",
+        "runtime_verified": false,
+        "drift_status": "observed_then_silent"
+      },
+      "calls": null,
+      "note": "源函数 24h 有 2 次调用，但 X-Ray 看不到这条边 —— 边级**测不出**（可能未开 Active 追踪），不等于无流量"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petfood",
+      "dl": "AWSServiceEndpoint",
+      "dst": "dynamodb",
+      "props": {
+        "nfm_bytes": 46665.0,
+        "nfm_cross_az": false,
+        "first_seen": 1788551240,
+        "dependency_kind": "dynamic",
+        "active": true,
+        "source": "nfm",
+        "last_seen": 1788970364,
+        "nfm_categories": "AMAZON_DYNAMODB",
+        "deactivated_at": 1788596275,
+        "nfm_last_seen": 1788970364,
+        "nfm_flow_count": 3
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "AWSServiceEndpoint",
+      "dst": "stepfunctions",
+      "props": {
+        "source": "appsignals-etl",
+        "observation_window_seconds": 86400,
+        "last_seen": 1788666678,
+        "first_seen": 1788662178,
+        "dependency_kind": "dynamic",
+        "active": false,
+        "deactivated_at": 1788667380,
+        "appsignals_entries": 1
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "payforadoption",
+      "dl": "AWSServiceEndpoint",
+      "dst": "ssm",
+      "props": {
+        "xray_window_hours": 24,
+        "observation_window_seconds": 86400,
+        "first_seen": 1788015649,
+        "dependency_kind": "dynamic",
+        "xray_error_count": 0,
+        "active": false,
+        "xray_total_response_time_s": 2.593,
+        "xray_last_seen": 1788631248,
+        "source": "xray",
+        "last_seen": 1788634772,
+        "xray_fault_count": 0,
+        "xray_call_count": 68,
+        "appsignals_entries": 1
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "LambdaFunction",
+      "src": "neptune-etl-from-xray",
+      "dl": "AWSServiceEndpoint",
+      "dst": "xray",
+      "props": {
+        "xray_window_hours": 24,
+        "first_seen": 1788013912,
+        "dependency_kind": "dynamic",
+        "xray_error_count": 0,
+        "active": false,
+        "xray_total_response_time_s": 3.015,
+        "xray_last_seen": 1788192049,
+        "source": "xray",
+        "last_seen": 1788192049,
+        "xray_fault_count": 0,
+        "xray_call_count": 4,
+        "deactivated_at": 1788192176
+      },
+      "calls": null,
+      "note": "源函数 24h 有 24 次调用，但 X-Ray 看不到这条边 —— 边级**测不出**（可能未开 Active 追踪），不等于无流量"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "AWSServiceEndpoint",
+      "dst": "sns",
+      "props": {
+        "source": "appsignals-etl",
+        "observation_window_seconds": 86400,
+        "last_seen": 1788666678,
+        "first_seen": 1788662178,
+        "dependency_kind": "dynamic",
+        "active": false,
+        "deactivated_at": 1788667380,
+        "appsignals_entries": 1
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "DependsOn",
+      "sl": "Microservice",
+      "src": "petstatusupdater",
+      "dl": "SQSQueue",
+      "dst": "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+      "props": {
+        "source": "manual-fix",
+        "dependency_kind": "static",
+        "evidence": "petstatusupdater consumes SQS sqspetadoption"
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "DependsOn",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "SQSQueue",
+      "dst": "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+      "props": {
+        "xray_window_hours": 24,
+        "first_seen": 1788016689,
+        "dependency_kind": "dynamic",
+        "xray_error_count": 0,
+        "active": false,
+        "xray_total_response_time_s": 3.36,
+        "xray_last_seen": 1788663649,
+        "source": "xray",
+        "last_seen": 1788663649,
+        "xray_fault_count": 0,
+        "xray_call_count": 338,
+        "deactivated_at": 1788663780
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "DependsOn",
+      "sl": "Microservice",
+      "src": "petstatusupdater",
+      "dl": "SQSQueue",
+      "dst": "ServicesEks2-sqspetadoptiondlqEEEFF2AC-EQwBtdEFe8jQ",
+      "props": {
+        "source": "manual-fix",
+        "dependency_kind": "static",
+        "evidence": "petstatusupdater consumes SQS sqspetadoption"
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "DependsOn",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "AgentRuntime",
+      "dst": "WaggleAIOrchestrator",
+      "props": {
+        "source": "agentcore-etl",
+        "observation_window_seconds": 86400,
+        "last_seen": 1788969974,
+        "declared_in": "/petstore/agent/waggleairuntimearn",
+        "first_seen": 1788623546,
+        "dependency_kind": "static",
+        "appsignals_observed": true,
+        "active": true
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "Invokes",
+      "sl": "StepFunction",
+      "src": "Providerwaiterstatemachine5D4A9DF0-ZkuIyyskPCyz",
+      "dl": "LambdaFunction",
+      "dst": "ServicesEks2-awscdkawseks-ProviderframeworkisCompl-sIJBJPos5iM2",
+      "props": {
+        "source": "aws-etl",
+        "last_updated": 1773326860,
+        "dependency_kind": "static"
+      },
+      "calls": null,
+      "note": "CloudWatch 查不到该状态机的执行数"
+    },
+    {
+      "edge": "Invokes",
+      "sl": "StepFunction",
+      "src": "Providerwaiterstatemachine5D4A9DF0-ZkuIyyskPCyz",
+      "dl": "LambdaFunction",
+      "dst": "ServicesEks2-awscdkawseks-ProviderframeworkonTimeo-T6MAOIsLvvn5",
+      "props": {
+        "source": "aws-etl",
+        "last_updated": 1773326861,
+        "dependency_kind": "static"
+      },
+      "calls": null,
+      "note": "CloudWatch 查不到该状态机的执行数"
+    },
+    {
+      "edge": "Invokes",
+      "sl": "SNSTopic",
+      "src": "petsite-ops-alerts",
+      "dl": "LambdaFunction",
+      "dst": "petsite-ops-slack-notifier",
+      "props": {
+        "source": "aws-etl-static",
+        "last_updated": 1788970372,
+        "last_seen": 1788970372,
+        "dependency_kind": "static"
+      },
+      "calls": null,
+      "note": "主题 24h 发布 2 条，但这是源侧不是边级 —— 边级测不出"
+    },
+    {
+      "edge": "PublishesTo",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "SNSTopic",
+      "dst": "ServicesEks2-topicpetadoption192CAB8F-Dn0iiU45RZ1g",
+      "props": {
+        "xray_window_hours": 24,
+        "evidence": "source:PaymentController.cs#SendNotification",
+        "verified_by": "none",
+        "xray_error_count": 0,
+        "runtime_verified": false,
+        "active": true,
+        "drift_status": "declared_not_observed",
+        "xray_total_response_time_s": 8.806,
+        "xray_last_seen": 1788663649,
+        "source": "aws-etl",
+        "last_updated": 1772712274,
+        "last_drift_check": 1788970004,
+        "declared_in": "etl_aws",
+        "last_seen": 1788663649,
+        "xray_fault_count": 0,
+        "xray_call_count": 338
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "PublishesTo",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "SQSQueue",
+      "dst": "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+      "props": {
+        "source": "aws-etl",
+        "last_updated": 1772712274,
+        "last_drift_check": 1788970004,
+        "declared_in": "etl_aws",
+        "evidence": "source:PaymentController.cs#PostMessageToSqs",
+        "verified_by": "none",
+        "runtime_verified": false,
+        "drift_status": "declared_not_observed"
+      },
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    }
+  ]
+}

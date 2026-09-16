@@ -62,22 +62,43 @@ class GraphFeedback:
         # 3. dependency_type=none → 可疑边告警
         if dep_type == "none":
             logger.warning(
-                f"⚠️ SUSPICIOUS EDGE: {svc} 的 Calls 边 "
-                f"degradation_rate={degradation:.1f}% → 依赖可能是 ETL 误识别，"
-                f"建议人工复核 Neptune 图谱。experiment_id={exp_id}"
+                f"⚠️ SUSPICIOUS EDGE: {svc} 的 Calls 入边 "
+                f"degradation_rate={degradation:.1f}% → 依赖可能是 ETL 误识别。"
+                f"experiment_id={exp_id}。"
+                f"注意：本判定基于注入目标自身指标，不足以证伪一条边 —— "
+                f"证伪需在被依赖方注入、观测调用方，见 runner/edge_verification.py"
             )
 
     def _update_calls_edges(self, svc: str, props: dict):
-        """更新与目标服务相关的所有 Calls 边"""
+        """更新**指向** svc 的 Calls 边（入边）。
+
+        两处修复（2026-08-30）：
+
+        1. **去掉 `property(single, ...)`**。Neptune 对边属性拒绝基数说明，实测
+           返回 `400 UnsupportedOperationException: "Cardinality specification
+           may not be used with Edge properties."`。原实现因此 100% 失败，
+           异常被下面的 except 吞成 logger.error —— 活图谱实测 21 个 Calls 类
+           实验跑完后，19 条 Calls 边上 chaos_* 属性全部为 0，**这条写回路径
+           从未成功过一次**。边属性天生单值，直接 property() 即可。
+
+        2. **只写入边，不再写出边**。原查询是
+           `where(outV().has(name,svc).or_(inV().has(name,svc)))`，把同一个判定
+           写给 svc 的所有出边和入边。在 svc 注入故障只能检验「谁依赖 svc」，
+           对「svc 依赖谁」毫无信息 —— 写上去等于凭空伪造验证证据。
+
+        更根本的问题（观测对象错误：degradation_rate 采的是注入目标自己的指标，
+        而验证边 A→B 必须在 B 注入、观测 A）不在本方法的修复范围内，
+        由 runner/edge_verification.py 提供正确实现。本方法保留的是
+        「注入目标周边的粗粒度经验标注」，语义已在属性名上与 verify_* 区分。
+        """
         gremlin = f"""
 g.E().hasLabel('Calls')
- .where(__.outV().has('name', '{svc}')
-   .or_(__.inV().has('name', '{svc}')))
- .property(single, 'chaos_dependency_type',       '{props["chaos_dependency_type"]}')
- .property(single, 'chaos_degradation_rate',      {props["chaos_degradation_rate"]})
- .property(single, 'chaos_recovery_time_seconds', {props["chaos_recovery_time_seconds"]})
- .property(single, 'chaos_last_verified',         '{props["chaos_last_verified"]}')
- .property(single, 'chaos_verified_by',           '{props["chaos_verified_by"]}')
+ .where(__.inV().has('name', '{svc}'))
+ .property('chaos_dependency_type',       '{props["chaos_dependency_type"]}')
+ .property('chaos_degradation_rate',      {props["chaos_degradation_rate"]})
+ .property('chaos_recovery_time_seconds', {props["chaos_recovery_time_seconds"]})
+ .property('chaos_last_verified',         '{props["chaos_last_verified"]}')
+ .property('chaos_verified_by',           '{props["chaos_verified_by"]}')
 """.strip()
         try:
             self._run_gremlin(gremlin)

@@ -1,0 +1,191 @@
+{
+    "findingsSummary": [
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/awesomeshop-legacy:1w54nc",
+            "findingId": "0d49df0e-d342-4090-84f0-a212b1fcab6b",
+            "name": "Single-AZ ElastiCache Redis lacks replication and failover capability",
+            "description": "The ElastiCache Redis cluster (awesomeshop-redis) is a single cache.t3.micro node in ap-northeast-1a with no replication group, no replicas, no automatic failover, and SnapshotRetentionLimit of 0 (no backups). If ap-northeast-1a is impaired or the node fails, all cached session data and fast lookups are lost. All six microservices reference REDIS_HOST, indicating Redis is used across the entire request path.",
+            "failureCategory": "SINGLE_POINT_OF_FAILURE",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:20:56.817000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/awesomeshop-legacy:1w54nc",
+            "findingId": "2894bf1e-92ce-4190-ae75-e90ecc56a901",
+            "name": "No ARC zonal autoshift enabled on EKS cluster for automatic AZ recovery",
+            "description": "The EKS cluster PetSite does not have ARC zonal autoshift enabled. Without autoshift, automatic recovery from a detected AZ impairment requires manual operator intervention. Autoshift lets AWS automatically start a zonal shift when its telemetry detects an AZ impairment, reducing time to recovery.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:20:56.817000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/awesomeshop-legacy:1w54nc",
+            "findingId": "494a7f22-b3fa-41af-b833-9f7031c76eff",
+            "name": "No automatic AZ recovery mechanism for external traffic on load balancer",
+            "description": "The inferred load balancer fronting the EKS cluster lacks an automatic mechanism to shift external traffic away from an impaired AZ. Without ARC zonal autoshift or ALB Automatic Target Weights (ATW), recovery from an AZ impairment requires manual operator detection and intervention for external traffic routing.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:20:56.817000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/awesomeshop-legacy:1w54nc",
+            "findingId": "5a73655e-0833-44ec-b904-2499078bb3bd",
+            "name": "No AWS Backup plan protecting RDS against ransomware or accidental deletion",
+            "description": "No AWS Backup plan exists for the service's stateful resources. While the RDS MySQL instance has native automated backups with a 7-day retention, there is no centralized AWS Backup plan providing vault-level protection. Native automated snapshots are deleted if the RDS instance is deleted. This leaves the service vulnerable to ransomware, accidental deletion, or malicious insider actions that could wipe both the database and its native snapshots.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "DATA_RECOVERY",
+            "updatedAt": "2026-08-29T07:20:56.817000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/awesomeshop-legacy:1w54nc",
+            "findingId": "775d531b-408f-4a87-819e-14f37833eee8",
+            "name": "RDS MySQL and EKS cluster lack deletion protection",
+            "description": "The RDS MySQL instance (awesomeshopinfra-awesomeshopmysql36bf1715-7hlgoeulquaq) and EKS cluster (PetSite) both have DeletionProtection set to false. Accidental deletion of the RDS instance would remove the sole persistent data store and its automated backups. Accidental deletion of the EKS cluster would destroy all Kubernetes workloads. Either event causes a complete service outage requiring extensive recovery.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "DATA_RECOVERY",
+            "updatedAt": "2026-08-29T07:20:56.817000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/awesomeshop-legacy:1w54nc",
+            "findingId": "7a28542f-563b-4ce9-bb82-5da9b7253fac",
+            "name": "No ARC zonal shift enabled on EKS cluster for manual AZ evacuation",
+            "description": "The EKS cluster PetSite does not have ARC zonal shift enabled. Without this capability, operators cannot manually shift in-cluster Pod-to-Pod traffic away from an impaired AZ. During a gray failure where nodes remain running but are degraded, Kubernetes health checks may not detect the issue, leaving traffic flowing to degraded Pods.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:20:56.817000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/awesomeshop-legacy:1w54nc",
+            "findingId": "7a3a5e23-bdba-42ae-be2a-519bef552949",
+            "name": "Single-AZ RDS MySQL instance lacks Multi-AZ failover capability",
+            "description": "The RDS MySQL instance (awesomeshopinfra-awesomeshopmysql36bf1715-7hlgoeulquaq) is deployed as a single-AZ instance in ap-northeast-1c with MultiAZ disabled, no read replicas, and runs on db.t3.micro. If this AZ experiences an impairment, all six microservices lose access to persistent data, causing a complete service outage. Recovery requires restoring from backup, which may take 30+ minutes and depends on control plane availability during the impairment.",
+            "failureCategory": "SINGLE_POINT_OF_FAILURE",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:20:56.817000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/awesomeshop-legacy:1w54nc",
+            "findingId": "a7e125ef-c93d-4822-9509-c46d7fbfae1f",
+            "name": "All six deployments have zero replicas — complete service outage",
+            "description": "All six deployments in the awesomeshop namespace (gateway-service, frontend, product-service, order-service, points-service, auth-service) are configured with spec.replicas: 0. With zero running pods, the entire service is non-functional. Any single pod failure, node failure, or disruption results in complete unavailability since there are no replicas to absorb failures. Even when scaled up, a single replica per deployment is a complete SPOF.",
+            "failureCategory": "SINGLE_POINT_OF_FAILURE",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:20:56.817000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/awesomeshop-legacy:1w54nc",
+            "findingId": "af6a6a23-e106-446c-8290-0fd760a0e7d3",
+            "name": "Missing startup probes on Spring Boot services — slow starts killed by liveness probe",
+            "description": "None of the six containers define a startupProbe. The five Spring Boot services use initialDelaySeconds of 90s on liveness probes as a fragile workaround. If startup takes longer than 165s (90s delay + 5 failures × 15s period), the liveness probe kills the container, causing a restart loop. The frontend also lacks a startup probe.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:20:56.817000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/awesomeshop-legacy:1w54nc",
+            "findingId": "b1980367-7984-4796-8f20-3de9c50b2c0a",
+            "name": "No topology spread constraints — AZ failure may take down all replicas",
+            "description": "All six deployments in the awesomeshop namespace have no topologySpreadConstraints configured. Without these constraints, the Kubernetes scheduler may place all replicas of a deployment into a single AZ (ap-northeast-1a or ap-northeast-1c). An AZ failure would then take down all replicas of affected services simultaneously.",
+            "failureCategory": "SINGLE_POINT_OF_FAILURE",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:20:56.817000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/awesomeshop-legacy:1w54nc",
+            "findingId": "c2a2a224-e79b-4f33-8dd0-8116c7007265",
+            "name": "No pod anti-affinity — multiple replicas may co-locate on same node",
+            "description": "None of the six awesomeshop deployments define podAntiAffinity rules. Without anti-affinity, the scheduler may place both replicas of a deployment on the same node. A single node failure would then take down all replicas of that service, negating the benefit of running multiple replicas.",
+            "failureCategory": "SINGLE_POINT_OF_FAILURE",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:20:56.817000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/awesomeshop-legacy:1w54nc",
+            "findingId": "c3c2071f-4539-4d66-b445-6de02a27f49a",
+            "name": "No ARC zonal shift enabled on load balancer for external traffic evacuation",
+            "description": "The inferred load balancer fronting the EKS cluster does not have ARC zonal shift enabled. Without this capability, there is no reliable mechanism to shift external client traffic away from an impaired AZ during a gray failure where ELB health checks continue to pass.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:20:56.817000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/awesomeshop-legacy:1w54nc",
+            "findingId": "cdca7bbe-3280-4b29-8d60-c14cdbbaee33",
+            "name": "Missing preStop hooks — in-flight requests dropped during pod termination",
+            "description": "All six containers across the awesomeshop deployments lack preStop lifecycle hooks. During pod termination (rolling updates, node drains, scale-down), Kubernetes sends SIGTERM and updates EndpointSlice concurrently with no ordering guarantee. Without a preStop sleep, the container may shut down before kube-proxy removes it from iptables, causing in-flight requests to be routed to a terminating pod and dropped.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:20:56.817000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/awesomeshop-legacy:1w54nc",
+            "findingId": "d5ec7160-105a-4d8a-a822-804674573388",
+            "name": "EKS worker nodes span only two AZs — AZ loss removes 50% of compute",
+            "description": "EKS worker nodes are distributed across only two AZs (ap-northeast-1a and ap-northeast-1c) with 2 instances each. If one AZ is impaired, 50% of compute capacity is lost. The remaining 2 nodes in the surviving AZ must absorb all six microservice workloads, which may overwhelm them before Auto Scaling can compensate — especially since EC2 capacity may be constrained during an AZ impairment.",
+            "failureCategory": "EXCESSIVE_LOAD",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:20:56.817000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/awesomeshop-legacy:1w54nc",
+            "findingId": "deb5ca73-3422-4304-9342-c71e375fe1d0",
+            "name": "No HPA configured — services cannot scale under load or during AZ failure",
+            "description": "No HorizontalPodAutoscaler resources exist for any of the six awesomeshop deployments. All services run with a fixed replica count and cannot scale horizontally in response to traffic increases or load redistribution during an AZ failure. The Spring Boot backend services use JVM-based workloads where CPU-based HPA may be less effective.",
+            "failureCategory": "EXCESSIVE_LOAD",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:20:56.817000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/awesomeshop-legacy:1w54nc",
+            "findingId": "e2cc0143-2735-46d0-b9f2-c0cdcf877521",
+            "name": "No PodDisruptionBudgets — voluntary disruptions can evict all pods simultaneously",
+            "description": "Zero PodDisruptionBudgets exist in the awesomeshop namespace. Without PDBs, voluntary disruptions such as node drains during EKS cluster upgrades, node group updates, or Karpenter consolidation can evict all pods of a deployment simultaneously, causing complete service unavailability during maintenance operations.",
+            "failureCategory": "MISCONFIGURATION_AND_BUGS",
+            "severity": "HIGH",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:20:56.817000+00:00"
+        },
+        {
+            "serviceArn": "arn:aws:resiliencehub:ap-northeast-1:926093770964:service/awesomeshop-legacy:1w54nc",
+            "findingId": "fadc7259-08ce-4bc5-9133-15e1fafa7eb2",
+            "name": "RDS MySQL burstable instance may throttle under sustained or cache-failure load",
+            "description": "The RDS MySQL instance uses db.t3.micro, a burstable instance class with limited CPU credits (2 vCPUs, 1 GiB RAM). Under sustained load or if the Redis cache fails (causing cache miss storms to hit the database), CPU credits can be exhausted, throttling the instance to baseline performance (10% of a vCPU). This would cause severe latency increases or timeouts for all microservices.",
+            "failureCategory": "EXCESSIVE_LOAD",
+            "severity": "MEDIUM",
+            "status": "OPEN",
+            "policyComponent": "MULTI_AZ_DISASTER_RECOVERY",
+            "updatedAt": "2026-08-29T07:20:56.817000+00:00"
+        }
+    ]
+}

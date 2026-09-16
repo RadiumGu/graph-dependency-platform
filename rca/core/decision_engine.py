@@ -38,6 +38,15 @@ AUTOMATION_POLICY: dict[str, dict[str, str]] = {
 }
 
 # 允许自动执行的安全操作（幂等、可回滚、不影响数据）
+# auto 分支要求 LLM 自身置信度也不低于此值（0.0-1.0）。
+# 理由见 evaluate() 里 2b 段:confidence = max(规则分, LLM 分) 是乐观偏置的，
+# 规则分饱和到 1.0 时（生产实测 40% 的 Incident 如此）会完全覆盖 LLM 的判断。
+# auto 是唯一「无人确认就动生产」的分支，值得单独设一道否决。
+# 取 0.5 = medium band 下界:即「LLM 认为至少中等可信」才允许全自动。
+AUTO_REQUIRES_LLM_CONFIDENCE: float = float(
+    os.environ.get('AUTO_REQUIRES_LLM_CONFIDENCE', '0.5')
+)
+
 SAFE_AUTO_ACTIONS: frozenset[str] = frozenset({
     'restart_pod',
     'scale_up_replicas',
@@ -97,9 +106,14 @@ class DecisionEngine:
         # 如果有 rag_report 的 confidence，优先使用（0-100 → 0.0-1.0）
         rag = rca_result.get('rag_report', {}) or {}
         rag_conf = rag.get('confidence', None)
+        rag_conf_normalized = None
         if rag_conf is not None:
             try:
-                rag_conf_normalized = float(rag_conf) / 100.0
+                # 钳制到 [0, 1]。2026-08-28:此前无上界 —— 生产图谱里实测存在
+                # root_cause_confidence = **1.1** 的 Incident，即 LLM 返回 110、
+                # 除以 100 后直接成为 1.1。graph_rag_reporter 侧也已加钳制，
+                # 这里是第二道防线（该值也可能来自其它写入方）。
+                rag_conf_normalized = max(0.0, min(1.0, float(rag_conf) / 100.0))
                 confidence = max(confidence, rag_conf_normalized)
             except (TypeError, ValueError):
                 pass
@@ -109,6 +123,26 @@ class DecisionEngine:
         # 2. 查策略矩阵
         sev = severity if severity in AUTOMATION_POLICY else 'P1'
         action_level = AUTOMATION_POLICY[sev].get(confidence_band, 'manual')
+
+        # 2b. LLM 低置信否决 auto
+        # `confidence = max(规则分, LLM 分)` 是**乐观偏置**的:规则分一旦饱和到
+        # 1.0（生产实测 40% 的 Incident 如此），LLM 自己的判断就被完全覆盖 ——
+        # 即使模型说「置信度 35，证据很弱」，max(1.0, 0.35) 仍是 1.0。
+        # 对一个用来授权**自动执行修复动作**的闸门，这个方向是错的。
+        #
+        # 处理方式刻意**只收紧 auto 这一条路**，不改展示用的 confidence 与 band:
+        # band 阈值（high>=80 / medium>=50）是按现有分值校准的，动它会改变所有
+        # 历史评分的相对关系。而 auto 是唯一「无人确认就动生产」的分支，
+        # 值得单独设一道否决。
+        #
+        # semi_auto / manual 不受影响 —— 它们都有人在环。
+        llm_veto = (
+            action_level == 'auto'
+            and rag_conf_normalized is not None
+            and rag_conf_normalized < AUTO_REQUIRES_LLM_CONFIDENCE
+        )
+        if llm_veto:
+            action_level = 'semi_auto'
 
         # 3. 推断建议操作
         proposed_action = self._propose_action(rca_result, rag)

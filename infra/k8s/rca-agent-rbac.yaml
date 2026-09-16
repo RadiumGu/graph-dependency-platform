@@ -1,0 +1,64 @@
+# RCA Lambda 的集群内权限。
+#
+# 背景：petsite-rca-lambda-role 与 gp-window-flush-lambda-role 此前没有 EKS
+# access entry，导致 eks:DescribeCluster 拿到 token 后调用 k8s API 一律
+# HTTP 401 Unauthorized（Pod 状态采集与 restart 动作均无法执行）。
+#
+# 权限范式对齐集群里已有的 ClusterRole/neptune-etl-reader，额外只多授予
+# deployments 的 patch/update —— actions/action_executor.py 的重启动作是
+# patch_namespaced_deployment（改注解触发滚动重启），不是删除 Pod，
+# 因此不需要 pods 的 delete 权限。
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rca-agent
+  labels:
+    app.kubernetes.io/part-of: graph-dependency-platform
+    app.kubernetes.io/component: rca
+rules:
+  # 只读：故障现场采集（Pod 状态、重启次数、所在节点、服务端点）
+  - apiGroups: [""]
+    resources: ["nodes", "pods", "services", "namespaces", "endpoints", "events"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list"]
+  # 只读：Pod 日志（RCA 需要采样 ERROR 行）
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+  # 写：半自动修复动作 —— 仅 Deployment 的 patch/update，不含 create/delete
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["patch", "update"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    verbs: ["patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: rca-agent-binding
+  labels:
+    app.kubernetes.io/part-of: graph-dependency-platform
+    app.kubernetes.io/component: rca
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: rca-agent
+subjects:
+  # 该组由 EKS access entry 的 kubernetesGroups 映射进来，
+  # 对应 IAM 角色 petsite-rca-lambda-role 与 gp-window-flush-lambda-role。
+  - kind: Group
+    name: rca-agent
+    apiGroup: rbac.authorization.k8s.io

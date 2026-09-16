@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-PROJECT_ROOT = Path('/home/ubuntu/tech/graph-dependency-platform')
+from paths import PROJECT_ROOT_PATH as PROJECT_ROOT
 ETL_DIR = PROJECT_ROOT / 'infra' / 'lambda' / 'etl_aws'
 
 

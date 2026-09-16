@@ -4,7 +4,7 @@ sample_for_golden_learning.py — 用 DirectBedrockLearning 采样建立 Golden 
 抗 SIGPIPE + 场景级 try/except + 进度写文件（retro § 6 Top 1）。
 
 用法:
-  cd /home/ubuntu/tech/graph-dependency-platform
+  cd <仓库根>
   PYTHONPATH=rca:chaos/code python3 chaos/code/agents/sample_for_golden_learning.py
 """
 from __future__ import annotations

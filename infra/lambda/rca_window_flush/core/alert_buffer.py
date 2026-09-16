@@ -30,10 +30,19 @@ import boto3
 
 logger = logging.getLogger(__name__)
 
-REGION = os.environ.get('REGION', 'ap-northeast-1')
-TABLE_NAME = os.environ.get('ALERT_BUFFER_TABLE', 'gp-alert-buffer')
+from shared import get_region
+REGION = get_region()
+# 环境变量命名兼容：部署脚本(deploy.sh)与 CDK(AlertBufferStack)历史上用了
+# BUFFER_TABLE_NAME / WINDOW_FLUSH_FUNCTION_ARN，而本模块原先只读
+# ALERT_BUFFER_TABLE / WINDOW_FLUSH_LAMBDA_ARN，导致定时器被静默跳过
+# （_schedule_flush 的跳过日志是 debug 级，生产不可见）。此处同时接受两种名称。
+TABLE_NAME = (os.environ.get('ALERT_BUFFER_TABLE')
+              or os.environ.get('BUFFER_TABLE_NAME')
+              or 'gp-alert-buffer')
 SCHEDULER_ROLE_ARN = os.environ.get('SCHEDULER_ROLE_ARN', '')
-FLUSH_LAMBDA_ARN = os.environ.get('WINDOW_FLUSH_LAMBDA_ARN', '')
+FLUSH_LAMBDA_ARN = (os.environ.get('WINDOW_FLUSH_LAMBDA_ARN')
+                    or os.environ.get('WINDOW_FLUSH_FUNCTION_ARN')
+                    or '')
 
 BUFFER_WINDOW_SECONDS: int = 120   # 2 分钟缓冲窗口
 P0_BYPASS_BUFFER: bool = True       # P0 告警不进缓冲，直接处理
@@ -94,7 +103,9 @@ class AlertBuffer:
         try:
             self._table.put_item(
                 Item={
-                    'fingerprint': event.fingerprint,
+                    # 键名必须与表 schema 一致：CDK(alert-buffer-stack.ts) 定义
+                    # partitionKey=window_id, sortKey=alert_fingerprint。
+                    'alert_fingerprint': event.fingerprint,
                     'window_id': wid,
                     'alert_json': alert_json,
                     'service_name': event.service_name,
@@ -104,7 +115,7 @@ class AlertBuffer:
                     'ttl': _ttl(),
                 },
                 # 仅在 PK 不存在时写入（幂等去重）
-                ConditionExpression='attribute_not_exists(fingerprint)',
+                ConditionExpression='attribute_not_exists(alert_fingerprint)',
             )
             logger.info(f"AlertBuffer: put {event.fingerprint[:8]}... svc={event.service_name} window={wid}")
             # 触发窗口定时器（首次写入时）
@@ -114,7 +125,7 @@ class AlertBuffer:
             # 同 fingerprint 已存在，仅递增计数
             try:
                 self._table.update_item(
-                    Key={'fingerprint': event.fingerprint, 'window_id': wid},
+                    Key={'window_id': wid, 'alert_fingerprint': event.fingerprint},
                     UpdateExpression='ADD #cnt :one',
                     ExpressionAttributeNames={'#cnt': 'count'},
                     ExpressionAttributeValues={':one': 1},
@@ -123,8 +134,9 @@ class AlertBuffer:
                 logger.warning(f"AlertBuffer count increment failed: {e}")
             return False
         except Exception as e:
+            # 写入失败必须让调用方可区分「去重命中」与「真失败」，否则告警会被静默丢弃。
             logger.error(f"AlertBuffer put_item failed: {e}")
-            return False
+            raise
 
     # ── 读取 & 清空 ───────────────────────────────────────────────────────────
 
@@ -172,11 +184,11 @@ class AlertBuffer:
                 })
                 events.append(ev)
                 delete_keys.append({
-                    'fingerprint': item['fingerprint'],
                     'window_id': item['window_id'],
+                    'alert_fingerprint': item['alert_fingerprint'],
                 })
             except Exception as e:
-                logger.warning(f"AlertBuffer deserialize failed: {e} item={item.get('fingerprint','?')}")
+                logger.warning(f"AlertBuffer deserialize failed: {e} item={item.get('alert_fingerprint','?')}")
 
         # 批量删除（已消费）
         if delete_keys:
@@ -198,7 +210,12 @@ class AlertBuffer:
             window_id: 当前窗口 ID（YYYY-MM-DDTHH:MM）
         """
         if not FLUSH_LAMBDA_ARN:
-            logger.debug("WINDOW_FLUSH_LAMBDA_ARN not set, skip scheduler")
+            # 提升为 warning：缺这个 ARN 会导致窗口永不 flush，缓冲的告警只能等 TTL 过期，
+            # 等于静默丢弃。原先是 debug 级，生产日志里看不到。
+            logger.warning(
+                "AlertBuffer: WINDOW_FLUSH_LAMBDA_ARN/WINDOW_FLUSH_FUNCTION_ARN not set — "
+                "window will NEVER be flushed, buffered alerts will expire via TTL"
+            )
             return
 
         # 调度时间 = 窗口结束时间 + 5 秒缓冲

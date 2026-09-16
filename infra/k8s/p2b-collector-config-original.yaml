@@ -1,0 +1,23 @@
+# aws-otel-collector sidecar 的**原始**配置（2026-08-29 从生产 Deployment 实测取得）
+# 保留此文件用于回滚。4 个服务共用同一份：
+#   search-service / pay-for-adoption / list-adoptions / pethistory
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+processors:
+  batch/traces:
+    timeout: 1s
+    send_batch_size: 50
+exporters:
+  awsxray:
+    region: ap-northeast-1
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch/traces]
+      exporters: [awsxray]

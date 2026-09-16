@@ -273,8 +273,15 @@ class Layer2ProberBase(ABC):
             healthy = r.get("healthy", True)
             summary = r.get("summary", "")
             evidence = r.get("evidence", [])
+            # 原先写作 f"Status: {'OK' if healthy else '\u26a0\ufe0f ANOMALY'}" ——
+            # f-string 表达式部分含反斜杠在 **Python 3.12 之前是 SyntaxError**
+            # (PEP 701 才放宽)。Lambda 运行时是 3.12 所以生产可用,但本地 3.10/3.11
+            # 连解析都过不去:本文件导入失败 → engines.factory 失败 →
+            # 实测 78 个测试 error 全部源于这一行。
+            # 把转义序列提到 f-string 之外,使本文件在 3.10+ 均可解析。
+            _status = "OK" if healthy else "\u26a0\ufe0f ANOMALY"
             block = [f"[{svc} Probe]",
-                     f"Status: {'OK' if healthy else '\u26a0\ufe0f ANOMALY'}",
+                     f"Status: {_status}",
                      f"Summary: {summary}"]
             for e in evidence:
                 block.append(f"  - {e}")

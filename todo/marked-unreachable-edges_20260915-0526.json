@@ -1,0 +1,41 @@
+[
+  {
+    "eid": "42d0368d-d6b1-a5f7-1ca8-f15826be604c",
+    "edge": "Delegates",
+    "src_label": "AgentRuntime",
+    "src": "WaggleAIOrchestrator",
+    "dst_label": "AgentRuntime",
+    "dst": "WaggleAINutrition",
+    "status": "untested",
+    "existing": null,
+    "existing_class": null,
+    "reason": "无任何后端能打到目标类型 AgentRuntime，源 AgentRuntime 不在集群内、无法在源侧切断，也不满足 IAM deny 的两侧条件（目标在能力表内=True，源有可加策略的角色=False）",
+    "klass": "unreachable_by_any_backend"
+  },
+  {
+    "eid": "62d03a4a-beec-d9f8-3ebb-3a9a33127390",
+    "edge": "Delegates",
+    "src_label": "AgentRuntime",
+    "src": "WaggleAIOrchestrator",
+    "dst_label": "AgentRuntime",
+    "dst": "WaggleAIOrdering",
+    "status": null,
+    "existing": null,
+    "existing_class": null,
+    "reason": "无任何后端能打到目标类型 AgentRuntime，源 AgentRuntime 不在集群内、无法在源侧切断，也不满足 IAM deny 的两侧条件（目标在能力表内=True，源有可加策略的角色=False）",
+    "klass": "unreachable_by_any_backend"
+  },
+  {
+    "eid": "c0d0368d-d6c5-6fd5-2dd3-fc5151c542c9",
+    "edge": "Delegates",
+    "src_label": "AgentRuntime",
+    "src": "WaggleAIOrchestrator",
+    "dst_label": "AgentRuntime",
+    "dst": "WaggleAIAdoption",
+    "status": "untested",
+    "existing": null,
+    "existing_class": null,
+    "reason": "无任何后端能打到目标类型 AgentRuntime，源 AgentRuntime 不在集群内、无法在源侧切断，也不满足 IAM deny 的两侧条件（目标在能力表内=True，源有可加策略的角色=False）",
+    "klass": "unreachable_by_any_backend"
+  }
+]

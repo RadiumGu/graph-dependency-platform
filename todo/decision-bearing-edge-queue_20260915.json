@@ -1,0 +1,38 @@
+{
+  "_note": "决策承重且零观测、尚未验证的依赖边 —— 给 scripts/verify_via_iam_deny.py / verify_via_rds_fault.py 之类的探针工具消费的优先级清单。",
+  "_generated": "2026-09-15T05:50Z",
+  "_criterion": {
+    "layer1": "位于 q_articulation_chokepoints 给出的割点关联路径上 —— 这些边错了，blocked 数就错，也就是爆炸半径算错",
+    "layer2": "零独立观测（xray_call_count / xray_last_seen / nfm_flow_count / nfm_last_seen / calls / error_rate / image_ref 全为 NULL）—— 有观测证据的边，注入只是复核观测已证明的事",
+    "rejected_criterion": "先试过「能被决策查询触达的边」：逐个依赖方（33 个）跑 q3_upstream_deps 触达 110/110 条，占 100%，筛不掉任何东西。因为 q3 只列依赖，列错一项的代价远低于判错一个单点故障。",
+    "not_used": "刻意不用 q16_single_point_of_failure —— 它的判据是「只在单个 AZ 且被 >=2 个服务依赖」，实测返回的是 EC2 实例，与依赖边不直接相关（见 tests/test_59_chokepoint_spof.py）"
+  },
+  "_coverage_at_generation": {
+    "all_dependency_edges": 110,
+    "chokepoint_incident": 62,
+    "core_decision_bearing_zero_obs": 25,
+    "core_confirmed": 4,
+    "core_untested": 20,
+    "verified_ratio_all_pct": 14.5,
+    "verified_ratio_core_pct": 16.0
+  },
+  "_how_to_regenerate": "demo/pages/1_Edge_Verification.py 的「该攻哪些边」一段现算同一个集合；命令行可用 C.dr_query_module().q_articulation_chokepoints() 取割点后按上面两道判据过滤。",
+  "targets_by_priority": [
+    {"target": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb", "type": "S3Bucket", "core_untested_edges": 3},
+    {"target": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM", "type": "DynamoDBTable", "core_untested_edges": 3},
+    {"target": "serviceseks2-databasewriter2462cc03-fwgfu4gossqe", "type": "RDSInstance", "core_untested_edges": 2},
+    {"target": "serviceseks2-databasereader1f54479b8-hpyukqlufzus", "type": "RDSInstance", "core_untested_edges": 2},
+    {"target": "serviceseks2-databaseb269d8bb-efjeyzicx2ak", "type": "RDSCluster", "core_untested_edges": 2},
+    {"target": "ServicesEks2-petsiteapplicationresourcecontrolerDC-xWipuliA0V5T", "type": "LambdaFunction", "core_untested_edges": 2},
+    {"target": "petsite-ops-slack-notifier", "type": "LambdaFunction", "core_untested_edges": 1},
+    {"target": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ", "type": "StepFunction", "core_untested_edges": 1},
+    {"target": "ServicesEks2-StepFnlambdasteppriceGreaterThan...", "type": "LambdaFunction", "core_untested_edges": 1},
+    {"target": "WaggleAIOrchestrator", "type": "AgentRuntime", "core_untested_edges": 1}
+  ],
+  "_why_i_did_not_run_these": [
+    "你们的 verify_via_iam_deny.py / verify_via_rds_fault.py 产出的记录质量明显高于 chaos/code/runner 那条老 FIS 路径：带 verify_evidence_channel / verify_severance，还会明确拒绝过度声称（payforadoption -> ssm 判 inconclusive，理由「证明了调用失败，没证明业务受损，消费方存在降级路径」）。",
+    "两个 agent 并发往同一个活系统注故障不安全 —— chaos_lock 是窗口级不是会话级，而最近一次判定写入距我开工只有 25 分钟。",
+    "本轮我已经改过一次生产（etl_agentcore 函数代码 + 层 v20）。图谱是这套验证的测量仪器，刚改完它的写入路径就叠加故障注入，不是好次序 —— 建议先让 ETL 平稳跑几轮。"
+  ],
+  "_caveat": "S3 那三条的注入手段需要单独想：IAM deny 对 S3 可行，但 petsearch 读 S3 是否有降级路径未知；参照 payforadoption -> ssm 那条的处置（注入生效但业务未退化 ⇒ inconclusive 而非 confirmed）。"
+}

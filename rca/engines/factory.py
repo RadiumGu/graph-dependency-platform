@@ -1,7 +1,7 @@
 """engines/factory.py — NLQuery 引擎工厂，按环境变量 NLQUERY_ENGINE 选实现。
 
 规则：
-  - 默认 direct
+  - 默认 strands（north_star §1.5 硬约束：LLM/agent 一律走 Strands）
   - NLQUERY_ENGINE=strands 且依赖已装 → strands
   - NLQUERY_ENGINE=strands 但 strands 未装 → 日志 warning + 回退 direct（不崩）
 """
@@ -25,7 +25,7 @@ def make_nlquery_engine(profile: Any = None) -> NLQueryBase:
     Returns:
         NLQueryBase 具体实现。
     """
-    engine = (os.environ.get("NLQUERY_ENGINE") or "direct").lower()
+    engine = (os.environ.get("NLQUERY_ENGINE") or "strands").lower()
     if engine == "strands":
         try:
             from neptune.nl_query_strands import StrandsNLQueryEngine  # type: ignore
@@ -54,10 +54,10 @@ def make_nlquery_engine(profile: Any = None) -> NLQueryBase:
 def make_hypothesis_engine(profile: Any = None) -> "NLQueryBase":  # type: ignore[name-defined]
     """构造 HypothesisAgent 引擎，切换 env：HYPOTHESIS_ENGINE=direct|strands。
 
-    默认 direct；strands 不可用 → warning + 回退 direct。
+    默认 strands；strands 不可用 → warning + 回退 direct（回退是应急，不是常态）。
     """
     from engines.base import HypothesisBase  # 延迟导入避免循环
-    engine = (os.environ.get("HYPOTHESIS_ENGINE") or "direct").lower()
+    engine = (os.environ.get("HYPOTHESIS_ENGINE") or "strands").lower()
     if engine == "strands":
         try:
             from chaos.code.agents.hypothesis_strands import StrandsHypothesisAgent  # type: ignore
@@ -84,10 +84,10 @@ def make_hypothesis_engine(profile: Any = None) -> "NLQueryBase":  # type: ignor
 def make_learning_engine(profile: Any = None) -> "LearningBase":  # type: ignore[name-defined]
     """构造 LearningAgent 引擎，切换 env：LEARNING_ENGINE=direct|strands。
 
-    默认 direct；strands 不可用 → warning + 回退 direct。
+    默认 strands；strands 不可用 → warning + 回退 direct（回退是应急，不是常态）。
     """
     from engines.base import LearningBase  # 延迟导入避免循环
-    engine = (os.environ.get("LEARNING_ENGINE") or "direct").lower()
+    engine = (os.environ.get("LEARNING_ENGINE") or "strands").lower()
     if engine == "strands":
         try:
             from agents.learning_strands import StrandsLearningAgent  # type: ignore
@@ -116,7 +116,7 @@ def make_layer2_engine(profile: Any = None) -> "Layer2ProberBase":  # type: igno
     \u9ed8\u8ba4 direct\uff1bstrands \u4e0d\u53ef\u7528 \u2192 warning + \u56de\u9000 direct\u3002
     """
     from engines.base import Layer2ProberBase  # \u5ef6\u8fdf\u5bfc\u5165\u907f\u514d\u5faa\u73af
-    engine = (os.environ.get("LAYER2_ENGINE") or "direct").lower()
+    engine = (os.environ.get("LAYER2_ENGINE") or "strands").lower()
     if engine == "strands":
         try:
             from collectors.layer2_strands import StrandsLayer2Prober  # type: ignore

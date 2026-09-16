@@ -47,7 +47,8 @@ def lambda_handler(event, context):
 
     logger.info(f"RCA triggered: {json.dumps(event)[:300]}")
 
-    if 'Records' in event:
+    is_sns_event = 'Records' in event
+    if is_sns_event:
         msg_str = event['Records'][0]['Sns']['Message']
         try:
             msg = json.loads(msg_str)
@@ -76,6 +77,63 @@ def lambda_handler(event, context):
         except Exception as e:
             logger.error(f"Resolve failed: {e}")
             return {'statusCode': 500, 'body': str(e)}
+
+    # ── 告警聚合缓冲（仅 SNS 路径）────────────────────────────────────────────
+    # 设计意图：SNS 告警可能成风暴（100 条告警 → 100 次完整 RCA）。
+    # 缓冲后由 window_flush_handler 在窗口到期时统一处理：
+    #   flush_window → TopologyCorrelator 按拓扑聚合 → 每组只跑一次 RCA。
+    #
+    # 直接 invoke（无 'Records'）不走缓冲，保持同步返回 RCA 结果：
+    #   chaos/code/runner/rca.py 的 RCATrigger 依赖同步结果做准确性校验，
+    #   手动排障调用同理。
+    #
+    # ALERT_BUFFER_ENABLED=false 可关闭缓冲，退回逐条同步处理（无需改代码）。
+    if is_sns_event and os.environ.get('ALERT_BUFFER_ENABLED', 'true').lower() != 'false':
+        try:
+            from core.alert_buffer import AlertBuffer
+            from core.event_normalizer import EventNormalizer
+
+            unified = EventNormalizer().normalize(signal)
+            if unified is None:
+                logger.info("AlertBuffer: normalize returned None, skipping")
+                return {'statusCode': 200, 'body': 'skipped (not normalizable)'}
+
+            is_first = AlertBuffer().put_alert(unified)
+            logger.info(
+                f"AlertBuffer: buffered fingerprint={unified.fingerprint[:8]}... "
+                f"svc={unified.service_name} first_in_window={is_first}"
+            )
+            # ── 首次进窗时发起 DevOps Agent 调查（2026-09-15 接入）──────
+            #
+            # 接在 `is_first` 而不是每条告警：同一个故障只发一次调查。
+            # 不去重的话一次告警风暴会打满 agent task 配额，
+            # 而后面那些任务查的是同一件事。
+            #
+            # 为什么不用 `aws devops-agent create-trigger`：它的 condition
+            # 是 tagged union 且**只支持 schedule**，没有告警条件
+            # （2026-09-15 实测 + CLI 文档原文）。工作坊也说生产环境
+            # 的 alarm-driven investigation 由 Lambda 调用。
+            #
+            # 默认关闭（DEVOPS_AGENT_INVESTIGATE_ENABLED），
+            # 且任何异常都在模块内吞掉 —— 发起调查是增强，不是主链路。
+            if is_first:
+                try:
+                    from actions.devops_agent_trigger import on_first_alert
+                    on_first_alert(unified)
+                except Exception as _e:             # noqa: BLE001
+                    logger.warning("DevOps Agent 调查发起跳过: %r", _e)
+            return {
+                'statusCode': 202,
+                'body': json.dumps({
+                    'buffered': True,
+                    'fingerprint': unified.fingerprint,
+                    'service': unified.service_name,
+                    'first_in_window': is_first,
+                }, ensure_ascii=False),
+            }
+        except Exception as e:
+            # 缓冲失败不能吞掉告警：记录后继续走同步 RCA，保证不丢信号
+            logger.error(f"AlertBuffer failed, falling back to sync RCA: {e}", exc_info=True)
 
     # 故障分类
     try:

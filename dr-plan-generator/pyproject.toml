@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dr-plan-generator"
+version = "0.2.0"
+description = "Graph-driven disaster recovery plan generator (pilot light / warm standby)"
+readme = "README.md"
+requires-python = ">=3.9"
+
+# 刻意不含 pydantic。0.1 时它是被父仓库 profiles/schema.py 间接拖进来的；
+# M2 解耦后本模块自带 dr_profile.py，只需 pyyaml。
+dependencies = [
+    "boto3>=1.34",
+    "requests>=2.28",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[project.scripts]
+dr-plan-generator = "main:main"
+
+[tool.setuptools]
+# 平铺布局：模块直接位于本目录下（main.py / models.py / config.py / dr_profile.py）。
+py-modules = ["main", "models", "config", "dr_profile",
+              "executor_base", "executor_direct", "executor_factory", "executor_strands"]
+
+[tool.setuptools.packages.find]
+include = ["graph*", "planner*", "registry*", "assessment*", "output*", "validation*"]
+exclude = ["tests*", "examples*", "docs*", "skills*", "references*"]
+
+[tool.setuptools.package-data]
+registry = ["*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

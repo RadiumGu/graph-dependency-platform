@@ -1,0 +1,471 @@
+{
+  "verifiable": [
+    {
+      "edge": "AccessesData",
+      "sl": "LambdaFunction",
+      "src": "neptune-etl-trigger",
+      "dl": "LambdaFunction",
+      "dst": "neptune-etl-from-aws",
+      "calls": 33,
+      "note": "X-Ray 近 1h 33 次"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petsearch",
+      "dl": "DynamoDBTable",
+      "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "calls": 17637,
+      "note": "X-Ray 近 1h 17637 次"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petsearch",
+      "dl": "S3Bucket",
+      "dst": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+      "calls": 2528,
+      "note": "X-Ray 近 1h 2528 次"
+    },
+    {
+      "edge": "Invokes",
+      "sl": "LambdaFunction",
+      "src": "neptune-etl-trigger",
+      "dl": "LambdaFunction",
+      "dst": "neptune-etl-from-aws",
+      "calls": 33,
+      "note": "X-Ray 近 1h 33 次"
+    }
+  ],
+  "no_traffic": [
+    {
+      "edge": "AccessesData",
+      "sl": "StepFunction",
+      "src": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "dl": "LambdaFunction",
+      "dst": "ServicesEks2-StepFnlambdasteppriceLessThan556D8B30-2POHnQIjCcYJ",
+      "calls": 0,
+      "note": "状态机 24h 零执行 —— 链路休眠"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "StepFunction",
+      "src": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "dl": "LambdaFunction",
+      "dst": "ServicesEks2-StepFnlambdasteppriceGreaterThan55AD1-kkACGO1yh30X",
+      "calls": 0,
+      "note": "状态机 24h 零执行 —— 链路休眠"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "StepFunction",
+      "src": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "dl": "LambdaFunction",
+      "dst": "ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A",
+      "calls": 0,
+      "note": "状态机 24h 零执行 —— 链路休眠"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petsearch",
+      "dl": "AWSServiceEndpoint",
+      "dst": "sts",
+      "calls": 6,
+      "note": "X-Ray 近 1h 6 次"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "AWSServiceEndpoint",
+      "dst": "sts",
+      "calls": 1,
+      "note": "X-Ray 近 1h 1 次"
+    },
+    {
+      "edge": "Invokes",
+      "sl": "StepFunction",
+      "src": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "dl": "LambdaFunction",
+      "dst": "ServicesEks2-StepFnlambdasteppriceLessThan556D8B30-2POHnQIjCcYJ",
+      "calls": 0,
+      "note": "状态机 24h 零执行 —— 链路休眠"
+    },
+    {
+      "edge": "Invokes",
+      "sl": "StepFunction",
+      "src": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "dl": "LambdaFunction",
+      "dst": "ServicesEks2-StepFnlambdasteppriceGreaterThan55AD1-kkACGO1yh30X",
+      "calls": 0,
+      "note": "状态机 24h 零执行 —— 链路休眠"
+    },
+    {
+      "edge": "Invokes",
+      "sl": "StepFunction",
+      "src": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "dl": "LambdaFunction",
+      "dst": "ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A",
+      "calls": 0,
+      "note": "状态机 24h 零执行 —— 链路休眠"
+    }
+  ],
+  "compound": [
+    {
+      "edge": "DependsOn",
+      "sl": "Microservice",
+      "src": "pethistory",
+      "dl": "ECRRepository",
+      "dst": "pet-adoptions-history",
+      "note": "稳态无流量属正常 —— 需删Pod+切仓库的复合实验"
+    },
+    {
+      "edge": "DependsOn",
+      "sl": "Microservice",
+      "src": "order-service",
+      "dl": "ECRRepository",
+      "dst": "awesomeshop/order-service",
+      "note": "稳态无流量属正常 —— 需删Pod+切仓库的复合实验"
+    },
+    {
+      "edge": "DependsOn",
+      "sl": "Microservice",
+      "src": "product-service",
+      "dl": "ECRRepository",
+      "dst": "awesomeshop/product-service",
+      "note": "稳态无流量属正常 —— 需删Pod+切仓库的复合实验"
+    },
+    {
+      "edge": "DependsOn",
+      "sl": "Microservice",
+      "src": "points-service",
+      "dl": "ECRRepository",
+      "dst": "awesomeshop/points-service",
+      "note": "稳态无流量属正常 —— 需删Pod+切仓库的复合实验"
+    },
+    {
+      "edge": "DependsOn",
+      "sl": "Microservice",
+      "src": "auth-service",
+      "dl": "ECRRepository",
+      "dst": "awesomeshop/auth-service",
+      "note": "稳态无流量属正常 —— 需删Pod+切仓库的复合实验"
+    },
+    {
+      "edge": "DependsOn",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "ECRRepository",
+      "dst": "petadoptions/petsite",
+      "note": "稳态无流量属正常 —— 需删Pod+切仓库的复合实验"
+    },
+    {
+      "edge": "DependsOn",
+      "sl": "Microservice",
+      "src": "gateway-service",
+      "dl": "ECRRepository",
+      "dst": "awesomeshop/gateway-service",
+      "note": "稳态无流量属正常 —— 需删Pod+切仓库的复合实验"
+    }
+  ],
+  "unknown": [
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "payforadoption",
+      "dl": "StepFunction",
+      "dst": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "StepFunction",
+      "dst": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "order-service",
+      "dl": "RDSCluster",
+      "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "auth-service",
+      "dl": "RDSCluster",
+      "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "product-service",
+      "dl": "RDSCluster",
+      "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "LambdaFunction",
+      "src": "petsite-ops-slack-notifier",
+      "dl": "RDSCluster",
+      "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "calls": null,
+      "note": "源函数 24h 有 2 次调用，但 X-Ray 看不到这条边 —— 边级**测不出**（可能未开 Active 追踪），不等于无流量"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "points-service",
+      "dl": "RDSCluster",
+      "dst": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "payforadoption",
+      "dl": "RDSInstance",
+      "dst": "serviceseks2-databasewriter2462cc03-fwgfu4gossqe",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petlistadoptions",
+      "dl": "RDSInstance",
+      "dst": "serviceseks2-databasewriter2462cc03-fwgfu4gossqe",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "pethistory",
+      "dl": "RDSInstance",
+      "dst": "serviceseks2-databasewriter2462cc03-fwgfu4gossqe",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petstatusupdater",
+      "dl": "DynamoDBTable",
+      "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "DynamoDBTable",
+      "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "LambdaFunction",
+      "src": "petsite-ops-slack-notifier",
+      "dl": "DynamoDBTable",
+      "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "calls": null,
+      "note": "源函数 24h 有 2 次调用，但 X-Ray 看不到这条边 —— 边级**测不出**（可能未开 Active 追踪），不等于无流量"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "payforadoption",
+      "dl": "DynamoDBTable",
+      "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petfood",
+      "dl": "DynamoDBTable",
+      "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "payforadoption",
+      "dl": "S3Bucket",
+      "dst": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "S3Bucket",
+      "dst": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "LambdaFunction",
+      "src": "petsite-ops-slack-notifier",
+      "dl": "S3Bucket",
+      "dst": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+      "calls": null,
+      "note": "源函数 24h 有 2 次调用，但 X-Ray 看不到这条边 —— 边级**测不出**（可能未开 Active 追踪），不等于无流量"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petfood",
+      "dl": "AWSServiceEndpoint",
+      "dst": "dynamodb",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "AWSServiceEndpoint",
+      "dst": "stepfunctions",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "payforadoption",
+      "dl": "AWSServiceEndpoint",
+      "dst": "ssm",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petsearch",
+      "dl": "AWSServiceEndpoint",
+      "dst": "ssm",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "LambdaFunction",
+      "src": "neptune-etl-from-xray",
+      "dl": "AWSServiceEndpoint",
+      "dst": "xray",
+      "calls": null,
+      "note": "源函数 24h 有 24 次调用，但 X-Ray 看不到这条边 —— 边级**测不出**（可能未开 Active 追踪），不等于无流量"
+    },
+    {
+      "edge": "AccessesData",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "AWSServiceEndpoint",
+      "dst": "sns",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "DependsOn",
+      "sl": "Microservice",
+      "src": "petstatusupdater",
+      "dl": "SQSQueue",
+      "dst": "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "DependsOn",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "SQSQueue",
+      "dst": "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "DependsOn",
+      "sl": "Microservice",
+      "src": "petstatusupdater",
+      "dl": "SQSQueue",
+      "dst": "ServicesEks2-sqspetadoptiondlqEEEFF2AC-EQwBtdEFe8jQ",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "DependsOn",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "AgentRuntime",
+      "dst": "WaggleAIOrchestrator",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "Invokes",
+      "sl": "StepFunction",
+      "src": "Providerwaiterstatemachine5D4A9DF0-ZkuIyyskPCyz",
+      "dl": "LambdaFunction",
+      "dst": "ServicesEks2-awscdkawseks-ProviderframeworkisCompl-sIJBJPos5iM2",
+      "calls": null,
+      "note": "CloudWatch 查不到该状态机的执行数"
+    },
+    {
+      "edge": "Invokes",
+      "sl": "StepFunction",
+      "src": "Providerwaiterstatemachine5D4A9DF0-ZkuIyyskPCyz",
+      "dl": "LambdaFunction",
+      "dst": "ServicesEks2-awscdkawseks-ProviderframeworkonTimeo-T6MAOIsLvvn5",
+      "calls": null,
+      "note": "CloudWatch 查不到该状态机的执行数"
+    },
+    {
+      "edge": "Invokes",
+      "sl": "SNSTopic",
+      "src": "petsite-ops-alerts",
+      "dl": "LambdaFunction",
+      "dst": "petsite-ops-slack-notifier",
+      "calls": null,
+      "note": "主题 24h 发布 2 条，但这是源侧不是边级 —— 边级测不出"
+    },
+    {
+      "edge": "PublishesTo",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "SNSTopic",
+      "dst": "ServicesEks2-topicpetadoption192CAB8F-Dn0iiU45RZ1g",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    },
+    {
+      "edge": "PublishesTo",
+      "sl": "Microservice",
+      "src": "petsite",
+      "dl": "SQSQueue",
+      "dst": "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+      "calls": null,
+      "note": "X-Ray 服务图里没有这条边（测不出，不等于无流量）"
+    }
+  ]
+}

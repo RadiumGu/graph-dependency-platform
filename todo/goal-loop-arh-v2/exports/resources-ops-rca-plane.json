@@ -1,0 +1,109 @@
+{
+    "serviceResources": [
+        {
+            "resourceIdentifier": "arn:aws:lambda:ap-northeast-1:926093770964:function:gp-window-flush",
+            "inputSource": {
+                "identifier": "TAGS",
+                "type": "TAGS"
+            },
+            "resource": {
+                "identifier": "arn:aws:lambda:ap-northeast-1:926093770964:function:gp-window-flush",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::Lambda::Function"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:lambda:ap-northeast-1:926093770964:function:petsite-ops-slack-notifier",
+            "inputSource": {
+                "identifier": "TAGS",
+                "type": "TAGS"
+            },
+            "resource": {
+                "identifier": "arn:aws:lambda:ap-northeast-1:926093770964:function:petsite-ops-slack-notifier",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::Lambda::Function"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:lambda:ap-northeast-1:926093770964:function:petsite-rca-engine",
+            "inputSource": {
+                "identifier": "TAGS",
+                "type": "TAGS"
+            },
+            "resource": {
+                "identifier": "arn:aws:lambda:ap-northeast-1:926093770964:function:petsite-rca-engine",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::Lambda::Function"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:lambda:ap-northeast-1:926093770964:function:petsite-rca-interaction",
+            "inputSource": {
+                "identifier": "TAGS",
+                "type": "TAGS"
+            },
+            "resource": {
+                "identifier": "arn:aws:lambda:ap-northeast-1:926093770964:function:petsite-rca-interaction",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::Lambda::Function"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:sns:ap-northeast-1:926093770964:petsite-ops-alerts",
+            "inputSource": {
+                "identifier": "TAGS",
+                "type": "TAGS"
+            },
+            "resource": {
+                "identifier": "arn:aws:sns:ap-northeast-1:926093770964:petsite-ops-alerts",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::SNS::Topic"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:sns:ap-northeast-1:926093770964:petsite-rca-alerts",
+            "inputSource": {
+                "identifier": "TAGS",
+                "type": "TAGS"
+            },
+            "resource": {
+                "identifier": "arn:aws:sns:ap-northeast-1:926093770964:petsite-rca-alerts",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::SNS::Topic"
+            }
+        },
+        {
+            "resourceIdentifier": "arn:aws:sns:ap-northeast-1:926093770964:rca-alerts",
+            "inputSource": {
+                "identifier": "TAGS",
+                "type": "TAGS"
+            },
+            "resource": {
+                "identifier": "arn:aws:sns:ap-northeast-1:926093770964:rca-alerts",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::SNS::Topic"
+            }
+        },
+        {
+            "resourceIdentifier": "gp-alert-buffer",
+            "inputSource": {
+                "identifier": "CFN_STACK",
+                "type": "CFN_STACK"
+            },
+            "resource": {
+                "identifier": "gp-alert-buffer",
+                "awsRegion": "ap-northeast-1",
+                "awsAccountId": "926093770964",
+                "resourceType": "AWS::DynamoDB::Table"
+            }
+        }
+    ],
+    "serviceFunctionId": null
+}

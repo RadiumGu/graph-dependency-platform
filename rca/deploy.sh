@@ -84,11 +84,19 @@ if ! $DRY_RUN; then
 
   # Copy source files preserving subdirectory structure (Lambda-compatible)
   cp "$SCRIPT_DIR"/*.py "$BUILD_DIR/" 2>/dev/null
-  for dir in core neptune collectors actions data search; do
+  for dir in core neptune collectors actions data search engines; do
     if [ -d "$SCRIPT_DIR/$dir" ]; then
       cp -r "$SCRIPT_DIR/$dir" "$BUILD_DIR/"
     fi
   done
+  # Copy shared/ (neptune/neptune_client.py does `from shared import get_region`)
+  SHARED_DIR="$SCRIPT_DIR/../shared"
+  if [ -d "$SHARED_DIR" ]; then
+    cp -r "$SHARED_DIR" "$BUILD_DIR/"
+    echo "Shared included: $(ls "$SHARED_DIR"/*.py 2>/dev/null | xargs -n1 basename | tr '\n' ' ')"
+  else
+    echo "⚠️  shared/ 目录不存在 — neptune_client 的 get_region 导入会失败"
+  fi
   # Copy profiles directory (EnvironmentProfile dynamic loading)
   PROFILES_DIR="$SCRIPT_DIR/../profiles"
   if [ -d "$PROFILES_DIR" ]; then
@@ -97,8 +105,21 @@ if ! $DRY_RUN; then
   else
     echo "⚠️  profiles/ 目录不存在，Profile 动态加载将回退到硬编码"
   fi
-  # Install dependencies
-  pip3 install requests pyyaml -t "$BUILD_DIR" -q
+  # Install dependencies.
+  # 必须平台定向：构建机 Python 版本与 Lambda 运行时通常不同（本仓库场景：
+  # 构建机 py3.9，Lambda py3.12），直接 pip install 会装错版本的 wheel。
+  # pydantic 含编译组件 pydantic-core、pyyaml 含 _yaml，平台不匹配会在运行时
+  # 静默回退到纯 Python 实现（性能下降）或直接 ImportError。
+  # 默认 arm64（Graviton，成本约低 20%，与 EKS/deepflow 的 Graviton 栈一致）。
+  # 切回 x86 时同时设置：LAMBDA_ARCH=manylinux2014_x86_64 且 Lambda 架构改回 x86_64。
+  DEP_PLATFORM="${LAMBDA_ARCH:-manylinux2014_aarch64}"
+  DEP_PYVER="${LAMBDA_PY:-3.12}"
+  echo "Installing deps for platform=$DEP_PLATFORM python=$DEP_PYVER"
+  pip3 install requests pyyaml pydantic \
+      --platform "$DEP_PLATFORM" \
+      --python-version "$DEP_PYVER" \
+      --only-binary=:all: \
+      -t "$BUILD_DIR" -q
   # Package
   cd "$BUILD_DIR"
   rm -f /tmp/rca-engine.zip
@@ -190,13 +211,29 @@ run aws sns subscribe \
     --notification-endpoint "arn:aws:lambda:${REGION}:${ACCOUNT}:function:${FUNCTION_NAME}" \
     --region "$REGION" > /dev/null
 
-run aws lambda add-permission \
-    --function-name "$FUNCTION_NAME" \
-    --statement-id rca-sns-trigger \
-    --action lambda:InvokeFunction \
-    --principal sns.amazonaws.com \
-    --source-arn "$SNS_TOPIC_ARN" \
-    --region "$REGION" 2>/dev/null || echo "Permission already exists"
+# statement-id 必须随 topic 变化，否则换 SNS_TOPIC_NAME 重跑时会与旧语句冲突。
+# 旧版固定用 rca-sns-trigger 且以 `|| echo "Permission already exists"` 吞掉失败，
+# 导致「订阅已建但权限缺失」的静默故障（发布到该 topic 时投递会 AccessDenied）。
+SID="rca-sns-trigger-$(echo -n "$SNS_TOPIC_ARN" | tr -c 'a-zA-Z0-9' '-' | tail -c 40)"
+if $DRY_RUN; then
+  echo "[DRY-RUN] aws lambda add-permission --statement-id $SID --source-arn $SNS_TOPIC_ARN"
+else
+  ADD_OUT=$(aws lambda add-permission \
+      --function-name "$FUNCTION_NAME" \
+      --statement-id "$SID" \
+      --action lambda:InvokeFunction \
+      --principal sns.amazonaws.com \
+      --source-arn "$SNS_TOPIC_ARN" \
+      --region "$REGION" 2>&1) && echo "Permission added: $SID" || {
+    if echo "$ADD_OUT" | grep -q "ResourceConflictException"; then
+      echo "Permission already exists for this topic ($SID) — OK"
+    else
+      echo "✗ add-permission FAILED (不是幂等冲突，需人工处理):"
+      echo "$ADD_OUT" | sed 's/^/    /'
+      exit 1
+    fi
+  }
+fi
 
 echo ""
 echo "=== Step 6: 冒烟测试（本地调用）==="

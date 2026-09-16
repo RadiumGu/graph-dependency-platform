@@ -1,0 +1,95 @@
+# 测试用的最小 workload profile。
+#
+# 刻意**不是** PetAdoptions：这份 fixture 的存在本身就是解耦的证据——
+# 测试不引用父仓库的 profiles/petsite.yaml，也不含任何 petsite 字面量。
+# 另有一个用例单独加载真实的 petsite.yaml 来验证格式兼容性。
+profile:
+  name: acme-shop
+  description: 测试用虚构 workload
+  version: "1.0"
+
+aws_resources:
+  primary_region: eu-west-1
+  dynamodb_tables:
+    acme-shop:
+      - acme-orders
+  s3_buckets:
+    receipts: acme-receipts
+
+application:
+  domain: shop.acme.test
+  health_endpoint: /healthz
+  health_check_command: "curl -sf https://{domain}{health_endpoint} | jq '.status'"
+  alarm_prefix: acme
+
+monitoring:
+  cloudwatch_alarm_prefix: acme-shop
+
+parameter_store:
+  prefix: /acme-shop
+  keys:
+    dynamodb_region: /acme-shop/dynamodb-region
+
+dns:
+  hosted_zone_id: ${ACME_ZONE_ID}
+  primary_record: shop.acme.test
+  ttl_normal: 300
+  ttl_pre_switchover: 60
+
+kubernetes:
+  namespace: acme
+  cluster_name: ${ACME_EKS_CLUSTER}
+  deployment_map:
+    storefront: storefront-deployment
+
+services:
+  storefront:
+    tier: Tier0
+    k8s_deployment: storefront-deployment
+  checkout:
+    tier: Tier1
+    k8s_deployment: checkout-svc
+
+# 这份 fixture 刻意把数据层前提写成**齐备**，作为 petsite.yaml（全 none）的对照，
+# 让 strategy_feasibility() 的两种结果都有用例覆盖。
+dr:
+  target_region: eu-central-1
+  strategy: warm_standby
+  data:
+    aurora:
+      topology: global_database
+      cluster_identifier: acme-db
+      global_cluster_identifier: acme-global
+    dynamodb:
+      topology: global_tables
+      tables:
+        - acme-orders
+    s3:
+      topology: crr
+      buckets:
+        - acme-receipts
+    sqs:
+      replicable: false
+  eks:
+    target_cluster: acme-dr
+    nodegroups:
+      - name: acme-arm64
+        desired: 2
+        min: 2
+        instance_type: m7g.large
+        vcpus_per_node: 2
+    ecr_replication_required: true
+    ecr_repositories:
+      - acme/storefront
+      - acme/checkout
+    image_tag: v1.2.3
+    default_replicas: 2
+    replicas_by_tier:
+      Tier0: 3
+      Tier1: 2
+      Tier2: 1
+  kms_key_aliases:
+    - alias/acme-data
+  excluded:
+    - pattern: "etl_*"
+      reason: "platform_infrastructure：不属于业务负载"

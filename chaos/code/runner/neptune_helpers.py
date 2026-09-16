@@ -61,13 +61,26 @@ def query_infra_snapshot(services: list[str]) -> dict:
 
 
 def query_learning_nodes(service_filter: str = "") -> list[dict]:
-    """查询 Neptune 中已有的学习节点和边（LearningAgent 专用）。"""
+    """查询 Neptune 中已有的学习节点和边（LearningAgent 专用）。
+
+    属性名说明（2026-08-28 修正）：本函数原先读 chaos_resilience_score /
+    last_tested_at，但活图里这两个属性 **0 个节点** 拥有 —— 真正落数据的是
+    runner/graph_feedback.py 写的 resilience_score / last_chaos_test（6 个节点）。
+    四个投影当时全部命中兜底值，LearningAgent 一直在拿空数据决策。
+
+    现以 resilience_score / last_chaos_test 为主，并保留对旧名的 coalesce 回退
+    一个版本周期，避免历史数据（若某处确实写过旧名）在切换瞬间读不到。
+    注意旧名 chaos_resilience_score 是 0-1 量纲，新名是 0-100，回退分支已乘 100 归一。
+    """
     gremlin = """
     g.V().hasLabel('Microservice')
       .project('name','resilience_score','last_tested','coverage','weakness')
       .by('name')
-      .by(coalesce(values('chaos_resilience_score'), constant(-1)))
-      .by(coalesce(values('last_tested_at'), constant('never')))
+      .by(coalesce(
+            values('resilience_score'),
+            __.values('chaos_resilience_score').math('_ * 100'),
+            constant(-1)))
+      .by(coalesce(values('last_chaos_test'), values('last_tested_at'), constant('never')))
       .by(coalesce(values('test_coverage'), constant('')))
       .by(coalesce(values('weakness_pattern'), constant('')))
     """

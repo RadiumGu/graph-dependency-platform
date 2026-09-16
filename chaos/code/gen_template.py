@@ -473,8 +473,11 @@ def interactive(preset_service: str = None, preset_fault: str = None):
     )
 
     # 5. 确定保存路径
+    # 原先硬编码 /home/ubuntu/tech/chaos/code/experiments/ —— 开发机上 chaos 是
+    # 独立树时的路径。改为从本文件位置推导：本文件在 <repo>/chaos/code/gen_template.py。
     tier_dir = {"Tier0": "tier0", "Tier1": "tier1", "Tier2": "tier2"}.get(tier, "tier1")
-    out_dir  = f"/home/ubuntu/tech/chaos/code/experiments/{tier_dir}"
+    _chaos_code = os.path.dirname(os.path.abspath(__file__))
+    out_dir  = os.path.join(_chaos_code, "experiments", tier_dir)
     os.makedirs(out_dir, exist_ok=True)
 
     exp_name = f"{service}-{fault_type.replace('_', '-')}"
@@ -493,7 +496,7 @@ def interactive(preset_service: str = None, preset_fault: str = None):
                 f.write(yaml_content)
             print(f"✅ 已保存: {out_path}")
             print(f"\n运行命令:")
-            print(f"  cd /home/ubuntu/tech/chaos/code")
+            print(f"  cd {_chaos_code}")
             print(f"  python main.py run --file experiments/{tier_dir}/{exp_name}.yaml")
             print(f"  python main.py run --file experiments/{tier_dir}/{exp_name}.yaml --dry-run  # 先 dry-run")
             break

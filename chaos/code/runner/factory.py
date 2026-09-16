@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 def make_runner_engine(dry_run: bool = True):
     """构造 Runner 引擎。dry_run=True 是不可商量的默认值。"""
-    engine = (os.environ.get("CHAOS_RUNNER_ENGINE") or "direct").lower()
+    engine = (os.environ.get("CHAOS_RUNNER_ENGINE") or "strands").lower()
 
     # 双重 gate: 代码参数 + env 变量，两个都 False 才真执行
     env_dry_run = os.environ.get("CHAOS_RUNNER_DRY_RUN", "true").lower() == "true"

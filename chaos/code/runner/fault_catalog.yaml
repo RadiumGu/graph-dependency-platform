@@ -585,17 +585,16 @@ fis:
     tier: [Tier0, Tier1]
     recommended_for: [ec2-based, eks-microservices]
 
-  - type: fis_ec2_network_disrupt
-    backend: fis
-    category: network
-    description: 通过 NACL 修改中断 EC2 网络连通性，模拟实例级网络隔离
-    fis_action_id: "aws:ec2:disrupt-network-connectivity"
-    default_params:
-      duration: "5m"
-      scope: all
-    requires: []
-    tier: [Tier0, Tier1]
-    recommended_for: [ec2-based]
+  # 2026-08-31 删除 fis_ec2_network_disrupt。三重问题，无法修成一个有意义的条目：
+  #   ① fis_action_id 写的 aws:ec2:disrupt-network-connectivity 在 AWS 侧不存在
+  #      （list-actions 50 个里没有），所以它从未能执行
+  #   ② description 说「模拟**实例级**网络隔离」，而唯一对应的真 action
+  #      aws:network:disrupt-connectivity 的目标是**子网**——
+  #      FIS 做不到实例级网络隔离，这个能力本身不存在
+  #   ③ 改成真 action 后与 fis_network_disrupt 完全重复（同一个 action，
+  #      只差默认 scope）
+  # 需要 scope=all 的整子网中断，直接用 fis_network_disrupt 并传
+  # extra_params.scope: all。要做实例级隔离得换手段（SSM 改 SG / iptables）。
 
   # ── EC2 SSM（通过 Systems Manager 执行压力测试）──────────────────────────────
 
@@ -697,11 +696,16 @@ fis:
   - type: fis_vpc_endpoint_disrupt
     backend: fis
     category: network
-    description: 中断 VPC Endpoint 连接，模拟 AWS 服务访问中断
+    # 2026-08-31 修：原写 requires: [subnet_arn]，而该 action 的目标是
+    # aws:ec2:vpc-endpoint（`aws fis get-action` 实测），声明与 AWS 侧不一致，
+    # 该故障类型从未能执行。同时注意**它只对 interface 端点（PrivateLink）有效**：
+    # PetSite VPC 里只有 guardduty-data 一个端点，ssm/sts/xray/s3/dynamodb
+    # 都没有端点，所以验证那批边要用 fis_network_disrupt 的 scope=s3|dynamodb。
+    description: 中断 VPC Interface Endpoint（PrivateLink）连接
     fis_action_id: "aws:network:disrupt-vpc-endpoint"
     default_params:
       duration: "2m"
-    requires: [subnet_arn]
+    requires: [vpc_endpoint_arn]
     tier: [Tier0, Tier1]
     recommended_for: [multi-az, all]
 
@@ -759,7 +763,9 @@ fis:
     backend: fis
     category: data
     description: 模拟 ElastiCache 集群 AZ 断电，验证缓存层故障后的应用降级
-    fis_action_id: "aws:elasticache:interrupt-cluster-az-power"
+    # 2026-08-31 修：原名 aws:elasticache:interrupt-cluster-az-power 在 AWS 侧不存在，
+    # 真名是 replicationgroup-interrupt-az-power（目标是复制组而非 cluster）
+    fis_action_id: "aws:elasticache:replicationgroup-interrupt-az-power"
     default_params:
       duration: "5m"
     requires: [cluster_arn, availability_zone]
@@ -791,6 +797,34 @@ fis:
     tier: [Tier0]
     recommended_for: [multi-az]
 
+  # ── 编排原语：不注入故障，只推进时间 ──────────────────────────────────────
+  # `aws:fis:wait` 是 FIS 的空动作，靠 startAfter 串在别的动作前后来编排时序。
+  # 它本身不产生任何故障，所以不该被选边器当成靶点（category: orchestration，
+  # 与其它五类刻意区分开）。
+  #
+  # 为什么需要它：`injectability.py` 把 `image-repo-dependency` 判为
+  # NEEDS_COMPOUND，理由写着「需复合实验：切断 + 触发重启，**当前 runner 未实现**」。
+  # 实测有 7 条 `微服务 -DependsOn-> ECRRepository` 靶点卡在这里 ——
+  # 镜像仓库依赖在稳态下没有可观测退化（镜像早拉下来了），
+  # 必须「先切断 ECR 通路 → 等一段 → 删 Pod 触发重拉」才能观测到。
+  # 那个「等一段」就是本条目。
+  #
+  # 来源：fis-template-library/aurora-postgres-cluster-loadtest-failover
+  # 用它在负载压上来之后再 failover —— 这也解释了为什么 2026-08-31 那次
+  # fis_rds_reboot 得到 inconclusive：注入时没有负载在驱动依赖。
+  - type: fis_wait
+    backend: fis
+    category: orchestration
+    description: FIS 空动作，只消耗时间。用 startAfter 串在其它动作之间做时序编排（复合实验的原语，本身不注入故障）
+    fis_action_id: "aws:fis:wait"
+    default_params:
+      duration: "2m"
+    requires: []
+    tier: [Tier0, Tier1, Tier2]
+    template_source: fis-template-library
+    doc_url: "https://docs.aws.amazon.com/fis/latest/userguide/fis-actions-reference.html"
+    recommended_for: [compound]
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # FIS Scenario Library 复合场景（4 种）
@@ -810,7 +844,7 @@ fis_scenarios:
       - aws:ec2:stop-instances
       - aws:rds:failover-db-cluster
       - aws:ebs:pause-volume-io
-      - aws:elasticache:interrupt-cluster-az-power
+      - aws:elasticache:replicationgroup-interrupt-az-power
     required_tags:
       AzImpairmentPower: "IceQualified"
     template_source: docs
@@ -829,7 +863,7 @@ fis_scenarios:
     scenario_id: "az-application-slowdown-scenario"
     description: AZ 应用减速场景 — 在指定 AZ 内注入多层应用延迟，模拟 AZ 级灰色故障
     sub_actions:
-      - aws:ec2:disrupt-network-connectivity
+      - aws:network:disrupt-connectivity
       - aws:lambda:invocation-add-delay
     required_tags:
       AzImpairmentPower: "IceQualified"

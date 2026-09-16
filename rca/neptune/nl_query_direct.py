@@ -104,14 +104,40 @@ class DirectBedrockNLQuery(NLQueryBase):
 
         cypher = query_guard.ensure_limit(cypher)
 
+        retried = False
         try:
             results = nc.results(cypher)
         except Exception as e:
+            # 执行失败 → 把错误回喂给 LLM 改一次。
+            # 此前这里直接 return，而"空结果"却会重试 —— 不对称且方向反了:
+            # 语法错误正是 LLM 看到报错就能改对的情形。实测「petsite 的上下游
+            # 服务」4 次里 3 次生成 `WHERE` 在 `RETURN` 之后的非法查询。
             logger.warning(f"NLQuery execution failed: {e} | cypher={cypher[:200]}")
-            return _base_return({"cypher": cypher, "error": str(e)})
+            fixed = self._retry_with_error(question, cypher, str(e))
+            recovered = False
+            if fixed and fixed != cypher:
+                safe_f, reason_f = query_guard.is_safe(fixed)
+                if safe_f:
+                    fixed = query_guard.ensure_limit(fixed)
+                    try:
+                        results = nc.results(fixed)
+                        cypher = fixed
+                        retried = True
+                        recovered = True
+                        logger.info(
+                            "NLQuery error-retry succeeded: %d rows", len(results),
+                        )
+                    except Exception as e2:
+                        logger.warning(
+                            f"NLQuery error-retry still failed: {e2} | cypher={fixed[:200]}"
+                        )
+                else:
+                    logger.debug(f"NLQuery error-retry blocked by guard: {reason_f}")
+            if not recovered:
+                # 只重试一次 —— 再失败就把错误交给调用方，不无限烧 Bedrock 调用
+                return _base_return({"cypher": cypher, "error": str(e)})
 
         # Wave 4: 空结果自动重试（跳过“合理空”的否定查询）
-        retried = False
         if not results and self._should_retry_on_empty(question):
             retry_cypher = self._retry_with_hint(question, cypher)
             if retry_cypher:
@@ -177,6 +203,45 @@ class DirectBedrockNLQuery(NLQueryBase):
             return self._generate_cypher(question + hint)
         except Exception as e:
             logger.warning(f"NLQuery retry generation failed: {e}")
+            return ""
+
+    def _retry_with_error(self, question: str, bad_cypher: str, error: str) -> str:
+        """把 Neptune 的执行错误回喂给 LLM,让它改正 cypher 后重试。
+
+        2026-08-28 新增。此前 query() 对两种失败的处理是**反的**:
+        空结果会重试(`_retry_with_hint`),而执行失败直接返回 error 不重试 ——
+        可语法错误恰恰是 LLM 看到报错就能改对的情形。
+
+        实测触发场景:问「petsite 的上下游服务」时,4 次里 3 次生成
+
+            RETURN 'downstream' AS direction, ...
+            WHERE downstream IS NOT NULL        ← WHERE 在 RETURN 之后,语法非法
+            UNION ...
+
+        Neptune 回 400 Bad Request。这不是 Neptune 的限制,是 LLM 输出质量问题。
+        而「某服务的上下游」是依赖图谱最核心的问题,75% 失败率意味着
+        「图谱可被各类 agent 快速调用」这条目标在最常用的问法上并不成立。
+
+        只重试一次:再失败就把错误返回给调用方,不无限烧 Bedrock 调用。
+
+        Returns:
+            改正后的 cypher;生成失败返回空字符串。
+        """
+        hint = (
+            f"\n\n注意：上次生成的查询在 Neptune 上执行失败。"
+            f"\n错误：{error[:500]}"
+            f"\n失败的查询：{bad_cypher}"
+            f"\n请修正语法后重新生成。常见错误："
+            f"\n  - WHERE 必须紧跟在 MATCH / OPTIONAL MATCH / WITH 之后，"
+            f"**不能**出现在 RETURN 之后"
+            f"\n  - UNION 两侧的 RETURN 列名与列数必须完全一致"
+            f"\n  - Neptune openCypher 不支持 CALL 子查询"
+            f"\n只输出修正后的查询本身。"
+        )
+        try:
+            return self._generate_cypher(question + hint)
+        except Exception as e:
+            logger.warning(f"NLQuery error-retry generation failed: {e}")
             return ""
 
     def _select_model(self, question: str) -> str:

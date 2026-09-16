@@ -1,0 +1,148 @@
+# 边验证实验：用 FIS 断开子网到 DynamoDB 的连通性，证伪打进 `dynamodb` 端点的边
+#
+# 生成 2026-08-31。这是第二个走 FIS 的边验证实验（第一个是 verify-edges-into-aurora）。
+#
+# ── 为什么不是 aws:network:disrupt-vpc-endpoint ─────────────────────────────
+# 用户要求用该动作验证 11 条 AWSServiceEndpoint 边。实测**它对这批边无从施加**：
+#
+#   aws fis get-action aws:network:disrupt-vpc-endpoint
+#     targets: VPCEndpoints -> aws:ec2:vpc-endpoint
+#     description: "Disrupt AWS PrivateLink connectivity."
+#
+# 而 PetSite VPC（vpc-010ab37a3f9f74725）里**只有一个** VPC 端点：
+#   vpce-0b35b2472df108d50  com.amazonaws.ap-northeast-1.guardduty-data  Interface
+#
+# ssm / sts / xray / s3 / dynamodb 一个端点都没有 —— 那些端点全在 agent VPC
+# （vpc-06731f30388b57818，即 Kiro Crew 本机所在 VPC），与被观测的工作负载无关。
+# PetSite 的服务是经 NAT 走公网访问这些 AWS API 的。没有 PrivateLink 可断，
+# 该动作就没有目标可选。
+#
+# 顺带记一个目录缺陷：fault_catalog.yaml 的 `fis_vpc_endpoint_disrupt` 写着
+# `requires: [subnet_arn]`，而该动作实际要求 `aws:ec2:vpc-endpoint` 目标 ——
+# 声明与 AWS 侧不一致，这个故障类型从未被真正执行过。
+#
+# ── 改用 aws:network:disrupt-connectivity ───────────────────────────────────
+#   targets: Subnets -> aws:ec2:subnet
+#   scope:   all | availability-zone | prefix-list | s3 | s3express | dynamodb | vpc
+#
+# `scope=dynamodb` 用 AWS 托管前缀列表在子网上挂拒绝 NACL，**公网路径同样被拦**，
+# 所以不依赖 VPC 端点是否存在。这覆盖 11 条里的 4 条（dynamodb 3 + s3 1）。
+#
+# **剩下 7 条（ssm 4 / sts 2 / xray 1）任何 FIS 动作都做不到**：既没有端点可断，
+# AWS 也不为这三个服务发布托管前缀列表（只有 S3 / DynamoDB / CloudFront /
+# Ground Station / VPC Lattice 有）。替代路径见 T-294。
+#
+# ── 为什么必须同时断两个私有子网 ────────────────────────────────────────────
+# EKS 的 Pod 跨两个私有子网分布（实测 11.0.2.0/24 在 1a、11.0.3.0/24 在 1c）。
+# 只断一个 AZ，观测方只有一半流量受影响，退化率会落进 5%~20% 的 inconclusive
+# 中间带 —— 拿不到判定，而不是拿到「弱依赖」。为此给 fis_backend 的网络类目标
+# 加了 `subnet_arns` 多子网支持（原实现硬编码单个 subnet_arn）。
+#
+# ── 这一次注入能验几条边 ────────────────────────────────────────────────────
+#   search-service   -> dynamodb   src=nfm    实测有 HTTP 流量 ✅（petsearch 的主存储）
+#   pay-for-adoption -> dynamodb   src=nfm    实测有 HTTP 流量 ✅
+#   ServicesEks2-statusupdaterservicelambdafn... -> dynamodb  src=xray
+#       —— Lambda 非持续调用，DeepFlow 没有它的 HTTP SLI，**刻意不列为观测方**：
+#          列上去只会得到一次「无候选边」跳过，不如如实记为判不了（T-293 同类）
+#
+# 用法：
+#   cd chaos/code && python3.11 main.py run --file experiments/tier1/verify-edges-into-dynamodb.yaml
+
+name: verify-edges-into-dynamodb
+description: "FIS 断开两个私有子网到 DynamoDB 的连通性，观测 petsearch 与 payforadoption 是否退化"
+backend: fis
+
+target:
+  # 图谱里的 AWSServiceEndpoint 节点名，candidate_edges 用它查入边
+  service: dynamodb
+  # AWS 资源类目标填**受影响的应用命名空间**（PolicyGuard R002 校验的是 K8s
+  # 命名空间白名单，写 aws / dynamodb 这类资源名会被 DENY）
+  namespace: petadoptions
+  tier: Tier0
+
+  observers:
+    - service: search-service
+      namespace: petadoptions
+      edge_label: AccessesData
+      min_baseline_requests: 20
+    - service: pay-for-adoption
+      namespace: petadoptions
+      edge_label: AccessesData
+      min_baseline_requests: 20
+
+fault:
+  type: fis_network_disrupt
+  mode: all
+  value: "100"
+  duration: "3m"
+  extra_params:
+    scope: dynamodb
+    # 刻意**不写** service_name / resource_type：TargetResolver.resolve_experiment
+    # 只在两者都存在时才覆盖 ARN，省掉它们，下面显式给的多子网列表才不会被
+    # 单子网解析结果冲掉。
+    subnet_arns:
+      - "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-0f801fa79077eb277"  # PrivateSubnet1 11.0.2.0/24 1a
+      - "arn:aws:ec2:ap-northeast-1:926093770964:subnet/subnet-047a94f9c5ab6302a"  # PrivateSubnet2 11.0.3.0/24 1c
+
+steady_state:
+  before:
+    # ⚠️ 对 AWSServiceEndpoint 目标**不是有效门禁**：metrics.collect 走 DeepFlow
+    # request_domain，`dynamodb` 这个名字在 l7_flow_log 里查不到东西，必然 0 请求
+    # → fallback 100% → 恒过。真正的前置条件是**观测方基线**（runner 单独采集
+    # 并逐个报下限）。保留此项只为相位结构一致，不要读成「目标健康已核实」。
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "3m"
+
+stop_conditions: []
+# ⚠️ 刻意为空。这是「护栏对准了处理本身而不是附带损害」这个错误的**第三次**：
+#
+#   第一次（T-214b）：护栏挂注入目标、阈值 <40%，全量 abort 下注入目标必然归零，
+#                     T+71s 熔断，零判定
+#   第二次（T-214b）：把地板降到 <2%，仍在 T+92s 掉到 0.0% 时触发
+#   第三次（本实验，2026-08-31 15:43）：护栏挂**观测方**、阈值 <20%，
+#                     T+~60s 时 search-service 掉到 **0.0%** 熔断，零判定
+#
+# 根因：**petsearch 的主存储就是 DynamoDB，这条依赖是全量的**。断开 DynamoDB 后
+# 观测方必然归零 —— 而「观测方归零」正是这条边成立的证据，不是附带损害。
+# 任何高于 0 的观测方护栏都会在判定写回之前触发。
+#
+# 与 T-214b 同一句结论，只是换了主体：
+#   > 对全量依赖的边，**观测方的成功率不是护栏信号，它就是处理本身**。
+#
+# 去掉它不是削弱护栏，真正的护栏是下面三层，且都比 Chaos Mesh 路径更硬：
+#   1. FIS 动作自带 duration PT3M，AWS 侧到期**自动解除 NACL 关联**
+#      （实测本轮熔断后两个子网立刻回到默认 ACL acl-0611b1a8125a1c31a，零残留）
+#   2. options.max_duration 8m + runner 的 emergency_cleanup
+#   3. 影响面本身是有界且自愈的：只拦 DynamoDB 前缀列表，非生产 demo，3 分钟
+#
+# 正确的长期做法是引入 **canary 观测方**——一个声明为「预期不依赖注入目标」的
+# 观测方，只用于护栏、不参与判定。本实验没有干净的 canary：
+# petsite 经 petsearch 会传导性退化，list-adoptions 虽走 Aurora 但把它列进
+# observers 会产生一次「无候选边」跳过。见 T-295。
+
+rca:
+  enabled: false
+
+graph_feedback:
+  enabled: true
+  edges:
+    - AccessesData
+
+options:
+  max_duration: "8m"
+
+# ── 爆炸半径 ────────────────────────────────────────────────────────────────
+# FIS 在两个私有子网上挂临时拒绝 NACL，只拦到 DynamoDB 托管前缀列表的流量，
+# 其余流量照常。影响面是**这两个子网里的全部工作负载**对 DynamoDB 的访问 ——
+# 不只是两个观测方，但这不影响判定：注入目标是 DynamoDB 这个服务，
+# 归因来自逐个观测方各自的退化率。
+# 不受影响：Aurora（VPC 内）、Neptune（VPC 内）、DeepFlow ClickHouse（集群内），
+#           所以观测链路本身不会被这次注入打断。
+# 恢复：FIS 到期自动解除 NACL 关联，无残留对象；实验结束后核对 NACL 已还原。
+# 与 Chaos Mesh 的差别：FIS 路径不产生 tproxy 残留、不打伤 Pod netns，
+# 所以 T-214h 的 Pod 判据对 fis 后端刻意跳过。

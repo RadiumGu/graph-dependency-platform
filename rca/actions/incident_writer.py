@@ -13,6 +13,12 @@ logger = logging.getLogger(__name__)
 from shared import get_region
 REGION = get_region()
 
+# ── 因果先验（prior_root_cause_*）的调参 ────────────────────────────────────
+# 半衰期:年龄 t 天的历史事件权重 = 0.5^(t / HALF_LIFE)。
+# 30 天意味着上月的故障算半份、三个月前算 1/8 —— 既保留趋势又不让陈旧共现
+# 永久压制新证据。原实现取全历史计数，旧证据与新证据同权、永不衰减。
+CAUSAL_HALF_LIFE_DAYS = float(os.environ.get('CAUSAL_HALF_LIFE_DAYS', '30'))
+
 # AWS 资源 ID 正则（实体提取用）
 _EC2_PATTERN = re.compile(r'\bi-[0-9a-f]{8,17}\b')
 _RDS_PATTERN = re.compile(r'\b(?:arn:aws:rds:[^:\s]+:[^:\s]+:(?:cluster|db):)?([a-zA-Z][a-zA-Z0-9-]{2,63})\b')
@@ -239,64 +245,145 @@ def _write_subgraph_pattern(incident_id: str, affected_service: str,
 
 
 def _update_causal_weights(affected_service: str, root_cause: str):
-    """
-    更新 Calls 边上的因果权重属性。
+    """更新 Calls 边上的因果权重属性。
 
-    因果权重 = 历史上 A 出问题时 B 同时出现在同一 Incident 的次数 / A 出问题的总次数
+    ## 2026-08-28 重写。原实现有四个问题，其中最严重的是语义错位
 
-    注意：当前 Incident 数量较少（<100），权重仅作为数据采集用途，
-         尚未纳入 step4_score() 评分，待积累 100+ 真实告警后启用。
+    ### 1. 语义与名字不符（最严重）
+
+    原 docstring 写「B **同时出现在同一 Incident** 的次数」——共现语义，
+    字段也叫 `co_occurrence`。但 co_count 查的是 `Involves` 边，而
+    `Involves` 在 write_incident 里**只在 root_cause != affected_service 时
+    为根因服务写一条**（本文件 :141-150）。
+
+    所以它实际测量的是「该上游**曾被判定为根因**的次数」，不是共现。
+    这也解释了稀疏度：全图 141 个 Incident 只有 8 条 Involves 边。
+
+    结论：**保留数据语义、改正名字与文档**。「曾是根因的频率」对 RCA 是
+    比共现更强的先验（共现只是相关，曾是根因带因果判定），
+    所以该修的是名字不是数据。字段改为 prior_root_cause_rate /
+    prior_root_cause_count，旧字段保留一轮以免破坏既有读取方。
+
+    ### 2. 无时间衰减
+
+    原 total 取该服务**全历史** Incident 计数，旧共现与新共现同权、永不衰减 ——
+    一个曾频繁致故但已修复的依赖会永远保持高权重。
+    改为指数衰减：年龄 t 天的事件权重 = 0.5^(t / HALF_LIFE_DAYS)。
+
+    ### 3. 上游集合未过滤已下线服务
+
+    原 `MATCH (upstream)-[e:Calls]->(n)` 无 active 过滤，于是给已缩容到零的
+    服务也算权重 —— 生产日志里的 `causal_weight: gateway-service→petsite = 0.0`
+    就是这么来的（该服务所属命名空间 6 个 Deployment 全为 0 副本）。
+    改为只看 active=true 的边（cycle-6 引入的 live 语义）。
+
+    ### 4. 基线率混杂
+
+    P(A 是根因 | B 故障) 忽略了 A 的整体根因率 —— 一个在所有故障里都被判为
+    根因的服务会在每条边上都拿到高权重，却不含任何针对性信息。
+    改为 lift = P(A|B) / P(A)，lift > 1 才表示「A 对 B 有特异性」。
     """
     from neptune import neptune_client as nc
 
+    # 只看仍然活跃的上游边 —— 已下线服务的历史调用不能用来解释现在的故障
     upstream_edges = nc.results("""
     MATCH (upstream:Microservice)-[e:Calls]->(n:Microservice {name: $svc})
+    WHERE e.active = true OR e.active IS NULL
     RETURN upstream.name AS upstream_name
     """, {'svc': affected_service})
 
     if not upstream_edges:
+        logger.info(
+            f"causal_weight: {affected_service} 无活跃上游边，跳过"
+        )
         return
 
-    total_result = nc.results("""
+    now = time.time()
+
+    def _decayed(rows: list, key: str = 'st') -> float:
+        """按 start_time 做指数衰减求和。解析不了的当作最老（权重最小）。"""
+        total = 0.0
+        for r in rows:
+            st = r.get(key)
+            try:
+                t = time.mktime(time.strptime(str(st)[:19], '%Y-%m-%dT%H:%M:%S'))
+                age_days = max(0.0, (now - t) / 86400.0)
+            except (ValueError, TypeError):
+                age_days = CAUSAL_HALF_LIFE_DAYS * 4  # 无法定年 → 权重压到 1/16
+            total += 0.5 ** (age_days / CAUSAL_HALF_LIFE_DAYS)
+        return total
+
+    # 分母：该服务的 Incident（衰减后）
+    svc_incidents = nc.results("""
     MATCH (i:Incident {affected_service: $svc})
-    RETURN count(i) AS total
+    RETURN i.start_time AS st
     """, {'svc': affected_service})
-    total = total_result[0].get('total', 0) if total_result else 0
-
-    if total == 0:
+    denom = _decayed(svc_incidents)
+    if denom <= 0:
         return
+
+    # 基线：全图 Incident 总量（衰减后），用于算 lift
+    all_incidents = nc.results("""
+    MATCH (i:Incident) RETURN i.start_time AS st
+    """, {})
+    all_denom = _decayed(all_incidents)
 
     for row in upstream_edges:
         upstream_name = row.get('upstream_name')
         if not upstream_name:
             continue
 
-        co_result = nc.results("""
+        co_rows = nc.results("""
         MATCH (i:Incident {affected_service: $svc})-[:Involves]->(u {name: $upstream})
-        RETURN count(i) AS co_count
+        RETURN i.start_time AS st
         """, {'svc': affected_service, 'upstream': upstream_name})
-        co_count = co_result[0].get('co_count', 0) if co_result else 0
+        numer = _decayed(co_rows)
 
-        causal_weight = round(co_count / total, 3)
+        # P(A 是根因 | B 故障)
+        p_cond = numer / denom if denom > 0 else 0.0
+
+        # 基线 P(A 是根因 | 任意故障)，用于 lift 校正
+        base_rows = nc.results("""
+        MATCH (i:Incident)-[:Involves]->(u {name: $upstream})
+        RETURN i.start_time AS st
+        """, {'upstream': upstream_name})
+        p_base = (_decayed(base_rows) / all_denom) if all_denom > 0 else 0.0
+
+        # lift > 1 表示 A 对 B 有特异性；p_base 为 0 时 lift 无定义，记 None
+        lift = round(p_cond / p_base, 3) if p_base > 0 else None
 
         try:
             nc.results("""
             MATCH (upstream:Microservice {name: $upstream})-[e:Calls]->(n:Microservice {name: $svc})
-            SET e.causal_weight = $weight,
-                e.co_occurrence = $co_count,
-                e.sample_count = $total,
+            SET e.prior_root_cause_rate = $rate,
+                e.prior_root_cause_count = $numer,
+                e.prior_sample_weight = $denom,
+                e.prior_lift = $lift,
+                e.prior_half_life_days = $hl,
+                e.causal_weight = $rate,
+                e.co_occurrence = $numer,
+                e.sample_count = $denom,
                 e.updated_at = $ts
             """, {
                 'upstream': upstream_name,
                 'svc': affected_service,
-                'weight': causal_weight,
-                'co_count': co_count,
-                'total': total,
+                'rate': round(p_cond, 3),
+                'numer': round(numer, 3),
+                'denom': round(denom, 3),
+                'lift': lift if lift is not None else -1.0,
+                'hl': CAUSAL_HALF_LIFE_DAYS,
                 'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
             })
-            logger.info(f"causal_weight: {upstream_name}→{affected_service} = {causal_weight} ({co_count}/{total})")
+            logger.info(
+                f"prior_root_cause: {upstream_name}→{affected_service} "
+                f"rate={p_cond:.3f} ({numer:.2f}/{denom:.2f}, 半衰期 "
+                f"{CAUSAL_HALF_LIFE_DAYS}d) lift="
+                f"{lift if lift is not None else 'n/a'}"
+            )
         except Exception as e:
-            logger.warning(f"Failed to set causal_weight {upstream_name}→{affected_service}: {e}")
+            logger.warning(
+                f"Failed to set prior_root_cause {upstream_name}→{affected_service}: {e}"
+            )
 
 
 def resolve_incident(incident_id: str, resolution: str, mttr_seconds: int):

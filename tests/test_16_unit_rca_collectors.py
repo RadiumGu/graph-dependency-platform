@@ -11,7 +11,9 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-# sys.path configured by conftest.py (rca/ → sys.path[0])
+# `collectors` 的解析由 conftest.py 的 _isolate_collectors_package fixture 统一保证
+# —— 仓库有两个同名 collectors 包(rca 与 etl_aws),test_12 会在收集期把 etl_aws
+# 顶到 sys.path[0],本文件需要的是 rca 那个。背景见 conftest 中该 fixture 的注释。
 
 
 # ─── S3-09: infra_collector ──────────────────────────────────────────────────

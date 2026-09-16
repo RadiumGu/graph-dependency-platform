@@ -154,6 +154,10 @@ export class NeptuneEtlStack extends cdk.Stack {
       layerVersionName: 'neptune-client-base',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/shared')),
       compatibleRuntimes: [lambda.Runtime.PYTHON_3_12],
+      // 本 layer 是纯 Python（仅 python/neptune_client_base.py，无任何编译产物），
+      // 因此架构无关。显式声明双架构：未声明时 AWS 视为仅 x86_64，
+      // 会阻止 arm64 函数挂载该 layer。声明后可按函数逐个迁移，无需重建 layer。
+      compatibleArchitectures: [lambda.Architecture.X86_64, lambda.Architecture.ARM_64],
       description: 'Shared Neptune Gremlin client utilities (neptune_query, safe_str, extract_value)',
     });
 

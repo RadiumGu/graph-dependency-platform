@@ -20,7 +20,18 @@ logger = logging.getLogger(__name__)
 from .config import REGION, BEDROCK_REGION, BEDROCK_MODEL, DYNAMODB_TABLE, CHAOS_RECORD_TTL_SECONDS
 
 TABLE_NAME = DYNAMODB_TABLE
-REPORT_DIR = "/home/ubuntu/tech/chaos/validation-results"
+
+# 报告输出目录。原先硬编码 "/home/ubuntu/tech/chaos/validation-results" ——
+# 那是最初开发机上 chaos 作为**独立树**时的路径（是仓库的同级目录，不在仓库内），
+# 在任何其他机器上写入都会失败。改为从本文件位置推导到仓库内的 chaos/validation-results。
+# 本文件在 <repo>/chaos/code/runner/report.py，故需上溯四级到仓库根。
+# 允许用 CHAOS_REPORT_DIR 覆盖（如指向共享盘或 CI artifact 目录）。
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__)))))
+REPORT_DIR = os.environ.get(
+    'CHAOS_REPORT_DIR',
+    os.path.join(_REPO_ROOT, 'chaos', 'validation-results'),
+)
 
 
 class Reporter:
@@ -222,6 +233,21 @@ class Reporter:
         for check_result in result.steady_state_after_checks:
             icon2 = "✅" if check_result["passed"] else "❌"
             lines.append(f"- {icon2} {check_result['desc']}")
+
+        # 注入目标 Pod 健康（T-214h）。有损伤必须写进报告 —— 历史上实验报 PASSED
+        # 却留下两个重启循环的 Pod，污染被 HPA 新拉的干净 Pod 完全掩盖。
+        pb, pa = result.target_pods_before or {}, result.target_pods_after or {}
+        if pb or pa:
+            lines += ["", "## 注入目标 Pod 健康（Phase 0 → Phase 5）"]
+            lines.append(
+                f"- 就绪: {pb.get('running','?')}/{pb.get('total','?')} → "
+                f"{pa.get('running','?')}/{pa.get('total','?')}")
+            lines.append(
+                f"- 容器重启数: {pb.get('restarts','?')} → {pa.get('restarts','?')}")
+        if result.pod_damage:
+            lines += ["", "### ⚠️ 本次实验对目标 Pod 造成的损伤"]
+            for d in result.pod_damage:
+                lines.append(f"- {d}")
 
         # FIS 特有信息
         if exp.backend == "fis":

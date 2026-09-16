@@ -1,0 +1,159 @@
+# 展示界面（Streamlit）部署到 PetSite EKS 集群。
+#
+# 为什么迁到这里（详见 todo/webui/02-落位方案_20260905-0530.md）：
+#   现状是 openclaw-instance-v2（10.1.2.198，vpc-06731f30388b57818）上的手工
+#   systemd 服务，跨 VPC peering 访问 Neptune，且完全不在 IaC 里。
+#   而 Neptune 与 EKS PetSite 都在 vpc-010ab37a3f9f74725 ——
+#   Neptune 的子网组 (subnet-0f801fa79077eb277, subnet-047a94f9c5ab6302a)
+#   本身就是 EKS 子网的子集。迁进来就去掉了跨 VPC 这一跳，
+#   凭证也能从「机器上的长期凭证」换成 IRSA。
+#
+# ALB 规则与 Cognito 认证完全不动：只是把 streamlit-demo-tg 的目标
+# 从固定 IP 10.1.2.198 换成由 TargetGroupBinding 管理的 Pod IP。
+# 回滚 = 删掉 TargetGroupBinding，把 IP 目标重新注册回去。
+#
+# ── 部署前提 ──────────────────────────────────────────────────────────────
+# 1. 构建并推送镜像（arm64，集群是 Graviton 节点组）：
+#      docker build --platform linux/arm64 -f demo/Dockerfile -t graphdp-demo:latest .
+#      aws ecr create-repository --repository-name graphdp-demo --region ap-northeast-1
+#      # docker tag / push 到 <acct>.dkr.ecr.ap-northeast-1.amazonaws.com/graphdp-demo:<tag>
+#    ⚠️ 用**带内容标识的 tag**（git sha 或日期），不要用固定的 :latest ——
+#      本仓已经踩过这个坑：镜像内容变而 tag 不变时 Deployment spec 无变化，
+#      不会触发滚动更新，imagePullPolicy: Always 也救不了（它只在创建容器时生效）。
+#
+# 2. 建 IRSA 角色（最小权限：Neptune 只读 + Bedrock 调用）：
+#      信任 EKS OIDC provider，subject = system:serviceaccount:petadoptions:streamlit-demo-sa
+#      权限：neptune-db:ReadDataViaQuery（限本集群资源）
+#            bedrock:InvokeModel / InvokeModelWithResponseStream（限所用推理配置）
+#      然后把角色 ARN 填到下面 ServiceAccount 的 annotation 里。
+#
+# 3. 集群 CPU 紧张（观测栈 request 2054m 比被观测应用的 1892m 还多，
+#    曾出现无节点放得下 544m），所以下面刻意只申请 200m / 1 副本。
+#    不要照抄「CPU 1 core」这类默认值，会调度不上去。
+#
+#   kubectl apply -f infra/k8s/streamlit-demo.yaml
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: streamlit-demo-sa
+  namespace: petadoptions
+  annotations:
+    # TODO 部署前替换为实际角色 ARN
+    eks.amazonaws.com/role-arn: arn:aws:iam::926093770964:role/REPLACE-streamlit-demo-irsa
+  labels:
+    app: streamlit-demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamlit-demo
+  namespace: petadoptions
+  labels:
+    app: streamlit-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: streamlit-demo
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: streamlit-demo
+    spec:
+      serviceAccountName: streamlit-demo-sa
+      nodeSelector:
+        kubernetes.io/arch: arm64
+      containers:
+        - name: streamlit
+          # TODO 部署前替换为实际镜像（用 git sha / 日期 tag，不要用 :latest）
+          image: 926093770964.dkr.ecr.ap-northeast-1.amazonaws.com/graphdp-demo:REPLACE-TAG
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8501
+          env:
+            - name: NEPTUNE_ENDPOINT
+              value: petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com
+            - name: REGION
+              value: ap-northeast-1
+            - name: AWS_DEFAULT_REGION
+              value: ap-northeast-1
+            - name: NLQUERY_ENGINE
+              value: strands
+            # 真实故障注入闸门：刻意**不设** DEMO_ALLOW_INJECTION。
+            # 这个界面挂在公网入口后面，不应能对生产发起故障注入。
+          resources:
+            requests:
+              cpu: 200m          # 集群 CPU 紧张，刻意压低
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          startupProbe:
+            # Streamlit 冷启动要装载 pandas/pyvis，给足宽限期。
+            # 本仓踩过 search-service 的坑：探针宽限期短于真实启动时间会造成循环重启。
+            httpGet:
+              path: /streamlit/_stcore/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30      # 最多 150s
+          readinessProbe:
+            httpGet:
+              path: /streamlit/_stcore/health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /streamlit/_stcore/health
+              port: http
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: streamlit-demo
+  namespace: petadoptions
+  labels:
+    app: streamlit-demo
+spec:
+  type: ClusterIP
+  selector:
+    app: streamlit-demo
+  ports:
+    - name: http
+      port: 8501
+      targetPort: http
+---
+# 把 Pod 挂进**已存在**的目标组。ALB 监听规则（:443 priority 20，
+# path /streamlit 与 /streamlit/*，动作含 authenticate-cognito）完全不动。
+#
+# 刻意不带 CDK 的 prune label（aws.cdk.eks/prune-...）：
+# 本文件是手工管理的，带上会被下一次 CDK 部署清掉。
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: streamlit-demo-tgb
+  namespace: petadoptions
+  labels:
+    app: streamlit-demo
+spec:
+  serviceRef:
+    name: streamlit-demo
+    port: 8501
+  targetGroupARN: arn:aws:elasticloadbalancing:ap-northeast-1:926093770964:targetgroup/streamlit-demo-tg/aafb8e66ba257593
+  targetType: ip

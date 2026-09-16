@@ -33,15 +33,41 @@ class MarkdownRenderer:
             "",
             f"> Generated: {plan.created_at}",
             f"> Failure scope: {plan.source} → DR target: {plan.target}",
-            f"> Estimated RTO: {plan.estimated_rto} minutes",
-            f"> Estimated RPO: {plan.estimated_rpo} minutes",
-            f"> Graph snapshot: {plan.graph_snapshot_time}",
+            f"> Strategy: {plan.strategy or '(unset)'} | Mode: {plan.mode}",
+            f"> Estimated RTO: {plan.estimated_rto} minutes"
+            + (
+                f" (confidence: {plan.rto_basis.get('confidence')})"
+                if plan.rto_basis.get("confidence") else ""
+            ),
+            f"> Estimated RPO: {self._format_rpo(plan)}",
+            f"> Graph snapshot: {plan.graph_snapshot_time}"
+            + (
+                f" (captured from {plan.plan_source}, "
+                f"age {plan.graph_snapshot_age_seconds / 3600.0:.1f}h"
+                f"{', STALE' if plan.graph_snapshot_stale else ''})"
+                if plan.graph_snapshot_age_seconds is not None
+                else f" (source: {plan.plan_source})"
+            ),
             f"> Plan ID: `{plan.plan_id}`",
             "",
         ]
 
+        # Data-layer feasibility comes FIRST, above the impact summary: if the
+        # declared strategy's preconditions are not met, every RTO/RPO figure
+        # below is optimistic and the reader must know that before reading them.
+        if plan.data_layer_gaps or plan.compute_layer_gaps:
+            lines += self._render_data_layer_gaps(plan)
+
         # Impact summary table
         lines += self._render_impact_summary(plan)
+
+        # RPO 推导依据 —— 审计问「数字怎么来的」时的答案。
+        if plan.rpo_basis:
+            lines += self._render_rpo_basis(plan)
+
+        # What was deliberately left out of scope.
+        if plan.scope_exclusions:
+            lines += self._render_scope_exclusions(plan)
 
         # SPOF warnings
         if plan.impact_assessment and plan.impact_assessment.single_points_of_failure:
@@ -85,7 +111,13 @@ class MarkdownRenderer:
             f"| Tier1 services | {len(report.by_tier.get('Tier1', []))} |",
             f"| Tier2 services | {len(report.by_tier.get('Tier2', []))} |",
             f"| Estimated RTO | {report.estimated_rto_minutes} min |",
-            f"| Estimated RPO | {report.estimated_rpo_minutes} min |",
+            # RPO 为 None 时**不能**渲染成 0 —— 见 ImpactReport.estimated_rpo_minutes
+            # 的注释：容灾报告里的 0 min 读作「零数据丢失」。
+            "| Estimated RPO | "
+            + (f"{report.estimated_rpo_minutes} min"
+               if report.estimated_rpo_minutes is not None
+               else "**不可推定**（依据见计划的 RPO 依据表）")
+            + " |",
             "",
         ]
 
@@ -113,6 +145,160 @@ class MarkdownRenderer:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _render_data_layer_gaps(self, plan: DRPlan) -> List[str]:
+        """渲染「所声明策略未满足的前提」（数据层 + 计算层）。
+
+        刻意放在 RTO/RPO 摘要**之前**：前提不成立时，下方所有指标都是乐观值，
+        读者必须先知道这一点。审计场景下这一段就是「已知缺口」的书面留痕。
+
+        Args:
+            plan: 含 ``data_layer_gaps`` / ``compute_layer_gaps`` 的 DRPlan。
+
+        Returns:
+            Markdown 行列表。
+        """
+        lines: List[str] = []
+
+        if plan.data_layer_gaps:
+            lines += [
+                "## ⚠️ 数据层前提未满足",
+                "",
+                f"所声明的策略 **{plan.strategy or '(unset)'}** 要求数据已复制到恢复区"
+                "（AWS Well-Architected REL13-BP02）。以下组件不满足该前提，"
+                "**下方 RTO/RPO 均为乐观估计**：",
+                "",
+                "| 组件 | 当前状态 | 该策略要求 | 影响 |",
+                "|------|----------|-----------|------|",
+            ]
+            for gap in plan.data_layer_gaps:
+                lines.append(
+                    f"| `{gap.get('component', '')}` | {gap.get('actual', '')} "
+                    f"| {gap.get('requirement', '')} | {gap.get('implication', '')} |"
+                )
+            lines += [
+                "",
+                "> 在补齐跨区复制之前，本计划的**实际**恢复能力接近 "
+                "backup & restore（RPO 数小时），而非所声明的档位。",
+                "",
+            ]
+
+        if plan.compute_layer_gaps:
+            lines += [
+                "## ⚠️ 计算层前提未满足",
+                "",
+                "**本计划在执行前必须先补齐以下配置**，否则会出现「命令成功但服务未起」：",
+                "",
+                "| 组件 | 当前状态 | 需要 | 影响 |",
+                "|------|----------|------|------|",
+            ]
+            for gap in plan.compute_layer_gaps:
+                lines.append(
+                    f"| `{gap.get('component', '')}` | {gap.get('actual', '')} "
+                    f"| {gap.get('requirement', '')} | {gap.get('implication', '')} |"
+                )
+            lines.append("")
+
+        return lines
+
+    def _render_scope_exclusions(self, plan: DRPlan) -> List[str]:
+        """渲染排除清单。
+
+        审计要能看出某个资源是**有意排除**而不是漏了，所以每条都带 reason 与
+        命中的规则。可达性排除数量通常很多，只详列显式规则命中的，其余汇总。
+
+        Args:
+            plan: 含 ``scope_exclusions`` 的 DRPlan。
+
+        Returns:
+            Markdown 行列表。
+        """
+        explicit = [e for e in plan.scope_exclusions if e.get("rule") != "reachability"]
+        implicit = [e for e in plan.scope_exclusions if e.get("rule") == "reachability"]
+
+        lines = ["## 切换范围排除项", ""]
+        if explicit:
+            lines += [
+                "**按显式规则排除**（有意排除，非遗漏）：",
+                "",
+                "| 资源 | 类型 | 命中规则 | 原因 |",
+                "|------|------|---------|------|",
+            ]
+            for e in explicit:
+                lines.append(
+                    f"| `{e.get('name','')}` | {e.get('type','')} "
+                    f"| `{e.get('rule','')}` | {e.get('reason','')} |"
+                )
+            lines.append("")
+        if implicit:
+            names = ", ".join(f"`{e.get('name','')}`" for e in implicit[:20])
+            more = f" 等 {len(implicit)} 项" if len(implicit) > 20 else ""
+            lines += [
+                f"**从本 workload 锚点不可达**（{len(implicit)} 项）：{names}{more}",
+                "",
+            ]
+        return lines
+
+    @staticmethod
+    def _format_rpo(plan: DRPlan) -> str:
+        """格式化 RPO。
+
+        ``None`` 表示无法从配置推定，此时**必须显示这一点**而不是印一个 0
+        ——0 会被读成「零数据丢失」，与「说不清」是完全相反的结论。
+        """
+        if plan.estimated_rpo is None:
+            unmeasurable = "、".join(plan.rpo_unmeasurable) or "部分组件"
+            return f"⚠️ 不可从配置推定（{unmeasurable}），需实测或按备份间隔论证"
+        return f"{plan.estimated_rpo} minutes"
+
+    def _render_rpo_basis(self, plan: DRPlan) -> List[str]:
+        """渲染 RPO 的逐组件推导依据。
+
+        这一段就是审计问「这个数字怎么来的」时的答案。原实现给不出答案——
+        它是一张硬编码表（RDS=5 / DynamoDB=0 / 其他=15）。
+
+        Args:
+            plan: 含 ``rpo_basis`` 的 DRPlan。
+
+        Returns:
+            Markdown 行列表。
+        """
+        lines = [
+            "## RPO 推导依据",
+            "",
+            "| 组件 | 复制拓扑 | RPO | 依据 |",
+            "|------|---------|-----|------|",
+        ]
+        for item in plan.rpo_basis:
+            lines.append(
+                f"| `{item.get('component', '')}` | {item.get('topology', '')} "
+                f"| {item.get('rpo', '')} | {item.get('reason', '')} |"
+            )
+        lines.append("")
+
+        if plan.rpo_measurement_commands:
+            lines += [
+                "**取得可举证数值所需的实测命令**（演练时执行并回填报告）：",
+                "",
+            ]
+            for cmd in plan.rpo_measurement_commands:
+                lines += [
+                    f"- `{cmd.get('component', '')}` — {cmd.get('purpose', '')}",
+                    "",
+                    "  ```bash",
+                    f"  {cmd.get('command', '')}",
+                    "  ```",
+                    "",
+                ]
+
+        if plan.rto_basis.get("confidence") == "design_values_only":
+            lines += [
+                "> ⚠️ **RTO 全部来自设计值查表，尚无演练实测数据。** 监管场景要的是"
+                "实测 RTO；跑过演练并回写 `plans/measurements.json` 后，"
+                "估算会自动改用实测滚动均值。",
+                "",
+            ]
+        return lines
 
     def _render_impact_summary(self, plan: DRPlan) -> List[str]:
         """Render the impact summary section.

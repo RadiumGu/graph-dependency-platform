@@ -1,0 +1,127 @@
+/* graph.css —— 自绘依赖图的样式。
+ *
+ * 样式全在这里，不受任何图库的内置规则约束 —— 这是自绘相对封装组件的主要收益：
+ * 上一个方案里「节点标签是否显示」由组件硬编码的 min-zoomed-font-size 决定，
+ * 而这里字号就是下面这一条 .gs-label 的 font-size，没有别人能改它。
+ */
+
+.gs-wrap {
+  width: 100%;
+  height: 100%;
+  overflow: auto;                 /* 图比容器大时滚动浏览，不缩小字号 */
+  background: #ffffff;
+  border: 1px solid #e3e8ef;
+  border-radius: 10px;
+}
+
+.gs-svg {
+  display: block;
+}
+
+.gs-empty {
+  padding: 28px 18px;
+  color: #5f6b7a;
+  font: 13px -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+/* ── 边 ─────────────────────────────────────────────────────────────────── */
+.gs-edge {
+  fill: none;
+  stroke-linecap: round;
+  /* --gs-stale 由 Python 侧按「多久没观测到」写入（1 = 新鲜，越小越旧）。
+     没有这个数据时回落到 0.85，与原来的默认一致。 */
+  opacity: var(--gs-stale, 0.85);
+}
+
+/* ── 节点 ───────────────────────────────────────────────────────────────── */
+.gs-node {
+  cursor: pointer;
+  outline: none;
+}
+
+.gs-box {
+  stroke-width: 1;
+  transition: stroke 0.12s ease, filter 0.12s ease;
+}
+
+.gs-node:hover .gs-box {
+  stroke: #7f8c9b;
+  filter: drop-shadow(0 1px 3px rgba(15, 25, 45, 0.13));
+}
+
+.gs-node.is-selected .gs-box {
+  stroke: #3759ce;
+  stroke-width: 2;
+}
+
+/* 键盘可达：焦点必须看得见，否则 tabindex 只是形式 */
+.gs-node:focus-visible .gs-box {
+  stroke: #3759ce;
+  stroke-width: 2;
+  filter: drop-shadow(0 0 0 3px rgba(55, 89, 206, 0.28));
+}
+
+.gs-label {
+  font: 13px -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  fill: #16191f;                  /* 字色写死，不跟随主题：白底白字是上一版的坑 */
+  dominant-baseline: auto;
+  pointer-events: none;           /* 点击落在整块节点上，不被文字截走 */
+  user-select: none;
+}
+
+.gs-badge-t {
+  font: 700 9px -apple-system, "Segoe UI", Roboto, sans-serif;
+  fill: #ffffff;
+  text-anchor: middle;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ── 聚光：hover / 键盘聚焦某个节点时，压暗无关的、点亮相连的 ─────────────
+ *
+ * 压暗而不是隐藏：被压暗的部分仍然占位、仍然看得见轮廓，所以用户不会以为
+ * 图变小了。隐藏会让布局看起来发生变化，那是更大的干扰。
+ */
+.gs-spotlight .gs-edge {
+  opacity: 0.1;
+}
+
+/* 被点亮的边恢复到**它自己的**陈旧度，而不是一律 1 ——
+   否则 hover 会把「这条边已经沉默很久」这个信息临时抹掉，
+   而那恰恰是用户盯着一个节点看时最需要知道的事。 */
+.gs-spotlight .gs-edge.is-lit {
+  opacity: var(--gs-stale, 1);
+  stroke-width: 2.6;
+}
+
+.gs-spotlight .gs-node .gs-box,
+.gs-spotlight .gs-node .gs-accent,
+.gs-spotlight .gs-node .gs-label {
+  opacity: 0.28;
+}
+
+.gs-spotlight .gs-node.is-lit .gs-box,
+.gs-spotlight .gs-node.is-lit .gs-accent,
+.gs-spotlight .gs-node.is-lit .gs-label {
+  opacity: 1;
+}
+
+.gs-spotlight .gs-node.is-lit .gs-box {
+  stroke: #7f8c9b;
+}
+
+/* 尊重「减少动效」偏好：过渡对前庭敏感的用户是负担，而高亮本身不依赖它 */
+@media (prefers-reduced-motion: reduce) {
+  .gs-box {
+    transition: none;
+  }
+}
+
+/* ── 泳道标题（Graph_Explorer 的 scope 簇）───────────────────────────────── */
+.gs-band-t {
+  font: 600 12px -apple-system, "Segoe UI", Roboto, sans-serif;
+  fill: #8492a6;
+  text-anchor: middle;
+  pointer-events: none;
+  user-select: none;
+}
