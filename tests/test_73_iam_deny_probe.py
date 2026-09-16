@@ -551,3 +551,28 @@ def test_t73_13_stepfn验证器不得在缺环时写回判定():
     assert "inconclusive" in src, (
         "没有说明「执行归零但业务照常」该判 inconclusive —— "
         "那种情况写 confirmed 是过度声称")
+
+def test_t73_14_合成流量必须有延迟判据():
+    """只按成功率判会漏掉「变慢但还算成功」这一整类事件。
+
+    2026-09-16 01:17 实测：领养 cron 那轮 **98 秒、支付 6/8**，判为 `ok`。
+    同一分钟 waggle cron 超时报警 —— 两个 cron 同时退化，这一侧静默通过。
+    原因是 `elapsed` 只出现在文案里、从来不是判据。
+
+    620 个成功轮次的分布是 4~14 秒，98 秒是**唯一**离群点：
+    **延迟才是那轮的判别信号**，支付 6/8 本身出现过 4 次、不异常。
+    """
+    cron = pathlib.Path(
+        "~/.kiro/crew/crons/adoption_synthetic_traffic.py").expanduser()
+    if not cron.exists():
+        pytest.skip("合成流量 cron 不在此环境")
+    src = cron.read_text(encoding="utf-8")
+    code = "\n".join(ln for ln in src.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    assert "MAX_ROUND_SECONDS" in code, (
+        "没有耗时上限常量 —— 只按成功率判会漏掉「变慢但还算成功」")
+    assert "elapsed > MAX_ROUND_SECONDS" in code, (
+        "定义了上限却没拿它当判据 —— 这正是 01:17 那轮被判 ok 的原因")
+    assert "alarm=slow_round" in code, (
+        "延迟事件没有独立的告警名 —— 并进 low_pay 就分不出"
+        "「支付失败」与「整体变慢」这两种不同故障")
