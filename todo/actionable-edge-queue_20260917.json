@@ -1,22 +1,103 @@
 {
- "_generated": "2026-09-17T06:40Z",
- "_criterion": "verify_status=untested 且 verify_blocked_class IS NULL —— 即四类未测里「真正的还没轮到」那一类",
- "total": 24,
- "core_chokepoint_related": 13,
+ "_generated_by": "scripts/build_actionable_queue.py",
+ "_criterion": {
+  "untested": "verify_status = untested",
+  "not_blocked": "verify_blocked_class IS NULL —— 排除已知打不了的三类",
+  "active": "active IS NOT false —— 图谱自己没判定它已不存活（**上一版漏了这道**）",
+  "core": "源或目标在 q_articulation_chokepoints 给出的割点名单上"
+ },
+ "counts": {
+  "untested_unblocked": 36,
+  "excluded_inactive": 5,
+  "actionable": 31,
+  "actionable_core": 24
+ },
+ "excluded_inactive_edges": [
+  {
+   "src": "neptune-etl-from-xray",
+   "src_label": "LambdaFunction",
+   "edge_type": "AccessesData",
+   "dst": "petsite-neptune",
+   "dst_label": "NeptuneCluster",
+   "active": false,
+   "kind": "dynamic",
+   "source": "xray",
+   "last_seen": 1788192049
+  },
+  {
+   "src": "petlistadoptions",
+   "src_label": "Microservice",
+   "edge_type": "AccessesData",
+   "dst": "serviceseks2-databasereader1f54479b8-hpyukqlufzus",
+   "dst_label": "RDSInstance",
+   "active": false,
+   "kind": "dynamic",
+   "source": "deepflow-l4",
+   "last_seen": 1789120606
+  },
+  {
+   "src": "payforadoption",
+   "src_label": "Microservice",
+   "edge_type": "AccessesData",
+   "dst": "serviceseks2-databasewriter2462cc03-fwgfu4gossqe",
+   "dst_label": "RDSInstance",
+   "active": false,
+   "kind": "dynamic",
+   "source": "deepflow-l4",
+   "last_seen": 1789120606
+  },
+  {
+   "src": "pethistory",
+   "src_label": "Microservice",
+   "edge_type": "AccessesData",
+   "dst": "serviceseks2-databasewriter2462cc03-fwgfu4gossqe",
+   "dst_label": "RDSInstance",
+   "active": false,
+   "kind": "dynamic",
+   "source": "deepflow-l4",
+   "last_seen": 1789120606
+  },
+  {
+   "src": "neptune-etl-from-xray",
+   "src_label": "LambdaFunction",
+   "edge_type": "AccessesData",
+   "dst": "xray",
+   "dst_label": "AWSServiceEndpoint",
+   "active": false,
+   "kind": "dynamic",
+   "source": "xray",
+   "last_seen": 1788192049
+  }
+ ],
  "core_by_target": [
+  {
+   "target": "ssm",
+   "label": "AWSServiceEndpoint",
+   "edges": 5
+  },
+  {
+   "target": "bedrockruntime",
+   "label": "AWSServiceEndpoint",
+   "edges": 4
+  },
   {
    "target": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
    "label": "DynamoDBTable",
    "edges": 2
   },
   {
-   "target": "serviceseks2-databasewriter2462cc03-fwgfu4gossqe",
-   "label": "RDSInstance",
-   "edges": 2
+   "target": "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
+   "label": "SQSQueue",
+   "edges": 1
   },
   {
-   "target": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
-   "label": "StepFunction",
+   "target": "ServicesEks2-sqspetadoptiondlqEEEFF2AC-EQwBtdEFe8jQ",
+   "label": "SQSQueue",
+   "edges": 1
+  },
+  {
+   "target": "ServicesEks2-statusupdaterservicelambdafn37242E00-0SHsIkrhwJ32",
+   "label": "LambdaFunction",
    "edges": 1
   },
   {
@@ -35,8 +116,18 @@
    "edges": 1
   },
   {
+   "target": "bedrock",
+   "label": "AWSServiceEndpoint",
+   "edges": 1
+  },
+  {
    "target": "dynamodb",
    "label": "AWSServiceEndpoint",
+   "edges": 1
+  },
+  {
+   "target": "petsearch",
+   "label": "Microservice",
    "edges": 1
   },
   {
@@ -45,8 +136,8 @@
    "edges": 1
   },
   {
-   "target": "serviceseks2-databasereader1f54479b8-hpyukqlufzus",
-   "label": "RDSInstance",
+   "target": "petstatusupdater",
+   "label": "Microservice",
    "edges": 1
   },
   {
@@ -55,251 +146,354 @@
    "edges": 1
   },
   {
-   "target": "ssm",
+   "target": "sqs",
    "label": "AWSServiceEndpoint",
    "edges": 1
   }
  ],
- "edges": [
-  {
-   "src": "Providerwaiterstatemachine5D4A9DF0-ZkuIyyskPCyz",
-   "sl": "StepFunction",
-   "et": "Invokes",
-   "dst": "ServicesEks2-awscdkawseks-ProviderframeworkisCompl-sIJBJPos5iM2",
-   "dl": "LambdaFunction",
-   "source": "aws-etl",
-   "kind": "static",
-   "xray": null
-  },
-  {
-   "src": "Providerwaiterstatemachine5D4A9DF0-ZkuIyyskPCyz",
-   "sl": "StepFunction",
-   "et": "Invokes",
-   "dst": "ServicesEks2-awscdkawseks-ProviderframeworkonTimeo-T6MAOIsLvvn5",
-   "dl": "LambdaFunction",
-   "source": "aws-etl",
-   "kind": "static",
-   "xray": null
-  },
-  {
-   "src": "payforadoption",
-   "sl": "Microservice",
-   "et": "AccessesData",
-   "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
-   "dl": "DynamoDBTable",
-   "source": "aws-etl",
-   "kind": "static",
-   "xray": 342
-  },
+ "actionable_core_edges": [
   {
    "src": "petfood",
-   "sl": "Microservice",
-   "et": "AccessesData",
+   "src_label": "Microservice",
+   "edge_type": "AccessesData",
    "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
-   "dl": "DynamoDBTable",
+   "dst_label": "DynamoDBTable",
+   "active": true,
+   "kind": "dynamic",
    "source": "deepflow-dns",
-   "kind": "dynamic",
-   "xray": null
+   "last_seen": 1788592005
   },
   {
    "src": "petstatusupdater",
-   "sl": "Microservice",
-   "et": "AccessesData",
+   "src_label": "Microservice",
+   "edge_type": "AccessesData",
    "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
-   "dl": "DynamoDBTable",
-   "source": "manual-fix",
+   "dst_label": "DynamoDBTable",
+   "active": true,
    "kind": "static",
-   "xray": null
+   "source": "manual-fix",
+   "last_seen": null
   },
   {
    "src": "petstatusupdater",
-   "sl": "Microservice",
-   "et": "DependsOn",
+   "src_label": "Microservice",
+   "edge_type": "DependsOn",
    "dst": "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
-   "dl": "SQSQueue",
-   "source": "manual-fix",
+   "dst_label": "SQSQueue",
+   "active": true,
    "kind": "static",
-   "xray": null
+   "source": "manual-fix",
+   "last_seen": null
   },
   {
    "src": "petstatusupdater",
-   "sl": "Microservice",
-   "et": "DependsOn",
+   "src_label": "Microservice",
+   "edge_type": "DependsOn",
    "dst": "ServicesEks2-sqspetadoptiondlqEEEFF2AC-EQwBtdEFe8jQ",
-   "dl": "SQSQueue",
+   "dst_label": "SQSQueue",
+   "active": true,
+   "kind": "static",
    "source": "manual-fix",
-   "kind": "static",
-   "xray": null
+   "last_seen": null
   },
   {
-   "src": "petsite",
-   "sl": "Microservice",
-   "et": "AccessesData",
-   "dst": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
-   "dl": "StepFunction",
-   "source": "xray",
+   "src": "petstatusupdater",
+   "src_label": "Microservice",
+   "edge_type": "AccessesData",
+   "dst": "ServicesEks2-statusupdaterservicelambdafn37242E00-0SHsIkrhwJ32",
+   "dst_label": "LambdaFunction",
+   "active": true,
    "kind": "dynamic",
-   "xray": 8
+   "source": "xray",
+   "last_seen": 1789630795
   },
   {
    "src": "WaggleAIOrchestrator",
-   "sl": "AgentRuntime",
-   "et": "Delegates",
+   "src_label": "AgentRuntime",
+   "edge_type": "Delegates",
    "dst": "WaggleAINutrition",
-   "dl": "AgentRuntime",
-   "source": "agentcore-etl",
+   "dst_label": "AgentRuntime",
+   "active": true,
    "kind": "inference",
-   "xray": null
+   "source": "agentcore-etl",
+   "last_seen": 1789631179
   },
   {
    "src": "petsite",
-   "sl": "Microservice",
-   "et": "DependsOn",
+   "src_label": "Microservice",
+   "edge_type": "DependsOn",
    "dst": "WaggleAIOrchestrator",
-   "dl": "AgentRuntime",
-   "source": "agentcore-etl",
+   "dst_label": "AgentRuntime",
+   "active": true,
    "kind": "static",
-   "xray": null
+   "source": "agentcore-etl",
+   "last_seen": 1789631179
   },
   {
    "src": "WaggleAIOrchestrator",
-   "sl": "AgentRuntime",
-   "et": "Delegates",
+   "src_label": "AgentRuntime",
+   "edge_type": "Delegates",
    "dst": "WaggleAIOrdering",
-   "dl": "AgentRuntime",
-   "source": "agentcore-etl",
+   "dst_label": "AgentRuntime",
+   "active": true,
    "kind": "inference",
-   "xray": null
+   "source": "agentcore-etl",
+   "last_seen": 1789631179
+  },
+  {
+   "src": "WaggleAINutrition",
+   "src_label": "AgentRuntime",
+   "edge_type": "AccessesData",
+   "dst": "bedrock",
+   "dst_label": "AWSServiceEndpoint",
+   "active": true,
+   "kind": "dynamic",
+   "source": "xray",
+   "last_seen": 1789630795
+  },
+  {
+   "src": "WaggleAIAdoption",
+   "src_label": "AgentRuntime",
+   "edge_type": "AccessesData",
+   "dst": "bedrockruntime",
+   "dst_label": "AWSServiceEndpoint",
+   "active": true,
+   "kind": "dynamic",
+   "source": "xray",
+   "last_seen": 1789630795
+  },
+  {
+   "src": "WaggleAINutrition",
+   "src_label": "AgentRuntime",
+   "edge_type": "AccessesData",
+   "dst": "bedrockruntime",
+   "dst_label": "AWSServiceEndpoint",
+   "active": true,
+   "kind": "dynamic",
+   "source": "xray",
+   "last_seen": 1789630795
+  },
+  {
+   "src": "WaggleAIOrchestrator",
+   "src_label": "AgentRuntime",
+   "edge_type": "AccessesData",
+   "dst": "bedrockruntime",
+   "dst_label": "AWSServiceEndpoint",
+   "active": true,
+   "kind": "dynamic",
+   "source": "xray",
+   "last_seen": 1789630795
+  },
+  {
+   "src": "WaggleAIOrdering",
+   "src_label": "AgentRuntime",
+   "edge_type": "AccessesData",
+   "dst": "bedrockruntime",
+   "dst_label": "AWSServiceEndpoint",
+   "active": true,
+   "kind": "dynamic",
+   "source": "xray",
+   "last_seen": 1789630795
   },
   {
    "src": "petfood",
-   "sl": "Microservice",
-   "et": "AccessesData",
+   "src_label": "Microservice",
+   "edge_type": "AccessesData",
    "dst": "dynamodb",
-   "dl": "AWSServiceEndpoint",
+   "dst_label": "AWSServiceEndpoint",
+   "active": true,
+   "kind": "dynamic",
    "source": "nfm",
+   "last_seen": 1789631389
+  },
+  {
+   "src": "WaggleAIAdoption",
+   "src_label": "AgentRuntime",
+   "edge_type": "Calls",
+   "dst": "petsearch",
+   "dst_label": "Microservice",
+   "active": true,
    "kind": "dynamic",
-   "xray": null
-  },
-  {
-   "src": "neptune-etl-trigger",
-   "sl": "LambdaFunction",
-   "et": "AccessesData",
-   "dst": "neptune-etl-from-aws",
-   "dl": "LambdaFunction",
-   "source": "cfn-etl",
-   "kind": "static",
-   "xray": 355
-  },
-  {
-   "src": "neptune-etl-trigger",
-   "sl": "LambdaFunction",
-   "et": "Invokes",
-   "dst": "neptune-etl-from-aws",
-   "dl": "LambdaFunction",
-   "source": "aws-etl",
-   "kind": "static",
-   "xray": null
-  },
-  {
-   "src": "neptune-etl-from-xray",
-   "sl": "LambdaFunction",
-   "et": "AccessesData",
-   "dst": "petsite-neptune",
-   "dl": "NeptuneCluster",
    "source": "xray",
-   "kind": "dynamic",
-   "xray": 73
+   "last_seen": 1789630795
   },
   {
    "src": "petsite-ops-alerts",
-   "sl": "SNSTopic",
-   "et": "Invokes",
+   "src_label": "SNSTopic",
+   "edge_type": "Invokes",
    "dst": "petsite-ops-slack-notifier",
-   "dl": "LambdaFunction",
-   "source": "aws-etl-static",
+   "dst_label": "LambdaFunction",
+   "active": true,
    "kind": "static",
-   "xray": null
-  },
-  {
-   "src": "petlistadoptions",
-   "sl": "Microservice",
-   "et": "AccessesData",
-   "dst": "serviceseks2-databasereader1f54479b8-hpyukqlufzus",
-   "dl": "RDSInstance",
-   "source": "deepflow-l4",
-   "kind": "dynamic",
-   "xray": null
+   "source": "aws-etl-static",
+   "last_seen": 1789631396
   },
   {
    "src": "payforadoption",
-   "sl": "Microservice",
-   "et": "AccessesData",
-   "dst": "serviceseks2-databasewriter2462cc03-fwgfu4gossqe",
-   "dl": "RDSInstance",
-   "source": "deepflow-l4",
+   "src_label": "Microservice",
+   "edge_type": "Calls",
+   "dst": "petstatusupdater",
+   "dst_label": "Microservice",
+   "active": true,
    "kind": "dynamic",
-   "xray": null
-  },
-  {
-   "src": "pethistory",
-   "sl": "Microservice",
-   "et": "AccessesData",
-   "dst": "serviceseks2-databasewriter2462cc03-fwgfu4gossqe",
-   "dl": "RDSInstance",
-   "source": "deepflow-l4",
-   "kind": "dynamic",
-   "xray": null
+   "source": "xray",
+   "last_seen": 1789630795
   },
   {
    "src": "payforadoption",
-   "sl": "Microservice",
-   "et": "AccessesData",
+   "src_label": "Microservice",
+   "edge_type": "AccessesData",
    "dst": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
-   "dl": "S3Bucket",
-   "source": "deepflow-dns",
+   "dst_label": "S3Bucket",
+   "active": true,
    "kind": "dynamic",
-   "xray": null
+   "source": "deepflow-dns",
+   "last_seen": 1788579104
   },
   {
-   "src": "petsite",
-   "sl": "Microservice",
-   "et": "AccessesData",
-   "dst": "sns",
-   "dl": "AWSServiceEndpoint",
-   "source": "appsignals-etl",
+   "src": "payforadoption",
+   "src_label": "Microservice",
+   "edge_type": "AccessesData",
+   "dst": "sqs",
+   "dst_label": "AWSServiceEndpoint",
+   "active": true,
    "kind": "dynamic",
-   "xray": null
+   "source": "xray",
+   "last_seen": 1789630795
+  },
+  {
+   "src": "WaggleAIAdoption",
+   "src_label": "AgentRuntime",
+   "edge_type": "AccessesData",
+   "dst": "ssm",
+   "dst_label": "AWSServiceEndpoint",
+   "active": true,
+   "kind": "dynamic",
+   "source": "xray",
+   "last_seen": 1789630795
+  },
+  {
+   "src": "WaggleAINutrition",
+   "src_label": "AgentRuntime",
+   "edge_type": "AccessesData",
+   "dst": "ssm",
+   "dst_label": "AWSServiceEndpoint",
+   "active": true,
+   "kind": "dynamic",
+   "source": "xray",
+   "last_seen": 1789630795
+  },
+  {
+   "src": "WaggleAIOrchestrator",
+   "src_label": "AgentRuntime",
+   "edge_type": "AccessesData",
+   "dst": "ssm",
+   "dst_label": "AWSServiceEndpoint",
+   "active": true,
+   "kind": "dynamic",
+   "source": "xray",
+   "last_seen": 1789630795
+  },
+  {
+   "src": "WaggleAIOrdering",
+   "src_label": "AgentRuntime",
+   "edge_type": "AccessesData",
+   "dst": "ssm",
+   "dst_label": "AWSServiceEndpoint",
+   "active": true,
+   "kind": "dynamic",
+   "source": "xray",
+   "last_seen": 1789630795
   },
   {
    "src": "petsearch",
-   "sl": "Microservice",
-   "et": "AccessesData",
+   "src_label": "Microservice",
+   "edge_type": "AccessesData",
    "dst": "ssm",
-   "dl": "AWSServiceEndpoint",
-   "source": "xray",
+   "dst_label": "AWSServiceEndpoint",
+   "active": true,
    "kind": "dynamic",
-   "xray": 6
+   "source": "xray",
+   "last_seen": 1789630795
+  }
+ ],
+ "actionable_noncore_edges": [
+  {
+   "src": "Providerwaiterstatemachine5D4A9DF0-ZkuIyyskPCyz",
+   "src_label": "StepFunction",
+   "edge_type": "Invokes",
+   "dst": "ServicesEks2-awscdkawseks-ProviderframeworkisCompl-sIJBJPos5iM2",
+   "dst_label": "LambdaFunction",
+   "active": true,
+   "kind": "static",
+   "source": "aws-etl",
+   "last_seen": null
+  },
+  {
+   "src": "Providerwaiterstatemachine5D4A9DF0-ZkuIyyskPCyz",
+   "src_label": "StepFunction",
+   "edge_type": "Invokes",
+   "dst": "ServicesEks2-awscdkawseks-ProviderframeworkonTimeo-T6MAOIsLvvn5",
+   "dst_label": "LambdaFunction",
+   "active": true,
+   "kind": "static",
+   "source": "aws-etl",
+   "last_seen": null
   },
   {
    "src": "petsite",
-   "sl": "Microservice",
-   "et": "AccessesData",
-   "dst": "stepfunctions",
-   "dl": "AWSServiceEndpoint",
-   "source": "appsignals-etl",
+   "src_label": "Microservice",
+   "edge_type": "AccessesData",
+   "dst": "bedrockagentcore",
+   "dst_label": "AWSServiceEndpoint",
+   "active": true,
    "kind": "dynamic",
-   "xray": null
+   "source": "xray",
+   "last_seen": 1789630795
   },
   {
-   "src": "neptune-etl-from-xray",
-   "sl": "LambdaFunction",
-   "et": "AccessesData",
-   "dst": "xray",
-   "dl": "AWSServiceEndpoint",
-   "source": "xray",
+   "src": "neptune-etl-trigger",
+   "src_label": "LambdaFunction",
+   "edge_type": "AccessesData",
+   "dst": "neptune-etl-from-aws",
+   "dst_label": "LambdaFunction",
+   "active": true,
+   "kind": "static",
+   "source": "cfn-etl",
+   "last_seen": 1789630795
+  },
+  {
+   "src": "neptune-etl-trigger",
+   "src_label": "LambdaFunction",
+   "edge_type": "Invokes",
+   "dst": "neptune-etl-from-aws",
+   "dst_label": "LambdaFunction",
+   "active": true,
+   "kind": "static",
+   "source": "aws-etl",
+   "last_seen": 1789631397
+  },
+  {
+   "src": "petsite",
+   "src_label": "Microservice",
+   "edge_type": "AccessesData",
+   "dst": "sns",
+   "dst_label": "AWSServiceEndpoint",
+   "active": true,
    "kind": "dynamic",
-   "xray": 4
+   "source": "appsignals-etl",
+   "last_seen": 1789630575
+  },
+  {
+   "src": "petsite",
+   "src_label": "Microservice",
+   "edge_type": "AccessesData",
+   "dst": "stepfunctions",
+   "dst_label": "AWSServiceEndpoint",
+   "active": true,
+   "kind": "dynamic",
+   "source": "appsignals-etl",
+   "last_seen": 1789630575
   }
  ]
 }
