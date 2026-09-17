@@ -139,6 +139,73 @@ SEVERANCE_METHODS: dict[str, dict] = {
         "also": [],
         "xray_types": (),
     },
+    "AgentRuntime": {
+        # ⚠️ 这一项被撤回过一次又加回来。**加回的证据强度与撤回时不同**，
+        # 不是反复无常，读完再动它。
+        #
+        # ## 实测确认：IAM deny 能切断 agent 间委派
+        #
+        # 源码（one-observability-demo 的
+        # `waggle_ai_agents/orchestrator_strands/delegate.py`）：
+        #
+        #     TRANSPORT = os.getenv("AGENT_TRANSPORT", "local")
+        #     if TRANSPORT == "gateway": return _via_gateway(...)
+        #     return _in_process(...)      # 默认进程内直接 import
+        #
+        #     # _via_gateway 里：
+        #     SigV4Auth(boto3.Session().get_credentials(),
+        #               "bedrock-agentcore", region).add_auth(signed)
+        #     httpx.post(url, ...)   # {gateway}/{target}/invocations
+        #
+        # 生产是 `gateway`（X-Ray 里 Orchestrator 有到网关的出边），
+        # 用**标准 SigV4**，服务端每次请求评估策略。
+        # CloudTrail 按 access key 反查确认签名身份就是
+        # `WaggleAIAgents-RoleWaggleAIOrchestrator...` —— 我 deny 的那个角色。
+        #
+        # 施加 deny 后，源侧运行时日志里：
+        #
+        #     "gateway call to" 168 次
+        #     "403"             379 次（6.89 次/分，基线 0.02 次/分 → 413x）
+        #     典型: gateway call to 'adoption' failed:
+        #           Client error '403 Forbidden' for url '...'
+        #
+        # **注入一直是生效的。**
+        #
+        # ## 为什么我曾经判成"打不到"（三次）
+        #
+        # 因为另外两条观测通道**同时瞎**：
+        #
+        # · 边级流量：委派经网关，X-Ray 只有一条到
+        #   `gateway.bedrock-agentcore` 的合流边，测不出目标粒度；
+        # · 业务探针：`_via_gateway` 把 403 **包成 JSON 错误字符串
+        #   返回给 LLM**（`except: return json.dumps({"error": ...})`，
+        #   不抛出），LLM 就用对话历史里的旧信息编出一个看起来
+        #   完全正常的回答。探针判据是"是否兜底文案"，
+        #   LLM 编的回答不是兜底文案 → 判"未退化"。
+        #
+        # 我拿"业务未退化"反推"注入没生效"，而中间那一步
+        # （观测有没有能力看见）从没验证过。
+        # 期间还写过一个机制上就错的解释（"运行时缓存凭证" ——
+        # IAM 策略评估在服务端每次请求重做，凭证缓存不影响授权）。
+        #
+        # ## 所以这类边必须用 `_source_denial_count` 做生效性判据
+        #
+        # 它读调用方自己记录的失败，不经聚合、不经语义解释。
+        # 业务探针在 agent 系统上**系统性地漏判**：
+        # LLM 是一个万能的隐式降级路径，总能编出像样的回答。
+        #
+        # 而"切断成功 + 业务无感"的正确判定是 `soft`（依赖不承重），
+        # 既不是 `confirmed` 也不是"打不到"。
+        #
+        # ⚠️ 顺带一个韧性缺陷，值得单独看：LLM 用**过时数据**回答
+        # "Puppy 001 可领养"，而真实数据此刻取不到 —— 那是**静默错误**，
+        # 比明确报错更危险。这不是优雅降级。
+        "actions": ["bedrock-agentcore:InvokeAgentRuntime",
+                    "bedrock-agentcore:InvokeGateway"],
+        "arn": "*",          # runtime 与 gateway ARN 形态不同，用 * 覆盖两者
+        "also": [],
+        "xray_types": ("AWS::BedrockAgentCore",),
+    },
     "NeptuneCluster": {
         # 2026-09-17 加入。前置条件已实测确认，不是照文档猜的：
         #
@@ -181,63 +248,19 @@ SEVERANCE_METHODS: dict[str, dict] = {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 为什么 `AgentRuntime` **不在**上面这张表里（2026-09-15 三次真跑 + 09-17 复盘）
+# 关于 `AgentRuntime`：它撤回过一次、又加回来了
 # ─────────────────────────────────────────────────────────────────────────────
 #
-# 它曾经登记过。撤掉是因为**实测切不断**，而留着一个"判定说能打、真打
-# 打不到"的条目，比不登记更糟 —— 判定器会把这类边放回验证队列，
-# 每个接手的人都要重跑一遍才发现打空。
+# 完整的证据链与三次误判的原因写在上面 SEVERANCE_METHODS 的
+# `"AgentRuntime"` 条目注释里（约 60 行），这里不重复。
 #
-# ## 已确证的事实
+# 一句话版本：IAM deny **一直是生效的**（源侧日志 379 次 403，
+# 6.89 次/分 vs 基线 0.02 次/分）。我三次判成"打不到"是因为
+# 边级流量与业务探针两条通道同时瞎 —— 而 `_via_gateway` 把 403
+# 包成 JSON 错误喂给 LLM，LLM 编出了一个看起来正常的回答。
 #
-# 1. **deny 语句本身在 IAM 层面完全有效。** 用 simulate-principal-policy
-#    对真实网关 ARN 验证：
-#        无 deny                -> allowed
-#        加 deny Resource=*     -> explicitDeny
-#
-# 2. **施加 deny 后委派照常成功。** 三次真跑（含两个 action 都 deny、
-#    换成调用最频繁的那条边），业务探针 300 秒内全程不退化。
-#    运行时日志里那次调用是：
-#        scope=httpx  POST .../gateway.bedrock-agentcore.../adoption/invocations
-#        http.status_code=200
-#
-# 3. **AWS 文档确认入站 IAM 授权用的就是 `InvokeGateway`**，
-#    而该网关 `authorizerType = AWS_IAM`。所以 action 名没选错。
-#
-# ## 一个必须撤回的错误结论
-#
-# 我在 09-15 把原因写成「AgentCore 运行时缓存凭证，策略变更没被重新拉取」。
-# **那个解释在机制上就是错的**：SigV4 凭证缓存不影响授权 ——
-# IAM 策略评估发生在**服务端**，每次请求都按当前策略重新评估。
-# 缓存的是凭证（access key + session token），不是授权决定。
-# 所以凭证缓存永远解释不了 deny 失效。
-#
-# 当时是从脚本那句 `⚠️ 未能刷新凭证` 顺下来的 —— 那句话在集群内服务
-# 场景是对的（rollout restart 换 Pod），但它说的是**注入手段的完整性**，
-# 不是**授权为何未生效**。又一次拿一个答不了这个问题的判据回答它。
-#
-# ## 尚未确证的部分（诚实标注）
-#
-# 委派究竟用什么鉴权，没有直接证据。最可能是 workload identity JWT
-# 而非 SigV4：CloudTrail 里 `GetWorkloadAccessTokenForJWT` 有持续调用，
-# 且委派走 httpx 而非 botocore。若是 Bearer token，
-# deny 一个 IAM action 自然打不到，而已签发的 token 在有效期内继续可用。
-#
-# ⚠️ 但注意：httpx 的 OTel instrumentation **本来就不记录** `aws.auth.*`
-# 属性（那是 botocore instrumentation 独有的），所以「日志里没有
-# access_key」**不能**作为「没有 SigV4 签名」的证据。要确证需要读
-# Orchestrator 的源码或抓请求头。
-#
-# ## 所以这类边现在是什么状态
-#
-# `Delegates AgentRuntime -> AgentRuntime` 与 `InvokesTool -> AgentTool`
-# 回到 `blocked_unreachable`：**我们已知的手段都切不断它**。
-# 那是诚实的"没有手段"，不是"有手段但缺一步"。
-#
-# 要真正解开，得先回答上面那个未确证的问题。可行的下一步：
-#   · 读 Orchestrator 源码看它怎么构造那个 httpx 请求；
-#   · 若确认是 JWT，切断点应在 workload identity 而非 IAM action。
-
+# 教训：**"业务未退化"不能反推"注入未生效"**，
+# 中间那一步（观测有没有能力看见）必须单独验证。
 
 #: 内联策略名。固定前缀便于识别与清理遗留。
 POLICY_PREFIX = "ChaosDenyProbe"
@@ -798,6 +821,118 @@ def _measure(client: str, server: str, window: int,
             "p99_ms": getattr(snap, "latency_p99_ms", None)}
 
 
+def _source_denial_count(src_label: str, service: str,
+                         start_ms: int, end_ms: int) -> dict:
+    """数源侧日志里的**拒绝错误** —— 某些边唯一可靠的生效性证据。
+
+    ## 为什么需要这条通道（2026-09-17，一个花了三次真跑的教训）
+
+    验 `Delegates AgentRuntime -> AgentRuntime` 时，另外两条通道**都瞎**：
+
+    · **边级流量**：委派经网关，X-Ray 服务图里只有一条到
+      `gateway.bedrock-agentcore` 的合流边，测不出目标粒度；
+    · **业务探针**：判据是"回答内容是否为兜底文案"，
+      而 Orchestrator 的 `_via_gateway()` 把网关失败**包成一个
+      JSON 错误字符串返回给 LLM**（不抛出），
+      LLM 就用对话历史里的旧信息编出一个看起来完全正常的回答。
+      探针看到的是"正常回答"，于是判"未退化"。
+
+    两条通道同时瞎，我据此三次得出"IAM deny 打不断 agent 间委派"，
+    甚至把 `AgentRuntime` 从能力表里撤了。**结论是错的。**
+    直接数源侧日志才看到真相：
+
+        实验窗口内 "gateway call to" 168 次
+                   "403"             379 次
+        典型消息: gateway call to 'adoption' failed:
+                  Client error '403 Forbidden' for url '...'
+
+    **注入一直是生效的。** 错的是观测。
+
+    ## 这条通道为什么可靠
+
+    它读的是**调用方自己记录的失败**，不经过任何聚合、采样或语义解释。
+    `ok=False` 与"真的零错误"在这里也能分开：前者是 API 调不到
+    （返回 `ok=False`），后者是 `count=0` 且 `ok=True`。
+
+    ⚠️ 它证明的是**注入生效**，不是**业务受损**。两者必须分开记：
+    一条边可以"切断成功 + 业务无感"，那是 `soft`（依赖不承重），
+    不是 `confirmed`，也不是"打不到"。
+
+    ## 必须比基线，不能看"有没有"
+
+    实测（同上）：
+
+        deny 施加窗口（55 分钟）  403 计数 200+（触到 limit，实际 379）
+        干净窗口（60 分钟）       403 计数 1
+
+    **干净窗口不是 0。** 所以"窗口内有 403"不能作为生效判据 ——
+    那 1 次是常态噪声，任何窗口都可能碰上。
+    返回值给的是 `per_min` 速率，调用方必须与基线窗口比
+    （本仓库 7b889e5 已经为 X-Ray 通道做过同样的修正，
+    这里沿用那个口径，不要退回计数比较）。
+
+    `truncated=True` 表示计数触到 API 上限、真实值更大 ——
+    此时速率是**下界**，用于"显著高于基线"的判断仍然安全，
+    但不可当作精确值写进证据。
+    """
+    import boto3
+    logs = boto3.client("logs", region_name=REGION)
+
+    prefix = {
+        "AgentRuntime": "/aws/bedrock-agentcore/runtimes/",
+        "LambdaFunction": "/aws/lambda/",
+    }.get(src_label)
+    if not prefix:
+        return {"ok": False, "count": 0, "per_min": None,
+                "how": "源类型 %s 未登记日志组前缀" % src_label}
+
+    # AgentCore 的日志组名带随机 ID 与 endpoint 后缀
+    # （`WaggleAIOrchestrator-K85tG867Xt-DEFAULT`），必须按前缀搜。
+    group = None
+    try:
+        for page in logs.get_paginator("describe_log_groups").paginate(
+                logGroupNamePrefix=prefix + service):
+            for g in page.get("logGroups", []) or []:
+                group = g["logGroupName"]
+                break
+            if group:
+                break
+    except Exception as exc:
+        return {"ok": False, "count": 0, "per_min": None,
+                "how": "查日志组失败: %s" % exc}
+    if not group:
+        return {"ok": False, "count": 0, "per_min": None,
+                "how": "找不到 %s%s* 的日志组" % (prefix, service)}
+
+    # 与后端无关的拒绝证据。故意不含 "error" 这类泛词 ——
+    # 那会把无关报错也数进来，把生效性证据变成噪声。
+    patterns = ('"403"', '"AccessDenied"', '"not authorized"',
+                '"UnauthorizedOperation"')
+    LIMIT = 1000
+    total, hit, truncated = 0, [], False
+    for pat in patterns:
+        try:
+            r = logs.filter_log_events(
+                logGroupName=group, startTime=start_ms, endTime=end_ms,
+                filterPattern=pat, limit=LIMIT)
+            n = len(r.get("events", []) or [])
+        except Exception:
+            continue
+        if n >= LIMIT:
+            truncated = True
+        if n:
+            hit.append("%s=%d" % (pat.strip('"'), n))
+            total += n
+    minutes = max((end_ms - start_ms) / 60000.0, 1e-9)
+    return {"ok": True, "count": total, "per_min": total / minutes,
+            "truncated": truncated, "group": group,
+            "how": ("源侧拒绝 %.2f 次/分（%s）%s"
+                    % (total / minutes, ", ".join(hit),
+                       " ⚠️触到上限，真实值更大" if truncated else ""))
+                   if hit else "源侧日志窗口内无拒绝错误"}
+
+
+
 def edge_flow_measurable(src_label: str, dst_label: str) -> tuple[bool, str]:
     """这条边的**边级流量**能不能测到目标粒度。
 
@@ -1029,15 +1164,58 @@ def run_probe(service: str, label: str, target: str,
         #
         # **任一探针退化即算生效**：某条依赖可能只坏源服务的一个功能
         # （SQS 断了领养挂、首页照常），要求全部退化会永远等不到。
+        #
+        # ── 2026-09-17 修正：业务探针不是唯一、也不是最可靠的生效性判据 ──
+        #
+        # 在 agent 系统上它会**系统性地漏判**。实测：`Delegates` 边被
+        # IAM deny 切断后，源侧日志 379 次 403（6.89 次/分，基线 0.02），
+        # 而业务探针全程判"未退化" —— 因为 Orchestrator 把网关 403 包成
+        # JSON 错误喂给 LLM，LLM 用对话历史编出了一个看起来正常的回答。
+        #
+        # 我据此三次得出"IAM deny 打不断 agent 间委派"，全错。
+        #
+        # 所以现在**两条通道都轮询**，只要有一条动了就算生效：
+        #   · 源侧拒绝速率显著高于基线 -> 注入生效（直接证据）
+        #   · 业务探针退化             -> 注入生效**且**业务受损
+        # 两者的区别决定最终判定是 `confirmed` 还是 `soft`，
+        # 不能混成一个"生效"了事。
+        denial_base = _source_denial_count(
+            src_label, service,
+            int((time.time() - window) * 1000), int(time.time() * 1000))
+        if denial_base.get("ok"):
+            print("   源侧拒绝基线: %s" % denial_base["how"])
+
         effective_at = None
+        effective_by = ""
+        _inject_t0 = time.time()
         for i in range(propagation_budget // 15):
             time.sleep(15)
             probe = _probe_business(service, n=1)
             deg, _brk, note = _biz_degraded(biz_base, probe)
-            print("      [+%3ds] %s" % ((i + 1) * 15, note))
-            if deg:
+
+            # 源侧拒绝证据：与基线比**速率**而不是看有没有 ——
+            # 干净窗口也会有零星 403（实测 0.02 次/分）。
+            dn = _source_denial_count(
+                src_label, service,
+                int(_inject_t0 * 1000), int(time.time() * 1000))
+            base_rate = (denial_base.get("per_min") or 0.0)
+            cur_rate = (dn.get("per_min") or 0.0)
+            denial_up = (dn.get("ok") and cur_rate > 0
+                         and cur_rate >= max(base_rate * 5.0, 0.5))
+
+            print("      [+%3ds] %s | 源侧拒绝 %.2f 次/分%s"
+                  % ((i + 1) * 15, note, cur_rate,
+                     " ✓显著高于基线" if denial_up else ""))
+            if deg or denial_up:
                 effective_at = (i + 1) * 15
-                print("      ✓ 注入已生效（第 %ds）" % effective_at)
+                effective_by = "业务退化" if deg else "源侧拒绝证据"
+                print("      ✓ 注入已生效（第 %ds，依据：%s）"
+                      % (effective_at, effective_by))
+                if denial_up and not deg:
+                    print("        ⚠️ 切断成功但业务未退化 —— "
+                          "这是 soft（依赖不承重），不是 confirmed。")
+                    print("        agent 系统尤其要当心：LLM 会用旧数据"
+                          "编出像样的回答，那是静默错误而非优雅降级。")
                 break
         if effective_at is None:
             print("      ⚠️ %ds 预算内业务未退化 —— 注入可能未生效或消费方有降级路径"

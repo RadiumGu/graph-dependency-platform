@@ -140,36 +140,75 @@ def test_t74_05_共用角色必须拒绝():
 
 
 @pytest.mark.neptune
-def test_t74_06_Delegates边应标注为不可达():
-    """那 3 条 `Delegates AgentRuntime -> AgentRuntime` **应当**带不可达标注。
+def test_t74_06_Delegates边必须可注入():
+    """`Delegates AgentRuntime -> AgentRuntime` 必须判成可注入。
 
-    ⚠️ 本用例 9-17 **反转过方向**，原先断言的是"不该再带阻断标注"。
+    ⚠️ 本用例的方向**反转过两次**。第三版（9-17）的证据与前两版不同类，
+    这段写清楚，免得第四次又反过来。
 
-    反转的理由是三次真跑的结果，不是口径调整：
+    **第一版**：断言"不该再带阻断标注"。依据是 `_agentcore_role_for`
+    能取到角色 —— 那是**能力**证据。
 
-    · `_agentcore_role_for` 能取到角色、deny 策略能加上，
-      `simulate-principal-policy` 也确认语句有效
-      （无 deny -> allowed，加 deny -> explicitDeny）；
-    · **但施加 deny 后委派照常返回 200**，业务探针 300 秒全程不退化。
-      换成调用最频繁的那条边、两个 action 都 deny，结果一样。
+    **第二版**：反转成"应当标注不可达"。依据是三次真跑业务都没退化 ——
+    那是**被欺骗的观测**。
 
-    所以"源侧能解析出角色"**不等于**"这条边能被 IAM deny 切断"。
-    我当时把前者当成了后者的充分条件，才写出原来那个方向。
+    **第三版（本版）**：回到"必须可注入"。依据是**源侧直接证据**：
 
-    曾经写下的"运行时缓存凭证"是错的：IAM 策略评估在服务端每次请求
-    重做，凭证缓存不影响授权决定。真实机制未确证
-    （最可能是 workload identity JWT 而非 SigV4 —— 委派走 httpx
-    而非 botocore，且 CloudTrail 里 GetWorkloadAccessTokenForJWT 持续有量）。
+        读源码：委派用标准 SigV4
+          SigV4Auth(boto3.Session().get_credentials(),
+                    "bedrock-agentcore", region).add_auth(signed)
+        CloudTrail 按 access key 反查：签名身份就是被 deny 的那个角色
+        施加 deny 后源侧运行时日志：
+          "gateway call to" 168 次
+          "403"             379 次 → 6.89 次/分（基线 0.02，413 倍）
+          典型: gateway call to 'adoption' failed: 403 Forbidden
 
-    要再反转回去，需要的是**业务退化的实测证据**，
-    而不是"能加上策略"这类能力证据。
+    **注入一直是生效的。** 第二版之所以看不见，是两条通道同时瞎：
+
+    · 边级流量：委派经网关，X-Ray 里只有一条到
+      `gateway.bedrock-agentcore` 的合流边，测不出目标粒度；
+    · 业务探针：`_via_gateway` 把 403 **包成 JSON 错误字符串返回给
+      LLM**（不抛出），LLM 用对话历史编出看起来正常的回答。
+      探针判据是"是否兜底文案" → 判"未退化"。
+
+    我拿"业务未退化"反推"注入未生效"，而中间那一步
+    （观测有没有能力看见）从没验证过。
+
+    要再反转，需要的是**源侧拒绝速率没有升高**的证据，
+    而不是"业务没退化"。后者在 agent 系统上不构成反证。
     """
     from runner import injectability as inj
     verdict, why = inj.injectability('AgentRuntime', 'AgentRuntime')
-    assert verdict == inj.UNREACHABLE, (
+    assert verdict == inj.INJECTABLE, (
         f'AgentRuntime -> AgentRuntime 判成了 {verdict}（{why}）。\n'
-        f'实测 IAM deny 切不断 agent 间委派 —— '
-        f'若要改回可注入，先拿业务退化的证据。')
+        f'源侧日志已证明 IAM deny 能切断委派（379 次 403）。\n'
+        f'若你因为"业务没退化"想改回不可达 —— 那不是反证，'
+        f'先看 _source_denial_count 的速率。')
+
+
+def test_t74_08_必须有源侧拒绝证据通道():
+    """`_source_denial_count` 必须存在，且必须比速率而不是看有没有。
+
+    这条通道是 agent 委派类边**唯一**可靠的生效性判据：
+    边级流量测不出目标粒度，业务探针被 LLM 的隐式降级欺骗。
+
+    为什么要钉"比速率"：干净窗口也有零星 403（实测 0.02 次/分），
+    看"有没有"会把常态噪声判成注入生效。
+    本仓库 7b889e5 已为 X-Ray 通道做过同样修正，这里不能退回去。
+    """
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parents[1] / 'scripts'
+           / 'verify_via_iam_deny.py').read_text(encoding='utf-8')
+    assert '_source_denial_count' in src, (
+        '源侧拒绝证据通道没了 —— agent 委派类边会退回靠业务探针判生效，'
+        '而那条通道在 agent 系统上系统性漏判。')
+    assert 'per_min' in src, (
+        '源侧拒绝证据没有速率口径 —— '
+        '看计数会把常态噪声（实测 0.02 次/分）判成注入生效。')
+    i = src.index('_source_denial_count')
+    assert 'LLM' in src[i:i + 4000], (
+        '源侧通道的注释里没写清它为什么存在（LLM 会吸收故障）—— '
+        '下一个人会以为业务探针够用，然后重走三次误判。')
 
 
 def test_t74_07_判定器不得import那个脚本():

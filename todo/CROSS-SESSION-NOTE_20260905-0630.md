@@ -1354,3 +1354,119 @@ X-Ray 服务图（近 15min）：
      不是采样规则。
   c) `petsearch` 每次 CreateBucket 是个反模式（应用侧），值不值得提给 demo 应用
      的维护者由你们判断 —— 对本平台的直接影响是它让这条边的成功率通道永久失效。
+
+---
+
+## 2026-09-17 下午 — 三次误判的真相：**LLM 是一个万能的隐式降级路径**
+
+这是本台账目前最重要的一条。前面 09-15 和 09-17 上午两段关于
+"IAM deny 打不断 agent 间委派"的记录**全部作废**，
+连带那条"运行时缓存凭证"的错误解释。
+
+### 真相
+
+读 `one-observability-demo/PetAdoptions/waggle_ai_agents/
+orchestrator_strands/delegate.py`：
+
+```python
+TRANSPORT = os.getenv("AGENT_TRANSPORT", "local")
+
+def delegate(agent, query, user_id=None):
+    if TRANSPORT == "gateway":
+        return _via_gateway(agent, query, user_id)
+    return _in_process(agent, query, user_id)
+
+def _via_gateway(...):
+    SigV4Auth(boto3.Session().get_credentials(),
+              "bedrock-agentcore", config.AWS_REGION).add_auth(signed)
+    try:
+        resp = httpx.post(url, ...); resp.raise_for_status()
+    except Exception as exc:
+        return json.dumps({"error": f"gateway call to '{agent}' failed: {exc}"})
+```
+
+三件事同时确认：
+
+1. **委派用标准 SigV4**，不是 JWT（我上午的猜测也错了）；
+2. CloudTrail 按 access key（`ASIA5PH35QDKIOWMJ2FF`）反查，
+   签名身份就是 `WaggleAIAgents-RoleWaggleAIOrchestrator...` ——
+   **正是我 deny 的那个角色**；
+3. 施加 deny 后源侧运行时日志：
+
+       "gateway call to" 168 次
+       "403"             379 次 → 6.89 次/分（基线 0.02，413 倍）
+       gateway call to 'adoption' failed: Client error '403 Forbidden'
+
+**IAM deny 一直是生效的。委派被切断了 379 次。**
+
+### 为什么我三次都看不见
+
+两条观测通道**同时瞎**，而我没有验证过"观测有没有能力看见"：
+
+· **边级流量**：委派经网关，X-Ray 服务图里只有一条到
+  `gateway.bedrock-agentcore` 的合流边，测不出目标粒度；
+· **业务探针**：那个 `except: return json.dumps({"error": ...})` ——
+  **网关失败被包成一个 JSON 错误字符串返回给 LLM，不抛出**。
+  LLM 收到错误，就用对话历史里的旧信息编出一个看起来完全正常的回答。
+  探针判据是"回答是否为兜底文案"，LLM 编的回答不是兜底文案，
+  于是判"未退化"。
+
+我拿"业务未退化"反推"注入未生效"。**这个反推需要一个前提：
+观测方有能力看见这次故障。那个前提我从没验证。**
+
+### 可迁移的一条（这是本条记录的价值所在）
+
+**在 agent 系统上，"业务功能是否退化"会系统性地漏判依赖故障。**
+
+LLM 是一个万能的隐式降级路径：无论下游工具返回什么错误，
+它都能用上下文历史 + 自身知识编出一个像样的回答。
+传统混沌工程的判据（用户功能是否可用）在这里失效。
+
+而且这个"降级"**不是优雅降级，是静默错误**：
+LLM 回答"Puppy 001 可领养"，而真实数据此刻取不到。
+用户拿到一个自信、流畅、**可能已经过时**的答案，
+比拿到一个明确的错误页危险得多。
+这是 Waggle 的一个真实韧性缺陷，不是特性。
+
+**所以 agent 系统的依赖验证必须有源侧证据通道。**
+已实现 `_source_denial_count()`：读调用方自己记录的失败，
+不经聚合、不经语义解释。并且要**比速率**而不是看有没有 ——
+干净窗口也有 0.02 次/分的常态 403。
+
+### 这一轮的收尾动作
+
+· `AgentRuntime` 加回 `SEVERANCE_METHODS`，带完整证据链注释；
+· `t67_02` / `t74_06` 第三次反转 —— 但这次的证据是源侧 379 次 403，
+  与前两次（能力证据、被欺骗的观测）不同类。两个用例都写清了
+  "要再反转需要什么证据"：源侧拒绝速率没升高，
+  而不是"业务没退化"；
+· 新增 `t74_08` 钉住源侧通道必须存在、必须比速率、
+  注释必须写清 LLM 会吸收故障；
+· `WaggleAIOrchestrator -> WaggleAIAdoption` 判 **soft**
+  （切断成功 + 业务无感 = 该问句下依赖不承重），
+  `evidence_channel='source-denial-log+business-probe'`；
+· 另两条 Delegates 边清掉不可达标注回验证队列。
+
+### 附：内部数据管道类依赖的判据（同日完成）
+
+`neptune-etl-from-xray -> petsite-neptune` 暴露的缺口：
+这类依赖**没有面向用户的消费方**（ETL 的消费者是图谱自己），
+9 个业务探针全部打的是用户服务，拿它们验只会得到"业务未退化" ——
+又是观测方选错，不是依赖不承重。
+
+新增 `chaos/code/runner/pipeline_probes.py`，两个设计决策：
+
+1. **观测方 = 产出物新鲜度**（`max(r.last_seen)`），不是用户功能。
+   刻意不用 `count()`：图谱是 upsert，切断 ETL 不会让边消失，
+   数量对这件事完全不敏感、会永远判"未退化"。
+2. **主动触发**而非等周期。ETL 是 `rate(1 hour)`、实验窗口 180s，
+   等周期意味着实验跑一小时以上且期间任何变更都污染结论。
+   实测：主动 invoke 后 `last_seen` 从 1789626147 前进到 1789626226。
+
+⚠️ 主动触发的前提是**幂等**。`PIPELINE_OUTPUTS` 是白名单，
+只登记已核实幂等的源 —— 纪律与 `SEVERANCE_METHODS` 同源：
+不幂等的源用这个手段会把混沌实验变成数据损坏。
+
+`trigger_and_observe` 把 "invoke 成功但产出未推进" 与 "invoke 失败"
+**分开记**，因为前者正是本次误判的形状（源吞掉了错误）。
+`t76_06` 钉住这一点。

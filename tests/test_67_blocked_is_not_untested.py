@@ -117,23 +117,28 @@ def test_t67_02_injectability_still_flags_agentcore_as_unreachable():
       `neptune-etl-from-xray` 是 Lambda、冷启动重取凭证）。
       所以它从本清单移出，改钉在下面"必须可注入"那一组。
 
-    · `AgentRuntime` 作**目标**已从 `SEVERANCE_METHODS` **撤回** ——
-      三次真跑证明 IAM deny 切不断 agent 间委派：
-      `simulate-principal-policy` 显示 deny 语句本身有效
-      （allowed -> explicitDeny），但施加后委派照常 200。
-      我曾把原因写成"运行时缓存凭证"，**那个解释机制上就是错的**：
-      IAM 策略评估在服务端每次请求重做，凭证缓存不影响授权。
-      真实机制未确证（最可能是 workload identity JWT 而非 SigV4）。
-      按"登记做不到的类型比不登记更糟"的纪律撤回，
-      于是 `AgentRuntime -> AgentRuntime` 回到本清单。
+    · `AgentRuntime` 作**目标**曾被撤回，**9-17 又加回来了**。
+      撤回的理由（"IAM deny 切不断"）是错的，加回的证据强度也不同：
+
+      读源码确认委派用**标准 SigV4**
+      （`SigV4Auth(..., "bedrock-agentcore", region)` + httpx POST），
+      CloudTrail 按 access key 反查确认签名身份就是被 deny 的那个角色，
+      而施加 deny 后源侧日志 **403 出现 379 次**
+      （6.89 次/分，基线 0.02 次/分 → 413 倍）。
+      **注入一直是生效的。**
+
+      三次误判的原因是两条观测通道同时瞎：边级流量测不出目标粒度，
+      而业务探针被 LLM 欺骗 —— `_via_gateway` 把 403 包成 JSON 错误
+      喂给 LLM，LLM 用对话历史编出看起来正常的回答。
+      我拿"业务未退化"反推"注入未生效"，中间那一步从没验证。
+
+      所以 `AgentRuntime -> AgentRuntime` 现在钉在"必须可注入"那一组，
+      且这类边的生效性判据必须用 `_source_denial_count`（源侧拒绝速率）。
     """
     from runner import injectability as inj
 
     for src, dst in (('AgentRuntime', 'AgentTool'),
-                     ('AgentRuntime', 'KnowledgeBase'),
-                     # 9-17 加入：实测 IAM deny 打不断 agent 间委派。
-                     # 详见 scripts/verify_via_iam_deny.py 文件末尾那段实测。
-                     ('AgentRuntime', 'AgentRuntime')):
+                     ('AgentRuntime', 'KnowledgeBase')):
         verdict, why = inj.injectability(src, dst)
         assert verdict == inj.UNREACHABLE, (
             f'{src} -> {dst} 的可注入性判定变成了 {verdict}（{why}）。\n'
@@ -141,24 +146,26 @@ def test_t67_02_injectability_still_flags_agentcore_as_unreachable():
             f'  1. 用 scripts/reclassify_blocked_edges.py 清掉这些边的标注\n'
             f'  2. 让它们回到验证队列\n'
             f'  3. 更新本用例\n'
-            f'不要只改本用例 —— 那会让这些边永久停在「打不到」而实际已可打。\n'
-            f'⚠️ 特别地，若你想把 AgentRuntime 重新加回目标侧：\n'
-            f'   先拿出**业务退化的实测证据**，不要只看'
-            f'simulate-principal-policy 说 explicitDeny —— '
-            f'那一条已经验证过是 explicitDeny，而边照样打得通。'
+            f'不要只改本用例 —— 那会让这些边永久停在「打不到」而实际已可打。'
         )
 
-    # 反向钉住：Lambda -> Neptune 现在**必须**可注入。
-    # 这一条守的是 `NeptuneCluster` 条目与 `_lambda_role_for` 不被拆掉。
-    verdict, why = inj.injectability('LambdaFunction', 'NeptuneCluster')
-    assert verdict == inj.INJECTABLE, (
-        f'LambdaFunction -> NeptuneCluster 退回成 {verdict}（{why}）。\n'
-        f'可能是 SEVERANCE_METHODS 的 NeptuneCluster 条目被删，'
-        f'或 IAM_DENY_SOURCE_LABELS 里的 LambdaFunction 被移除。\n'
-        f'注意：该集群的 IAMDatabaseAuthenticationEnabled 必须为 True，'
-        f'否则 deny neptune-db:* 拦不到任何东西 —— '
-        f'关掉 IAM 认证时应当撤回这个条目，而不是留着一个打空的判定。'
-    )
+    # 反向钉住：这两类现在**必须**可注入。
+    for src, dst, guard in (
+            ('LambdaFunction', 'NeptuneCluster',
+             'NeptuneCluster 条目与 _lambda_role_for'),
+            # 9-17 加回：源侧日志 379 次 403 证明 IAM deny 确实切断了委派。
+            ('AgentRuntime', 'AgentRuntime',
+             'AgentRuntime 条目与 _agentcore_role_for')):
+        verdict, why = inj.injectability(src, dst)
+        assert verdict == inj.INJECTABLE, (
+            f'{src} -> {dst} 退回成 {verdict}（{why}）。\n'
+            f'可能是 {guard} 被拆掉。\n'
+            f'⚠️ 若你是因为"跑了一次业务没退化"而想把它标回不可达：\n'
+            f'   先看源侧日志的拒绝速率（_source_denial_count）。\n'
+            f'   agent 系统上业务探针会系统性漏判 —— LLM 会用旧数据\n'
+            f'   编出像样的回答，那是静默错误而不是"依赖不成立"。\n'
+            f'   这个坑本项目已经踩了三次。'
+        )
 
 
     # 注：这里曾有一条"`AgentRuntime -> AgentRuntime` 必须 INJECTABLE"的
