@@ -140,17 +140,36 @@ def test_t74_05_共用角色必须拒绝():
 
 
 @pytest.mark.neptune
-def test_t74_06_Delegates边已回到验证队列(neptune_rca):
-    """那 3 条 `Delegates AgentRuntime -> AgentRuntime` 不该再带阻断标注。"""
-    rows = neptune_rca.results("""
-MATCH (a:AgentRuntime)-[r:Delegates]->(b:AgentRuntime)
-WHERE r.verify_blocked_class IS NOT NULL
-RETURN a.name AS src, b.name AS dst, r.verify_blocked_class AS k
-""")
-    assert not rows, (
-        f'这些 Delegates 边仍带阻断标注: {rows}\n'
-        f'AgentRuntime 已进 IAM deny 源侧清单（_agentcore_role_for 已实现），'
-        f'它们应回到验证队列。用 scripts/reclassify_blocked_edges.py --apply 清。')
+def test_t74_06_Delegates边应标注为不可达():
+    """那 3 条 `Delegates AgentRuntime -> AgentRuntime` **应当**带不可达标注。
+
+    ⚠️ 本用例 9-17 **反转过方向**，原先断言的是"不该再带阻断标注"。
+
+    反转的理由是三次真跑的结果，不是口径调整：
+
+    · `_agentcore_role_for` 能取到角色、deny 策略能加上，
+      `simulate-principal-policy` 也确认语句有效
+      （无 deny -> allowed，加 deny -> explicitDeny）；
+    · **但施加 deny 后委派照常返回 200**，业务探针 300 秒全程不退化。
+      换成调用最频繁的那条边、两个 action 都 deny，结果一样。
+
+    所以"源侧能解析出角色"**不等于**"这条边能被 IAM deny 切断"。
+    我当时把前者当成了后者的充分条件，才写出原来那个方向。
+
+    曾经写下的"运行时缓存凭证"是错的：IAM 策略评估在服务端每次请求
+    重做，凭证缓存不影响授权决定。真实机制未确证
+    （最可能是 workload identity JWT 而非 SigV4 —— 委派走 httpx
+    而非 botocore，且 CloudTrail 里 GetWorkloadAccessTokenForJWT 持续有量）。
+
+    要再反转回去，需要的是**业务退化的实测证据**，
+    而不是"能加上策略"这类能力证据。
+    """
+    from runner import injectability as inj
+    verdict, why = inj.injectability('AgentRuntime', 'AgentRuntime')
+    assert verdict == inj.UNREACHABLE, (
+        f'AgentRuntime -> AgentRuntime 判成了 {verdict}（{why}）。\n'
+        f'实测 IAM deny 切不断 agent 间委派 —— '
+        f'若要改回可注入，先拿业务退化的证据。')
 
 
 def test_t74_07_判定器不得import那个脚本():

@@ -147,3 +147,33 @@ def test_t75_06_纪律文本不得复制一份():
         '证据纪律文本会变成两份并漂移')
     assert '证据纪律（必须遵守' not in src, (
         '证据纪律文本被复制到了这里 —— 应当 import 而不是复制')
+
+
+def test_t75_08_必须写明开启前提是部署而非环境变量():
+    """`enabled()` 那个开关只有在接入代码已部署时才有意义。
+
+    2026-09-17 实测踩到：
+
+        petsite-rca-engine 代码最后部署于 2026-08-29
+        rca/handler.py 的接入点提交于 2026-09-15
+
+    也就是说**生产 Lambda 里没有 `on_first_alert` 的调用点**。
+    此时给它加 `DEVOPS_AGENT_INVESTIGATE_ENABLED=true` 毫无作用 ——
+    变量会被设上，但没有任何代码路径去读它。
+
+    为什么值得一条门禁守着：这个状态的表现是"没有新 INVESTIGATION task"，
+    而它与"开了但这段时间没有告警"**在数据上完全同形**。
+    误判方向是危险的那一侧 —— 会让人以为闭环已经生效。
+
+    本用例只钉文档，不钉部署状态（部署时间不该进单元测试）。
+    """
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parents[1] / 'rca' / 'actions'
+           / 'devops_agent_trigger.py').read_text(encoding='utf-8')
+    assert '部署' in src and 'deploy.sh' in src, (
+        'devops_agent_trigger.py 里没有写明"开启前提是部署" —— '
+        '下一个人会只加环境变量然后以为闭环已生效。\n'
+        '必须写清：先部署 rca/ 到 petsite-rca-engine，再加环境变量。')
+    assert 'limit=-1' in src, (
+        '没有记录配额实测值 —— '
+        '"配额会耗尽"这个已被推翻的理由会被重新写回来。')

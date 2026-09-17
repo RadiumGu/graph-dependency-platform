@@ -1137,3 +1137,220 @@ SQL/成功率通道，业务证据在另一条通道上。
 
 **可迁移的一条**：见到"单独跑绿、组合跑红"，先怀疑 sys.path，
 而不是怀疑后跑的那个文件有问题。
+
+---
+
+## 2026-09-17 — 撤回一个自己写下的结论，以及三个"能力≠可验证"的新样本
+
+这一段主要是**撤回**。上一段（09-15）末尾我写了一条结论，
+现在证明它在机制上就是错的，而它已经被我写进了代码注释和门禁。
+
+### 撤回：「AgentCore 缓存凭证」解释不了 deny 失效
+
+09-15 我的记录是：IAM deny 语句有效（`simulate-principal-policy`
+显示 allowed → explicitDeny），但施加后 agent 间委派照常 200，
+于是判断「运行时缓存了凭证，策略变更没被重新拉取」。
+
+**那个解释机制上不成立**：IAM 策略评估发生在**服务端**，
+每次请求都按当前策略重新评估。缓存的是凭证（access key + session
+token），不是授权决定。所以凭证缓存**永远**解释不了 deny 失效。
+
+我当时是从脚本那句 `⚠️ 未能刷新凭证` 顺下来的 —— 那句话在集群内服务
+场景是对的（rollout restart 换 Pod），但它说的是**注入手段的完整性**，
+不是**授权为何未生效**。**又一次拿一个答不了这个问题的判据回答它**，
+这已经是本台账里同一个错误的第六次。
+
+真实机制**仍未确证**。最可能是 workload identity JWT 而非 SigV4：
+委派走 httpx 而非 botocore，CloudTrail 里
+`GetWorkloadAccessTokenForJWT` 有持续调用量。
+
+⚠️ 但我必须标注一处**不能当证据**的东西：日志里委派那条 span 没有
+`aws.auth.account.access_key`，而同批 SSM 调用有。这**不是**"没签名"
+的证据 —— 那个属性是 botocore instrumentation 独有的，httpx 本来就不记录。
+我差点拿它当结论。
+
+处理：按「登记做不到的类型比不登记更糟」的纪律，
+把 `AgentRuntime` 从 `SEVERANCE_METHODS` **撤回**，
+那 3 条 `Delegates` 边重新标注 `unreachable`（09-15 我清早了）。
+连带删掉一条钉着错误结论的反向断言、反转 `t74_06` 的方向。
+
+**可迁移的一条**：写下结论前先问它的**机制**站不站得住。
+「IAM 策略评估在哪一侧发生」是可以从原理推出来的，
+不需要等三次真跑才发现。
+
+### 三个新的"能力可达 ≠ 可验证"样本
+
+同一天里撞到三次，形状完全一样：**手段具备，但观测条件不成立。**
+
+**一、`Lambda → NeptuneCluster`（本轮唯一新登记的目标类型）**
+
+前置条件实测都对：`IAMDatabaseAuthenticationEnabled=True`、
+源是 Lambda（冷启动重取凭证）、`neptune-db:*` 能 deny。
+判定器如期从 UNREACHABLE 转成 INJECTABLE。
+
+**但它验不了**：ETL 触发是 `rate(1 hour)`、近 1h 仅 1 次调用，
+而实验窗口 180s —— 窗口内 Lambda 根本不会被调用。
+而且这个 Lambda **没有面向用户的业务消费方**（消费者是图谱自身），
+硬造一个下游探针就是伪造证据。
+
+标注成 `precondition_unmet` 并写清原因。要验它需要**源侧直接观测**：
+加 deny 后主动 invoke 一次看调用是否失败。这是框架目前缺的一类
+——**内部数据管道依赖**没有业务探针意义上的消费方。
+
+**二、`AgentRuntime → AgentTool` / `KnowledgeBase`（9 条，保持不可达）**
+
+上一轮我判断"补条目就能解开"。现在清楚了：它们的源侧机制与
+`Delegates` 完全相同（都经网关），所以**同一个未确证的鉴权问题挡着**。
+补条目只会造出 9 条"判定说能打、实际打不到"的边。
+没补是对的。
+
+**三、告警触发调查：开关的前置是部署，不是环境变量**
+
+    petsite-rca-engine 代码最后部署于 2026-08-29
+    rca/handler.py 的接入点提交于 2026-09-15
+
+**生产 Lambda 里没有那个调用点。** 此时加
+`DEVOPS_AGENT_INVESTIGATE_ENABLED=true` 毫无作用。
+
+危险在于误判方向：这个状态的表现是"没有新 INVESTIGATION task"，
+与"开了但没有告警"**在数据上完全同形**，而它会让人以为闭环已生效。
+加了 `t75_08` 钉住文档必须写明这个前提。
+
+### 顺带推翻两条我自己写的"默认关闭"理由
+
+`DEVOPS_AGENT_INVESTIGATE_ENABLED` 保持默认关闭，但理由只剩一条：
+
+- ~~配额会耗尽~~ → `limit=-1` 无限制（用量 0.76 / 4.90 小时）
+- ~~任务列表被填满~~ → 近 7 天转入 ALARM **5 次**（每天 0.7），
+  当前 0 个在 ALARM，现有 76 条 task **全部终态无堆积**
+- ✓ **调查结论会进 agent 的 system learning** —— 喂进去的告警质量
+  影响它后续判断，而我们还有已知假警报来源。
+  这是**质量**问题，不会因为告警少而消失。
+
+**可迁移的一条**：给一个开关写"默认关闭"的理由时，那个理由本身
+也要有数据。我两次都是凭直觉写的量级担忧，两次都被实测推翻。
+
+---
+
+## 2026-09-17 06:00 — 三件事的判断：两件不该做，第三件被你们的闸门正确拦下
+
+### 一、「给那两个 Lambda 打开 Active 追踪」—— 不该做，前提是错的
+
+预检的诊断是「**可能**未开 Active 追踪」，那是个假设。实查：
+
+    neptune-etl-from-xray        Active      ← 早就开着
+    neptune-etl-from-aws         Active
+    neptune-etl-from-deepflow    Active
+    neptune-etl-trigger          Active
+    neptune-etl-from-agentcore   PassThrough
+    neptune-etl-from-appsignals  PassThrough
+
+真正缺的是 **instrumentation**。层 20 的顶层包只有
+`certifi / charset_normalizer / idna / requests / urllib3` ——
+**没有 `aws_xray_sdk`，没有 `opentelemetry`，没有 powertools**。
+
+Lambda 的 `Active` 只让 AWS 产生**函数自身的 segment**；下游调用要有 SDK 打点
+才会产生 subsegment。实测 `neptune-etl-from-xray` 的 trace：
+
+    segment neptune-etl-from-xray  origin=AWS::Lambda
+       └ Attempt #1 / Dwell Time          ← Lambda 服务自己产生的
+    segment neptune-etl-from-xray  origin=AWS::Lambda::Function
+       └ Init / Overhead                  ← 同样是服务产生的
+
+**一个下游 subsegment 都没有**（既无 `namespace=aws` 也无 `namespace=remote`）。
+所以 X-Ray 服务图里当然没有这条边 —— 这不是采样问题，是**根本没打点**。
+
+**而且那 2 条边不在承重清单上。** 它们是
+`neptune-etl-from-xray -> petsite-neptune` 与 `-> xray`，
+属于「观测者自身的基础设施」，验了不改变任何决策结论。
+为它们改 5 个生产 Lambda（加 SDK 到层 + 代码调 patch_all，或挂 ADOT 层 +
+设 `AWS_LAMBDA_EXEC_WRAPPER`）不划算。
+
+**真正值得看的是**：预检「测不出」的 19 条里有 **10 条是承重的**，
+它们的源是应用服务（petsite / payforadoption / pethistory / petfood / petsearch），
+不是 ETL Lambda。那些服务在 X-Ray 里是可见的（petsite→petsearch 有边），
+所以是**部分打点** —— HTTP 有、AWS SDK 调用没有。这才是提高覆盖率的主战场。
+
+### 二、「加一条定向采样规则」—— 不该做，它解决不了这个问题
+
+**采样只决定已发出的 span 记不记，它变不出从未发出的 span。**
+上一轮我把两个失败模式混成了一个，这里更正：
+
+    concierge 那类   span 发出了（runtime 有 OTel），但没被采样   → 采样是解法
+    ETL Lambda 那类  span 从未发出（无 instrumentation）          → 打点是解法
+    应用服务那 10 条 部分打点（HTTP 有、AWS SDK 无）              → 打点是解法
+
+19 条测不出的边属于后两类。加采样规则对它们**零效果**，只增加成本。
+
+（定向规则本身的成本判断我也更正一下：它覆盖的是低频服务，
+所以「高采样率」在这里几乎不花钱 —— 但既然解决不了问题，便宜也不该做。）
+
+### 三、「只打 petsearch → S3」—— 跑了，你们的基线闸门正确拦下
+
+做法：`chaos/code/runner/*` 现已全部提交，只有 `scripts/verify_via_iam_deny.py`
+仍是未提交状态。所以我用 `git show HEAD:` 导出**已提交版**到 scratch 去跑，
+**完全没碰你们的工作副本**。
+
+探针的输出：
+
+    可加 deny 的角色: ServicesEks2-searchserviceServiceAccountRole588AF64-...
+      （由 ServiceAccount search-service-sa 的注解取得）
+    deny 语句: s3:* on arn:aws:s3:::serviceseks2-s3bucketpetadoption... (+/*)
+
+    ── 1. 基线 ──
+       被测边: {'success_rate': 0.0, 'total_requests': 138, 'p99_ms': 423.8}
+       业务探针: home=[26, 26, 26]
+    ✗ 基线成功率 0.00% < 下限 95% —— 拒绝开跑。
+
+**闸门是对的，而且它抓到了一个真实状况。** 探针给的常见原因是「上次实验的 deny
+仍在生效」，我查了：`searchserviceServiceAccountRoleDefaultPolicy608C0257` 里
+**没有任何 Deny 语句** —— 不是实验残留。
+
+X-Ray 服务图（近 15min）：
+
+    PetSearch → serviceseks2-s3bucketpetadoption...   total=634  ok=0  err=634  fault=0
+    PetSearch → ServicesEks2-ddbpetadoption...        total=4535 ok=4535 err=0
+    PetSearch → STS                                   total=4    ok=4    err=0
+
+**634 次全是 4xx，零 5xx，零成功。** 解码 trace 后看到原因：
+
+    S3  op=CreateBucket  status=409
+        BucketAlreadyOwnedByYouException
+        "Your previous request to create the named bucket succeeded and you alr..."
+
+`petsearch` 每次都去 `CreateBucket`，桶已存在于是 409。**应用本身是好的**
+（DynamoDB Scan 200、业务探针 home=26 稳定）。
+
+### 这条边引出一个建模问题，比注入本身更值得记
+
+`petsearch → S3` 这条边**观测充足（634 次）却不可验证**，而且它是承重的
+（S3 在割点关联路径上，有 3 条承重待测边）。原因有两层：
+
+1. **成功率通道恒为 0%**，所以 deny 注入产生不了可测的 delta。
+   这与你们在 `74a9369` 给 `petsite → StepFunction` 换证据通道是同一类问题
+   （那次是「X-Ray 结构性看不见」，这次是「看得见但基线已坏」）。
+
+2. **更根本的：这条边的真实数据路径不在这些调用里。** 观测到的 S3 API 流量
+   全部是失败的 CreateBucket；而图片是通过**预签名 URL** 交付的
+   （早先在 orchestrator 应答里见过 `...s3.amazonaws.com/puppies/p10.jpg?
+   X-Amz-Security-Token=...`），预签名是本地密码学操作、**不调用 S3 API**，
+   浏览器直取，因此永远不会出现在 petsearch 的 trace 里。
+
+   ⚠️ 这一层我标为**推断**：证据是 `ok=0`（无任何成功的 S3 API 调用）+
+   解码出的两条 trace 全是 CreateBucket + 观测到的 URL 是预签名的。
+   我没有读 petsearch 的源码（它是外部 demo 应用）。
+
+   如果这个推断成立，那么「给 petsearch 的角色加 s3:* deny」会切断的是
+   CreateBucket（无用户影响），而预签名 URL 的浏览器请求按签名者权限评估、
+   **也会被 deny 挡住** —— 也就是说这个手段其实能影响真实路径，
+   但**观测通道看不到**（浏览器请求不经 petsearch）。
+   要验它得靠业务探针（搜索结果里的图片还能不能取到），不是边级成功率。
+
+### 建议的下一步（都不是「多跑注入」）
+
+  a) 给 `petsearch → S3` 换证据通道：业务探针为主（图片可取性），
+     边级成功率为辅。参照 `74a9369` 的做法。
+  b) 那 10 条承重的「测不出」边，主战场是给应用服务的 AWS SDK 调用补打点，
+     不是采样规则。
+  c) `petsearch` 每次 CreateBucket 是个反模式（应用侧），值不值得提给 demo 应用
+     的维护者由你们判断 —— 对本平台的直接影响是它让这条边的成功率通道永久失效。

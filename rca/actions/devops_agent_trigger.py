@@ -35,30 +35,53 @@ alarm-driven investigations [are] invoked by a Lambda function"。
 纪律文本与 `scripts/devops_agent_investigate.py` 同源，从那里 import ——
 不在这里复制一份。本仓库为「同类清单各处一份」付过代价。
 
-## 默认关闭，但理由不是"配额会耗尽"
+## ⚠️ 开启它的真实前置是**部署**，不是环境变量
+
+2026-09-17 实测发现的坑，写在最前面因为它会让人白忙一场：
+
+    petsite-rca-engine 的代码最后部署于 2026-08-29
+    本模块的接入点（rca/handler.py）提交于 2026-09-15
+
+**生产 Lambda 里没有 `on_first_alert` 的调用点。** 此时给它加
+`DEVOPS_AGENT_INVESTIGATE_ENABLED=true` **一点作用都没有** ——
+环境变量会被读到，但没有任何代码路径去读它。
+
+所以"打开开关"的正确顺序是：
+
+1. 先把 `rca/` 部署到 `petsite-rca-engine`（`rca/deploy.sh`）；
+2. 再加环境变量；
+3. 然后才能观察 backlog task 的增长。
+
+只做第 2 步会得到一个"以为开了其实没开"的状态 ——
+而它的表现（没有新 INVESTIGATION task）与"开了但没有告警"完全一样，
+在数据上分不开。
+
+## 默认关闭，但两条理由里有一条已被实测推翻
 
 `DEVOPS_AGENT_INVESTIGATE_ENABLED` 默认 `false`。
 
-第一版写的理由是"会消耗 agent task 配额，配额耗尽后真实故障就发不出调查"。
-**实测（2026-09-15）那个理由不成立**：
+**第一版理由「会消耗 agent task 配额」不成立**：
 
     aws devops-agent get-account-usage --region ap-northeast-1
-    monthlyAccountInvestigationHours: limit=-1  usage=0.537
-    monthlyAccountSystemLearningHours: limit=-1 usage=4.040
-    （usagePeriod 09-01 ~ 09-15）
+    monthlyAccountInvestigationHours:  limit=-1  usage=0.76
+    monthlyAccountSystemLearningHours: limit=-1  usage=4.90
 
-`limit=-1` 是**无限制**，半个月只用掉 0.54 调查小时。
+`limit=-1` 是无限制。
 
-保持默认关闭的真实理由改成两条：
+**第二版理由「任务列表会被真实告警填满」也不成立**（09-17 量化）：
 
-1. **每次首告警都会创建一个 backlog task**，任务列表会被真实告警流量填满，
-   而人要在里面找自己关心的那条。开之前应先确认告警噪声水平 ——
-   `list-backlog-tasks` 能看当前积压。
-2. **调查结论会进 agent 的 system learning**（上面 4.04 小时那项）。
-   喂进去的告警质量直接影响它后续的判断，
-   而我们的告警里还有已知的假警报来源（实验期互锁刚在 9531ee0 修好）。
+    近 7 天转入 ALARM 5 次 => 平均每天约 0.7 次
+    当前处于 ALARM 的告警 0 个
+    现有 backlog task 76 条，**全部终态**
+      （54 SYSTEM_LEARNING + 16 INVESTIGATION + 5 EVALUATION，无堆积）
 
-两条都是"先看清再开"，不是"不能开"。
+每天 ≤1 个 INVESTIGATION，agent 完全消化得过来。
+
+**剩下唯一站得住的理由**：调查结论会进 agent 的 system learning
+（上面 4.90 小时那项）。喂进去的告警质量直接影响它后续的判断，
+而我们的告警里还有已知的假警报来源。这是**质量**问题，
+不是量的问题 —— 所以它不会因为告警少而消失。
+
 """
 from __future__ import annotations
 

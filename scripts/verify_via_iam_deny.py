@@ -139,54 +139,105 @@ SEVERANCE_METHODS: dict[str, dict] = {
         "also": [],
         "xray_types": (),
     },
-    "AgentRuntime": {
-        # ⚠️⚠️ **实测：这一项目前验不出来**（2026-09-15，三次真跑）。
+    "NeptuneCluster": {
+        # 2026-09-17 加入。前置条件已实测确认，不是照文档猜的：
         #
-        # 保留它是因为 IAM 层面完全有效，缺的是"让运行时重新取凭证"的手段。
-        # 详见下面的三段实测，别再重跑一遍。
+        #   aws neptune describe-db-clusters
+        #     petsite-neptune  IAMDatabaseAuthenticationEnabled = True   ✓
+        #     DbClusterResourceId = cluster-TPNY7IXPX2YQ5ZIAPC5Y6EJRRM
         #
-        # ## 一、deny 的 action 选错过（已修）
+        # IAM 认证必须为 True 才有意义 —— 关着的时候 Neptune 靠
+        # VPC/安全组鉴权，deny `neptune-db:*` 一个都拦不到，
+        # 判定会说"能打"而实际打空。同账号另两个集群就是 False。
         #
-        # 第一版只 deny `InvokeAgentRuntime`。业务毫无变化。
-        # 该角色的内联策略同时授了两个 action，资源前缀不同：
-        #     bedrock-agentcore:InvokeAgentRuntime -> arn:...:*
-        #     bedrock-agentcore:InvokeGateway      -> arn:...:gateway/*
-        # 而 X-Ray 显示 Orchestrator 的出边指向
-        # `waggleaigateway-...gateway.bedrock-agentcore...` —— **委派经网关**。
-        # 与本仓库既有记载一致（8fa841d / 2be2048：agent 间调用经网关）。
-        # 我读过那条记载，却只把它用在观测侧、没用在 deny 的 action 选择上。
+        # ## 为什么 arn 用 `*` 而不是精确 ARN
         #
-        # ## 二、被测边选错过（不是代码问题，是用法）
+        # Neptune 的 IAM 资源 ARN 用 **DbClusterResourceId**
+        # （`cluster-TPNY7...`）而不是集群名（`petsite-neptune`）：
+        #     arn:aws:neptune-db:<region>:<acct>:<DbClusterResourceId>/*
+        # 而本表的 `{name}` 填的是**图谱节点名**，即集群名 ——
+        # 拿它拼 ARN 会得到一个不存在的资源，deny 静默失效。
         #
-        # 探针问「Which dogs are available for adoption?」会被路由到
-        # `WaggleAIAdoption`（26 次调用），而我先验的是
-        # `WaggleAINutrition`（5 次）—— **切断了一条被测路径上不存在的委派**。
-        # 验 Delegates 边必须让探针的问题落在那条委派上。
+        # 本表是模块级 dict 字面量（tests/test_73 用 AST 钉住，不能改成
+        # 函数调用），没法在条目里现查 ResourceId。用 `*` 是**取舍**
+        # 而非偷懒：deny 只加在被测那一个 Lambda 的执行角色上、
+        # 且实验后立即删除，半径就是这个 Lambda 自己。
         #
-        # ## 三、真正的卡点：AgentCore 缓存凭证
+        # 要精确化的话，改法是在 `_deny_document` 里为这个 label 加一次
+        # `describe-db-clusters` 反查，而不是把查询塞进这张表。
         #
-        # 两个 action 都 deny、改验最忙的那条边之后，业务**仍然**不退化。
-        # 用 `iam simulate-principal-policy` 直接问 IAM：
-        #     无 deny                -> allowed
-        #     加 deny Resource=*     -> explicitDeny
-        # **IAM 层面完全有效。** 所以 deny 生效、业务不退化，只剩一个解释：
-        # AgentCore 运行时缓存了凭证，策略变更在实验窗口内没被重新拉取。
+        # ## action 选择
         #
-        # 脚本自己那条告警说的就是这件事：
-        #     ⚠️ 取不到 <runtime> 的 K8s 工作负载名，未能刷新凭证
-        # 对集群内服务它会 `rollout restart` 强制重取凭证；
-        # 对 AgentCore 托管运行时**没有等价手段** ——
-        # `update-agent-runtime` 可能可以（未验证，会改生产配置）。
-        #
-        # 所以这类边的现状是「有手段但缺一步」，不是「不可注入」。
-        # 补上刷新凭证的路径才算真的解开。
-        "actions": ["bedrock-agentcore:InvokeAgentRuntime",
-                    "bedrock-agentcore:InvokeGateway"],
-        "arn": "*",          # runtime 与 gateway ARN 形态不同，用 * 覆盖两者
+        # `neptune-db:*` 覆盖 connect 与三个 *DataViaQuery。
+        # 只 deny `connect` 不稳：已建立的连接可能复用。
+        # 源侧 `LambdaFunction` 的角色解析已在 f2838b6 实现、有
+        # tests/test_74 门禁；Lambda 冷启动重取凭证，
+        # 不存在 AgentCore 那种"deny 有效但打不到"的问题（见文件末尾）。
+        "actions": ["neptune-db:*"],
+        "arn": "*",
         "also": [],
-        "xray_types": ("AWS::BedrockAgentCore",),
+        "xray_types": ("AWS::Neptune", "AWS::NeptuneCluster"),
     },
 }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 为什么 `AgentRuntime` **不在**上面这张表里（2026-09-15 三次真跑 + 09-17 复盘）
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# 它曾经登记过。撤掉是因为**实测切不断**，而留着一个"判定说能打、真打
+# 打不到"的条目，比不登记更糟 —— 判定器会把这类边放回验证队列，
+# 每个接手的人都要重跑一遍才发现打空。
+#
+# ## 已确证的事实
+#
+# 1. **deny 语句本身在 IAM 层面完全有效。** 用 simulate-principal-policy
+#    对真实网关 ARN 验证：
+#        无 deny                -> allowed
+#        加 deny Resource=*     -> explicitDeny
+#
+# 2. **施加 deny 后委派照常成功。** 三次真跑（含两个 action 都 deny、
+#    换成调用最频繁的那条边），业务探针 300 秒内全程不退化。
+#    运行时日志里那次调用是：
+#        scope=httpx  POST .../gateway.bedrock-agentcore.../adoption/invocations
+#        http.status_code=200
+#
+# 3. **AWS 文档确认入站 IAM 授权用的就是 `InvokeGateway`**，
+#    而该网关 `authorizerType = AWS_IAM`。所以 action 名没选错。
+#
+# ## 一个必须撤回的错误结论
+#
+# 我在 09-15 把原因写成「AgentCore 运行时缓存凭证，策略变更没被重新拉取」。
+# **那个解释在机制上就是错的**：SigV4 凭证缓存不影响授权 ——
+# IAM 策略评估发生在**服务端**，每次请求都按当前策略重新评估。
+# 缓存的是凭证（access key + session token），不是授权决定。
+# 所以凭证缓存永远解释不了 deny 失效。
+#
+# 当时是从脚本那句 `⚠️ 未能刷新凭证` 顺下来的 —— 那句话在集群内服务
+# 场景是对的（rollout restart 换 Pod），但它说的是**注入手段的完整性**，
+# 不是**授权为何未生效**。又一次拿一个答不了这个问题的判据回答它。
+#
+# ## 尚未确证的部分（诚实标注）
+#
+# 委派究竟用什么鉴权，没有直接证据。最可能是 workload identity JWT
+# 而非 SigV4：CloudTrail 里 `GetWorkloadAccessTokenForJWT` 有持续调用，
+# 且委派走 httpx 而非 botocore。若是 Bearer token，
+# deny 一个 IAM action 自然打不到，而已签发的 token 在有效期内继续可用。
+#
+# ⚠️ 但注意：httpx 的 OTel instrumentation **本来就不记录** `aws.auth.*`
+# 属性（那是 botocore instrumentation 独有的），所以「日志里没有
+# access_key」**不能**作为「没有 SigV4 签名」的证据。要确证需要读
+# Orchestrator 的源码或抓请求头。
+#
+# ## 所以这类边现在是什么状态
+#
+# `Delegates AgentRuntime -> AgentRuntime` 与 `InvokesTool -> AgentTool`
+# 回到 `blocked_unreachable`：**我们已知的手段都切不断它**。
+# 那是诚实的"没有手段"，不是"有手段但缺一步"。
+#
+# 要真正解开，得先回答上面那个未确证的问题。可行的下一步：
+#   · 读 Orchestrator 源码看它怎么构造那个 httpx 请求；
+#   · 若确认是 JWT，切断点应在 workload identity 而非 IAM action。
+
 
 #: 内联策略名。固定前缀便于识别与清理遗留。
 POLICY_PREFIX = "ChaosDenyProbe"

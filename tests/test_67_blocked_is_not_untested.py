@@ -105,15 +105,35 @@ def test_t67_02_injectability_still_flags_agentcore_as_unreachable():
     于是 `AgentRuntime` 进了源侧清单，那 3 条边**真的**可注入了，已清标注
     （留痕 `todo/reclassified-blocked-edges_20260915-0924.json`）。
 
-    留下来的三类是**目标侧**打不到：`AgentTool` / `KnowledgeBase` /
-    `NeptuneCluster` 都不在 `SEVERANCE_METHODS` 里。
-    要解开得往那张表加条目，不是往源侧清单加。
+    留下来的两类是**目标侧**打不到：`AgentTool` / `KnowledgeBase`
+    都不在 `SEVERANCE_METHODS` 里。要解开得往那张表加条目，
+    不是往源侧清单加。
+
+    **9-17 第四次（本次修正，两个方向都动了）**：
+
+    · `NeptuneCluster` **已加入** `SEVERANCE_METHODS` ——
+      前置条件实测确认（`petsite-neptune` 的
+      `IAMDatabaseAuthenticationEnabled = True`，源
+      `neptune-etl-from-xray` 是 Lambda、冷启动重取凭证）。
+      所以它从本清单移出，改钉在下面"必须可注入"那一组。
+
+    · `AgentRuntime` 作**目标**已从 `SEVERANCE_METHODS` **撤回** ——
+      三次真跑证明 IAM deny 切不断 agent 间委派：
+      `simulate-principal-policy` 显示 deny 语句本身有效
+      （allowed -> explicitDeny），但施加后委派照常 200。
+      我曾把原因写成"运行时缓存凭证"，**那个解释机制上就是错的**：
+      IAM 策略评估在服务端每次请求重做，凭证缓存不影响授权。
+      真实机制未确证（最可能是 workload identity JWT 而非 SigV4）。
+      按"登记做不到的类型比不登记更糟"的纪律撤回，
+      于是 `AgentRuntime -> AgentRuntime` 回到本清单。
     """
     from runner import injectability as inj
 
     for src, dst in (('AgentRuntime', 'AgentTool'),
                      ('AgentRuntime', 'KnowledgeBase'),
-                     ('LambdaFunction', 'NeptuneCluster')):
+                     # 9-17 加入：实测 IAM deny 打不断 agent 间委派。
+                     # 详见 scripts/verify_via_iam_deny.py 文件末尾那段实测。
+                     ('AgentRuntime', 'AgentRuntime')):
         verdict, why = inj.injectability(src, dst)
         assert verdict == inj.UNREACHABLE, (
             f'{src} -> {dst} 的可注入性判定变成了 {verdict}（{why}）。\n'
@@ -121,17 +141,31 @@ def test_t67_02_injectability_still_flags_agentcore_as_unreachable():
             f'  1. 用 scripts/reclassify_blocked_edges.py 清掉这些边的标注\n'
             f'  2. 让它们回到验证队列\n'
             f'  3. 更新本用例\n'
-            f'不要只改本用例 —— 那会让这些边永久停在「打不到」而实际已可打。'
+            f'不要只改本用例 —— 那会让这些边永久停在「打不到」而实际已可打。\n'
+            f'⚠️ 特别地，若你想把 AgentRuntime 重新加回目标侧：\n'
+            f'   先拿出**业务退化的实测证据**，不要只看'
+            f'simulate-principal-policy 说 explicitDeny —— '
+            f'那一条已经验证过是 explicitDeny，而边照样打得通。'
         )
 
-    # 反向钉住：AgentRuntime 之间的 Delegates 现在**必须**可注入。
-    # 这一条守的是 `_agentcore_role_for` 不被拆掉。
-    verdict, why = inj.injectability('AgentRuntime', 'AgentRuntime')
+    # 反向钉住：Lambda -> Neptune 现在**必须**可注入。
+    # 这一条守的是 `NeptuneCluster` 条目与 `_lambda_role_for` 不被拆掉。
+    verdict, why = inj.injectability('LambdaFunction', 'NeptuneCluster')
     assert verdict == inj.INJECTABLE, (
-        f'AgentRuntime -> AgentRuntime 退回成 {verdict}（{why}）。\n'
-        f'可能是 IAM_DENY_SOURCE_LABELS 里的 AgentRuntime 被移除，'
-        f'或 scripts/verify_via_iam_deny.py 的 _agentcore_role_for 被拆掉。\n'
-        f'那会让 3 条 Delegates 边重新被判成永久不可达。')
+        f'LambdaFunction -> NeptuneCluster 退回成 {verdict}（{why}）。\n'
+        f'可能是 SEVERANCE_METHODS 的 NeptuneCluster 条目被删，'
+        f'或 IAM_DENY_SOURCE_LABELS 里的 LambdaFunction 被移除。\n'
+        f'注意：该集群的 IAMDatabaseAuthenticationEnabled 必须为 True，'
+        f'否则 deny neptune-db:* 拦不到任何东西 —— '
+        f'关掉 IAM 认证时应当撤回这个条目，而不是留着一个打空的判定。'
+    )
+
+
+    # 注：这里曾有一条"`AgentRuntime -> AgentRuntime` 必须 INJECTABLE"的
+    # 反向断言，用来守 `_agentcore_role_for` 不被拆掉。9-17 删除 ——
+    # 它钉的是一个**被实测推翻**的结论（见上面 docstring 第四次）。
+    # `_agentcore_role_for` 本身仍有 tests/test_74 守着源侧解析，
+    # 不需要靠一条错误的可注入性断言来保护。
 
 
 def test_t67_02b_IAM_deny_轴必须两侧都判():
