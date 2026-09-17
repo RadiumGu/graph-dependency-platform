@@ -490,6 +490,41 @@ def reset_dependency_class(edge_id: str) -> bool:
     return True
 
 
+def retract_assessability(edge_id: str, reason: str) -> bool:
+    """撤回**可评估性**分级 —— 条件变了，分级必须能收回。
+
+    ## 为什么必须有这条路径
+
+    `verify_assessability` 记的是「这条边为什么（不）能靠切断实验拿到
+    confirmed」。那些理由里有一部分是**可整改的状态**，不是永久属性：
+
+        already_failing  —— 依赖当前 100% 失效，切不断已经断的东西。
+                            权限补上之后这条理由就不成立了。
+        platform_pull    —— 若改成由应用自己拉镜像，也会变。
+
+    没有撤回路径的分类字段会**沉淀成错的**：本仓库已经为此写过两个撤回脚本
+    （`retract_false_soft_verdicts.py` / `reclassify_blocked_edges.py`），
+    起因就是 `soft` 被错写而当时没有收回的手段。这里从一开始就配上。
+
+    与 `reset_dependency_class` 的区别：那个字段有既定中性值
+    `unclassified`（属性缺失与「没分级」在查询上无法区分），
+    而本字段**空即未分类**是自然语义，所以这里是真的删属性，
+    但把撤回理由留在 `verify_assessability_retracted` 上 ——
+    删得无痕会让人以为从来没分过级，而分级过又被撤回是两件不同的事。
+    """
+    rs = str(reason).replace("'", "").replace("\\", "")[:300]
+    q = ("g.E('%s')"
+         ".property('verify_assessability_retracted', '%s')"
+         ".properties('verify_assessability', 'verify_assessability_reason')"
+         ".drop()" % (edge_id, rs))
+    try:
+        query_gremlin_parsed(q)
+    except Exception as e:
+        logger.error("撤回可评估性失败 edge=%s: %s", edge_id, e)
+        return False
+    return True
+
+
 def coverage(now_epoch: int | None = None) -> dict:
     """边级验证覆盖度 —— 哪些依赖边从未被任何实验验证过。
 
