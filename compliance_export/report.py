@@ -624,6 +624,41 @@ def _limitations(snap, bd: Breakdown, tn: _TableNumberer) -> str:
         "",
     ]
 
+    # ── 分母里的粒度重复：这个数字本身需要限定 ──
+    #
+    # 同一条依赖会被两条边表示，因为发现管道落在不同粒度上（端点级
+    # `AWSServiceEndpoint:sns` vs 资源级 `SNSTopic:…`）。两条都是真的，
+    # 但它们不是两个依赖 —— 分母算两行、只给一次学分。
+    #
+    # 为什么写在这里而不是单开一节：这是对 11.1 那个数字的**直接限定**，
+    # 披露必须跟着被限定的指标走。读者看到覆盖率就该同时看到它的口径缺陷，
+    # 而不是翻到后面某节才发现分母是虚高的。
+    #
+    # 数字全部现算。**不要改成手写** —— 本文件的既定教训是手写的披露会过期。
+    dup_rows = [r for r in snap.function_mapping
+                if (r.get("verify_assessability") or "") == "granularity_duplicate"]
+    if dup_rows:
+        # B 组（判定落在粗粒度那侧、细粒度是空）**拒绝移出分母** ——
+        # 移出会把真跑过实验采集来的事实从分母里藏掉。理由串里有标记。
+        pending = [r for r in dup_rows
+                   if "拒绝移出分母" in (r.get("verify_assessability_reason") or "")]
+        n_dup, n_pending = len(dup_rows), len(pending)
+        n_excl = n_dup - n_pending
+        dedup_total = bd.total - n_excl
+        dedup_pct = ("%.0f%%" % (100.0 * n_conf / dedup_total)) if dedup_total else "—"
+        lines += [
+            "**11.1a 上述分母含 %d 条粒度重复，去重后覆盖率为 %s（%d/%d）。** "
+            "同一条依赖被两条边表示（端点级 `AWSServiceEndpoint` 与资源级资源节点），"
+            "两条都为真但不是两个依赖，分母因此虚高。其中 %d 条可从可评估分母移出；"
+            "另 %d 条**拒绝移出** —— 这些边的判定恰好落在粗粒度那一侧而细粒度为空，"
+            "移出会把已采集到的实测结论从分母里藏掉。"
+            "该 %d 条的整改动作是把证据归并到资源粒度那条边，"
+            "属语义搬迁，须逐条确认切断手段的作用域是否适用于资源粒度，"
+            "不做自动归并。"
+            % (n_dup, dedup_pct, n_conf, dedup_total, n_excl, n_pending, n_pending),
+            "",
+        ]
+
     # ── 证据来源缺口：比覆盖率数字更容易被审查挑到 ──
     #
     # 「16 条已验证」这个数字会被读成 16 条同等强度的证据。实际不是：

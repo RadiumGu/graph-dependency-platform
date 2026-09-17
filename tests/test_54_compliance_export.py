@@ -752,3 +752,89 @@ def test_m19_三个轴不许合并到一个字段():
             "%s 写入了但查询没取 —— 与 §6 那次「每条 confirmed 都渲染成同一句」"
             "是同一个缺陷：落在合规产物上的字段，写入端与读取端必须成对出现。"
             % field)
+
+def _strip_comments(text):
+    """先剥注释行再匹配。
+
+    解释性注释常需**引用**被禁的写法来说明为什么禁 —— 判据会撞在自己的
+    说明上。本仓库的门禁假阳性五次里有多次是这个原因。
+    """
+    return "\n".join(ln for ln in text.splitlines()
+                      if not ln.lstrip().startswith("#"))
+
+
+def test_t54_granularity_duplicate_不得写进_verify_status():
+    """影子关系不是证据陈述，必须走 verify_assessability。
+
+    `verify_status` 回答「取到了什么证据」。「这条边是另一条边的重复」不是
+    证据，塞进去就是又一次把两套轴挤进一个字段 —— 本仓库为此付过两次代价
+    （verify_evidence_channel 混轴、verify_dependency_class 被写进 platform_pull，
+    后者有 DR 影响面分析这个下游消费者，专门有两个撤回脚本存在）。
+    """
+    src = pathlib.Path("scripts/mark_granularity_duplicates.py").read_text(
+        encoding="utf-8")
+    code = _strip_comments(src)
+    assert "write_assessability" in code, "没有走可评估性写入器"
+    assert "write_verdict" not in code, (
+        "影子边标记不得调用 write_verdict —— 那会写 verify_status")
+    # 判据匹配**写入形态**，不枚举读取形态。
+    #
+    # 第一版写成「排除掉已知的 r.get('verify_status') 后不得再出现」，
+    # 结果撞在 `p.get('verify_status')`（对 peer 取值）上 —— 假阳性。
+    # 那是本仓库第六次同族错误：判据切了个语法片段而不是表达意图。
+    # 意图是「不许**写**」，所以直接找写的形态。
+    for write_form in (".property('verify_status'",
+                       '.property("verify_status"',
+                       "'verify_status':", '"verify_status":'):
+        assert write_form not in code, (
+            "出现了 verify_status 的写入形态 %r —— "
+            "影子关系不是证据陈述" % write_form)
+
+
+def test_t54_无资源节点类型的端点边不得判为影子():
+    """ssm / sts / xray 的端点边是那条依赖**唯一的表示**，不是重复。
+
+    图谱里没有对应的资源级节点类型，误标会把 5 条真实的唯一边移出分母
+    （实测这三个端点名下正好有 5 条）。
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_mgd", "scripts/mark_granularity_duplicates.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    for ep in ("ssm", "sts", "xray"):
+        assert ep in m._NO_RESOURCE_NODE, "%s 未列入无资源节点类型" % ep
+        assert ep not in m.EP_TO_RESOURCE_LABEL, (
+            "%s 同时出现在两张表里，判据会自相矛盾" % ep)
+    # 造数据：端点边 + 一条同源的资源边，但端点是 ssm -> 不应判为影子
+    rows = [{"service": "svc", "target": "ssm",
+             "target_label": "AWSServiceEndpoint", "verify_status": ""},
+            {"service": "svc", "target": "tbl",
+             "target_label": "DynamoDBTable", "verify_status": "confirmed"}]
+    g = m.find_shadows(rows)
+    assert not g["A"] and not g["B"] and not g["C"], (
+        "ssm 端点边被误判为影子：%r" % g)
+
+
+def test_t54_判定落在粗粒度的影子边不得移出分母():
+    """B 组拒绝排除 —— 移出会把实测结论从分母里藏掉。
+
+    `petsearch -> s3` 的 inconclusive 是**真跑过实验采集来的事实**，
+    本仓库的不变式是它不能被源码审计覆盖、也不能被悄悄移出分母。
+    """
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_mgd", "scripts/mark_granularity_duplicates.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    rows = [{"service": "petsearch", "target": "s3",
+             "target_label": "AWSServiceEndpoint", "verify_status": "inconclusive"},
+            {"service": "petsearch", "target": "bucket",
+             "target_label": "S3Bucket", "verify_status": ""}]
+    g = m.find_shadows(rows)
+    assert len(g["B"]) == 1, "判定在粗粒度那侧的影子边未归入 B 组：%r" % g
+    assert not g["A"] and not g["C"], "B 组被误归入可排除组"
+    # 报告里必须能看出这一条拒绝排除
+    rpt = pathlib.Path("compliance_export/report.py").read_text(encoding="utf-8")
+    assert "拒绝移出分母" in rpt, (
+        "报告没有据以识别 B 组的标记串 —— 去重口径会把它一起排除")

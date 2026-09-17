@@ -4,9 +4,9 @@
 
 | 项 | 值 |
 |---|---|
-| 报告编号 | `DEP-MAP-20260917T064133Z`（由快照时刻确定，全局唯一） |
+| 报告编号 | `DEP-MAP-20260917T065746Z`（由快照时刻确定，全局唯一） |
 | 报告名称 | 依赖关系映射记录 —— 管理层自评估 |
-| 基准时点（as-at） | `2026-09-17T06:41:33Z` |
+| 基准时点（as-at） | `2026-09-17T06:57:46Z` |
 | 版本纪律 | 每次导出为独立版本，文件名带快照时刻，不覆盖历史（SYSC 15A.6.2R 要求保存 each version 满 6 年） |
 | 密级 | 〈待指定〉 |
 | 编制 | `compliance_export` 自动生成，无人工编辑 |
@@ -28,7 +28,7 @@
 
 | 项 | 值 |
 |---|---|
-| 快照时刻（基准日） | `2026-09-17T06:41:33Z` |
+| 快照时刻（基准日） | `2026-09-17T06:57:46Z` |
 | 数据源 | `petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com` |
 | 业务功能数 | 3 |
 | 一跳依赖边数 | 47 |
@@ -114,7 +114,7 @@ ISAE 3000 §69(d) 要求识别适用标准。下表把条文依据集中成交�
 | 1 | payforadoption | AccessesData | `ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM` | DynamoDBTable | observed | EXAMINE | Not tested — assessment not performed | 漂移 `declared_not_observed` |
 | 2 | payforadoption | AccessesData | `StepFnStateMachine76D362E8-3jkn8j2OUpdQ` | StepFunction | observed | EXAMINE | 建模产物 — 源码/IaC 审计证明该调用不存在 | 漂移 `declared_not_observed`；实验 `source-audit-20260915` |
 | 3 | payforadoption | AccessesData | `dynamodb` | AWSServiceEndpoint | external | EXAMINE | 引导路径依赖 — 调用真实存在，但只在引导/管理端点上，无用户可见功能依赖，切断不产生业务退化 | 实验 `source-audit-20260915` |
-| 4 | payforadoption | AccessesData | `serviceseks2-databaseb269d8bb-efjeyzicx2ak` | RDSCluster | observed | TEST | Confirmed（未声明，范围受限） | 漂移 `declared_not_observed`；**范围限制**：⚠️ 边上未记录切断手段 —— 无法判断该结论的适用范围；⚠️ 未记录证据通道；实验 `exp-serviceseks2-databaseb269d8bb-efjeyzicx2ak-fis-rds-reboot-20260831-110323` |
+| 4 | payforadoption | AccessesData | `serviceseks2-databaseb269d8bb-efjeyzicx2ak` | RDSCluster | observed | TEST | Confirmed（未声明，范围受限） | **范围限制**：⚠️ 边上未记录切断手段 —— 无法判断该结论的适用范围；⚠️ 未记录证据通道；实验 `exp-serviceseks2-databaseb269d8bb-efjeyzicx2ak-fis-rds-reboot-20260831-110323` |
 | 5 | payforadoption | AccessesData | `serviceseks2-databasereader1f54479b8-hpyukqlufzus` | RDSInstance | 未评估（Assessment not performed） | TEST | Confirmed（数据库实例重启，范围受限） | **范围限制**：实例重启造成的**瞬时**中断（实测约 16~18 秒），覆盖「短暂丢失」场景；**不覆盖**「数据库长时间或彻底不可用」，亦不覆盖延迟升高；实验 `rds-fault-probe_20260914-022850` |
 | 6 | payforadoption | AccessesData | `serviceseks2-databasewriter2462cc03-fwgfu4gossqe` | RDSInstance | observed | EXAMINE | Not tested — assessment not performed |  |
 | 7 | payforadoption | AccessesData | `serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb` | S3Bucket | observed | EXAMINE | Not tested — assessment not performed | 漂移 `declared_not_observed` |
@@ -292,6 +292,8 @@ ISAE 3000 §69(d) 要求识别适用标准。下表把条文依据集中成交�
 本节对应 ISAE 3000 §69(e) 与 SYSC 15A.6.1R(7)。每一条的数字均由本次快照现算，不是手写的固定文本 —— 手写的披露会过期。
 
 **11.1 证据覆盖率 34%。** 47 条依赖里经实测确证（TEST/Confirmed）仅 16 条，15 条未测试。整改方向为扩大故障注入覆盖，当前受限于注入手段对 agent 层与部分托管服务的可达性。
+
+**11.1a 上述分母含 6 条粒度重复，去重后覆盖率为 37%（16/43）。** 同一条依赖被两条边表示（端点级 `AWSServiceEndpoint` 与资源级资源节点），两条都为真但不是两个依赖，分母因此虚高。其中 4 条可从可评估分母移出；另 2 条**拒绝移出** —— 这些边的判定恰好落在粗粒度那一侧而细粒度为空，移出会把已采集到的实测结论从分母里藏掉。该 2 条的整改动作是把证据归并到资源粒度那条边，属语义搬迁，须逐条确认切断手段的作用域是否适用于资源粒度，不做自动归并。
 
 **11.2 已验证的 16 条边并非同等强度证据。** 「已验证」这一个计数掩盖了三个不同的缺口，逐项披露如下（详见 §6）：
 
