@@ -61,6 +61,7 @@ DynamoDBTable 节点，所以那条边是资源级精确边。
 """
 
 import os
+import re
 import sys
 import time
 import logging
@@ -163,6 +164,104 @@ def _load_k8s_alias() -> dict:
 
 K8S_ALIAS = _load_k8s_alias()
 
+
+def _load_profile_registry():
+    """加载**规范名真源** `profiles/petsite.yaml` 的 services 段。
+
+    ## 为什么不能只靠 service_mappings.json
+
+    本目录的 `service_mappings.json` 是那份真源的**第三份抄本**
+    （etl_aws / etl_deepflow 各一份）。2026-09-17 实测三份**已经漂移到实际错误**：
+
+        项                              profile（真源）  etl_aws/deepflow  etl_xray
+        petlistadoptions.type           k8s              k8s               lambda ✗
+        petstatusupdater.tier           Tier1            Tier1             Tier2  ✗
+        neptune_to_k8s.petlistadoptions list-adoptions   list-adoptions    petlistadoptions ✗
+
+    profile 里对这两处都写了更正说明（Tier2 是错的；`type: lambda` 是错的，
+    账号里不存在名为 petlistadoptions 的 Lambda，它是 EKS 部署 list-adoptions），
+    并有 `tests/test_24_live_schema_consistency.py` 对着实际 AWS 校验 ——
+    **但那个校验不覆盖这三份 JSON 抄本**，所以抄本带着旧错值活到了今天。
+
+    所以名字解析以 profile 为准，JSON 仅作**兜底**（Lambda 包里没打进
+    `shared/` 时不至于整体退化），且兜底时打日志让它可见而不是静默降级。
+    """
+    try:
+        import yaml
+        from shared.service_registry import ServiceRegistry
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("读不到规范名真源（%s）—— 退回 service_mappings.json 抄本，"
+                       "该抄本已知会漂移，解析结果需人工复核", exc)
+        return None
+    here = os.path.dirname(os.path.abspath(__file__))
+    for cand in (os.path.join(here, 'profiles', 'petsite.yaml'),
+                 os.path.join(here, '..', '..', '..', 'profiles', 'petsite.yaml')):
+        if os.path.isfile(cand):
+            try:
+                with open(cand, encoding='utf-8') as fh:
+                    data = yaml.safe_load(fh) or {}
+                return ServiceRegistry(data.get('services', {}) or {})
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("解析 %s 失败: %s", cand, exc)
+                return None
+    logger.warning("找不到 profiles/petsite.yaml —— 退回 JSON 抄本")
+    return None
+
+
+_REGISTRY = _load_profile_registry()
+
+#: AgentCore 运行时在 X-Ray 里带的**限定符后缀**。
+#: 实测四个 runtime 全部是 `<Name>.DEFAULT`（DEFAULT 是 endpoint 名）。
+#: 与 ReplicaSet 哈希同类 —— 是部署形态而非身份，必须剥掉，
+#: 否则四个 AgentRuntime 源端的出边全部落不进图谱（实测 6 小时 474 次调用）。
+_AGENT_QUALIFIER = re.compile(r'\.[A-Z][A-Z0-9_]*$')
+#: API Gateway 的 stage 后缀：`PetAdoptionStatusUpdater/prod` -> 去掉 `/prod`。
+_APIGW_STAGE = re.compile(r'/[A-Za-z0-9_-]+$')
+
+
+def canonical_service_name(raw: str, strip_stage: bool = False) -> tuple:
+    """X-Ray 服务名 -> (图谱规范名, 用于大小写敏感匹配的原始名)。
+
+    ## 修的是什么
+
+    此前 `_classify` 对 `xray_type is None` 的服务本体直接返回
+    `(raw_name.lower(), 'service', raw_name)` —— **完全不过别名表**。
+    `K8S_ALIAS` 只在 `_strip_k8s_fqdn` 里用（处理 remote 形态的 FQDN）。
+    也就是说 X-Ray 上报名是**逐字当图谱服务名用**的，只在两者碰巧相等时才对。
+
+    `PetSearch` / `PetSite` 因为小写后正好等于图谱名，一直没暴露问题；
+    `payforadoption-api-go` 不等，于是它 6 小时内 30932 次调用的出边全丢。
+    **「图上大部分边都在」不能证明解析是通的** —— 只能证明大部分名字碰巧相等。
+
+    ## 顺序是承重的
+
+    先剥结构性后缀（`.DEFAULT` / stage），再查真源，最后才小写兜底。
+    反过来先小写会让 profile 里大小写敏感的 alias（`PetAdoptionStatusUpdater`）
+    查不中；不剥后缀则 `WaggleAIOrchestrator.DEFAULT` 永远查不中。
+
+    返回的第二个元素是**剥完后缀的原始大小写名**，不是入参原样 ——
+    Lambda 函数名与 AgentRuntime 名都大小写敏感，
+    带着 `.DEFAULT` 的原名匹配不到 `AgentRuntime:WaggleAIOrchestrator`。
+    """
+    if not raw:
+        return ('', raw)
+    name = _AGENT_QUALIFIER.sub('', str(raw))
+    if strip_stage:
+        name = _APIGW_STAGE.sub('', name)
+    for cand in (name, name.lower()):
+        if _REGISTRY is not None:
+            try:
+                got = _REGISTRY.resolve(cand)
+            except Exception:  # noqa: BLE001
+                got = None
+            if got and got != cand:
+                return (got, name)
+        alias = K8S_ALIAS.get(cand)
+        if alias:
+            return (alias, name)
+    return (name.lower(), name)
+
+
 # X-Ray 的粗粒度 AWS 服务身份 → 规范名。
 # key 用 lower() 后的原始名，避免大小写分支。
 XRAY_SERVICE_ALIASES = {
@@ -183,6 +282,14 @@ XRAY_SERVICE_ALIASES = {
     'cloudwatch': 'cloudwatch',
     'monitoring': 'cloudwatch',      # CloudWatch 的另一种上报名
     'logs': 'cloudwatchlogs',
+    # ── GenAI 层（2026-09-17 实测补上）──
+    # 这三个的 Name 字面就是服务标签（'Bedrock' / 'BedrockRuntime' /
+    # 'BedrockAgentCore'），正合本表的判据「Name 本身是不是一个服务标签」。
+    # 缺它们时这三类 AWS:: 类型走到函数末尾被 return None 丢掉 ——
+    # agent 层对本 ETL 完全不可见（连同四个解不出的 AgentRuntime 源端）。
+    'bedrock': 'bedrock',
+    'bedrockruntime': 'bedrockruntime',
+    'bedrockagentcore': 'bedrockagentcore',
 }
 
 # X-Ray 的 Type → 图谱里已存在的**资源级**节点类型。
@@ -456,7 +563,12 @@ def _classify(raw_name: str, xray_type):
         # 规范名仍用小写做键，保证 Type=None 的 `PetSearch` 与 remote 形态的
         # `search-service.petadoptions.svc.cluster.local` 归一到**同一个键**，
         # 不会拆成两个节点、把度量分摊。
-        return (low, 'service', raw_name)
+        # ⚠️ 2026-09-17 修：此处原来直接 `return (low, 'service', raw_name)`
+        # —— **完全不过别名表**，等于把 X-Ray 上报名逐字当图谱服务名用。
+        # 只在两者碰巧相等时才对：`PetSearch` 小写后正好等于图谱名，
+        # 而 `payforadoption-api-go` 不等，它 6 小时 30932 次调用的出边全丢。
+        canon, ident = canonical_service_name(raw_name)
+        return (canon, 'service', ident)
 
     # 有精确资源名的 AWS 资源类型。
     # 身份键的第三位用**映射后的节点类型**而不是原始 xray_type ——
@@ -464,6 +576,20 @@ def _classify(raw_name: str, xray_type):
     # AWS::Lambda::Function 都指同一个函数），带原始 type 会拆成两个 key，
     # 度量被分摊到两份、写边时后者覆盖前者而不是累加。
     # 这与 ssm 因 AWS::SSM / AWS::SimpleSystemsManagement 拆键是同一个坑。
+    # API Gateway Stage：`PetAdoptionStatusUpdater/prod` —— 剥掉 stage 后
+    # 经真源 alias 解析到后端服务（profile 里 petstatusupdater.aliases 已含
+    # `PetAdoptionStatusUpdater`，是为 AppSignals 加的，这里正好复用）。
+    #
+    # **为什么不建 APIGateway 节点**：`config.py:43` 有 'APIGateway' 这个类型
+    # 但**没有 collector**，建出来会是一个永远拿不到证据的节点，
+    # 只会给分母添一条不可验证的边。而 DR 影响面分析要的是
+    # `payforadoption -> petstatusupdater` 这个依赖，那个节点图上已有。
+    # 网关是**传输方式**，记在边属性上（见 upsert_xray_edges 的 via），
+    # 不是一个独立被依赖对象。
+    if xray_type == 'AWS::ApiGateway::Stage':
+        canon, ident = canonical_service_name(raw_name, strip_stage=True)
+        return (canon, 'service', ident)
+
     node_type = XRAY_TYPE_TO_RESOURCE_NODE.get(xray_type)
     if node_type:
         return (_resource_short_name(raw_name), 'resource', node_type)
@@ -512,6 +638,21 @@ def _classify(raw_name: str, xray_type):
                 seg in low for seg in ('.rds.', '.neptune.', '.cache.', '.es.')):
             return (raw_name, 'endpoint', None)
         return (_strip_k8s_fqdn(low), 'service', None)
+
+    # ── SQL 层：**刻意不建模，这是决定而不是遗漏** ──
+    #
+    # 实测 6 小时窗口 `postgres[Database::SQL]` x14424（本 ETL 看到的最高频
+    # 目标）。不映射它的理由不是拿不到，而是**会造出一条粒度重复边**：
+    # 同一个 Aurora 依赖在图上已有资源粒度表示（RDSCluster / RDSInstance，
+    # 由 aws-etl 与 deepflow-l4 写入，其中多条已 confirmed）。
+    # 再加一条 `-> AWSServiceEndpoint:postgres` 只会让分母多一行、
+    # 学分还是记在别处 —— 那正是 2026-09-17 刚清理的 6 条影子边的成因
+    # （见 scripts/mark_granularity_duplicates.py）。
+    #
+    # X-Ray 在这一层也给不出集群标识（`PGSQL Query` 已列入 XRAY_OPAQUE_LABELS
+    # 就是这个原因），所以即便想落资源粒度也落不准。
+    if xray_type == 'Database::SQL':
+        return None
 
     # 其余 AWS:: 类型：既不在资源类型映射里，Name 也不是已知服务标签。
     # **刻意跳过而不是猜一个节点类型** —— 前两次都是猜出来的错。
@@ -593,7 +734,11 @@ def upsert_aws_service_endpoints(nodes: dict, round_ts: int) -> int:
 # 服务和 Lambda」这个样本决定的。traffic-generator 启动后 Step Functions
 # 进入服务图，出现 `StepFnStateMachine... -[AccessesData]-> <3 个 Lambda>`，
 # 源是 StepFunction 节点，整批边因为源子句匹配不到而被跳过。
-SRC_CANDIDATE_LABELS = ('Microservice', 'LambdaFunction', 'StepFunction')
+#: ⚠️ `AgentRuntime` 是 2026-09-17 补的。缺它时四个 AgentCore runtime
+#: 即使名字解析对了也匹配不到任何源节点 —— 解析与匹配是两道关，
+#: 只修一道等于没修（实测 474 次调用的出边仍会记成 skipped_no_node）。
+SRC_CANDIDATE_LABELS = ('Microservice', 'LambdaFunction', 'StepFunction',
+                        'AgentRuntime')
 
 
 def _src_names(src_key) -> list:

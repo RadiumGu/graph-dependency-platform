@@ -775,20 +775,46 @@ def test_t54_granularity_duplicate_不得写进_verify_status():
         encoding="utf-8")
     code = _strip_comments(src)
     assert "write_assessability" in code, "没有走可评估性写入器"
-    assert "write_verdict" not in code, (
-        "影子边标记不得调用 write_verdict —— 那会写 verify_status")
-    # 判据匹配**写入形态**，不枚举读取形态。
+
+    # 这个脚本有两条写入路径，纪律不同：
     #
-    # 第一版写成「排除掉已知的 r.get('verify_status') 后不得再出现」，
-    # 结果撞在 `p.get('verify_status')`（对 peer 取值）上 —— 假阳性。
-    # 那是本仓库第六次同族错误：判据切了个语法片段而不是表达意图。
-    # 意图是「不许**写**」，所以直接找写的形态。
-    for write_form in (".property('verify_status'",
-                       '.property("verify_status"',
-                       "'verify_status':", '"verify_status":'):
-        assert write_form not in code, (
-            "出现了 verify_status 的写入形态 %r —— "
-            "影子关系不是证据陈述" % write_form)
+    #   标记影子边     -> **只准**写 verify_assessability。
+    #                     「这条边是另一条边的重复」不是证据陈述。
+    #   归并 B 组证据  -> 允许写 verify_status，因为那是把**已有判定**搬到
+    #                     规范侧那条边；但必须逐字带走 severance /
+    #                     evidence_channel / experiment，改写任何一项就是
+    #                     在合规产物上错标证据来源（本仓库为此付过三次代价）。
+    #
+    # 判据据此**按函数切**，而不是对整个文件下一个禁令 ——
+    # 第一版禁了全文出现 write_verdict，于是合法的归并路径把门禁撞红了。
+    # 这已是本会话第三次「判据切了语法片段而不是表达意图」。
+    lines = code.splitlines()
+    bodies, cur, name = {}, [], None
+    for ln in lines:
+        if ln.startswith("def ") or ln.startswith("class "):
+            if name:
+                bodies[name] = "\n".join(cur)
+            name = ln.split("(")[0].replace("def ", "").replace("class ", "").strip()
+            cur = []
+        elif name:
+            cur.append(ln)
+    if name:
+        bodies[name] = "\n".join(cur)
+
+    for fname, body in bodies.items():
+        if fname == "_consolidate":
+            continue
+        assert "write_verdict" not in body, (
+            "%s 里出现 write_verdict —— 只有归并路径 _consolidate 允许写 "
+            "verify_status" % fname)
+    cons = bodies.get("_consolidate", "")
+    assert cons, "找不到归并路径 _consolidate"
+    for must in ("'severance'", "'evidence_channel'", "'experiment_id'"):
+        assert must in cons, (
+            "归并没有带 %s —— 搬迁必须逐字保留证据来源，否则是范围虚报" % must)
+    for hardcoded in ("'severance': 'iam-deny'", '"severance": "iam-deny"'):
+        assert hardcoded not in cons, (
+            "归并把 severance 硬编码成 %r —— 这正是三次错标的形状" % hardcoded)
 
 
 def test_t54_无资源节点类型的端点边不得判为影子():

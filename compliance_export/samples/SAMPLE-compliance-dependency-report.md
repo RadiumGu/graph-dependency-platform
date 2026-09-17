@@ -4,9 +4,9 @@
 
 | 项 | 值 |
 |---|---|
-| 报告编号 | `DEP-MAP-20260917T065746Z`（由快照时刻确定，全局唯一） |
+| 报告编号 | `DEP-MAP-20260917T075452Z`（由快照时刻确定，全局唯一） |
 | 报告名称 | 依赖关系映射记录 —— 管理层自评估 |
-| 基准时点（as-at） | `2026-09-17T06:57:46Z` |
+| 基准时点（as-at） | `2026-09-17T07:54:52Z` |
 | 版本纪律 | 每次导出为独立版本，文件名带快照时刻，不覆盖历史（SYSC 15A.6.2R 要求保存 each version 满 6 年） |
 | 密级 | 〈待指定〉 |
 | 编制 | `compliance_export` 自动生成，无人工编辑 |
@@ -28,10 +28,10 @@
 
 | 项 | 值 |
 |---|---|
-| 快照时刻（基准日） | `2026-09-17T06:57:46Z` |
+| 快照时刻（基准日） | `2026-09-17T07:54:52Z` |
 | 数据源 | `petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com` |
 | 业务功能数 | 3 |
-| 一跳依赖边数 | 47 |
+| 一跳依赖边数 | 50 |
 | 依赖边类型（10 种） | `AccessesData / Calls / Delegates / DependsOn / Invokes / InvokesTool / PublishesTo / Retrieves / RoutesToRuntime / RoutesVia` |
 
 **2.1 依赖边清单来源**：`graph_contract.dependency_edge_labels()`（契约，单一来源）。本仓库曾因四处各抄一份清单而产生分歧，其中两处漂移到实际错误，故清单只有一个出处。
@@ -105,41 +105,44 @@ ISAE 3000 §69(d) 要求识别适用标准。下表把条文依据集中成交�
 
 ### 5.2 PetAdoptionFlow
 
-重要性分级 `Tier0`；一跳直接依赖 **29** 条；多跳可达 **40** 个对象。
+重要性分级 `Tier0`；一跳直接依赖 **32** 条；多跳可达 **47** 个对象。
 
 **表 4：PetAdoptionFlow 的一跳直接依赖**
 
 | # | 依赖方 | 依赖类型 | 依赖对象标识符 | 对象类型 | 范围 | 取证方法 | 结论 | 例外与备注 |
 |---|---|---|---|---|---|---|---|---|
-| 1 | payforadoption | AccessesData | `ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM` | DynamoDBTable | observed | EXAMINE | Not tested — assessment not performed | 漂移 `declared_not_observed` |
+| 1 | payforadoption | AccessesData | `ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM` | DynamoDBTable | observed | EXAMINE | 引导路径依赖 — 调用真实存在，但只在引导/管理端点上，无用户可见功能依赖，切断不产生业务退化 | 漂移 `declared_not_observed`；实验 `source-audit-20260915` |
 | 2 | payforadoption | AccessesData | `StepFnStateMachine76D362E8-3jkn8j2OUpdQ` | StepFunction | observed | EXAMINE | 建模产物 — 源码/IaC 审计证明该调用不存在 | 漂移 `declared_not_observed`；实验 `source-audit-20260915` |
 | 3 | payforadoption | AccessesData | `dynamodb` | AWSServiceEndpoint | external | EXAMINE | 引导路径依赖 — 调用真实存在，但只在引导/管理端点上，无用户可见功能依赖，切断不产生业务退化 | 实验 `source-audit-20260915` |
 | 4 | payforadoption | AccessesData | `serviceseks2-databaseb269d8bb-efjeyzicx2ak` | RDSCluster | observed | TEST | Confirmed（未声明，范围受限） | **范围限制**：⚠️ 边上未记录切断手段 —— 无法判断该结论的适用范围；⚠️ 未记录证据通道；实验 `exp-serviceseks2-databaseb269d8bb-efjeyzicx2ak-fis-rds-reboot-20260831-110323` |
 | 5 | payforadoption | AccessesData | `serviceseks2-databasereader1f54479b8-hpyukqlufzus` | RDSInstance | 未评估（Assessment not performed） | TEST | Confirmed（数据库实例重启，范围受限） | **范围限制**：实例重启造成的**瞬时**中断（实测约 16~18 秒），覆盖「短暂丢失」场景；**不覆盖**「数据库长时间或彻底不可用」，亦不覆盖延迟升高；实验 `rds-fault-probe_20260914-022850` |
 | 6 | payforadoption | AccessesData | `serviceseks2-databasewriter2462cc03-fwgfu4gossqe` | RDSInstance | observed | EXAMINE | Not tested — assessment not performed |  |
 | 7 | payforadoption | AccessesData | `serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb` | S3Bucket | observed | EXAMINE | Not tested — assessment not performed | 漂移 `declared_not_observed` |
-| 8 | payforadoption | AccessesData | `ssm` | AWSServiceEndpoint | external | TEST | Inconclusive — 已注入故障，观测退化不足以判定 | 实验 `iam-deny-probe_20260913-220634` |
-| 9 | payforadoption | Calls | `petsearch` | Microservice | observed | TEST | Confirmed（服务选择器黑洞）— no exceptions noted | 实验 `svc-blackhole-probe_20260915-101103` |
-| 10 | payforadoption | DependsOn | `cdk-hnb659fds-container-assets-926093770964-ap-northeast-1` | ECRRepository | scaffolding | TEST | Inconclusive — 已注入故障，观测退化不足以判定 | 实验 `image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable` |
-| 11 | petsite | AccessesData | `ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM` | DynamoDBTable | observed | EXAMINE | 建模产物 — 源码/IaC 审计证明该调用不存在 | 漂移 `declared_not_observed`；实验 `source-audit-20260915` |
-| 12 | petsite | AccessesData | `StepFnStateMachine76D362E8-3jkn8j2OUpdQ` | StepFunction | observed | TEST | Confirmed（IAM 拒绝）— no exceptions noted | ⚠️ 未登记的证据通道 `stepfn-execution-history+business-probe`；实验 `stepfn-three-ring-1789627178` |
-| 13 | petsite | AccessesData | `serviceseks2-databaseb269d8bb-efjeyzicx2ak` | RDSCluster | observed | EXAMINE | 建模产物 — 源码/IaC 审计证明该调用不存在 | 漂移 `declared_not_observed`；实验 `source-audit-20260915` |
-| 14 | petsite | AccessesData | `serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb` | S3Bucket | observed | EXAMINE | 建模产物 — 源码/IaC 审计证明该调用不存在 | 漂移 `declared_not_observed`；实验 `source-audit-20260915` |
-| 15 | petsite | AccessesData | `sns` | AWSServiceEndpoint | external | EXAMINE | Not tested — assessment not performed |  |
-| 16 | petsite | AccessesData | `ssm` | AWSServiceEndpoint | external | TEST | Confirmed（未声明，范围受限） | **范围限制**：⚠️ 边上未记录切断手段 —— 无法判断该结论的适用范围；【退化指标】仅吞吐塌陷、成功率未变（`abort` 类故障不产生响应行）。同属早期词汇，描述指标而非观测来源；实验 `exp-petsite-network-partition-20260831-165936` |
-| 17 | petsite | AccessesData | `stepfunctions` | AWSServiceEndpoint | external | EXAMINE | Not tested — assessment not performed |  |
-| 18 | petsite | AccessesData | `sts` | AWSServiceEndpoint | external | EXAMINE | Not tested — assessment not performed |  |
-| 19 | petsite | Calls | `payforadoption` | Microservice | observed | TEST | Inconclusive — 已注入故障，观测退化不足以判定 | 实验 `exp-pay-for-adoption-http-chaos-20260905-053059` |
-| 20 | petsite | Calls | `petfood` | Microservice | observed | TEST | Confirmed（未声明，范围受限） | **范围限制**：⚠️ 边上未记录切断手段 —— 无法判断该结论的适用范围；⚠️ 未记录证据通道；实验 `networkchaos-partition:petsite->petfood` |
-| 21 | petsite | Calls | `pethistory` | Microservice | observed | TEST | Confirmed（未声明，范围受限） | **范围限制**：⚠️ 边上未记录切断手段 —— 无法判断该结论的适用范围；【退化指标】仅吞吐塌陷、成功率未变（`abort` 类故障不产生响应行）。同属早期词汇，描述指标而非观测来源；实验 `exp-pethistory-http-chaos-20260905-064354` |
-| 22 | petsite | Calls | `petlistadoptions` | Microservice | observed | TEST | Inconclusive — 已注入故障，观测退化不足以判定 | 实验 `exp-list-adoptions-http-chaos-20260905-064919` |
-| 23 | petsite | Calls | `petsearch` | Microservice | observed | TEST | Confirmed（未声明，范围受限） | **范围限制**：⚠️ 边上未记录切断手段 —— 无法判断该结论的适用范围；【退化指标】仅吞吐塌陷、成功率未变（`abort` 类故障不产生响应行）。同属早期词汇，描述指标而非观测来源；实验 `exp-search-service-http-chaos-20260905-073516` |
-| 24 | petsite | DependsOn | `ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj` | SQSQueue | observed | TEST | Confirmed（IAM 拒绝）— no exceptions noted | 实验 `iam-deny-probe_20260913-212633` |
-| 25 | petsite | DependsOn | `WaggleAIOrchestrator` | AgentRuntime | observed | EXAMINE | Not tested — assessment not performed |  |
-| 26 | petsite | DependsOn | `cdk-hnb659fds-container-assets-926093770964-ap-northeast-1` | ECRRepository | scaffolding | TEST | Inconclusive — 已注入故障，观测退化不足以判定 | 实验 `image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable` |
-| 27 | petsite | DependsOn | `petadoptions/petsite` | ECRRepository | observed | EXAMINE | Not tested — assessment not performed |  |
-| 28 | petsite | PublishesTo | `ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj` | SQSQueue | observed | TEST | Confirmed（IAM 拒绝）— no exceptions noted | 实验 `iam-deny-probe_20260913-212633` |
-| 29 | petsite | PublishesTo | `ServicesEks2-topicpetadoption192CAB8F-Dn0iiU45RZ1g` | SNSTopic | observed | TEST | Confirmed（IAM 拒绝）— no exceptions noted | 漂移 `declared_not_observed`；实验 `iam-deny-probe_20260913-203500` |
+| 8 | payforadoption | AccessesData | `sqs` | AWSServiceEndpoint | external | EXAMINE | Not tested — assessment not performed |  |
+| 9 | payforadoption | AccessesData | `ssm` | AWSServiceEndpoint | external | TEST | Inconclusive — 已注入故障，观测退化不足以判定 | 实验 `iam-deny-probe_20260913-220634` |
+| 10 | payforadoption | Calls | `petsearch` | Microservice | observed | TEST | Confirmed（服务选择器黑洞）— no exceptions noted | 实验 `svc-blackhole-probe_20260915-101103` |
+| 11 | payforadoption | Calls | `petstatusupdater` | Microservice | observed | EXAMINE | Not tested — assessment not performed |  |
+| 12 | payforadoption | DependsOn | `cdk-hnb659fds-container-assets-926093770964-ap-northeast-1` | ECRRepository | scaffolding | TEST | Inconclusive — 已注入故障，观测退化不足以判定 | 实验 `image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable` |
+| 13 | petsite | AccessesData | `ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM` | DynamoDBTable | observed | EXAMINE | 建模产物 — 源码/IaC 审计证明该调用不存在 | 漂移 `declared_not_observed`；实验 `source-audit-20260915` |
+| 14 | petsite | AccessesData | `StepFnStateMachine76D362E8-3jkn8j2OUpdQ` | StepFunction | observed | TEST | Confirmed（IAM 拒绝）— no exceptions noted | 漂移 `declared_not_observed`；⚠️ 未登记的证据通道 `stepfn-execution-history+business-probe`；实验 `stepfn-three-ring-1789627178` |
+| 15 | petsite | AccessesData | `bedrockagentcore` | AWSServiceEndpoint | 未评估（Assessment not performed） | EXAMINE | Not tested — assessment not performed |  |
+| 16 | petsite | AccessesData | `serviceseks2-databaseb269d8bb-efjeyzicx2ak` | RDSCluster | observed | EXAMINE | 建模产物 — 源码/IaC 审计证明该调用不存在 | 漂移 `declared_not_observed`；实验 `source-audit-20260915` |
+| 17 | petsite | AccessesData | `serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb` | S3Bucket | observed | EXAMINE | 建模产物 — 源码/IaC 审计证明该调用不存在 | 漂移 `declared_not_observed`；实验 `source-audit-20260915` |
+| 18 | petsite | AccessesData | `sns` | AWSServiceEndpoint | external | EXAMINE | Not tested — assessment not performed |  |
+| 19 | petsite | AccessesData | `ssm` | AWSServiceEndpoint | external | TEST | Confirmed（未声明，范围受限） | **范围限制**：⚠️ 边上未记录切断手段 —— 无法判断该结论的适用范围；【退化指标】仅吞吐塌陷、成功率未变（`abort` 类故障不产生响应行）。同属早期词汇，描述指标而非观测来源；实验 `exp-petsite-network-partition-20260831-165936` |
+| 20 | petsite | AccessesData | `stepfunctions` | AWSServiceEndpoint | external | EXAMINE | Not tested — assessment not performed |  |
+| 21 | petsite | AccessesData | `sts` | AWSServiceEndpoint | external | EXAMINE | Not tested — assessment not performed |  |
+| 22 | petsite | Calls | `payforadoption` | Microservice | observed | TEST | Inconclusive — 已注入故障，观测退化不足以判定 | 实验 `exp-pay-for-adoption-http-chaos-20260905-053059` |
+| 23 | petsite | Calls | `petfood` | Microservice | observed | TEST | Confirmed（未声明，范围受限） | **范围限制**：⚠️ 边上未记录切断手段 —— 无法判断该结论的适用范围；⚠️ 未记录证据通道；实验 `networkchaos-partition:petsite->petfood` |
+| 24 | petsite | Calls | `pethistory` | Microservice | observed | TEST | Confirmed（未声明，范围受限） | **范围限制**：⚠️ 边上未记录切断手段 —— 无法判断该结论的适用范围；【退化指标】仅吞吐塌陷、成功率未变（`abort` 类故障不产生响应行）。同属早期词汇，描述指标而非观测来源；实验 `exp-pethistory-http-chaos-20260905-064354` |
+| 25 | petsite | Calls | `petlistadoptions` | Microservice | observed | TEST | Inconclusive — 已注入故障，观测退化不足以判定 | 实验 `exp-list-adoptions-http-chaos-20260905-064919` |
+| 26 | petsite | Calls | `petsearch` | Microservice | observed | TEST | Confirmed（未声明，范围受限） | **范围限制**：⚠️ 边上未记录切断手段 —— 无法判断该结论的适用范围；【退化指标】仅吞吐塌陷、成功率未变（`abort` 类故障不产生响应行）。同属早期词汇，描述指标而非观测来源；实验 `exp-search-service-http-chaos-20260905-073516` |
+| 27 | petsite | DependsOn | `ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj` | SQSQueue | observed | TEST | Confirmed（IAM 拒绝）— no exceptions noted | 实验 `iam-deny-probe_20260913-212633` |
+| 28 | petsite | DependsOn | `WaggleAIOrchestrator` | AgentRuntime | observed | EXAMINE | Not tested — assessment not performed |  |
+| 29 | petsite | DependsOn | `cdk-hnb659fds-container-assets-926093770964-ap-northeast-1` | ECRRepository | scaffolding | TEST | Inconclusive — 已注入故障，观测退化不足以判定 | 实验 `image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable` |
+| 30 | petsite | DependsOn | `petadoptions/petsite` | ECRRepository | observed | EXAMINE | Not tested — assessment not performed |  |
+| 31 | petsite | PublishesTo | `ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj` | SQSQueue | observed | TEST | Confirmed（IAM 拒绝）— no exceptions noted | 实验 `iam-deny-probe_20260913-212633` |
+| 32 | petsite | PublishesTo | `ServicesEks2-topicpetadoption192CAB8F-Dn0iiU45RZ1g` | SNSTopic | observed | TEST | Confirmed（IAM 拒绝）— no exceptions noted | 漂移 `declared_not_observed`；实验 `iam-deny-probe_20260913-203500` |
 
 ### 5.3 PetInventoryManagement
 
@@ -159,7 +162,7 @@ ISAE 3000 §69(d) 要求识别适用标准。下表把条文依据集中成交�
 | 8 | petsearch | AccessesData | `ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM` | DynamoDBTable | observed | TEST | Confirmed（IAM 拒绝）— no exceptions noted | 实验 `iam-deny-probe_20260913-155349` |
 | 9 | petsearch | AccessesData | `dynamodb` | AWSServiceEndpoint | external | TEST | Confirmed（未声明，范围受限） | **范围限制**：⚠️ 边上未记录切断手段 —— 无法判断该结论的适用范围；【退化指标】成功率与吞吐**同时**塌陷。注意：该取值来自早期实验的另一套词汇，描述的是指标而非观测来源，与本节前两项不同轴；实验 `exp-dynamodb-fis-network-disrupt-20260831-160742` |
 | 10 | petsearch | AccessesData | `s3` | AWSServiceEndpoint | external | TEST | Inconclusive — 已注入故障，观测退化不足以判定 | 实验 `exp-s3-fis-network-disrupt-20260831-160219` |
-| 11 | petsearch | AccessesData | `serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb` | S3Bucket | observed | EXAMINE | Not tested — assessment not performed |  |
+| 11 | petsearch | AccessesData | `serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb` | S3Bucket | observed | TEST | Confirmed（IAM 拒绝）— no exceptions noted | ⚠️ 未登记的证据通道 `business-probe-only`；实验 `iam-deny-probe_20260917-072110` |
 | 12 | petsearch | AccessesData | `ssm` | AWSServiceEndpoint | external | EXAMINE | Not tested — assessment not performed |  |
 | 13 | petsearch | AccessesData | `sts` | AWSServiceEndpoint | external | EXAMINE | 建模产物 — 源码/IaC 审计证明该调用不存在 | 实验 `source-audit-20260915` |
 | 14 | petsearch | DependsOn | `cdk-hnb659fds-container-assets-926093770964-ap-northeast-1` | ECRRepository | scaffolding | TEST | Inconclusive — 已注入故障，观测退化不足以判定 | 实验 `image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable` |
@@ -169,16 +172,16 @@ ISAE 3000 §69(d) 要求识别适用标准。下表把条文依据集中成交�
 
 本节回答「凭什么说这条依赖已验证，以及该结论**不**适用于什么」。§5 每条 `Confirmed` 都注明了手段，手段的边界在此定义。
 
-**已验证的 16 条边并非同质证据。**「已验证」不等于「已覆盖全部中断场景」——下表的「不覆盖」一列是本报告刻意突出的部分。
+**已验证的 17 条边并非同质证据。**「已验证」不等于「已覆盖全部中断场景」——下表的「不覆盖」一列是本报告刻意突出的部分。
 
-> **⚠️ 7 / 16 条 `Confirmed` 未记录切断手段。** 这些判定由早期实验写入，边上没有 `verify_severance`，因此**无法判断其结论的适用范围** ——读者不应假定它们与本轮实验同等强度。本报告不为这些边补写手段：那不是本轮采集的证据，追认手段等于伪造来源。整改方向见 §11。
+> **⚠️ 7 / 17 条 `Confirmed` 未记录切断手段。** 这些判定由早期实验写入，边上没有 `verify_severance`，因此**无法判断其结论的适用范围** ——读者不应假定它们与本轮实验同等强度。本报告不为这些边补写手段：那不是本轮采集的证据，追认手段等于伪造来源。整改方向见 §11。
 
 **表 6：切断手段的证据范围与覆盖边数**
 
 | 切断手段 | 中文名 | 验证边数 | 该手段的证据范围与不覆盖之处 |
 |---|---|---|---|
 | `unspecified` | 未声明 | 7 | ⚠️ 边上未记录切断手段 —— 无法判断该结论的适用范围 |
-| `iam-deny` | IAM 拒绝 | 5 | 注入期间该依赖的调用**全程**返回 AccessDenied，覆盖「依赖不可用」场景；不覆盖延迟升高与部分失败 |
+| `iam-deny` | IAM 拒绝 | 6 | 注入期间该依赖的调用**全程**返回 AccessDenied，覆盖「依赖不可用」场景；不覆盖延迟升高与部分失败 |
 | `rds-reboot` | 数据库实例重启 | 3 | 实例重启造成的**瞬时**中断（实测约 16~18 秒），覆盖「短暂丢失」场景；**不覆盖**「数据库长时间或彻底不可用」，亦不覆盖延迟升高 |
 | `k8s-service-blackhole` | 服务选择器黑洞 | 1 | 把 Kubernetes Service 的选择器改为不匹配任何 Pod，端点清空后调用方连接**立即失败**，覆盖「依赖不可用」场景；不覆盖延迟升高与部分失败。⚠️ 该手段切断的是**服务发现与路由**，被依赖服务本身仍在运行 —— 因此不覆盖「被依赖服务崩溃或返回错误响应」这一类失效 |
 
@@ -192,6 +195,7 @@ ISAE 3000 §69(d) 要求识别适用标准。下表把条文依据集中成交�
 | `rds-event+business-probe` | 1 | 【观测来源】⚠️ **消费方侧无调用遥测**；生效性由资源自身事件（RDS `DB instance shutdown`/`restarted`）证明，业务影响由探针证明 |
 | `stepfn-execution-history+business-probe` | 1 | ⚠️ 未登记的证据通道 |
 | `both` | 1 | 【退化指标】成功率与吞吐**同时**塌陷。注意：该取值来自早期实验的另一套词汇，描述的是指标而非观测来源，与本节前两项不同轴 |
+| `business-probe-only` | 1 | ⚠️ 未登记的证据通道 |
 
 **共同限制（适用于全部手段）**：本轮取证均为**可用性**维度的切断实验，不覆盖延迟升高、部分失败、数据正确性与容量耗尽等场景。因此本报告不对依赖做 hard／soft 分级 —— 分级需要延迟与部分失败场景的证据，而那些实验尚未进行。
 
@@ -208,11 +212,11 @@ ISAE 3000 §69(d) 要求识别适用标准。下表把条文依据集中成交�
 
 | 取值 | 条数 | 占比 |
 |---|---|---|
-| confirmed | 16 | 34% |
-| 未评估（Assessment not performed） | 15 | 32% |
-| inconclusive | 10 | 21% |
-| modeling_artifact | 5 | 11% |
-| bootstrap_only | 1 | 2% |
+| confirmed | 17 | 34% |
+| 未评估（Assessment not performed） | 16 | 32% |
+| inconclusive | 10 | 20% |
+| modeling_artifact | 5 | 10% |
+| bootstrap_only | 2 | 4% |
 
 ### 6.2 声明 vs 观测
 
@@ -222,8 +226,8 @@ ISAE 3000 §69(d) 要求识别适用标准。下表把条文依据集中成交�
 
 | 取值 | 条数 | 占比 |
 |---|---|---|
-| dynamic | 37 | 79% |
-| static | 8 | 17% |
+| dynamic | 40 | 80% |
+| static | 8 | 16% |
 | 未评估（Assessment not performed） | 2 | 4% |
 
 ### 6.3 第三方范围
@@ -234,10 +238,10 @@ ISAE 3000 §69(d) 要求识别适用标准。下表把条文依据集中成交�
 
 | 取值 | 条数 | 占比 |
 |---|---|---|
-| observed | 29 | 62% |
-| external | 11 | 23% |
-| scaffolding | 4 | 9% |
-| 未评估（Assessment not performed） | 3 | 6% |
+| observed | 30 | 60% |
+| external | 12 | 24% |
+| scaffolding | 4 | 8% |
+| 未评估（Assessment not performed） | 4 | 8% |
 
 
 ## 8 技术集中度
@@ -267,11 +271,11 @@ ISAE 3000 §69(d) 要求识别适用标准。下表把条文依据集中成交�
 
 | 边类型 | 条数 | 性质 |
 |---|---|---|
-| LocatedIn | 1606 | 承载/放置关系，非服务消费关系 |
-| RunsOn | 1939 | 承载/放置关系，非服务消费关系 |
-| BelongsTo | 1060 | 承载/放置关系，非服务消费关系 |
-| Manages | 1054 | 承载/放置关系，非服务消费关系 |
-| Routes | 1042 | 承载/放置关系，非服务消费关系 |
+| LocatedIn | 1617 | 承载/放置关系，非服务消费关系 |
+| RunsOn | 1955 | 承载/放置关系，非服务消费关系 |
+| BelongsTo | 1068 | 承载/放置关系，非服务消费关系 |
+| Manages | 1062 | 承载/放置关系，非服务消费关系 |
+| Routes | 1050 | 承载/放置关系，非服务消费关系 |
 
 ## 10 业务功能与容忍度阈值
 
@@ -291,11 +295,11 @@ ISAE 3000 §69(d) 要求识别适用标准。下表把条文依据集中成交�
 
 本节对应 ISAE 3000 §69(e) 与 SYSC 15A.6.1R(7)。每一条的数字均由本次快照现算，不是手写的固定文本 —— 手写的披露会过期。
 
-**11.1 证据覆盖率 34%。** 47 条依赖里经实测确证（TEST/Confirmed）仅 16 条，15 条未测试。整改方向为扩大故障注入覆盖，当前受限于注入手段对 agent 层与部分托管服务的可达性。
+**11.1 证据覆盖率 34%。** 50 条依赖里经实测确证（TEST/Confirmed）仅 17 条，16 条未测试。整改方向为扩大故障注入覆盖，当前受限于注入手段对 agent 层与部分托管服务的可达性。
 
-**11.1a 上述分母含 6 条粒度重复，去重后覆盖率为 37%（16/43）。** 同一条依赖被两条边表示（端点级 `AWSServiceEndpoint` 与资源级资源节点），两条都为真但不是两个依赖，分母因此虚高。其中 4 条可从可评估分母移出；另 2 条**拒绝移出** —— 这些边的判定恰好落在粗粒度那一侧而细粒度为空，移出会把已采集到的实测结论从分母里藏掉。该 2 条的整改动作是把证据归并到资源粒度那条边，属语义搬迁，须逐条确认切断手段的作用域是否适用于资源粒度，不做自动归并。
+**11.1a 上述分母含 6 条粒度重复，去重后覆盖率为 39%（17/44）。** 同一条依赖被两条边表示（端点级 `AWSServiceEndpoint` 与资源级资源节点），两条都为真但不是两个依赖，分母因此虚高。其中 6 条可从可评估分母移出；另 0 条**拒绝移出** —— 这些边的判定恰好落在粗粒度那一侧而细粒度为空，移出会把已采集到的实测结论从分母里藏掉。该 0 条的整改动作是把证据归并到资源粒度那条边，属语义搬迁，须逐条确认切断手段的作用域是否适用于资源粒度，不做自动归并。
 
-**11.2 已验证的 16 条边并非同等强度证据。** 「已验证」这一个计数掩盖了三个不同的缺口，逐项披露如下（详见 §6）：
+**11.2 已验证的 17 条边并非同等强度证据。** 「已验证」这一个计数掩盖了三个不同的缺口，逐项披露如下（详见 §6）：
 
 - **7 条未记录切断手段**，因此其结论的适用范围不明。这些判定由早期实验写入。**本报告不为它们追认手段** —— 那不是本轮采集的证据。整改方向：重跑这些边的切断实验并记录手段，或将其降级回未评估。
 

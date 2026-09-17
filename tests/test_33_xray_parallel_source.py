@@ -625,3 +625,103 @@ def test_x18_self_reference_is_detected_by_entity_not_key_equality():
     # 不同实体不能被误判为自环
     other = m._classify('petsearch', None)
     assert not m._is_self_reference(body, other)
+
+
+# ── 2026-09-17 补：名字解析必须走真源，抄本不得与真源矛盾 ──────────────
+
+def _xray_mod():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_ex", "infra/lambda/etl_xray/neptune_etl_xray.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def test_t33_服务本体名必须过别名表而不是逐字使用():
+    """X-Ray 上报名不等于图谱服务名，必须解析。
+
+    此前 `_classify` 对 `xray_type is None` 直接返回 `(raw.lower(), ...)`，
+    **完全不过别名表**。`PetSearch` 小写后正好等于图谱名，所以一直没暴露；
+    `payforadoption-api-go` 不等，于是它 6 小时 30932 次调用的出边全丢
+    （SQS x2541、API Gateway x6222、postgres x14411）。
+
+    **「图上大部分边都在」不能证明解析是通的** —— 只能证明大部分名字碰巧相等。
+    这个门禁钉住实测过的四个名字，其中三个是靠碰巧相等活下来的反例。
+    """
+    m = _xray_mod()
+    for raw, want in (('payforadoption-api-go', 'payforadoption'),
+                      ('PetSearch', 'petsearch'),
+                      ('PetSite', 'petsite'),
+                      ('pay-for-adoption', 'payforadoption')):
+        got = m._classify(raw, None)
+        assert got and got[0] == want, "%r 解析成 %r，应为 %r" % (raw, got, want)
+
+
+def test_t33_agentcore_限定符后缀必须剥掉且源端标签含AgentRuntime():
+    """`.DEFAULT` 是部署形态不是身份；解析与匹配是两道关，只修一道等于没修。"""
+    m = _xray_mod()
+    got = m._classify('WaggleAIOrchestrator.DEFAULT', None)
+    assert got, "AgentRuntime 源端被丢弃"
+    assert got[0] == 'waggleaiorchestrator', "规范名未剥后缀: %r" % (got,)
+    # 第三位是大小写敏感匹配用的原始名，必须是**剥完后缀**的
+    assert got[2] == 'WaggleAIOrchestrator', (
+        "身份名仍带 .DEFAULT，匹配不到 AgentRuntime:WaggleAIOrchestrator: %r" % (got,))
+    assert 'AgentRuntime' in m.SRC_CANDIDATE_LABELS, (
+        "源端候选标签缺 AgentRuntime —— 名字解析对了也匹配不到节点")
+
+
+def test_t33_apigateway_stage_解析到后端服务而不新建节点():
+    """`config.py` 有 APIGateway 类型但无 collector，建节点只会添一条不可验证的边。"""
+    m = _xray_mod()
+    got = m._classify('PetAdoptionStatusUpdater/prod', 'AWS::ApiGateway::Stage')
+    assert got and got[0] == 'petstatusupdater', (
+        "API Gateway Stage 未解析到后端服务: %r" % (got,))
+
+
+def test_t33_sql层是显式决定而不是静默落空():
+    """不建模 SQL 层的理由是会造粒度重复，必须写成显式分支让人看得见。"""
+    import pathlib
+    m = _xray_mod()
+    assert m._classify('postgres', 'Database::SQL') is None
+    src = pathlib.Path(
+        "infra/lambda/etl_xray/neptune_etl_xray.py").read_text(encoding="utf-8")
+    assert "Database::SQL" in src and "刻意不建模" in src, (
+        "SQL 层的跳过没有写成带理由的显式决定")
+
+
+def test_t33_service_mappings抄本不得与真源矛盾():
+    """三份 JSON 抄本必须与 profiles/petsite.yaml 一致。
+
+    2026-09-17 实测三份**已漂移到实际错误**：etl_xray 那份说
+    `petlistadoptions.type = lambda`（账号里不存在这个 Lambda，它是 EKS 部署
+    list-adoptions）、`petstatusupdater.tier = Tier2`（真源已写明 Tier2 是错的）。
+
+    profile 有 test_24 对着实际 AWS 校验，**但那个校验不覆盖抄本**，
+    所以旧错值活到了今天。这个门禁补上那个缺口。
+    """
+    import json
+    import pathlib
+    import yaml
+    prof = (yaml.safe_load(pathlib.Path('profiles/petsite.yaml').read_text(
+        encoding='utf-8')) or {}).get('services', {})
+    assert prof, "读不到真源"
+    for f in ('infra/lambda/etl_xray/service_mappings.json',
+              'infra/lambda/etl_aws/service_mappings.json',
+              'infra/lambda/etl_deepflow/service_mappings.json'):
+        d = json.loads(pathlib.Path(f).read_text(encoding='utf-8'))
+        for svc, cfg in prof.items():
+            if cfg.get('tier'):
+                assert d.get('tier_map', {}).get(svc) == cfg['tier'], (
+                    "%s: tier_map.%s=%r 与真源 %r 矛盾"
+                    % (f, svc, d.get('tier_map', {}).get(svc), cfg['tier']))
+            want_type = cfg.get('type') or (
+                'lambda' if cfg.get('lambda_name') else 'k8s')
+            assert d.get('service_types', {}).get(svc) == want_type, (
+                "%s: service_types.%s=%r 与真源 %r 矛盾"
+                % (f, svc, d.get('service_types', {}).get(svc), want_type))
+            for key in filter(None, [cfg.get('k8s_deployment')]
+                              + list(cfg.get('aliases') or [])):
+                assert d.get('k8s_alias', {}).get(key) == svc, (
+                    "%s: k8s_alias 缺 %r -> %r（真源里有这个别名）"
+                    % (f, key, svc))

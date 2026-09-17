@@ -15,7 +15,12 @@
     "petadoptionshistory": "pethistory",
     "pethistory-service": "pethistory",
     "list-adoptions": "petlistadoptions",
-    "traffic-generator": "trafficgenerator"
+    "traffic-generator": "trafficgenerator",
+    "petsite": "petsite",
+    "payforadoption-api-go": "payforadoption",
+    "pethistory": "pethistory",
+    "petadoptionstatusupdater": "petstatusupdater",
+    "PetAdoptionStatusUpdater": "petstatusupdater"
   },
   "neptune_to_k8s": {
     "petsite": "petsite-deployment",

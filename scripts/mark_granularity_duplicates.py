@@ -84,6 +84,55 @@ _NO_RESOURCE_NODE = frozenset({'ssm', 'sts', 'xray'})
 
 KIND = 'granularity_duplicate'
 
+#: 切断手段 -> 该手段证据的**作用域粒度**。
+#:
+#: ## 为什么规范侧不能固定选细粒度
+#:
+#: 第一版规则写的是「切断实验作用域是资源 ARN，所以规范侧恒为资源粒度」。
+#: 2026-09-17 逐条复核 B 组时发现**不成立**：
+#:
+#:     petsearch -> s3  的实验是 FIS disrupt-connectivity **scope=s3**
+#:       —— 网络层、按 AWS **服务**切，不是按桶 ARN 切。
+#:       证据天然属于端点粒度那条边，规范侧是粗粒度那条。
+#:
+#:     payforadoption -> dynamodb 的证据是源码审计，点名
+#:       `repository.go:529 db.Table(...)` 具体到那张表 —— 规范侧是资源粒度。
+#:
+#: 所以规范侧**由证据的作用域决定**。这不是细节：选错规范侧会把
+#: 一条服务级切断的结论挂到某个具体资源上，等于声称「我们验证过这个桶」，
+#: 而实际验证的是「到 S3 这个服务的连通性」—— 那是范围虚报，
+#: 与本仓库 severance 标错的三次是同一类问题。
+_SEVERANCE_SCOPE_GRANULARITY = {
+    'iam-deny': 'resource',        # 策略 Resource 写的是资源 ARN
+    'fis-network': 'service',      # FIS disrupt-connectivity scope=<服务>
+    'fis-reboot': 'resource',      # 针对具体实例
+    'source-audit': 'resource',    # 源码里点名的是具体资源
+}
+#: 实验 id 里出现这些片段时按此推断作用域 —— 早期实验没写 verify_severance
+#: （报告 §11.2 披露的「7 条未记录切断手段」）。**只用于推断作用域，
+#: 不用于追认手段** —— 追认手段是虚假陈述，本报告明确拒绝那样做。
+_EXPERIMENT_HINT_GRANULARITY = (
+    ('fis-network-disrupt', 'service'),
+    ('network-disrupt', 'service'),
+    ('fis', 'resource'),
+)
+
+
+def evidence_granularity(status: str, severance: str, experiment: str) -> str:
+    """判断这条边的证据是**服务级**还是**资源级**作用域。
+
+    拿不准时返回 `'unknown'` —— 那时**拒绝归并**，不猜。
+    猜错的代价是把结论挂到错误的粒度上，构成范围虚报。
+    """
+    sev = (severance or '').strip().lower()
+    if sev in _SEVERANCE_SCOPE_GRANULARITY:
+        return _SEVERANCE_SCOPE_GRANULARITY[sev]
+    exp = (experiment or '').lower()
+    for frag, gran in _EXPERIMENT_HINT_GRANULARITY:
+        if frag in exp:
+            return gran
+    return 'unknown'
+
 
 def _edge_ids(nc, service: str, target: str) -> list[str]:
     """取 service -> target 之间全部边的 id。
@@ -127,7 +176,15 @@ def find_shadows(rows: list[dict]) -> dict:
             item = {'service': svc, 'ep': ep, 'shadow_status': shadow_st,
                     'peer_label': res_label,
                     'peer_target': peers[0].get('target'),
-                    'peer_status': peer_st[0]}
+                    'peer_status': peer_st[0],
+                    'severance': r.get('verify_severance'),
+                    'experiment': r.get('verify_experiment'),
+                    'reason': r.get('verify_reason'),
+                    'channel': r.get('verify_evidence_channel'),
+                    'confidence': r.get('confidence'),
+                    'evidence_granularity': evidence_granularity(
+                        shadow_st, r.get('verify_severance'),
+                        r.get('verify_experiment'))}
             if not shadow_st and any(peer_st):
                 groups['A'].append(item)
             elif shadow_st and not any(peer_st):
@@ -140,9 +197,80 @@ def find_shadows(rows: list[dict]) -> dict:
     return groups
 
 
+
+def _consolidate(nc, g: dict, apply: bool) -> int:
+    """把 B 组的判定搬到**规范侧**那条边。
+
+    规范侧由证据作用域决定（见 `_SEVERANCE_SCOPE_GRANULARITY`）：
+
+        作用域 service  -> 端点粒度那条本来就是规范侧，**无需搬迁**，
+                           改把资源粒度那条标成重复
+        作用域 resource -> 判定要搬到资源粒度那条边
+        作用域 unknown  -> **拒绝搬迁**，原样留着并报出来
+
+    ## 搬迁时必须原样带走 severance / channel / experiment
+
+    改写其中任何一项就是在合规产物上**错标证据来源**。本仓库为此付过三次
+    代价：一条用 16 秒实例重启验证的边被标成 `iam-deny`，而两种手段的
+    适用范围差得很远（IAM deny 期间调用一直失败，覆盖「依赖不可用」；
+    实例重启只是瞬时中断，**明确不覆盖「数据库彻底不可用」**）。
+    报告按 severance 披露适用范围，标错就是虚假陈述。
+
+    所以搬迁是**逐字复制**，只换 edge_id，并在 reason 末尾追加一句搬迁说明
+    （让读者能查到这条判定不是在这个粒度上直接测出来的）。
+    """
+    from runner.edge_verification import write_verdict
+    import time as _t
+    moved = skipped = 0
+    for i in g['B']:
+        gran = i['evidence_granularity']
+        if gran != 'resource':
+            print("  ⏭ %s -> %s：作用域=%s，%s"
+                  % (i['service'], i['ep'], gran,
+                     "端点粒度本就是规范侧，不搬" if gran == 'service'
+                     else "**判不出作用域，拒绝搬迁**"))
+            skipped += 1
+            continue
+        tgt_ids = _edge_ids(nc, i['service'], i['peer_target'])
+        if not tgt_ids:
+            print("  ✗ %s -> %s：找不到资源粒度那条边 %s，拒绝搬迁"
+                  % (i['service'], i['ep'], i['peer_target']))
+            skipped += 1
+            continue
+        reason = (str(i.get('reason') or '')
+                  + "｜【粒度归并】本判定原记录在服务粒度边 "
+                    "AWSServiceEndpoint:%s 上，因证据作用域是**资源级**"
+                    "（severance=%s）而搬到这条资源粒度边。"
+                    "证据本身未重新采集，severance / evidence_channel / "
+                    "experiment 逐字保留。" % (i['ep'], i['severance']))
+        for eid, rel in tgt_ids:
+            print("  %s %s -%s-> %s  搬入 status=%s"
+                  % ("→" if apply else "[dry]", i['service'], rel,
+                     (i['peer_target'] or '')[:40], i['shadow_status']))
+            if not apply:
+                continue
+            ok = write_verdict({
+                'edge_id': eid, 'label': rel, 'observer': i['service'],
+                'status': i['shadow_status'], 'reason': reason,
+                'confidence': i.get('confidence') or 0.4,
+                'verified_at': int(_t.time()),
+                'evidence_channel': i.get('channel') or 'unknown',
+                'severance': i.get('severance') or '',
+                'verifier': 'granularity-consolidation',
+                'experiment_id': i.get('experiment') or '',
+                'confirm_count': 0, 'refute_count': 0,
+            })
+            moved += 1 if ok else 0
+    print("\n  搬迁 %d 条，跳过 %d 条%s" % (moved, skipped,
+          "" if apply else "（dry-run，加 --apply 生效）"))
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument('--apply', action='store_true')
+    ap.add_argument('--consolidate', action='store_true',
+                    help='把 B 组的判定搬到规范侧那条边（只搬作用域判得出的）')
     a = ap.parse_args()
 
     from compliance_export.queries import fetch_function_mapping, _dep_labels
@@ -160,10 +288,13 @@ def main() -> int:
         print("  %-16s 端点:%-14s st=%-16s ← %s:%s st=空" % (
             i['service'], i['ep'], i['shadow_status'],
             i['peer_label'], (i['peer_target'] or '')[:32]))
-    if g['B']:
-        print("  ↑ 排除这些会把**真跑过实验采集来的事实**从分母里藏掉。")
-        print("    正解是把证据归并到细粒度那条边，属语义搬迁，需逐条确认")
-        print("    切断手段的作用域是否真的适用于资源粒度，本脚本不自动做。")
+    for i in g['B']:
+        gran = i['evidence_granularity']
+        canon = ("粗粒度（端点）本身就是规范侧" if gran == 'service'
+                 else "资源粒度是规范侧，需把判定搬过去" if gran == 'resource'
+                 else "**作用域判不出 -> 拒绝归并**")
+        print("    作用域=%-8s severance=%-12s -> %s"
+              % (gran, i['severance'] or '未记录', canon))
     print("\n=== C 组：两侧都无判定，标记并可排除 %d 条 ===" % len(g['C']))
     for i in g['C']:
         print("  %-16s 端点:%-14s ← %s:%s" % (
@@ -182,8 +313,12 @@ def main() -> int:
     print("  其中可排除（A+C）          %d  -> 去重后分母 %d" % (excludable, tot - excludable))
     print("  拒绝排除（B，待归并）      %d" % len(g['B']))
 
+    if a.consolidate:
+        return _consolidate(nc, g, apply=a.apply)
+
     if not a.apply:
-        print("\n（只报告。加 --apply 写回 verify_assessability=%s）" % KIND)
+        print("\n（只报告。加 --apply 写回 verify_assessability=%s；"
+              "加 --consolidate 归并 B 组）" % KIND)
         return 0
 
     from runner.edge_verification import write_assessability

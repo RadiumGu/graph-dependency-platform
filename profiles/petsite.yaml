@@ -41,6 +41,17 @@ services:
     k8s_deployment: "pay-for-adoption"
     k8s_label: "pay-for-adoption"
     neptune_name: "payforadoption"
+    aliases:
+      # X-Ray 里这个服务上报的名字（2026-09-17 实测）—— Go 服务自己设的
+      # service name，与 K8s 部署名 `pay-for-adoption` 不同。
+      #
+      # 少了它，X-Ray 观测到的**全部出边**都落不进图谱：实测 6 小时窗口
+      # 30932 次调用（SQS x2545、API Gateway x6234、postgres x14424、
+      # PetSearch x2233、SSM x2545）一条都没进去。此前图上那条
+      # `payforadoption -> ssm(src=xray)` 是早期窗口从 FQDN 形态
+      # `pay-for-adoption.petadoptions.svc.cluster.local` 碰巧解出来的，
+      # 不是系统性的 —— 所以「图上有一条 xray 边」并不说明解析是通的。
+      - "payforadoption-api-go"
     cloudwatch:
       namespace: "AWS/ApplicationELB"
       dimension_name: "TargetGroup"
