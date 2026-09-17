@@ -258,7 +258,8 @@ def main() -> int:
         print("\n（--list 模式，未写回。加 --apply 生效）")
         return 0
 
-    from runner.edge_verification import write_verdict
+    from runner.edge_verification import (write_verdict, write_assessability,
+                                          reset_dependency_class)
     import importlib.util
     spec = importlib.util.spec_from_file_location(
         "_vd", os.path.join(os.path.dirname(__file__), "verify_via_iam_deny.py"))
@@ -292,13 +293,52 @@ def main() -> int:
                 "evidence_channel": "source-code+iac",
                 # 源码审计不做故障注入 —— 生效性「不适用」而非「未知」
                 "injection_confirmed": None,
-                "dependency_class": status,
+                # ⚠️ **不**把可评估性词汇塞进 dependency_class：那个字段的既定词汇是
+                # hard/degraded/soft（graph_confidence.py:75），且被 DR 影响面
+                # 分析消费。可评估性走独立的 verify_assessability。
+                "dependency_class": None,
                 "dependency_class_reason": v["why"][:300],
                 "observing_sources": 0,
             })
+            # 可评估性走独立字段 —— 与 verify_status 同值不等于同轴：
+            # status 说「取到了什么证据」，assessability 说「为什么拿不到
+            # confirmed」。两个字段都要有，否则查询端只能二选一。
+            write_assessability(e["eid"], status, v["why"])
             print("  %s %s  (edge %s)" % ("✓" if ok else "✗", key, e["eid"][:12]))
             n += 1 if ok else 0
-    print("\n已写回 %d 条边。%s" % (n, _ROLE_SNAPSHOT_NOTE))
+    # ── platform_pull / designed_to_fail：只写分级，**不动 verify_status** ──
+    #
+    # 这两类边有真实的实验结论（多为 inconclusive —— 真跑过、退化不足以判定）。
+    # 用 write_verdict 去标分级会把那次结论覆盖掉，而实验结果是采集来的事实，
+    # 不能被一次源码审计抹掉。所以走 write_dependency_class 这条窄路径。
+    #
+    # 之前把这两类留在「不写回」组是不对的：我在本文件里亲手写下
+    # 「只在报告里区分是不够的，图谱本身必须能查出差别」，然后没对它们执行。
+    m = 0
+    for dep_class, table in (("platform_pull", PLATFORM_PULL),
+                             ("designed_to_fail", DESIGNED_TO_FAIL)):
+        for key, v in table.items():
+            r = rows.get(key)
+            if r is None:
+                continue
+            eids, how = vd._edge_ids(key[0], key[2])
+            if not eids:
+                raise SystemExit("定位不到边 id：%s（%s）" % (key, how))
+            reason = "%s｜证据：%s｜搜过：%s" % (
+                v["why"], v["evidence"], ", ".join(v["searched"]))
+            for e in eids:
+                ok = write_assessability(e["eid"], dep_class, reason)
+                # 清掉第一版误写进承重程度字段的可评估性词汇。
+                # 那个字段有下游消费者（DR 影响面分析），读到 platform_pull
+                # 这种值无法解释。
+                reset_dependency_class(e["eid"])
+                print("  %s [%s] %s  (edge %s，verify_status 保持 %s)"
+                      % ("✓" if ok else "✗", dep_class, key, e["eid"][:12],
+                         r.get("verify_status") or "-"))
+                m += 1 if ok else 0
+
+    print("\n已写回 %d 条边状态、%d 条边分级。%s"
+          % (n, m, _ROLE_SNAPSHOT_NOTE))
     return 0
 
 

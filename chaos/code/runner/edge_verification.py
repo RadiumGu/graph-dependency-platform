@@ -430,6 +430,66 @@ def write_verdict(v: dict) -> bool:
     return True
 
 
+def write_assessability(edge_id: str, kind: str, reason: str) -> bool:
+    """写**可评估性**分级 —— 独立属性，不碰 `verify_status`，更不碰
+    `verify_dependency_class`。
+
+    ## 三个轴，三个字段，不许合并
+
+        verify_status             取到了什么证据
+                                 confirmed / inconclusive / modeling_artifact /
+                                 bootstrap_only / （空=未评估）
+        verify_dependency_class  失效时业务坏到什么程度（**承重程度**）
+                                 hard / degraded / soft / unclassified
+                                 —— 见 graph_confidence.py:75、:410
+        verify_assessability     这条边为什么（不）能靠切断实验拿到 confirmed
+                                 load_bearing / platform_pull /
+                                 designed_to_fail / bootstrap_only
+
+    ## 为什么单独开一个字段（2026-09-17 的自纠）
+
+    我第一版把 `platform_pull` / `designed_to_fail` 写进了
+    `verify_dependency_class`。那个字段已有既定词汇 `hard/degraded/soft`，
+    **且有下游消费者**：DR 影响面分析读它来判断故障传播程度，
+    本仓库还专门有 `retract_false_soft_verdicts.py` /
+    `reclassify_blocked_edges.py` 两个脚本，就是因为 `soft` 曾被错写、
+    必须撤回。往里塞另一个轴的词汇会让那个消费者读到无法解释的值。
+
+    这与 `verify_evidence_channel` 那次是同一个错：一个字段承载两套不同轴的
+    词汇。上次的补救是加前缀，这次是**从一开始就分字段** ——
+    加前缀只是让人能分辨，分字段才让消费者不会读错。
+    """
+    k = str(kind).replace("'", "")[:40]
+    rs = str(reason).replace("'", "").replace("\\", "")[:300]
+    q = ("g.E('%s')"
+         ".property('verify_assessability', '%s')"
+         ".property('verify_assessability_reason', '%s')"
+         % (edge_id, k, rs))
+    try:
+        query_gremlin_parsed(q)
+    except Exception as e:
+        logger.error("写回可评估性失败 edge=%s: %s", edge_id, e)
+        return False
+    return True
+
+
+def reset_dependency_class(edge_id: str) -> bool:
+    """把 `verify_dependency_class` 恢复为 `unclassified`。
+
+    用于清除我第一版误写进这个字段的可评估性词汇。`unclassified` 是
+    `write_verdict` 对「判过但分不了级」的既定取值，所以它是安全的中性值 ——
+    留空不行：属性缺失与「没分级」在查询上无法区分。
+    """
+    q = ("g.E('%s').property('verify_dependency_class', 'unclassified')"
+         % edge_id)
+    try:
+        query_gremlin_parsed(q)
+    except Exception as e:
+        logger.error("重置分级失败 edge=%s: %s", edge_id, e)
+        return False
+    return True
+
+
 def coverage(now_epoch: int | None = None) -> dict:
     """边级验证覆盖度 —— 哪些依赖边从未被任何实验验证过。
 

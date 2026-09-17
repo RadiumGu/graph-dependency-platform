@@ -160,6 +160,15 @@ def fetch_function_mapping(nc, dep_labels: List[str]) -> List[Dict[str, Any]]:
         "       d.last_seen AS last_seen, "
         "       d.verify_severance AS verify_severance, "
         "       d.verify_evidence_channel AS verify_evidence_channel, "
+        # ⚠️ 分级必须**取出来**，否则写进去等于没写。
+        # 2026-09-17：`verify_dependency_class` 写了但查询没取，报告一次都没读到 ——
+        # 与当初 §6 那次「查询根本没取 verify_severance/verify_evidence_channel、
+        # 于是每条 confirmed 都渲染成同一句」是**同一个缺陷**，我又犯了一次。
+        # 判据：任何落在合规产物上的字段，写入端与读取端必须成对出现。
+        "       d.verify_dependency_class AS verify_dependency_class, "
+        "       d.verify_assessability AS verify_assessability, "
+        "       d.verify_assessability_reason AS verify_assessability_reason, "
+        "       d.verify_dependency_class_reason AS verify_dependency_class_reason, "
         "       d.verify_experiment AS verify_experiment "
         "ORDER BY capability, service, edge_type, target"
     )

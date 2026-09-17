@@ -714,3 +714,41 @@ def test_m18_四类不可确认边必须各自单列():
         "bootstrap_only 的措辞没说明调用真实存在 —— "
         "读者会当成建模产物，那是把一条真实依赖从清单里抹掉")
     assert "source-audit" in SEVERANCE_SCOPE, "源码审计手段未登记范围"
+
+def test_m19_三个轴不许合并到一个字段():
+    """一个字段承载两套不同轴的词汇，本项目已付过两次代价。
+
+        verify_status             取到了什么证据
+        verify_dependency_class   失效时业务坏到什么程度（hard/degraded/soft）
+                                  —— graph_confidence.py:75、:410，**有下游消费者**
+                                  （DR 影响面分析；retract_false_soft_verdicts.py
+                                  与 reclassify_blocked_edges.py 的存在就是因为
+                                  `soft` 曾被错写、必须撤回）
+        verify_assessability      为什么（不）能靠切断实验拿到 confirmed
+
+    2026-09-17：我第一版把 platform_pull / designed_to_fail 写进了
+    verify_dependency_class —— 往一个有既定词汇且有消费者的字段里塞另一个轴。
+    与 verify_evidence_channel 那次同源；上次补救是加前缀，这次改成分字段：
+    **加前缀只是让人能分辨，分字段才让消费者不会读错。**
+    """
+    src = pathlib.Path("scripts/classify_modeling_artifacts.py").read_text(
+        encoding="utf-8")
+    code = "\n".join(ln for ln in src.splitlines()
+                     if not ln.lstrip().startswith("#"))
+    assert "write_assessability" in code, "可评估性没有走独立写入路径"
+    # 可评估性词汇不得出现在 dependency_class 的赋值处
+    import re
+    for m in re.finditer(r'"dependency_class":\s*([^,\n]+)', code):
+        val = m.group(1).strip()
+        assert val in ("None", "v.get('dependency_class')", 'v.get("dependency_class")'), (
+            "往 dependency_class 写了 %r —— 那个字段的既定词汇是 "
+            "hard/degraded/soft 且被 DR 影响面分析消费，"
+            "可评估性词汇必须走 verify_assessability" % val)
+    # 写入端与读取端必须成对：写了不取等于没写
+    q = pathlib.Path("compliance_export/queries.py").read_text(encoding="utf-8")
+    for field in ("verify_assessability", "verify_dependency_class",
+                  "verify_severance", "verify_evidence_channel"):
+        assert field in q, (
+            "%s 写入了但查询没取 —— 与 §6 那次「每条 confirmed 都渲染成同一句」"
+            "是同一个缺陷：落在合规产物上的字段，写入端与读取端必须成对出现。"
+            % field)
