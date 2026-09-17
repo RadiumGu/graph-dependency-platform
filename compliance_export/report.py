@@ -282,6 +282,16 @@ def _evidence(row: Dict[str, Any]) -> Tuple[str, str]:
         return "TEST", ("Confirmed（%s）— no exceptions noted" % name)
     if status == "inconclusive":
         return "TEST", "Inconclusive — 已注入故障，观测退化不足以判定"
+    if status == "bootstrap_only":
+        # 与 modeling_artifact 的区别必须能从措辞看出来：这条依赖**是真的**，
+        # 只是不在业务请求路径上。它留在可评估分母里，但**永远拿不到
+        # confirmed** —— 切断它不产生业务退化，而没有业务证据的 confirmed
+        # 只证明了调用失败、没证明业务受损。
+        #
+        # 把它写成 confirmed 或写成建模产物，都是错的：前者过度声称，
+        # 后者把一条真实依赖从清单里抹掉。
+        return "EXAMINE", ("引导路径依赖 — 调用真实存在，但只在引导/管理端点上，"
+                           "无用户可见功能依赖，切断不产生业务退化")
     if status == "modeling_artifact":
         # 取证方法是 EXAMINE 而非 TEST：源码/IaC 审计是**检查**，不是测试。
         # 用 TEST 会让读者以为做过故障注入。

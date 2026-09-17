@@ -138,11 +138,42 @@ DESIGNED_TO_FAIL: dict[tuple[str, str, str], dict] = {
 }
 
 
+#: 真实依赖，但只在**引导/管理路径**上被调用 —— 留在分母，且**永远拿不到
+#: confirmed**：没有任何用户可见功能依赖它，切断它不会产生业务退化。
+#:
+#: 这一类必须单列，并进上面任何一类都是错的：
+#:   不是 modeling_artifact —— 调用真实存在，端点运行时可达
+#:   不是 platform_pull     —— 由应用代码发起，不是平台行为
+#:   不是 designed_to_fail  —— 调用会成功，只是不在业务路径上
+BOOTSTRAP_ONLY: dict[tuple[str, str, str], dict] = {
+    ("payforadoption", "AccessesData", "dynamodb"): {
+        "why": "DynamoDB 调用只出现在引导端点 POST /api/triggerseeding，不在业务请求路径上",
+        "evidence": (
+            "payforadoption/repository.go:499 TriggerSeeding 是唯一的 DynamoDB 调用点"
+            "（:528 dynamo.New、:529 db.Table、:531-534 Batch().Write() 批量 Put 宠物目录）；"
+            "路由挂在 payforadoption/transport.go:69 POST /api/triggerseeding；"
+            "业务端点 /api/completeadoption（transport.go:54）无任何 DynamoDB 调用路径"),
+        "searched": ("dynamodb", "dynamo.", "guregu", "db.Table", "DynamoDBTable",
+                     "Batch()", "BatchWrite", "PutItem"),
+        "note": (
+            "此前被标为 confirmed 且无切断手段记录，**那条 confirmed 不成立**。"
+            "近 60 分钟活跃负载下 X-Ray 里 payforadoption 没有 DynamoDB 出边"
+            "（出边为 HTTP GET 51、API Gateway 102、SSM 51、SQS 51、postgres 150、"
+            "PetSearch 52）。这不是观测缺口 —— main.go:141 有 "
+            "otelaws.AppendMiddlewares，AWS SDK 客户端确实被插桩，"
+            "dynamo.New(awsCfg) 继承该中间件，播种若跑过就会出现节点。"
+            "刻意未做切断实验：结果可预知（注入生效但无业务退化 = inconclusive），"
+            "而代价是对线上打一个会批量重写宠物目录的管理端点，不成比例。"),
+    },
+}
+
+
 def _validate() -> None:
     """import 期就拒绝没有证据的条目 —— 证据不是可选项。"""
     for name, table in (("ARTIFACTS", ARTIFACTS),
                         ("PLATFORM_PULL", PLATFORM_PULL),
-                        ("DESIGNED_TO_FAIL", DESIGNED_TO_FAIL)):
+                        ("DESIGNED_TO_FAIL", DESIGNED_TO_FAIL),
+                        ("BOOTSTRAP_ONLY", BOOTSTRAP_ONLY)):
         for key, v in table.items():
             if len(key) != 3 or not all(key):
                 raise ValueError("%s 的键必须是 (service, edge_type, target)：%r"
@@ -179,33 +210,44 @@ def main() -> int:
     print("图谱中一跳依赖边：%d 条\n" % len(rows))
 
     plans = []
-    for key, v in ARTIFACTS.items():
-        r = rows.get(key)
-        if r is None:
-            # 硬失败而不是跳过。**「表里有、图里没有」几乎总是名字写错**，
-            # 而静默跳过的后果是「我以为标了、其实一条没标」——
-            # 第一版就因为拿被截断到 42 字符的终端显示值当数据用，
-            # 漏掉了两条边且只打了一行警告。
-            cand = [k[2] for k in rows if k[2].startswith(key[2][:24])]
-            raise SystemExit(
-                "图谱里没有这条边：%s\n"
-                "  前缀相近的真实目标名：%s\n"
-                "  （若是从终端输出复制的名字，检查是否被列宽截断）"
-                % (key, cand or "无"))
-        plans.append((key, v, r.get("verify_status")))
+    # ARTIFACTS 出可评估分母；BOOTSTRAP_ONLY 留在分母但永远拿不到 confirmed。
+    # 两者都要写回状态 —— 只在报告里区分是不够的，图谱本身必须能查出差别，
+    # 否则下一个查询者只能看到一个没有依据的 confirmed。
+    for status, table in (("modeling_artifact", ARTIFACTS),
+                          ("bootstrap_only", BOOTSTRAP_ONLY)):
+        for key, v in table.items():
+            r = rows.get(key)
+            if r is None:
+                # 硬失败而不是跳过。**「表里有、图里没有」几乎总是名字写错**，
+                # 而静默跳过的后果是「我以为标了、其实一条没标」——
+                # 第一版就因为拿被截断到 42 字符的终端显示值当数据用，
+                # 漏掉了两条边且只打了一行警告。
+                cand = [k[2] for k in rows if k[2].startswith(key[2][:24])]
+                raise SystemExit(
+                    "图谱里没有这条边：%s\n"
+                    "  前缀相近的真实目标名：%s\n"
+                    "  （若是从终端输出复制的名字，检查是否被列宽截断）"
+                    % (key, cand or "无"))
+            plans.append((key, v, r.get("verify_status"), status))
 
-    print("── 将标为 modeling_artifact（出可评估分母）──")
-    for key, v, cur in plans:
-        flag = "  ⚠️ 修正假 confirmed" if cur == "confirmed" else ""
-        print("  %-16s -%-13s-> %-42s  现状=%s%s"
-              % (key[0][:16], key[1][:13], key[2][:42], cur or "-", flag))
-        print("      理由: %s" % v["why"])
-        print("      证据: %s" % v["evidence"])
-        print("      搜过: %s" % ", ".join(v["searched"]))
-        if v.get("note"):
-            print("      附注: %s" % v["note"])
-    print()
-    print("── 留在分母、仅标注语义 ──")
+    for status in ("modeling_artifact", "bootstrap_only"):
+        sub = [p for p in plans if p[3] == status]
+        if not sub:
+            continue
+        scope = ("出可评估分母" if status == "modeling_artifact"
+                 else "留在分母，但永远拿不到 confirmed")
+        print("── 将标为 %s（%s）──" % (status, scope))
+        for key, v, cur, _ in sub:
+            flag = "  ⚠️ 修正假 confirmed" if cur == "confirmed" else ""
+            print("  %-16s -%-13s-> %-42s  现状=%s%s"
+                  % (key[0][:16], key[1][:13], key[2][:42], cur or "-", flag))
+            print("      理由: %s" % v["why"])
+            print("      证据: %s" % v["evidence"])
+            print("      搜过: %s" % ", ".join(v["searched"]))
+            if v.get("note"):
+                print("      附注: %s" % v["note"])
+        print()
+    print("── 留在分母、仅标注语义（不写回状态）──")
     for name, table in (("platform_pull", PLATFORM_PULL),
                         ("designed_to_fail", DESIGNED_TO_FAIL)):
         for key, v in table.items():
@@ -224,7 +266,7 @@ def main() -> int:
     spec.loader.exec_module(vd)
 
     n = 0
-    for key, v, _cur in plans:
+    for key, v, _cur, status in plans:
         reason = "%s｜证据：%s｜搜过：%s" % (
             v["why"], v["evidence"], ", ".join(v["searched"]))
         if v.get("note"):
@@ -237,7 +279,7 @@ def main() -> int:
         for e in eids:
             ok = write_verdict({
                 "edge_id": e["eid"],
-                "status": "modeling_artifact",
+                "status": status,
                 # 源码审计是**确定性**证据：不是采样、不是统计推断，
                 # 而是「这个调用在代码里不存在」。所以给满置信度。
                 "confidence": 1.0,
@@ -250,7 +292,7 @@ def main() -> int:
                 "evidence_channel": "source-code+iac",
                 # 源码审计不做故障注入 —— 生效性「不适用」而非「未知」
                 "injection_confirmed": None,
-                "dependency_class": "modeling_artifact",
+                "dependency_class": status,
                 "dependency_class_reason": v["why"][:300],
                 "observing_sources": 0,
             })

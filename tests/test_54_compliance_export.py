@@ -682,3 +682,35 @@ def test_m17_写回成败不得由记日志决定():
     # 日志必须有自己的 try：记账失败最多让日志缺一行，不能改变写入的成败
     assert body[j:].count("try:") >= 1, (
         "日志没有独立的 try —— 记账失败会伪装成写回失败")
+
+def test_m18_四类不可确认边必须各自单列():
+    """「真实但拿不到 confirmed」有四种成因，混成一类就掩盖了问题。
+
+        modeling_artifact  源码证明调用不存在        → 出可评估分母
+        bootstrap_only     只在引导/管理端点上       → 留在分母，永远拿不到 confirmed
+        platform_pull      平台行为（kubelet 拉镜像）→ 留在分母
+        designed_to_fail   调用会成功但被设计成失败  → 留在分母
+
+    2026-09-17：`payforadoption -> dynamodb` 曾是无手段记录的 confirmed。
+    源码显示 DynamoDB 只在 `POST /api/triggerseeding` 上被调用
+    （repository.go:499），业务端点无该调用路径；活跃负载下 X-Ray 无 DynamoDB
+    出边，且这不是观测缺口（main.go:141 有 otelaws.AppendMiddlewares）。
+    把它标成 modeling_artifact 会抹掉一条真实依赖，留着 confirmed 是过度声称。
+    """
+    from compliance_export.report import _evidence, SEVERANCE_SCOPE
+    seen = {}
+    for st in ("modeling_artifact", "bootstrap_only"):
+        method, wording = _evidence({"verify_status": st})
+        assert method == "EXAMINE", (
+            "%s 的取证方法应是 EXAMINE（检查）而不是 %s —— "
+            "写 TEST 会让读者以为做过故障注入" % (st, method))
+        assert wording not in seen, (
+            "%s 与 %s 的结论措辞相同 —— 读者无法分辨"
+            "「调用不存在」与「调用真实但不在业务路径上」" % (st, seen.get(wording)))
+        seen[wording] = st
+    # bootstrap_only 的措辞必须说明它是**真实**依赖，否则等同于抹掉它
+    _, w = _evidence({"verify_status": "bootstrap_only"})
+    assert "真实" in w, (
+        "bootstrap_only 的措辞没说明调用真实存在 —— "
+        "读者会当成建模产物，那是把一条真实依赖从清单里抹掉")
+    assert "source-audit" in SEVERANCE_SCOPE, "源码审计手段未登记范围"
