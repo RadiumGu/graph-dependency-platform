@@ -93,10 +93,89 @@ _EVIDENCE_DISCIPLINE = """
 
 
 def _aws(*args: str, timeout: int = 180) -> tuple[int, str]:
-    p = subprocess.run(['aws', 'devops-agent', *args,
-                        '--region', REGION, '--output', 'json'],
-                       capture_output=True, text=True, timeout=timeout)
-    return p.returncode, (p.stdout or '') + (p.stderr or '')
+    """调 devops-agent。有 `aws` CLI 就用它，没有则回落到 boto3。
+
+    ## 为什么需要回落（2026-09-17 部署到 Lambda 时踩到）
+
+    本模块原先只有 subprocess 这一条路。它在本地跑得很好，
+    但 **Lambda 运行时不含 AWS CLI** —— 实测 `shutil.which('aws')`
+    返回 `None`。于是生产日志报：
+
+        发起 DevOps Agent 调查失败（不影响告警处理）:
+        FileNotFoundError(2, 'No such file or directory')
+
+    而 `handler.py` 那段是 try/except + warning（发起调查是增强、
+    不是主链路），所以**告警照常处理、闭环静默失效**。
+    这是同一天里第二个"本地绿、生产坏"的形状。
+
+    boto3 这条路已实测可用：Lambda 运行时 botocore 1.42.97
+    有 `devops-agent` client 且 `create_backlog_task` 存在
+    （用一个临时探针 Lambda 验的，验完即删）。
+
+    保留 CLI 分支而不是全量改 boto3：CLI 路径是本地实测过的那条
+    （采纳率 25%→100% 那批实验都走它），换掉等于把已验证的行为
+    重新变成未验证的。
+    """
+    import shutil
+    if shutil.which('aws'):
+        p = subprocess.run(['aws', 'devops-agent', *args,
+                            '--region', REGION, '--output', 'json'],
+                           capture_output=True, text=True, timeout=timeout)
+        return p.returncode, (p.stdout or '') + (p.stderr or '')
+
+    # ── boto3 回落 ──
+    # CLI 的 `--kebab-case` 参数要转成 boto3 的 PascalCase/snake_case。
+    # 只支持本模块实际用到的操作，不做通用转换器 ——
+    # 通用转换器会在遇到没测过的操作时静默传错参数。
+    import json as _json
+    import boto3
+    if not args:
+        return 2, 'no operation given'
+    op = args[0]
+    kv, i = {}, 1
+    while i < len(args):
+        a = args[i]
+        if a.startswith('--'):
+            key = a[2:].replace('-', '_')
+            if i + 1 < len(args) and not args[i + 1].startswith('--'):
+                kv[key] = args[i + 1]
+                i += 2
+                continue
+            kv[key] = True
+        i += 1
+
+    def _camel(s: str) -> str:
+        head, *rest = s.split('_')
+        return head + ''.join(w[:1].upper() + w[1:] for w in rest)
+
+    # `_camel` 的输出（camelCase）就是这个服务的形参名，直接用。
+    params = {_camel(k): v for k, v in kv.items()}
+
+    # `--cli-input-json` 是 **CLI 专属**参数，boto3 没有对应形参。
+    # 它的值本身就是一份完整的请求体，所以在 boto3 这条路上
+    # 应当**展开**成实际参数，而不是当成一个叫 CliInputJson 的字段传进去。
+    #
+    # 踩到过：转换器把它变成 `CliInputJson=<json 字符串>`，
+    # API 报参数错误，而 handler 把错误吞成 warning —— 又是一次静默失效。
+    # ⚠️ 这个服务的 boto3 形参是 **camelCase**（`agentSpaceId`、`taskType`），
+    # 不是多数 AWS 服务的 PascalCase。所以 `_camel` 的输出直接可用，
+    # 不要再首字母大写 —— 本地验证时就是这里报
+    # `Unknown parameter in input: "cliInputJson"`。
+    blob = params.pop('cliInputJson', None)
+    if blob:
+        try:
+            params.update(_json.loads(blob) if isinstance(blob, str) else blob)
+        except (TypeError, ValueError) as exc:
+            return 2, 'cli-input-json 解析失败: %s' % exc
+
+    try:
+        c = boto3.client('devops-agent', region_name=REGION)
+        method = getattr(c, op.replace('-', '_'))
+        resp = method(**params)
+        resp.pop('ResponseMetadata', None)
+        return 0, _json.dumps(resp, default=str)
+    except Exception as exc:                    # noqa: BLE001
+        return 1, '%s: %s' % (type(exc).__name__, exc)
 
 
 def build_description(service: str, symptom: str, extra: str = '') -> str:

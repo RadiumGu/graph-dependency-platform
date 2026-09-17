@@ -1470,3 +1470,95 @@ LLM 回答"Puppy 001 可领养"，而真实数据此刻取不到。
 `trigger_and_observe` 把 "invoke 成功但产出未推进" 与 "invoke 失败"
 **分开记**，因为前者正是本次误判的形状（源吞掉了错误）。
 `t76_06` 钉住这一点。
+
+---
+
+## 2026-09-17 下午（二）— 部署闭环踩到**四个连续的静默失效**
+
+告警触发调查的闭环今天真正打通了（生产 Lambda 从告警链路创建了
+`petsite: trafficgenerator-sqs-age-high`，状态 IN_PROGRESS）。
+但过程里连撞四个坑，**每一个的表现都是"部署成功、日志干净、闭环不工作"**。
+
+这一段的价值不在具体的坑，而在这个**共同形状**：
+
+> `handler.py` 那段是 `try/except + logger.warning`
+> （发起调查是增强、不是主链路，这个设计是对的），
+> 于是任何一环坏掉都不会惊动任何人 ——
+> 而"闭环没工作"的观测表现与"这段时间没有告警"**完全同形**。
+
+### 坑一：模块没进部署包
+
+`actions/devops_agent_trigger.py` 从 `scripts/devops_agent_investigate`
+import（刻意不复制证据纪律文本，`t75_07` 钉着）。
+但 `deploy.sh` 的 zip 那行带 `-x "scripts/*"`，而那个文件本来也不在
+`rca/` 下。生产日志：
+
+    ModuleNotFoundError: No module named 'devops_agent_investigate'
+
+修：`deploy.sh` 显式把它平铺进包根（不能放子目录，那是顶层 import）。
+
+### 坑二：`--environment` 是整体替换，把手工加的开关冲掉了
+
+我先手工 `update-function-configuration` 加了
+`DEVOPS_AGENT_INVESTIGATE_ENABLED=true`，然后又跑了一次 `deploy.sh` ——
+它的 Step 3 用整体 `Variables={...}` 覆盖，那一项**静默消失**。
+
+更糟的是 `on_first_alert()` 在开关关闭时是 `return {'skipped': ...}`
+**不记日志**。所以现象是：部署成功、告警照常、任务数不涨、日志全空。
+
+修两处：开关进 `deploy.sh` 的变量表由脚本管理；开关关闭时记一条 INFO
+（关闭是预期状态所以用 INFO，但必须留痕，否则"没开"和"开了但坏了"分不开）。
+
+### 坑三：Lambda 运行时没有 `aws` CLI
+
+`devops_agent_investigate.py` 的唯一出口是
+`subprocess.run(['aws', 'devops-agent', ...])` —— 本地跑得很好。
+实测 Lambda 里 `shutil.which('aws')` 返回 `None`：
+
+    FileNotFoundError(2, 'No such file or directory')
+
+修：加 boto3 回落（保留 CLI 分支 —— 那是采纳率 25%→100% 那批实验
+实测过的路径，换掉等于把已验证行为变回未验证）。
+用一个临时探针 Lambda 确认运行时 botocore 1.42.97 有 `devops-agent`
+client 且 `create_backlog_task` 存在，验完即删。
+
+回落里两个细节都是踩出来的：
+· `--cli-input-json` 是 **CLI 专属**参数，boto3 没有对应形参，
+  必须**展开**成实际参数而不是当字段传；
+· 这个服务的 boto3 形参是 **camelCase**（`agentSpaceId`），
+  不是多数 AWS 服务的 PascalCase。
+
+这两个是**本地就抓到的** —— 我用 `shutil.which = lambda: None`
+强制走 boto3 分支跑了一次，没等部署。这是这一段唯一做对的地方：
+**能在本地复现的分支，就不要用部署去发现。**
+
+### 坑四：IAM 的服务前缀不是 CLI 名
+
+执行角色缺权限。第一版策略我写的是 `devops-agent:CreateBacklogTask`
+（照 CLI 名），`simulate-principal-policy` 甚至报 `allowed` ——
+因为那是个**不存在的 action**，模拟器不会告诉你拼错了。
+
+真实报错给出了正确前缀：
+
+    is not authorized to perform: aidevops:CreateBacklogTask
+    on resource: arn:aws:aidevops:...:agentspace/60c2f48f-...
+
+**`aidevops:` 才是 IAM 前缀，`devops-agent` 只是 CLI 命令名。**
+
+这条值得单记：**`simulate-principal-policy` 对拼错的 action 名返回
+allowed，不是 invalid。** 拿它验证权限时，action 名必须来自
+真实报错或官方文档，不能照 CLI 名猜。
+
+修：策略改用 `aidevops:CreateBacklogTask`，资源收窄到那一个
+agent space ARN（不是 `*`）。只给 Create，不给 List/Delete。
+
+### 这一段最该带走的一条
+
+**为"增强功能"设计的 try/except + warning 是对的，
+但它把所有配置错误也变成了静默失效。**
+
+所以这类旁路必须满足一个额外要求：**每一条失败路径都要留下可读的痕迹**，
+包括"开关没开"这种预期状态。今天排查时日志里只有
+`-> ['error', 'payload']`（只打了 keys 不打内容），
+逼我靠本地复现 + IAM 模拟去猜 —— 而 IAM 模拟还给了错的答案。
+把 error 内容打进日志之后，下一个坑一次就定位到了。

@@ -124,6 +124,17 @@ def on_first_alert(unified, dry_run: bool = False) -> dict:
     发起调查失败不能影响告警本身的处理，那是主链路。
     """
     if not enabled():
+        # 记一条 INFO 而不是静默返回。
+        #
+        # 2026-09-17 踩到：deploy.sh 的 Step 3 整体替换环境变量、
+        # 把手工加的开关冲掉了，而这里原先是静默 return ——
+        # 于是表现是"部署成功、告警照常处理、闭环失效、日志里什么都没有"。
+        # 排查时唯一的线索是任务数没涨，而那与"这段时间没告警"同形。
+        #
+        # 开关关闭是**预期状态**，所以用 INFO 不用 WARNING；
+        # 但必须留下痕迹，否则"没开"和"开了但坏了"分不开。
+        logger.info("DevOps Agent 调查未发起: %s 未开启（当前值 %r）",
+                    _ENABLED_ENV, os.environ.get(_ENABLED_ENV))
         return {'skipped': f'{_ENABLED_ENV} 未开启'}
     try:
         dai = _investigator()
@@ -149,6 +160,14 @@ def on_first_alert(unified, dry_run: bool = False) -> dict:
             priority='HIGH', dry_run=dry_run)
         logger.info('DevOps Agent 调查已发起 svc=%s alarm=%s -> %s',
                     svc, alarm, list(r))
+        # 只打 keys 不够。2026-09-17 排查时日志里只有
+        # `-> ['error', 'payload']`，看不出哪一步失败 ——
+        # 只能靠本地复现 + IAM 模拟去猜（真因是执行角色缺
+        # devops-agent 权限）。失败原因必须落到日志里，
+        # 否则这个"已发起"的 INFO 会读成成功。
+        if isinstance(r, dict) and r.get('error'):
+            logger.warning('DevOps Agent 调查发起未成功: %s',
+                           str(r.get('error'))[:600])
         return r
     except Exception as exc:                        # noqa: BLE001
         # 主链路优先：发起调查是增强，失败只记录。

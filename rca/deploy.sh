@@ -97,6 +97,27 @@ if ! $DRY_RUN; then
   else
     echo "⚠️  shared/ 目录不存在 — neptune_client 的 get_region 导入会失败"
   fi
+  # Copy scripts/devops_agent_investigate.py —— actions/devops_agent_trigger.py
+  # 从它 import 证据纪律文本与 agent space 常量（刻意不复制第二份，
+  # tests/test_75 钉住这一点）。
+  #
+  # ⚠️ 2026-09-17 踩到：这个文件原先根本没进包，而 zip 那行还带
+  # `-x "scripts/*"`。部署后生产日志报
+  #     ModuleNotFoundError: No module named 'devops_agent_investigate'
+  # 而 handler 里那段是 try/except + logger.warning（发起调查是增强、
+  # 不是主链路），所以**告警照常处理、闭环静默失效** ——
+  # 表现与"开关没开"完全一样，正是最难发现的那种坏法。
+  #
+  # 平铺到包根而不是保留 scripts/ 目录：`from devops_agent_investigate
+  # import ...` 是顶层 import，放进子目录 Lambda 找不到。
+  INVESTIGATE_SRC="$SCRIPT_DIR/../scripts/devops_agent_investigate.py"
+  if [ -f "$INVESTIGATE_SRC" ]; then
+    cp "$INVESTIGATE_SRC" "$BUILD_DIR/"
+    echo "Investigate module included: devops_agent_investigate.py"
+  else
+    echo "⚠️  scripts/devops_agent_investigate.py 不存在 —— "
+    echo "    告警触发调查会在生产静默失效（handler 吞掉 ImportError 只记 warning）"
+  fi
   # Copy profiles directory (EnvironmentProfile dynamic loading)
   PROFILES_DIR="$SCRIPT_DIR/../profiles"
   if [ -d "$PROFILES_DIR" ]; then
@@ -178,6 +199,17 @@ WEBHOOK_URL=$(aws ssm get-parameter --name "${SSM_SLACK_WEBHOOK_PATH:-/rca/slack
 if [ -z "$WEBHOOK_URL" ]; then
     echo "⚠️  SSM ${SSM_SLACK_WEBHOOK_PATH:-/rca/slack/webhook} 未找到 — Slack 通知将以 dry-run 模式运行"
 else
+    # ⚠️ `--environment` 是**整体替换**，不是合并 ——
+    # 任何没列在这里的变量都会被这一步静默删掉。
+    #
+    # 2026-09-17 踩到：手工 `update-function-configuration` 加了
+    # `DEVOPS_AGENT_INVESTIGATE_ENABLED=true`，下一次跑本脚本就被冲掉了，
+    # 而 `on_first_alert()` 在开关关闭时是 `return {'skipped': ...}`
+    # ——**不记日志**。于是表现是"部署成功、闭环静默失效、日志干净"，
+    # 排查时看不到任何线索。
+    #
+    # 所以凡是生产要长期带着的变量，都必须列进这张表由脚本管理，
+    # 不能靠手工 patch。
     run aws lambda update-function-configuration \
         --function-name "$FUNCTION_NAME" \
         --environment "Variables={
@@ -192,10 +224,11 @@ else
             SLACK_CHANNEL=${SLACK_CHANNEL:-#rca-alerts},
             BUFFER_TABLE_NAME=${BUFFER_TABLE_NAME:-gp-alert-buffer},
             SCHEDULER_ROLE_ARN=$SCHEDULER_ROLE_ARN,
-            WINDOW_FLUSH_FUNCTION_ARN=$WINDOW_FLUSH_FUNCTION_ARN
+            WINDOW_FLUSH_FUNCTION_ARN=$WINDOW_FLUSH_FUNCTION_ARN,
+            DEVOPS_AGENT_INVESTIGATE_ENABLED=${DEVOPS_AGENT_INVESTIGATE_ENABLED:-false}
         }" \
         --region "$REGION" > /dev/null
-    echo "Slack webhook configured."
+    echo "Slack webhook configured. DevOps Agent investigate: ${DEVOPS_AGENT_INVESTIGATE_ENABLED:-false}"
 fi
 
 echo ""
