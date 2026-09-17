@@ -963,6 +963,42 @@ def edge_flow_measurable(src_label: str, dst_label: str) -> tuple[bool, str]:
             'AgentCore 运行时之间的委派经网关，X-Ray 服务图里只有一条到'
             '`gateway.bedrock-agentcore` 的合流边，测不出目标粒度。'
             '改用业务探针的语义判据（回答内容而非状态码）。')
+
+    # ── 预签名交付的 S3 桶：边级通道存在但读数无意义（2026-09-17 实测）─────────
+    #
+    # `petsearch -> serviceseks2-s3bucketpetadoption...`：
+    # X-Ray 近 15min total=634 / ok=0 / err=634 / fault=0，基线成功率 0%。
+    # 但 0% **不是故障**，是两件事叠出来的：
+    #
+    #   ① 真实数据路径**不产生任何 S3 API 调用**。图片由 petsearch 用
+    #      S3Presigner 签发预签名 URL（SearchController.java:84
+    #      presignGetObject、WebConfig.java:52 建 bean），预签名是本地密码学
+    #      操作，浏览器直取 —— 既无 X-Ray subsegment 也不进服务图。
+    #   ② 边级通道里唯一的流量是 createBucket，挂在
+    #      `Math.random()*9999 < 100` 的 ~1% 门后，对已拥有的桶**必然**抛
+    #      BucketAlreadyOwnedByYouException（已标 designed_to_fail）。
+    #
+    # 所以边级读数是「一个必失败调用的成功率」，恒为 0，与 S3 数据路径健康无关。
+    # 按 success_rate 中止会让它永远验不了。
+    #
+    # 替代证据：`probe_pet_images`（注册在 petsearch 名下）真的 GET 预签名 URL。
+    # 实测正常 3/3；X-Amz-Signature 置零后 HTTP 403、探针归零 —— 对权限变化敏感，
+    # 而 `probe_home` 恒为 26 不敏感（正好当对照）。
+    #
+    # ⚠️ 刻意**不把所有 S3Bucket 都算进来**：真的走 GetObject/PutObject 的服务，
+    #    边级成功率是有意义的。所以要求「源是 Microservice」并在说明里点明前提；
+    #    要放宽请按服务收窄，不要按类型放开。
+    if dst_label == 'S3Bucket' and src_label == 'Microservice':
+        return False, (
+            'S3 桶的数据路径若走**预签名 URL**（本环境 petsearch 即如此：'
+            'S3Presigner.presignGetObject，浏览器直取），该路径不产生任何 '
+            'S3 API 调用；边级通道里只剩 createBucket 这类必失败的调用'
+            '（~1% 门 + BucketAlreadyOwnedByYou，已标 designed_to_fail），'
+            '成功率恒为 0%，与数据路径健康无关。'
+            '改用业务探针 probe_pet_images：真的 GET 预签名 URL。'
+            '⚠️ 若某服务确实走 GetObject/PutObject（而非预签名），'
+            '它的边级成功率是有意义的 —— 那种情况下本规则不该适用。')
+
     return True, ''
 
 
@@ -1284,7 +1320,14 @@ def run_probe(service: str, label: str, target: str,
     # ── 判定 ──
     print()
     print("── 判定 ──")
-    verdict, why = _verdict(base, during, post, biz_base, biz_during, biz_post)
+    # 边级通道结构性不可测时走另一套判定 —— 刻意分成两个函数而不是在 `_verdict`
+    # 里加分支：`_verdict` 的每一条都建立在「边通道能提供生效性证据」之上，
+    # 掺一个不满足该前提的分支进去，以后改任一条都要重新想另一条还成不成立。
+    if _semantic_only:
+        verdict, why = _semantic_channel_verdict(biz_base, biz_during, biz_post)
+    else:
+        verdict, why = _verdict(base, during, post,
+                                biz_base, biz_during, biz_post)
     print("   %s：%s" % (verdict, why))
 
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d-%H%M%S")
@@ -1305,8 +1348,13 @@ def run_probe(service: str, label: str, target: str,
 
     # ── 写回图谱 ──
     # 不写回的话，跑再多实验覆盖率也不会动 —— JSON 记录只有人看得到。
-    persisted = _persist_verdict(service, label, target, verdict, why,
-                                 base, during or {}, out.stem)
+    # evidence_channel 必须如实反映证据来源：边级通道结构性不可测时，
+    # 生效性依据是业务功能退化 + 对照探针，而不是被测边流量归零。
+    # DR / RCA 的消费方据此知道这条 confirmed 的证据范围。
+    persisted = _persist_verdict(
+        service, label, target, verdict, why, base, during or {}, out.stem,
+        evidence_channel=("business-probe-only" if _semantic_only
+                          else "xray-edge+business-probe"))
     print("   写回: %s" % persisted)
 
     release_chaos_lock(_lock)
@@ -1499,6 +1547,90 @@ def _persist_verdict(service: str, label: str, target: str,
         return "部分写回失败：成功 %s / 失败 %s" % (done or "无", failed)
     return "已写回 %d 条边 %s（%s，severance=%s）" % (
         len(done), done, how, severance)
+
+
+def _biz_control_held(base: dict, during: dict) -> tuple[bool, str]:
+    """故障期是否**存在一个未退化的对照探针**。
+
+    这是「业务通道单独出判定」唯一说得过去的前提。业务退化本身证明不了因果 ——
+    整站挂了、集群抖了、探针自己不可达，都会让业务归零。
+    但如果同一次采样里**另一个探针纹丝不动**，那些全局性解释就都被排除了：
+    它们不会只挑一个探针。这正是边通道原本承担的职责。
+
+    2026-09-17 实测形态（petsearch 的两个探针在同一窗口）：
+
+        home   26 → 26   不碰 S3，对照
+        images  3 → 0    真的 GET 预签名 URL，被测通道
+
+    返回 (有对照且未退化, 说明)。
+    """
+    bp = base.get("per_probe") or {}
+    dp = during.get("per_probe") or {}
+    held = []
+    for name, bvals in sorted(bp.items()):
+        bclean = [v for v in bvals if v is not None]
+        dclean = [v for v in (dp.get(name) or []) if v is not None]
+        if not bclean or not dclean:
+            continue
+        if min(bclean) > 0 and min(dclean) >= min(bclean):
+            held.append("%s（%s → %s）" % (name, min(bclean), min(dclean)))
+    if not held:
+        return False, "没有任何探针在故障期保持基线水平"
+    return True, "对照探针未退化：" + "、".join(held)
+
+
+def _semantic_channel_verdict(biz_base: dict, biz_during: dict | None,
+                           biz_post: dict | None) -> tuple[str, str]:
+    """边级通道结构性不可测时的判定：证据只能来自业务通道 + 对照。
+
+    `semantic_only` 由 `edge_flow_measurable()` 在**实验开始前**按结构性理由
+    置位（不是看结果反推）：AgentCore 委派经网关合流边、S3 走预签名交付
+    都属于这一类。此时边通道的读数与依赖健康无关，要求它变化等于要求一把
+    坏尺子给出好刻度。
+
+    ⚠️ 这**不是**放宽判据。少了边通道，就必须由别的东西承担它的职责 ——
+    「排除全局性混淆」。承担者是**同一次采样里的对照探针**：
+
+        基线稳定 → 注入后被测探针归零、对照探针不动 → 回滚后恢复
+
+    三个条件缺一不可，缺了仍然 observation_only：
+      ① 业务确有退化
+      ② 同窗口有对照探针保持基线
+      ③ 回滚后恢复
+
+    2026-09-17 实测（petsearch -> S3 桶）：源侧拒绝日志 **0.00 次/分** ——
+    那不是缺陷：预签名交付下 petsearch 自己不发 S3 API 调用，拒绝发生在
+    浏览器那一侧，不进它的日志。这条边连源侧通道都没有，业务+对照是
+    唯一可得的证据。写回时 evidence_channel 记 `business-probe-only`。
+    """
+    if biz_during is None or not biz_during.get("ok"):
+        return "observation_only", (
+            "边级通道结构性不可测，而业务探针故障期采集失败 —— 无任何生效性证据")
+
+    degraded, _broke, biz_note = _biz_degraded(biz_base, biz_during)
+    if not degraded:
+        return "soft", (
+            "边级通道结构性不可测；注入期业务探针全部未退化（%s）—— "
+            "消费方存在降级路径或该依赖不在业务关键路径上。"
+            "**证据范围**：没有边级生效性证据，"
+            "「注入确实生效」这一点本身未被独立确认" % biz_note)
+
+    held, held_note = _biz_control_held(biz_base, biz_during)
+    if not held:
+        return "observation_only", (
+            "边级通道结构性不可测，业务退化（%s）但**同窗口没有未退化的对照探针**"
+            " —— 无法排除「整站/集群/探针自身」这类全局性原因。%s"
+            % (biz_note, held_note))
+
+    if not (biz_post or {}).get("recovered"):
+        return "observation_only", (
+            "边级通道结构性不可测，业务退化且有对照（%s），但**回滚后未在预算内恢复**"
+            " —— 缺了这一环无法排除「退化本来就要发生」，不出 confirmed" % held_note)
+
+    return "confirmed", (
+        "边级通道结构性不可测，判定由业务通道 + 对照承担：%s；%s；回滚后恢复。"
+        "**证据范围**：生效性依据是业务功能退化而非被测边流量归零"
+        % (biz_note, held_note))
 
 
 def _verdict(base: dict, during: dict | None, post: dict | None,
