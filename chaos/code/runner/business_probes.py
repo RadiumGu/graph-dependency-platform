@@ -184,18 +184,25 @@ def probe_pet_images(sample: int = 3) -> dict:
     ⚠️ `X-Amz-Expires=300`：URL 只有 5 分钟有效。**必须每轮重新抓页面取新 URL**，
     不能缓存 —— 否则过期的 403 会被误读成 S3 故障。
 
-    ## 一个已知的归属问题（读结果时要当心）
+    ## 归属：这条 S3 数据路径属于 petsearch（三条独立证据）
 
-    `petsearch` 的 IRSA 角色对该桶**只有 `s3:CreateBucket`**（实查
-    `ServicesEks2-searchserviceServiceAccountRole588AF64-...`，无 GetObject）。
-    所以对 petsearch 加 `deny s3:*` 很可能**不会**让本探针退化 ——
-    它断掉的只是那个永远 409 的建桶调用。
+        源码       petsearch-java/.../SearchController.java:84
+                     s3Presigner.presignGetObject(...)
+                   petsearch-java/.../WebConfig.java:52  构建 S3Presigner bean
+        CloudTrail 预签名 URL 的 X-Amz-Credential 里的 ASIA… 密钥，反查
+                     AssumeRoleWithWebIdentity → roleArn =
+                     ServicesEks2-searchserviceServiceAccountRole588AF64-…
+        IAM        该角色的托管策略 AmazonS3ReadOnlyAccess 授予 s3:Get* on *
 
-    那种情况下正确结论是「`petsearch -> S3` 是**真实但不承重**的依赖」，
-    **不是**「这条边不存在」—— 该边有观测（X-Ray 看得见），
-    按本项目纪律，注入后调用方无反应对**有观测**的边只能推出 soft dependency。
+    ⚠️ 本函数第一版的 docstring 写着「petsearch 的角色只有 s3:CreateBucket，
+    所以它不是签发者」—— **那是错的，因为我只查了内联策略、漏了托管策略**。
+    留下这条更正是因为这个错法很容易重犯：判断一个角色能不能做某件事，
+    必须同时看 `list-role-policies`（内联）与 `list-attached-role-policies`（托管），
+    还要考虑资源侧策略（桶策略）。
 
-    本探针真正的用武之地是 `petsite -> S3` 那条（真实数据路径）。
+    petsite 则**不可能**访问 S3：PetSite.csproj 无 AWSSDK.S3、全树 grep 零命中、
+    IRSA 角色的托管策略只有 SSM/SNS/SQS/XRay。图上那条 petsite -> S3 是
+    deepflow-dns 派生且 229h 未刷新，按 modeling_artifact 处置。
 
     返回值 `value` = 成功取到的图片数（0 表示 S3 数据路径断了）。
     """
@@ -422,23 +429,31 @@ def probe_waggle() -> dict:
 SERVICE_PROBES: dict[str, tuple] = {
     # `images` 探针覆盖 **S3 数据路径**（预签名 URL 的实际 GET）。
     #
-    # 注册给 petsite 而**不是** petsearch，依据是 2026-09-17 实查的 IAM 权限：
+    # 2026-09-17 第一版把它挂在 petsite 名下，理由是「petsearch 的角色只有
+    # s3:CreateBucket」。**那个理由是错的 —— 我只查了内联策略，漏了托管策略。**
+    # 补查后：petsearch 的角色挂着 `AmazonS3ReadOnlyAccess`（s3:Get*/List* on *）。
     #
-    #   petsearch 的 IRSA 角色（ServicesEks2-searchserviceServiceAccountRole588AF64-…）
-    #     对该桶**只有 s3:CreateBucket**，无 GetObject
-    #     → 它观测到的全部 S3 流量就是那个永远 409 的建桶调用
-    #       （X-Ray: total=634 / ok=0 / err=634，全是 BucketAlreadyOwnedByYouException）
-    #     → deny s3:* 对它只断掉这个无用调用，本探针不会退化
+    # 三条独立证据都指向 petsearch 才是 S3 数据路径的持有者：
     #
-    # 给 petsearch 挂 images 会制造一个**测不到目标现象**的探针 ——
-    # 那比没有探针更糟：它会让「无退化」看起来像一次有效的否证。
+    #   源码      petsearch-java/.../SearchController.java:84
+    #               s3Presigner.presignGetObject(...)
+    #             petsearch-java/.../WebConfig.java:52  构建 S3Presigner bean
+    #   CloudTrail 预签名 URL 的 X-Amz-Credential 里那个 ASIA… 密钥，
+    #             反查 AssumeRoleWithWebIdentity 命中
+    #               roleArn = ServicesEks2-searchserviceServiceAccountRole588AF64-…
+    #   IAM       该角色的托管策略 AmazonS3ReadOnlyAccess 授予 s3:Get*
     #
-    # ⚠️ 若将来给 petsearch 加了 GetObject（或查明预签名 URL 确由它签发），
-    #    再把 images 加到它名下，并在提交说明里写清依据。
+    # 而 petsite **不可能**访问 S3：PetSite.csproj 里没有 AWSSDK.S3，
+    # 全树 grep（AmazonS3 / IAmazonS3 / GetPreSignedURL / GetObject）零命中，
+    # 其 IRSA 角色的托管策略只有 SSM/SNS/SQS/XRay、内联策略也无 S3 语句。
+    # 图上那条 petsite -> S3 是 deepflow-dns 派生、229h 未刷新的边
+    # —— 已按 modeling_artifact 处置。
+    #
+    # 所以 images 挂 **petsearch**。挂错服务的代价是做出一个测不到目标现象的
+    # 探针：deny 对它无效果时，「无退化」会被误读成一次有效的否证。
     "petsite": (("home", probe_home), ("adopt", probe_adopt),
-                ("list", probe_list), ("waggle", probe_waggle),
-                ("images", probe_pet_images)),
-    "petsearch": (("home", probe_home),),
+                ("list", probe_list), ("waggle", probe_waggle)),
+    "petsearch": (("home", probe_home), ("images", probe_pet_images)),
     "payforadoption": (("adopt", probe_adopt),),
     "petlistadoptions": (("list", probe_list),),
     "pethistory": (("history", probe_history),),

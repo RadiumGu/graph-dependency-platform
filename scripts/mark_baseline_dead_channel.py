@@ -83,16 +83,20 @@ _EDGE = 'AccessesData'
 
 _CLASS = 'precondition_unmet'
 _REASON = (
-    '基线成功率恒为 0%，成功率通道结构性失效：X-Ray 近 15min 该边 '
-    'total=634 / ok=0 / err=634 / fault=0，全部是 CreateBucket 返回 409 '
-    'BucketAlreadyOwnedByYouException（petsearch 每次都尝试建桶，桶已存在）。'
-    '应用本身正常（同期 DynamoDB Scan 200、业务探针 home=26 稳定）。'
-    '已排除实验残留：searchserviceServiceAccountRoleDefaultPolicy608C0257 '
-    '无任何 Deny 语句。'
-    '后端手段是有的（IAM deny s3:*），但拿一个 0% 的基线算退化 delta 无意义，'
-    'verify_via_iam_deny 的基线闸门因此正确拒绝开跑。'
-    '要验这条边须换证据通道：以业务探针（图片可取性）为主、边级成功率为辅，'
-    '参照 74a9369 对 petsite -> StepFunction 的做法。'
+    '真实数据路径在 API 层零遥测：图片由 petsearch 用 S3Presigner 签发预签名 URL '
+    '（源码 petsearch-java/.../SearchController.java:84 presignGetObject、'
+    'WebConfig.java:52 构建该 bean；CloudTrail 反查 URL 里的 ASIA… 密钥命中 '
+    'roleArn=ServicesEks2-searchserviceServiceAccountRole588AF64-…），'
+    '而**预签名是本地密码学操作、不调用 S3 API**，浏览器直取 —— '
+    '因此这条数据路径既不产生 X-Ray subsegment 也不进服务图，'
+    '**压根不存在成功率通道**，不是「通道坏了」。'
+    'verify_via_iam_deny 的基线闸门读到 0% 并拒绝开跑是对的，'
+    '但那 0% 来自另一条边（petsearch -> s3 服务端点边）的 CreateBucket 409 —— '
+    '那个调用挂在 Math.random()*9999 < 100 的 ~1% 门后、对已拥有的桶必失败，'
+    '已由 classify_modeling_artifacts 标为 designed_to_fail。'
+    '要验本边须用业务通道：chaos/code/runner/business_probes.py 的 '
+    'probe_pet_images（注册在 petsearch 名下）真的去 GET 预签名 URL，'
+    '实测正常 3/3、签名被破坏时归零（HTTP 403），对 S3 权限变化敏感。'
 )
 
 
@@ -131,9 +135,17 @@ def main() -> int:
         print(f"\n✗ 该边已有判定（{b['status']}），不覆盖。"
               " 本脚本只标注未测的边。")
         return 1
-    if b['blocked_class'] == _CLASS:
-        print('\n已经是 precondition_unmet，无需重复标注。')
+    # ⚠️ 这里刻意**同时比对 class 与 reason**。第一版只比 class，
+    #    结果是：理由一旦写错就永远改不回来 —— 脚本会说「已经是
+    #    precondition_unmet，无需重复标注」然后什么都不做。
+    #    实测踩过一次：2026-09-17 第一版的理由把「另一条边的 CreateBucket 409」
+    #    当成了本边的基线，更正时被这个守卫挡住。
+    if (b['blocked_class'] == _CLASS
+            and (b.get('blocked_reason') or '') == _REASON):
+        print('\n分类与理由都已是最新，无需重复标注。')
         return 0
+    if b['blocked_class'] == _CLASS:
+        print(f'\n分类已是 {_CLASS}，但**理由文本有变化** —— 将只更新理由。')
 
     print(f'\n=== 将写入 ===\n  verify_blocked_class = {_CLASS}')
     print(f'  verify_blocked_reason = {_REASON[:100]}…')

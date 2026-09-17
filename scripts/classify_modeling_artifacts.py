@@ -87,6 +87,27 @@ ARTIFACTS: dict[tuple[str, str, str], dict] = {
                      "StartExecution", "StateMachine"),
         "note": "状态机的真实调用方是 petsite（PaymentController.cs:211，仅 pettype==bunny 时）",
     },
+    ("petsite", "AccessesData", "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb"): {
+        "why": "petsite 无 S3 客户端；页面上的宠物图片是 petsearch 签发的预签名 URL，由浏览器直取",
+        "evidence": (
+            "PetSite.csproj 无 AWSSDK.S3（包清单里有 SSM/SQS/SNS/StepFunctions/"
+            "BedrockAgentCore/SecurityToken/XRay，唯独没有 S3）；"
+            "全树 grep 零命中"),
+        "searched": ("AmazonS3", "IAmazonS3", "AWSSDK.S3",
+                     "GetPreSignedURL", "PutObject", "GetObject"),
+        "note": (
+            "真实签发者是 petsearch，三条独立证据一致："
+            "① 源码 petsearch-java/.../SearchController.java:84 "
+            "`s3Presigner.presignGetObject(...)`，WebConfig.java:52 构建 S3Presigner bean；"
+            "② CloudTrail 反查预签名 URL 的 ASIA… 密钥，AssumeRoleWithWebIdentity 命中 "
+            "roleArn=ServicesEks2-searchserviceServiceAccountRole588AF64-…；"
+            "③ 该角色的**托管**策略 AmazonS3ReadOnlyAccess 授予 s3:Get* on *。"
+            "petsite 侧则既无代码也无权限：IRSA 角色的托管策略只有 "
+            "SSM/SNS/SQS/XRay，两条内联策略也无 S3 语句。"
+            "本条边 source=deepflow-dns、dependency_kind=dynamic、last_seen 已 229h —— "
+            "DNS 解析到 S3 端点不等于访问该桶；页面里嵌了 28 个 S3 主机名的 URL，"
+            "解析行为本身就有别的来源。"),
+    },
     ("petsearch", "AccessesData", "sts"): {
         "why": "petsearch 源码无显式 STS 调用",
         "evidence": (
