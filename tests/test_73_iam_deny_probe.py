@@ -520,38 +520,39 @@ def test_t73_12_两个cron都要有运行日志():
             "看起来是逐分支插的（_runlog 调用数接近 raise Report 数），"
             "应当由包装层统一记账。")
 
-def test_t73_13_stepfn验证器不得在缺环时写回判定():
-    """执行历史是新证据通道，判据仍须三环 —— 缺环时不许写回。
+def test_t73_13_stepfn实验的闸门只能用基线健康样本():
+    """闸门用的样本必须是基线证明健康的那些，否则测的是样本自身的问题。
 
-    2026-09-15 实测：3 次 bunny 领养全部触发 StartExecution（StatusCode=OK），
-    而 X-Ray 服务图**永远**没有 StepFunctions 节点 —— petsite 日志原文
-    `Service name doesn't exist in AWSServiceHandlerManifest:
-    serviceName = StepFunctions`。所以这条边只能换通道。
+    2026-09-17 实测缺陷：`_drive` 原取 `avail[:rounds]`，恒定从最小 id 开始，
+    而 bunny `022` **在基线就领养失败**（基线 3/4，另外三只都成功）。后果：
 
-    换通道**不等于**降门槛：仍要基线→故障→回滚三环，且注入生效性与业务退化
-    分开记录。执行归零而业务照常 = 这条边不承重 = inconclusive，不是 confirmed。
+      · 「注入已生效」闸门在 +20s 就通过 —— 它测的是 022，
+        **没施加 deny 也会这么报**。那不是证据。
+      · 回滚后恢复轮询一直重试 022，烧完 420s 预算全程失败，
+        而最终测量用全部四只时是 3/4 已恢复。
+
+    与 `probe_adopt` 取 `ids[0]` 同族（已修过一次，又在驱动器里引入一遍）。
+
+    判定本身不受影响：基线成功的 023/024/025 在故障期全败、回滚后全复，
+    执行数 3 -> 0 -> 3，非 bunny 对照 2/2 未受影响。但闸门必须修好，
+    否则下一条边会因此得出假结论。
     """
     src = pathlib.Path("scripts/verify_stepfn_edge.py").read_text(encoding="utf-8")
     code = "\n".join(ln for ln in src.splitlines()
                      if not ln.lstrip().startswith("#"))
-    # 尚未实现故障/回滚阶段时，不得存在任何写回调用
-    has_fault = "deny" in code.lower() and "put_role_policy" in code
-    if not has_fault:
-        assert "write_verdict" not in code, (
-            "故障/回滚阶段还没实现，却已经能写回判定 —— "
-            "那会落下一个只有基线的 confirmed")
-    # 归因必须双重过滤，只按时间窗会把别的触发路径算进来
-    assert "_EXEC_NAME_PREFIX" in src and "startswith" in code, (
-        "执行归因没有按名字前缀过滤 —— 只按时间窗会把别的触发路径算进来，"
-        "那正是把 API Gateway 的 1547 次当成状态机流量时犯的错")
-    # 必须归还宠物：4 只 bunny 极易耗光，而耗光的表现与依赖被切断一样
+    assert "only_ids" in code, (
+        "驱动器没有限定样本集 —— 闸门会测到基线就坏的宠物")
+    # 生效轮询、故障期、恢复轮询、回滚后测量都必须限定
+    assert code.count("only_ids=good") >= 4, (
+        "只有部分阶段限定了样本集（found %d，需 >= 4）—— "
+        "漏掉的阶段仍会用坏样本" % code.count("only_ids=good"))
+    assert '"good"' in code or "\"good\":" in code, "没有记录基线健康样本"
+    # 阴性对照不可省：它排除 restart 与 deny 打宽两种替代解释
+    assert "ctrl_ok" in code and "非 bunny" in src, (
+        "缺阴性对照 —— 没有它无法排除「rollout restart 本身造成影响」")
+    # 归还宠物：只有 4 只 bunny
     assert "_return_pets" in code, (
-        "没有归还宠物 —— 库存只有 4 只 bunny，耗光的表现与依赖被切断完全一样")
-    # 业务退化与注入生效性必须分开
-    assert "inconclusive" in src, (
-        "没有说明「执行归零但业务照常」该判 inconclusive —— "
-        "那种情况写 confirmed 是过度声称")
-
+        "没有归还宠物 —— 库存耗光的表现与依赖被切断完全一样")
 def test_t73_14_合成流量必须有延迟判据():
     """只按成功率判会漏掉「变慢但还算成功」这一整类事件。
 

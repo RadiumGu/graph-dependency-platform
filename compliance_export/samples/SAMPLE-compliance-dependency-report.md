@@ -4,9 +4,9 @@
 
 | 项 | 值 |
 |---|---|
-| 报告编号 | `DEP-MAP-20260917T044522Z`（由快照时刻确定，全局唯一） |
+| 报告编号 | `DEP-MAP-20260917T064133Z`（由快照时刻确定，全局唯一） |
 | 报告名称 | 依赖关系映射记录 —— 管理层自评估 |
-| 基准时点（as-at） | `2026-09-17T04:45:22Z` |
+| 基准时点（as-at） | `2026-09-17T06:41:33Z` |
 | 版本纪律 | 每次导出为独立版本，文件名带快照时刻，不覆盖历史（SYSC 15A.6.2R 要求保存 each version 满 6 年） |
 | 密级 | 〈待指定〉 |
 | 编制 | `compliance_export` 自动生成，无人工编辑 |
@@ -28,7 +28,7 @@
 
 | 项 | 值 |
 |---|---|
-| 快照时刻（基准日） | `2026-09-17T04:45:22Z` |
+| 快照时刻（基准日） | `2026-09-17T06:41:33Z` |
 | 数据源 | `petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com` |
 | 业务功能数 | 3 |
 | 一跳依赖边数 | 47 |
@@ -122,9 +122,9 @@ ISAE 3000 §69(d) 要求识别适用标准。下表把条文依据集中成交�
 | 9 | payforadoption | Calls | `petsearch` | Microservice | observed | TEST | Confirmed（服务选择器黑洞）— no exceptions noted | 实验 `svc-blackhole-probe_20260915-101103` |
 | 10 | payforadoption | DependsOn | `cdk-hnb659fds-container-assets-926093770964-ap-northeast-1` | ECRRepository | scaffolding | TEST | Inconclusive — 已注入故障，观测退化不足以判定 | 实验 `image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable` |
 | 11 | petsite | AccessesData | `ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM` | DynamoDBTable | observed | EXAMINE | 建模产物 — 源码/IaC 审计证明该调用不存在 | 漂移 `declared_not_observed`；实验 `source-audit-20260915` |
-| 12 | petsite | AccessesData | `StepFnStateMachine76D362E8-3jkn8j2OUpdQ` | StepFunction | observed | EXAMINE | Not tested — assessment not performed | 漂移 `declared_not_observed` |
+| 12 | petsite | AccessesData | `StepFnStateMachine76D362E8-3jkn8j2OUpdQ` | StepFunction | observed | TEST | Confirmed（IAM 拒绝）— no exceptions noted | ⚠️ 未登记的证据通道 `stepfn-execution-history+business-probe`；实验 `stepfn-three-ring-1789627178` |
 | 13 | petsite | AccessesData | `serviceseks2-databaseb269d8bb-efjeyzicx2ak` | RDSCluster | observed | EXAMINE | 建模产物 — 源码/IaC 审计证明该调用不存在 | 漂移 `declared_not_observed`；实验 `source-audit-20260915` |
-| 14 | petsite | AccessesData | `serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb` | S3Bucket | observed | EXAMINE | Not tested — assessment not performed | 漂移 `declared_not_observed` |
+| 14 | petsite | AccessesData | `serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb` | S3Bucket | observed | EXAMINE | 建模产物 — 源码/IaC 审计证明该调用不存在 | 漂移 `declared_not_observed`；实验 `source-audit-20260915` |
 | 15 | petsite | AccessesData | `sns` | AWSServiceEndpoint | external | EXAMINE | Not tested — assessment not performed |  |
 | 16 | petsite | AccessesData | `ssm` | AWSServiceEndpoint | external | TEST | Confirmed（未声明，范围受限） | **范围限制**：⚠️ 边上未记录切断手段 —— 无法判断该结论的适用范围；【退化指标】仅吞吐塌陷、成功率未变（`abort` 类故障不产生响应行）。同属早期词汇，描述指标而非观测来源；实验 `exp-petsite-network-partition-20260831-165936` |
 | 17 | petsite | AccessesData | `stepfunctions` | AWSServiceEndpoint | external | EXAMINE | Not tested — assessment not performed |  |
@@ -169,16 +169,16 @@ ISAE 3000 §69(d) 要求识别适用标准。下表把条文依据集中成交�
 
 本节回答「凭什么说这条依赖已验证，以及该结论**不**适用于什么」。§5 每条 `Confirmed` 都注明了手段，手段的边界在此定义。
 
-**已验证的 15 条边并非同质证据。**「已验证」不等于「已覆盖全部中断场景」——下表的「不覆盖」一列是本报告刻意突出的部分。
+**已验证的 16 条边并非同质证据。**「已验证」不等于「已覆盖全部中断场景」——下表的「不覆盖」一列是本报告刻意突出的部分。
 
-> **⚠️ 7 / 15 条 `Confirmed` 未记录切断手段。** 这些判定由早期实验写入，边上没有 `verify_severance`，因此**无法判断其结论的适用范围** ——读者不应假定它们与本轮实验同等强度。本报告不为这些边补写手段：那不是本轮采集的证据，追认手段等于伪造来源。整改方向见 §11。
+> **⚠️ 7 / 16 条 `Confirmed` 未记录切断手段。** 这些判定由早期实验写入，边上没有 `verify_severance`，因此**无法判断其结论的适用范围** ——读者不应假定它们与本轮实验同等强度。本报告不为这些边补写手段：那不是本轮采集的证据，追认手段等于伪造来源。整改方向见 §11。
 
 **表 6：切断手段的证据范围与覆盖边数**
 
 | 切断手段 | 中文名 | 验证边数 | 该手段的证据范围与不覆盖之处 |
 |---|---|---|---|
 | `unspecified` | 未声明 | 7 | ⚠️ 边上未记录切断手段 —— 无法判断该结论的适用范围 |
-| `iam-deny` | IAM 拒绝 | 4 | 注入期间该依赖的调用**全程**返回 AccessDenied，覆盖「依赖不可用」场景；不覆盖延迟升高与部分失败 |
+| `iam-deny` | IAM 拒绝 | 5 | 注入期间该依赖的调用**全程**返回 AccessDenied，覆盖「依赖不可用」场景；不覆盖延迟升高与部分失败 |
 | `rds-reboot` | 数据库实例重启 | 3 | 实例重启造成的**瞬时**中断（实测约 16~18 秒），覆盖「短暂丢失」场景；**不覆盖**「数据库长时间或彻底不可用」，亦不覆盖延迟升高 |
 | `k8s-service-blackhole` | 服务选择器黑洞 | 1 | 把 Kubernetes Service 的选择器改为不匹配任何 Pod，端点清空后调用方连接**立即失败**，覆盖「依赖不可用」场景；不覆盖延迟升高与部分失败。⚠️ 该手段切断的是**服务发现与路由**，被依赖服务本身仍在运行 —— 因此不覆盖「被依赖服务崩溃或返回错误响应」这一类失效 |
 
@@ -190,6 +190,7 @@ ISAE 3000 §69(d) 要求识别适用标准。下表把条文依据集中成交�
 | `unknown` | 3 | ⚠️ 未记录证据通道 |
 | `throughput_only` | 3 | 【退化指标】仅吞吐塌陷、成功率未变（`abort` 类故障不产生响应行）。同属早期词汇，描述指标而非观测来源 |
 | `rds-event+business-probe` | 1 | 【观测来源】⚠️ **消费方侧无调用遥测**；生效性由资源自身事件（RDS `DB instance shutdown`/`restarted`）证明，业务影响由探针证明 |
+| `stepfn-execution-history+business-probe` | 1 | ⚠️ 未登记的证据通道 |
 | `both` | 1 | 【退化指标】成功率与吞吐**同时**塌陷。注意：该取值来自早期实验的另一套词汇，描述的是指标而非观测来源，与本节前两项不同轴 |
 
 **共同限制（适用于全部手段）**：本轮取证均为**可用性**维度的切断实验，不覆盖延迟升高、部分失败、数据正确性与容量耗尽等场景。因此本报告不对依赖做 hard／soft 分级 —— 分级需要延迟与部分失败场景的证据，而那些实验尚未进行。
@@ -207,10 +208,10 @@ ISAE 3000 §69(d) 要求识别适用标准。下表把条文依据集中成交�
 
 | 取值 | 条数 | 占比 |
 |---|---|---|
-| 未评估（Assessment not performed） | 17 | 36% |
-| confirmed | 15 | 32% |
+| confirmed | 16 | 34% |
+| 未评估（Assessment not performed） | 15 | 32% |
 | inconclusive | 10 | 21% |
-| modeling_artifact | 4 | 9% |
+| modeling_artifact | 5 | 11% |
 | bootstrap_only | 1 | 2% |
 
 ### 6.2 声明 vs 观测
@@ -266,11 +267,11 @@ ISAE 3000 §69(d) 要求识别适用标准。下表把条文依据集中成交�
 
 | 边类型 | 条数 | 性质 |
 |---|---|---|
-| LocatedIn | 1597 | 承载/放置关系，非服务消费关系 |
-| RunsOn | 1921 | 承载/放置关系，非服务消费关系 |
-| BelongsTo | 1051 | 承载/放置关系，非服务消费关系 |
-| Manages | 1045 | 承载/放置关系，非服务消费关系 |
-| Routes | 1033 | 承载/放置关系，非服务消费关系 |
+| LocatedIn | 1606 | 承载/放置关系，非服务消费关系 |
+| RunsOn | 1939 | 承载/放置关系，非服务消费关系 |
+| BelongsTo | 1060 | 承载/放置关系，非服务消费关系 |
+| Manages | 1054 | 承载/放置关系，非服务消费关系 |
+| Routes | 1042 | 承载/放置关系，非服务消费关系 |
 
 ## 10 业务功能与容忍度阈值
 
@@ -290,9 +291,9 @@ ISAE 3000 §69(d) 要求识别适用标准。下表把条文依据集中成交�
 
 本节对应 ISAE 3000 §69(e) 与 SYSC 15A.6.1R(7)。每一条的数字均由本次快照现算，不是手写的固定文本 —— 手写的披露会过期。
 
-**11.1 证据覆盖率 32%。** 47 条依赖里经实测确证（TEST/Confirmed）仅 15 条，17 条未测试。整改方向为扩大故障注入覆盖，当前受限于注入手段对 agent 层与部分托管服务的可达性。
+**11.1 证据覆盖率 34%。** 47 条依赖里经实测确证（TEST/Confirmed）仅 16 条，15 条未测试。整改方向为扩大故障注入覆盖，当前受限于注入手段对 agent 层与部分托管服务的可达性。
 
-**11.2 已验证的 15 条边并非同等强度证据。** 「已验证」这一个计数掩盖了三个不同的缺口，逐项披露如下（详见 §6）：
+**11.2 已验证的 16 条边并非同等强度证据。** 「已验证」这一个计数掩盖了三个不同的缺口，逐项披露如下（详见 §6）：
 
 - **7 条未记录切断手段**，因此其结论的适用范围不明。这些判定由早期实验写入。**本报告不为它们追认手段** —— 那不是本轮采集的证据。整改方向：重跑这些边的切断实验并记录手段，或将其降级回未评估。
 

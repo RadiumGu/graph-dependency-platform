@@ -1,0 +1,24 @@
+{
+  "baseline": {
+    "bunny_ok": 3,
+    "bunny_tried": 4,
+    "executions": 3,
+    "ctrl_ok": 2,
+    "ctrl_tried": 2
+  },
+  "effective_at": 20,
+  "fault": {
+    "bunny_ok": 0,
+    "bunny_tried": 4,
+    "executions": 0,
+    "ctrl_ok": 2,
+    "ctrl_tried": 2
+  },
+  "post": {
+    "bunny_ok": 3,
+    "bunny_tried": 4,
+    "executions": 3
+  },
+  "status": "confirmed",
+  "why": "三环齐全 + 阴性对照通过。基线执行 3 次且 bunny 领养成功；deny states:* 后执行归零、bunny 领养全部失败（0/4）而非 bunny 照常成功（2/2）；回滚后执行 3 次、bunny 恢复。类型条件对照排除了「restart 或 deny 打宽」这两种替代解释。"
+}
