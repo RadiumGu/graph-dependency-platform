@@ -39,6 +39,7 @@ import json
 import os
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -49,6 +50,9 @@ PETSITE_URL = os.environ.get(
 
 _UA = {"User-Agent": "kirocrew-business-probe/1.0"}
 _PETID_RE = re.compile(r'class="ps-petid">Pet #([^<]+)<')
+#: 取 <img src>。刻意用**非贪婪**并只到下一个引号 —— 页面里 S3 预签名 URL 很长
+#: 且含 & 转义，贪婪匹配会把相邻多个 img 连成一条。
+_IMG_SRC_RE = re.compile(r'<img[^>]+src="([^"]+)"')
 
 #: 首页每张卡片的起始标记。按它切开才能把「宠物 id」「类型」「可用性」
 #: 三件事归到同一只宠物上 —— 三个独立的 findall 只能得到三个等长列表，
@@ -144,6 +148,96 @@ def probe_home() -> dict:
         return {"ok": False, "value": None, "detail": "HTTP %d" % st}
     n = len(_PETID_RE.findall(html))
     return {"ok": True, "value": n, "detail": "首页宠物 %d 个" % n}
+
+
+def probe_pet_images(sample: int = 3) -> dict:
+    """宠物图片能不能真的取到 —— 覆盖 **S3 的数据路径**。
+
+    ## 为什么需要一个单独的探针
+
+    `probe_home` 数的是首页 HTML 里的宠物条目数（稳定在 26）。**S3 全断它也不动**
+    —— 因为图片是 `<img src>` 指向 S3 的**预签名 URL**，页面照样渲染得出，
+    只是图挂掉。也就是说现有探针对「S3 不可用」完全不敏感。
+
+    ## 为什么边级成功率通道也用不了
+
+    2026-09-17 实测 `petsearch -> S3` 这条边：
+
+        X-Ray 近 15min: total=634  ok=0  err=634  fault=0
+        解码 trace: S3 op=CreateBucket status=409 BucketAlreadyOwnedByYouException
+
+    成功率**恒为 0%**，`verify_via_iam_deny` 的基线闸门因此正确拒绝开跑
+    （拿 0% 的基线算退化 delta 无意义）。该边已标 `precondition_unmet`。
+
+    所以要验 S3 这一层，只剩业务通道 —— 而业务通道必须**真的去取图**。
+
+    ## 判据：预签名 URL 的 GET 结果，不是页面里有没有 URL
+
+    实测首页有 28 个 `<img src=...s3...>`，全部带
+    `X-Amz-Signature` / `X-Amz-Security-Token` / `X-Amz-Expires=300`。
+    预签名是本地密码学操作、**不调用 S3 API**，所以：
+
+      - 签发这些 URL **不需要** S3 可达，页面永远能渲染出来；
+      - 浏览器（或本探针）拿 URL 去 GET 时，才第一次真正命中 S3，
+        且**按签名者的权限求值** —— 这一步才是 S3 依赖的真实断点。
+
+    ⚠️ `X-Amz-Expires=300`：URL 只有 5 分钟有效。**必须每轮重新抓页面取新 URL**，
+    不能缓存 —— 否则过期的 403 会被误读成 S3 故障。
+
+    ## 一个已知的归属问题（读结果时要当心）
+
+    `petsearch` 的 IRSA 角色对该桶**只有 `s3:CreateBucket`**（实查
+    `ServicesEks2-searchserviceServiceAccountRole588AF64-...`，无 GetObject）。
+    所以对 petsearch 加 `deny s3:*` 很可能**不会**让本探针退化 ——
+    它断掉的只是那个永远 409 的建桶调用。
+
+    那种情况下正确结论是「`petsearch -> S3` 是**真实但不承重**的依赖」，
+    **不是**「这条边不存在」—— 该边有观测（X-Ray 看得见），
+    按本项目纪律，注入后调用方无反应对**有观测**的边只能推出 soft dependency。
+
+    本探针真正的用武之地是 `petsite -> S3` 那条（真实数据路径）。
+
+    返回值 `value` = 成功取到的图片数（0 表示 S3 数据路径断了）。
+    """
+    try:
+        st, html = _get("/?userId=%s-img" % _UID)
+    except Exception as e:                              # noqa: BLE001
+        return {"ok": False, "value": None, "detail": "抓页面失败 %r" % e}
+    if st != 200:
+        return {"ok": False, "value": None, "detail": "抓页面 HTTP %d" % st}
+
+    # 只取指向 S3 且带签名的 URL。不带签名的（占位图、CDN）不算 S3 数据路径。
+    urls = [u for u in _IMG_SRC_RE.findall(html)
+            if "amazonaws.com" in u and "X-Amz-Signature" in u]
+    if not urls:
+        return {"ok": False, "value": None,
+                "detail": "页面里没有预签名的 S3 图片 URL —— "
+                          "可能是页面结构变了，或图片改走别的通道；"
+                          "先查清再把这解释成 S3 故障"}
+
+    # HTML 属性里的 & 是转义过的，取 URL 前必须还原，否则签名参数名会带 amp; 前缀。
+    import html as _htmlmod
+    picked = [_htmlmod.unescape(u) for u in urls[:max(1, int(sample))]]
+
+    ok_n, detail = 0, []
+    for u in picked:
+        try:
+            req = urllib.request.Request(u, headers=_UA, method="GET")
+            with urllib.request.urlopen(req, timeout=15) as r:
+                body = r.read(2048)          # 只读头部几 KB，够判成功
+                if r.status == 200 and body:
+                    ok_n += 1
+                else:
+                    detail.append("HTTP %d/%dB" % (r.status, len(body)))
+        except urllib.error.HTTPError as e:
+            detail.append("HTTP %d" % e.code)
+        except Exception as e:                          # noqa: BLE001
+            detail.append(repr(e)[:40])
+
+    return {"ok": True, "value": ok_n,
+            "detail": "预签名图片取到 %d/%d 个%s"
+                      % (ok_n, len(picked),
+                         ("（失败: %s）" % ", ".join(detail[:3])) if detail else "")}
 
 
 def probe_adopt(pet: dict | None = None) -> dict:
@@ -326,8 +420,24 @@ def probe_waggle() -> dict:
 #: petsite 挂四个：它的某条依赖可能只坏其中一个功能。少挂一个，
 #: 漏掉的形状是「业务正常」—— 一个假结论，比测不出更糟。
 SERVICE_PROBES: dict[str, tuple] = {
+    # `images` 探针覆盖 **S3 数据路径**（预签名 URL 的实际 GET）。
+    #
+    # 注册给 petsite 而**不是** petsearch，依据是 2026-09-17 实查的 IAM 权限：
+    #
+    #   petsearch 的 IRSA 角色（ServicesEks2-searchserviceServiceAccountRole588AF64-…）
+    #     对该桶**只有 s3:CreateBucket**，无 GetObject
+    #     → 它观测到的全部 S3 流量就是那个永远 409 的建桶调用
+    #       （X-Ray: total=634 / ok=0 / err=634，全是 BucketAlreadyOwnedByYouException）
+    #     → deny s3:* 对它只断掉这个无用调用，本探针不会退化
+    #
+    # 给 petsearch 挂 images 会制造一个**测不到目标现象**的探针 ——
+    # 那比没有探针更糟：它会让「无退化」看起来像一次有效的否证。
+    #
+    # ⚠️ 若将来给 petsearch 加了 GetObject（或查明预签名 URL 确由它签发），
+    #    再把 images 加到它名下，并在提交说明里写清依据。
     "petsite": (("home", probe_home), ("adopt", probe_adopt),
-                ("list", probe_list), ("waggle", probe_waggle)),
+                ("list", probe_list), ("waggle", probe_waggle),
+                ("images", probe_pet_images)),
     "petsearch": (("home", probe_home),),
     "payforadoption": (("adopt", probe_adopt),),
     "petlistadoptions": (("list", probe_list),),

@@ -193,6 +193,93 @@ else:
         _t = (_tot.get("results") or [{}])[0] if isinstance(_tot, dict) else {}
         _dist = {"全部": _t.get("全部") or 0, "零观测": _t.get("零观测") or 0}
 
+    # ── 「未测」不是一个类，是四个 ────────────────────────────────────────────
+    #
+    # 图上有 verify_blocked_class 这套分类（由 preflight_edge_traffic /
+    # mark_unreachable_dependency_edges / reclassify_blocked_edges 等脚本写入），
+    # 已经明确分类过 59 条边 —— 而本页此前只显示「未测」，把这层信息全丢了。
+    #
+    # 后果很具体：读者看到「79 条未测」会以为都是「还没轮到」，
+    # 于是把注意力放在「多跑实验」上。而实际分布是：
+    #
+    #   precondition_unmet          前置条件不满足（无流量、或基线已坏）
+    #   unreachable_by_any_backend  没有任何后端能对这个目标类型施加故障
+    #   needs_compound_experiment   单点注入不够，要复合实验
+    #   （未分类）                   真正的「还没轮到」
+    #
+    # 前三类**多跑实验也测不出来**，把它们混进待办队列只会让人反复撞墙。
+    # 2026-09-17 实测过一次：petsearch -> S3 观测充足（634 次）却因为
+    # 成功率通道恒为 0% 而被基线闸门拦下，那正是 precondition_unmet。
+    if C.neptune_online() and _labels:
+        _bc = C.gquery(
+            f"MATCH ()-[r]->() WHERE type(r) IN [{_L}] "
+            "AND coalesce(r.verify_status,'untested') = 'untested' "
+            "RETURN coalesce(r.verify_blocked_class,'unclassified') AS 阻断类别, "
+            "count(*) AS 边数 ORDER BY 边数 DESC")
+        _bc_rows = (_bc.get("results") if isinstance(_bc, dict) else _bc) or []
+        if _bc_rows:
+            st.markdown("---")
+            st.subheader("⬜ 「未测」不是一个类，是四个")
+
+            _LABEL = {
+                "precondition_unmet": (
+                    "前置条件不满足", "🔒",
+                    "观测方无流量，或**基线本身已坏**。后者更隐蔽：边有充足观测，"
+                    "但成功率恒为 0%，拿它算退化 delta 无意义。"
+                    "实例：`petsearch → S3` X-Ray 近 15min total=634 / ok=0 / "
+                    "err=634，全是 `CreateBucket` 返回 409 "
+                    "`BucketAlreadyOwnedByYouException`（每次都尝试建桶）。"
+                    "应用本身正常，但这条边的成功率通道**结构性失效**。"),
+                "unreachable_by_any_backend": (
+                    "没有后端能施加故障", "🚫",
+                    "现有故障注入后端（FIS / IAM deny / NetworkChaos …）"
+                    "对这个目标类型没有可用手段。**这不是懒惰，是能力边界** —— "
+                    "把它标出来比留在待办里假装能测更诚实。"),
+                "needs_compound_experiment": (
+                    "需要复合实验", "🔀",
+                    "单点注入不足以隔离这条边 —— 要同时操作多个点才能让它的"
+                    "贡献可辨识。成本高，且复合实验的因果归属本身更弱。"),
+                "unclassified": (
+                    "真正的「还没轮到」", "⬜",
+                    "既有流量、也有可用后端、也不需要复合实验 —— "
+                    "**只是还没有人去跑**。这才是「多跑实验」能推进的那部分。"),
+            }
+            _bc_total = sum(int(r.get("边数") or 0) for r in _bc_rows)
+            cols = st.columns(len(_bc_rows))
+            for col, r in zip(cols, _bc_rows):
+                key = str(r.get("阻断类别") or "unclassified")
+                name, icon, _ = _LABEL.get(key, (key, "•", ""))
+                n = int(r.get("边数") or 0)
+                col.metric(f"{icon} {name}", n)
+                col.caption(f"占未测的 {n / max(_bc_total, 1) * 100:.0f}%")
+
+            _actionable = next(
+                (int(r.get("边数") or 0) for r in _bc_rows
+                 if str(r.get("阻断类别") or "unclassified") == "unclassified"), 0)
+            st.warning(
+                f"**{_bc_total} 条未测里，只有 {_actionable} 条是「多跑实验」能推进的**"
+                f"（{_actionable / max(_bc_total, 1) * 100:.0f}%）。"
+                f"其余 {_bc_total - _actionable} 条要么前置条件不满足、"
+                "要么没有可用的注入后端、要么需要复合实验 —— "
+                "**对它们跑注入只会拿回 inconclusive**。\n\n"
+                "把这四类混成一个「未测」，会让人把力气放在错的地方："
+                "以为缺的是执行，实际缺的是可观测性与注入能力。",
+                icon="⬜")
+
+            with st.expander("四类各自是什么意思，以及为什么要分开"):
+                for r in _bc_rows:
+                    key = str(r.get("阻断类别") or "unclassified")
+                    name, icon, why = _LABEL.get(key, (key, "•", "（无说明）"))
+                    st.markdown(f"**{icon} {name}** · `{key}` · "
+                                f"{r.get('边数')} 条\n\n{why}")
+                st.caption(
+                    "分类由 `preflight_edge_traffic.py` / "
+                    "`mark_unreachable_dependency_edges.py` / "
+                    "`mark_baseline_dead_channel.py` 等脚本写入边的 "
+                    "`verify_blocked_class`，理由写在 `verify_blocked_reason`。"
+                    "**标注不等于判定** —— 这些边的 `verify_status` 仍是 "
+                    "`untested`，标注只说明「为什么现在测不了」。")
+
     if _gap_rows and _dist.get("全部"):
         _gap_edges = sum(int(r.get("可判伪边数") or 0) for r in _gap_rows)
         g = st.columns(3)
