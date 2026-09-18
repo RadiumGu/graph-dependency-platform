@@ -148,7 +148,17 @@ def test_c08_single_round_ts_basis(gcl):
     seen = {}
     for g in log:
         lb = re.search(r"hasLabel\('([A-Za-z0-9]+)'\)", g).group(1)
-        cut = int(re.search(r"lt\((\d+)\)", g).group(1))
+        m = re.search(r"lt\((\d+)\)", g)
+        if m is None:
+            # 唯一合法的「没有 cutoff」是 _edge_unjudgeable_query —— 它数的是
+            # **缺** TIMESTAMP_FIELD 的边，按定义无从与任何 cutoff 比较。
+            # 这里不写成 `continue` 而是断言它就是那个形状：否则一条真的漏了
+            # cutoff 的失效查询也会被静默放过，而那正是本门禁要防的事。
+            assert f".not(__.has('{gcl.TIMESTAMP_FIELD}'))" in g, (
+                f"{lb} 的查询没有 cutoff，且不是「缺时间戳」计数查询 —— "
+                f"失效判定丢了 cutoff 会命中全部边。查询: {g}")
+            continue
+        cut = int(m.group(1))
         seen[lb] = cut
     for lb, cut in seen.items():
         assert cut == round_ts - ttls[lb], (

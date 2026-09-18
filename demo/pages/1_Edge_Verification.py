@@ -438,6 +438,126 @@ else:
             "离线模式下无法算判伪覆盖 —— 这一段需要逐条查边的观测标记属性。"
             "在线时它会回答「那个 0 到底是没测过，还是测不了」。")
 
+# ── 边还在不在：三种「陈旧」只有一种能说它消失了 ─────────────────────────────
+#
+# 这一节回答的是「验过没有」之前的那个问题：**这条边现在还存在吗。**
+#
+# 起因是 2026-09-17 的一次实测。清单里两条待验的承重边指向 Aurora：
+#
+#     payforadoption -> serviceseks2-databasewriter2462cc03   last_seen 142h
+#     pethistory     -> serviceseks2-databasewriter2462cc03   last_seen 142h
+#
+# 看着像「久未观测、该去打一下」。查下去才发现是一次 **Aurora 故障转移**留下的
+# 痕迹 —— 而且实例名与角色是**相反**的（现查 DBClusterMembers[].IsClusterWriter）：
+#
+#     serviceseks2-databasereader1f54479b8   IsClusterWriter=True    名叫 reader，是写实例
+#     serviceseks2-databasewriter2462cc03    IsClusterWriter=False   名叫 writer，是读实例
+#
+# last_seen 呈互补模式，正是角色互换的指纹：转移前 payforadoption/pethistory 连
+# 前者，转移后改连后者。**若真去打那两条，会得到「重启当前读实例、那两个服务
+# 毫无反应」—— 一个可预知且会误导的 soft。**
+#
+# 关键在于：图谱**已经知道**这件事（那两条边 active=false），只是站点没显示。
+# 而更要紧的是，「陈旧」在这个图里有三种彼此不能互换的含义 ——
+# 只有第一种允许说「这条依赖没了」。
+if C.neptune_online() and _labels:
+    st.markdown("---")
+    st.subheader("🕰️ 边还在不在：三种「陈旧」只有一种能说它消失了")
+
+    # gquery 不接参数（签名是 gquery(cypher)），标签按本页既有写法内联 ——
+    # 与 213 行那段同一约定，不另造一套。
+    _SL = ", ".join(f"'{x}'" for x in _labels)
+    _stale_q = (
+        f"MATCH (a)-[r]->(b) WHERE type(r) IN [{_SL}] "
+        "AND coalesce(r.dependency_kind,'') IN ['dynamic','inference'] "
+        "RETURN CASE "
+        " WHEN r.active = false THEN 'deactivated' "
+        " WHEN r.drift_status = 'observed_then_silent' THEN 'observed_then_silent' "
+        " WHEN r.drift_status = 'declared_not_observed' THEN 'declared_not_observed' "
+        " WHEN r.last_seen IS NULL THEN 'no_timestamp' "
+        " ELSE 'observing' END AS 状态, count(r) AS 边数 ORDER BY 边数 DESC")
+    _stale_res = C.gquery(_stale_q)
+    _stale = (_stale_res or {}).get("results") or []
+
+    if _stale:
+        _meaning = {
+            "observing": ("🟢 在观测中", "窗口内有观测到，无需处置"),
+            "deactivated": (
+                "⬛ 已判定不存在（active=false）",
+                "强信号消失 → 允许断言依赖已不存在。写入方是 "
+                "`deactivate_stale_dynamic_edges`，只对**非稀疏源**的 dynamic 边生效"),
+            "observed_then_silent": (
+                "🔇 弱信号沉默（不可判定）",
+                "**绝不置 active=false。** 稀疏源（本图唯一成员 `deepflow-dns`）"
+                "上「没观测到」推不出「不存在」—— DNS 查询取决于连接行为："
+                "实测 grafana 因为会重连而有 360 次/24h，而 pod 持连接池的 "
+                "`serviceseks2-database` 是 **0 次**。可见性与依赖是否存在无关"),
+            "declared_not_observed": (
+                "📋 声明了但没观测到",
+                "代码/配置里声明过，DNS 与 X-Ray 都没看到 —— "
+                "这是相对合同型登记册的审计发现，不是边失效"),
+            "no_timestamp": (
+                "❔ 落在失效判定管辖之外",
+                "没有 `last_seen`，时间戳谓词匹配不上 → **过期机制看不见它们**。"
+                "实测是 8 条 `deepflow-etl` 的 `DependsOn` 边，"
+                "它们写的是契约声明的 legacy 别名 `last_updated`（实测 2.3h 前，"
+                "边其实是新鲜的）"),
+        }
+        _rows = []
+        for _r in _stale:
+            _k = _r.get("状态")
+            _label, _why = _meaning.get(_k, (_k, ""))
+            _rows.append({"状态": _label, "边数": _r.get("边数"), "含义": _why})
+        st.dataframe(_rows, width="stretch", hide_index=True)
+
+        _n_deact = sum(r.get("边数", 0) for r in _stale if r.get("状态") == "deactivated")
+        _n_silent = sum(r.get("边数", 0) for r in _stale
+                        if r.get("状态") in ("observed_then_silent", "declared_not_observed"))
+        _n_blind = sum(r.get("边数", 0) for r in _stale if r.get("状态") == "no_timestamp")
+        st.caption(
+            f"**只有 {_n_deact} 条允许说「这条依赖没了」。** "
+            f"另有 {_n_silent} 条久未观测但**刻意不下这个结论**，"
+            f"{_n_blind} 条根本不在过期机制的视野里 —— "
+            "后两类若被当成前一类，就会从图谱里读出一个它没有断言的东西。")
+
+    with st.expander("为什么不把「久未观测」一律当成「已消失」"):
+        st.markdown(
+            "这是本平台与「画出当前拓扑」那类产品的分界线之一。\n\n"
+            "把 6 小时没观测到的边一律置 `active=false` 曾经真的发生过，"
+            "代价是可复现的:\n\n"
+            "> agent 工具调用形态是同一天 03:25 一批、07:47 一批，中间四小时空白。"
+            "8 个工具里 7 个最后一次调用都在 03:26 —— 09:26 之后就落不进任何 6h 窗口。"
+            "于是 `Retrieves -> nutrition-kb` 被置了 `active=false`，"
+            "**而那个知识库客观存在、agent 也确实依赖它**，只是几小时没人问营养问题。\n\n"
+            "图谱因此给出的不是一个过期陈述，而是一个**错误陈述** —— "
+            "它违反本项目最核心的不变量：\n\n"
+            "> 零流量与健康在指标上无法区分 → 一律 inconclusive，绝不判 refuted\n\n"
+            "所以稀疏源的边只写 `drift_status='observed_then_silent'` + "
+            "`unobserved_since`，**绝不碰 `active`**。哪些源算稀疏写在契约的 "
+            "`sparse_observation_sources` 词表里，而不是散落在各处的 if 判断里。\n\n"
+            "**「不可判定」也必须是可见的。** 上表最后一类（没有 `last_seen`）"
+            "是 2026-09-18 补出来的：那 8 条边此前既不在失效统计里、也不在任何"
+            "报表里 —— 它们对应的 `DependsOn` 类型 stale 数**恒为 0**，"
+            "而那个 0 的含义是「看不见」，不是「都好」。"
+            "现在 `deactivate_stale_dynamic_edges` 会单独上报 `unjudgeable`，"
+            "由 tests/test_77 锁定它不得被并进 `stale`。")
+
+    with st.expander("⚠️ 这一节最实际的用处：别按名字推断 AWS 资源的角色"):
+        st.markdown(
+            "上面那次 Aurora 故障转移里，最容易出事的不是陈旧边本身，"
+            "而是**实例名与实际角色相反**:\n\n"
+            "```\n"
+            "serviceseks2-databasereader1f54479b8   IsClusterWriter = True   ← 名叫 reader，是写实例\n"
+            "serviceseks2-databasewriter2462cc03    IsClusterWriter = False  ← 名叫 writer，是读实例\n"
+            "```\n\n"
+            "名字是创建时的角色，**角色会随故障转移改变而名字不会**。"
+            "在这上面推断一次，就可能把混沌实验打到错的实例上："
+            "重启当前的读实例与重启当前的写实例，爆炸半径完全不同。\n\n"
+            "所以每次用到角色都应现查 "
+            "`describe-db-clusters` 的 `DBClusterMembers[].IsClusterWriter`。"
+            "图谱侧对应的纪律是：**节点名只是标识符，不是属性** —— "
+            "凡是会变的事实都必须来自一次现场查询。")
+
 # ── 决策承重边：把覆盖目标从「全部边」收敛到「错了会改变结论的边」 ──────────────
 #
 # 为什么要换分母：

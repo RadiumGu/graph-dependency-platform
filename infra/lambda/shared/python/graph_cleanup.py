@@ -291,13 +291,56 @@ def expiring_edge_labels() -> list[tuple[str, int]]:
                   if spec.get('expires_seconds'))
 
 
+def _live_clause() -> str:
+    """「尚未被判定为失效」的谓词 —— 刻意**不用** `has('active', true)`。
+
+    ## 这是与节点侧对齐，不是在修一个正在发生的错误
+
+    `has('active', true)` 是**存在性 + 值**的双重要求：一条从未被任何写入方
+    写过 `active` 的边不满足它，于是落在失效判定之外。
+    `_node_count_query` 早就改成了 `.not(has('active', false))`，注释写着
+    「刻意**不**要求 has('active', true)：节点侧此前没有任何写入方写 active」。
+    **同一个坑、同一个修法，边侧一直是旧谓词。** 抽成共用函数是为了两侧不再分叉。
+
+    ## 当前影响面：0 条（2026-09-18 实测，不要拿这个数当收益）
+
+    我一度以为这修好了 18 条「超期 78 倍却仍 active」的 deepflow-dns 边。
+    **那个判断是错的**，实测澄清如下，两个原因各自独立地让那 18 条与本谓词无关：
+
+        ① deepflow-dns 是契约里**唯一的** sparse_observation_sources 成员，
+           被 `_not_sparse_clause()` 刻意排除在失效路径外 —— 它们走 `_mark_query`，
+           只标 `observed_then_silent` 而绝不碰 active。实测这条路径**工作正常**：
+           18 条里 13 条已标 observed_then_silent（带 unobserved_since），
+           5 条标 declared_not_observed，最近一次 drift 检查 0.0h 前。
+           理由见本模块头部：DNS 是不对称弱信号，没查询证明不了依赖消失。
+
+        ② 唯一「非稀疏源且缺 active 属性」的是 8 条 deepflow-etl 的 DependsOn 边，
+           而它们缺的不止 active —— 它们根本没有 `last_seen`（用的是契约声明的
+           legacy 别名 `last_updated`，实测 2.3h 前，边是**新鲜的**）。
+           时间戳谓词先把它们排除了，`active` 谓词轮不到生效。
+
+    所以本函数当前是**纯防御性**的：它挡住的是「以后某个非稀疏写入方写了
+    last_seen 但没写 active」这个还没发生的形状。
+    保留它的理由是消除两侧分叉，不是它现在修好了什么。
+
+    ## 为什么「属性缺失」必须当成 active
+
+    全部消费方都按 `coalesce(active, true)` 读它 —— `demo/_common.py`、
+    `scripts/build_actionable_queue.py`、RCA 的依赖遍历都是。
+    **缺失即存活**是这个属性的既定语义。判定失效的一侧必须用同一套语义，
+    否则会出现一个荒谬的组合：消费方认为边是活的、收敛机制认为它不在自己
+    管辖内 —— 谁都没说它死，于是它永远不死。
+    """
+    return ".not(__.has('active', false))"
+
+
 def _count_query(label: str, cutoff: int) -> str:
     # 排除稀疏源：它们由 _mark_query 处置，两条路径不得同时碰同一条边 ——
     # 否则失效那条会赢并写下 active=false。
     return (f"g.E().hasLabel('{label}')"
             f".has('dependency_kind','dynamic')"
             f"{_not_sparse_clause()}"
-            f".has('active', true)"
+            f"{_live_clause()}"
             f".has('{TIMESTAMP_FIELD}', lt({cutoff}))"
             f".count()")
 
@@ -306,11 +349,51 @@ def _deactivate_query(label: str, cutoff: int) -> str:
     return (f"g.E().hasLabel('{label}')"
             f".has('dependency_kind','dynamic')"
             f"{_not_sparse_clause()}"
-            f".has('active', true)"
+            f"{_live_clause()}"
             f".has('{TIMESTAMP_FIELD}', lt({cutoff}))"
             f".property('active', false)"
             f".property('deactivated_at', {cutoff})"
             f".iterate()")
+
+
+def _edge_unjudgeable_query(label: str) -> str:
+    """数出**落在失效判定管辖之外**的动态边：缺 TIMESTAMP_FIELD 的那些。
+
+    与 `_node_unjudgeable_query` 同一职责，边侧此前没有 —— 而这正是本模块
+    自己定的纪律：「『不可判定』必须与『已判定为新鲜』分开上报」。
+
+    ## 为什么必须上报而不是静默保守
+
+    本模块头部写着「缺 last_seen 的历史边**不会被匹配**，因此不会被误置
+    false —— 保守方向是对的」。方向确实是对的，**但沉默不是**：
+    读 `per_label[...]['stale']=0` 的人会以为「这类边都新鲜」，
+    而真相可能是「这类边一条都没被看过」。这两件事在运维上完全不同。
+
+    2026-09-18 实测：8 条 `deepflow-etl` 的 `DependsOn` 边缺 `last_seen`
+    （它们用契约声明的 legacy 别名 `last_updated`，实测 2.3h 前、是新鲜的）。
+    也就是说 `DependsOn` 这个类型的失效统计**恒为 0**，
+    而那个 0 的含义是「看不见」，不是「都好」。
+
+    ## 刻意不去 coalesce 三个别名
+
+    契约声明 `timestamp_legacy_aliases: [last_updated, last_scanned]`，
+    看起来把谓词改成三者取一就能把它们纳入管辖。**不这么做**，两个理由：
+
+      · 那会让这批边**第一次**进入 active=false 的射程。当前它们新鲜，
+        一旦 ETL 出问题就会被置失效 —— 而 legacy 别名的语义与 last_seen
+        并不保证一致（`last_scanned` 是「扫描到」而非「观测到流量」，
+        实测 etl_cfn 的 last_scanned 有 148 天前的值）。用它做失效判定
+        等于拿一把没校准的尺子去下删除结论。
+      · 本项目的纪律是「测不了就说测不了」，不是「凑一个能测的量」。
+        正确的解法是让写入方迁移到 last_seen（那是可验证的一次改动），
+        在那之前**如实报告有多少边不可判定**。
+    """
+    return (f"g.E().hasLabel('{label}')"
+            f".has('dependency_kind','dynamic')"
+            f"{_not_sparse_clause()}"
+            f"{_live_clause()}"
+            f".not(__.has('{TIMESTAMP_FIELD}'))"
+            f".count()")
 
 
 def _mark_query(label: str, cutoff: int, round_ts: int) -> str:
@@ -517,11 +600,16 @@ def deactivate_stale_dynamic_edges(neptune_query, round_ts: int,
         only_labels:   限定边类型，None 表示全部声明了 TTL 的类型。
 
     Returns:
-        {'enabled': bool, 'per_label': {label: {'expires': int, 'stale': int,
-                                                'deactivated': int}}}
+        {'enabled': bool, 'unjudgeable_total': int,
+         'per_label': {label: {'expires': int, 'stale': int,
+                               'deactivated': int, 'unjudgeable': int}}}
+
+        `unjudgeable` 不为 0 意味着该类型有 dynamic 边缺 TIMESTAMP_FIELD，
+        **它们落在本函数的管辖之外** —— 同 `expire_stale_nodes` 的同名字段。
+        此时 `stale` 的含义是「看得见的部分里有多少陈旧」，不是全部。
     """
     enabled = expiry_enabled()
-    result = {'enabled': enabled, 'per_label': {}}
+    result = {'enabled': enabled, 'unjudgeable_total': 0, 'per_label': {}}
 
     for label, expires in expiring_edge_labels():
         if only_labels and label not in only_labels:
@@ -537,6 +625,27 @@ def deactivate_stale_dynamic_edges(neptune_query, round_ts: int,
             continue
 
         entry = {'expires': expires, 'stale': int(stale or 0), 'deactivated': 0}
+
+        # 「不可判定」与「已判定为新鲜」必须分开 —— stale=0 有两种截然不同的
+        # 含义：都新鲜，或者一条都没看见。单独一个字段，不并入 stale。
+        try:
+            uj = neptune_query(_edge_unjudgeable_query(label))
+            uvals = (uj or {}).get('result', {}).get('data', {}).get('@value', [])
+            uraw = uvals[0] if uvals else 0
+            entry['unjudgeable'] = int(
+                (uraw.get('@value', uraw) if isinstance(uraw, dict) else uraw) or 0)
+        except Exception as e:
+            logger.warning("edge-expiry: 统计 %s 不可判定数失败（非致命）: %s", label, e)
+            entry['unjudgeable'] = None
+
+        if entry.get('unjudgeable'):
+            result['unjudgeable_total'] += entry['unjudgeable']
+            logger.warning(
+                "edge-expiry: %s 有 %d 条 dynamic 边缺 %s，**落在失效判定管辖之外**。"
+                "该类型的 stale 统计因此偏低 —— 那个数字的含义是「看得见的部分」，"
+                "不是「全部」。写入方应迁移到 %s。",
+                label, entry['unjudgeable'], TIMESTAMP_FIELD, TIMESTAMP_FIELD)
+
         if entry['stale'] and enabled:
             try:
                 neptune_query(_deactivate_query(label, cutoff))
