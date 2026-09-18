@@ -14,9 +14,11 @@ import uuid
 
 import pytest
 
+from conftest import cleanup_incident
+
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = "/home/ubuntu/tech/graph-dependency-platform"
+from paths import PROJECT_ROOT
 
 # ── S7-01 ────────────────────────────────────────────────────────────────────
 
@@ -258,6 +260,10 @@ def incident_written(neptune_rca):
 
     yield incident_id
 
+    # 2026-08-28 补:本 fixture 原先**完全没有清理**，是 Incident 节点与向量
+    # 残留的主要来源（实测一天累积 15 个节点 + 38 条向量）。
+    cleanup_incident(neptune_rca, incident_id)
+
 
 @pytest.mark.neptune
 def test_s7_05_incident_written_and_rca_structured(neptune_rca, incident_written):
@@ -324,6 +330,7 @@ def test_s7_06_dr_plan_generated_from_graph_data(neptune_rca):
         from planner.plan_generator import PlanGenerator
         from planner.step_builder import StepBuilder
         from registry.registry_loader import get_registry
+        from dr_profile import set_active_profile
         import graph.neptune_client as _gnc
     except ImportError as exc:
         pytest.fail(f"S7-06: Import failed — {exc}")
@@ -335,6 +342,12 @@ def test_s7_06_dr_plan_generated_from_graph_data(neptune_rca):
         "NEPTUNE_ENDPOINT",
         "petsite-neptune.cluster-czbjnsviioad.ap-northeast-1.neptune.amazonaws.com",
     )
+
+    # dr-plan-generator 自 2026-09-05 起**刻意没有默认 workload profile**：
+    # 猜错 profile 会生成一份指向错误域名/SSM 键/命名空间的计划，看起来对、
+    # 执行时才炸。本用例跑的是**真实 petsite 图**，所以用真实 profile
+    # （不是 dr-plan-generator/tests 里那份虚构的 acme-shop fixture）。
+    set_active_profile(os.path.join(PROJECT_ROOT, "profiles", "petsite.yaml"))
 
     try:
         registry = get_registry()
@@ -352,6 +365,8 @@ def test_s7_06_dr_plan_generated_from_graph_data(neptune_rca):
             f"S7-06: DR plan generation failed. "
             f"Check Neptune connectivity and graph_analyzer. Error: {exc}"
         )
+    finally:
+        set_active_profile(None)
 
     assert plan is not None, "S7-06: generate_plan() 返回 None"
     assert plan.plan_id, f"S7-06: DRPlan.plan_id 不应为空，实际: {plan.plan_id!r}"

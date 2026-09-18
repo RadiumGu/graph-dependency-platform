@@ -1,0 +1,43 @@
+[
+  {
+    "eid": "22ce5ef1-553d-a703-2074-8860be72e8bc",
+    "edge": "AccessesData",
+    "src": "petsearch",
+    "dst": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+    "status": "inconclusive",
+    "dep_class": "soft",
+    "exp": "chaosmesh/vx-petsearch-dynamodbtable",
+    "props": {
+      "verify_reason": "观测方退化仅 0.0% 且已确认注入生效，但该边有 1 个独立观测源看到过它 —— 这是 soft dependency（打断它本就不该影响调用方），不是「边不存在」。本次干预对存在性不可判定，强度判为 soft",
+      "evidence": "source:SearchController.java#search",
+      "verified_by": "dns+xray",
+      "verify_by": "chaos-runner",
+      "verify_confidence": 0.9241,
+      "active": true,
+      "last_drift_check": 1788970004,
+      "last_seen": 1788969649,
+      "verify_evidence_channel": "both",
+      "verify_degradation": 0.0,
+      "xray_fault_count": 0,
+      "verify_refute_count": 0,
+      "xray_window_hours": 24,
+      "verify_observing_sources": 1,
+      "dependency_kind": "static",
+      "xray_error_count": 0,
+      "runtime_verified": true,
+      "drift_status": "ok",
+      "xray_total_response_time_s": 2085.615,
+      "xray_last_seen": 1788969649,
+      "source": "aws-etl",
+      "verify_last": 1788969970,
+      "last_updated": 1772712274,
+      "declared_in": "etl_aws",
+      "verify_status": "inconclusive",
+      "verify_experiment": "chaosmesh/vx-petsearch-dynamodbtable",
+      "xray_call_count": 420304,
+      "verify_dependency_class": "soft",
+      "verify_confirm_count": 0,
+      "verify_dependency_class_reason": "已确认注入生效、观测方退化仅 0.0%，而 1 个独立观测源看到过这条边 —— 边真实存在且打断它不影响调用方，是 soft dependency。这是**设计良好**的证据，不是图谱错误"
+    }
+  }
+]

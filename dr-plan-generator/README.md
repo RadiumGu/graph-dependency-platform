@@ -70,22 +70,22 @@ export REGION=ap-northeast-1
 
 ```bash
 # AZ-level switchover
-python3 main.py plan --scope az --source apne1-az1 --target apne1-az2,apne1-az4
+python3 main.py plan --scope az --source ap-northeast-1a --target ap-northeast-1c,ap-northeast-1d
 
 # Region-level switchover
 python3 main.py plan --scope region --source ap-northeast-1 --target us-west-2
 
 # With service exclusion
-python3 main.py plan --scope az --source apne1-az1 --target apne1-az2 --exclude petfood
+python3 main.py plan --scope az --source ap-northeast-1a --target ap-northeast-1c --exclude petfood
 
 # JSON output
-python3 main.py plan --scope az --source apne1-az1 --target apne1-az2 --format json
+python3 main.py plan --scope az --source ap-northeast-1a --target ap-northeast-1c --format json
 ```
 
 ### Impact assessment
 
 ```bash
-python3 main.py assess --scope az --failure apne1-az1
+python3 main.py assess --scope az --failure ap-northeast-1a
 ```
 
 ### Validate an existing plan
@@ -160,13 +160,39 @@ No step is generated without a corresponding rollback command. The rollback plan
 
 ## Examples
 
-Pre-generated example plans using PetSite topology:
+### Pre-generated examples (**synthetic topology**, not the live graph)
+
+⚠️ The three artifacts below come from a **hardcoded synthetic node list** in
+`examples/generate_examples.py`. Their AZ names are `apne1-az1/2/4`, which do
+**not exist** in the real graph (the real AZs are `ap-northeast-1a` / `1c` /
+`1d`). File names and the table keep the original names on purpose: these are
+historical artifacts, and search-replacing the AZ name would manufacture a
+plan that *claims* to be about `ap-northeast-1a` while actually describing a
+different topology — worse than leaving the fictional name in place.
+
+Use them to see what the output looks like offline. Do **not** use them to
+judge blast radius in a real environment.
 
 | Example | Scenario | Services | Steps | RTO |
 |---------|----------|----------|-------|-----|
 | [AZ switchover](examples/az-switchover-apne1-az1.md) | AZ1 → AZ2+AZ4 | 7 svc / 14 res | 19 + 15 rollback | ~34min |
 | [AZ with exclusion](examples/az-switchover-exclude-petfood.md) | AZ1 → AZ2+AZ4 (no petfood) | 6 svc / 13 res | 18 + 14 rollback | ~32min |
 | [Region switchover](examples/region-switchover-apne1-to-usw2.md) | Tokyo → US West | 7 svc / 22 res | 28 + 23 rollback | ~55min |
+
+### Measured on the live graph (2026-09-08)
+
+Same AZ scope, run against Neptune:
+
+| source | Affected services | Fully unavailable |
+|---|--:|---|
+| `ap-northeast-1a` | 6 | 0 — all span multiple AZs, so degraded only |
+| `ap-northeast-1c` | 7 | **1**: `trafficgenerator` has a single pod, only in 1c |
+| `ap-northeast-1d` | 0 | that AZ really does hold only 2 resources |
+
+"Affected" and "fully unavailable" are different things: `petsite` runs 96 pods
+in 1a and 160 in 1c, so losing one AZ **degrades** it; losing `trafficgenerator`
+means it is **gone**. The plan reports that distinction as
+`fully_lost_services`, with `service_az_pods` as the raw evidence behind it.
 
 ## Project Structure
 

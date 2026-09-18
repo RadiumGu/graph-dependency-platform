@@ -271,9 +271,9 @@ L4 TCP 信号（L7 无数据时）：
 
 | 查询 | 用途 |
 |------|------|
-| **Q1** `q1_blast_radius` | 下游影响：服务 → 5 跳 `Calls/DependsOn` + BusinessCapability |
+| **Q1** `q1_blast_radius` | 影响面：**谁依赖**该节点（入边，5 跳，契约全部 dependency 边）+ BusinessCapability |
 | **Q2** `q2_tier0_status` | 所有 Tier0 服务：故障边界、可用区、副本数 |
-| **Q3** `q3_upstream_deps` | 调用故障服务的上游服务 |
+| **Q3** `q3_upstream_deps` | 根因候选：故障服务**依赖的**节点（出边） |
 | **Q4** `q4_service_info` | 单个服务属性 |
 | **Q5** `q5_similar_incidents` | 该服务的历史已解决故障记录 |
 | **Q6** `q6_pod_status` | Neptune 中的 Pod 状态（ETL 写入） |

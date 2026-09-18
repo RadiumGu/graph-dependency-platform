@@ -4,6 +4,8 @@ cloudwatch.py - CloudWatch metrics collection for EC2 and Lambda nodes.
 
 import datetime
 import logging
+import os
+import time
 import boto3
 from neptune_client import neptune_query, safe_str
 from config import REGION, EKS_CLUSTER_NAME
@@ -193,6 +195,14 @@ def fetch_lambda_cloudwatch_metrics_batch(cw_client, fns: list) -> dict:
 
 
 def fetch_nfm_ec2_metrics(cw_client) -> dict:
+    """
+    从 CloudWatch 取 NFM 的**监视器级（= VPC 级）**聚合指标。
+
+    ⚠️ 返回值是**每个监视器一份聚合值**，不是每个实例一份。
+    监视器的 localResources 是 `AWS::EC2::VPC`，所以这份数字描述的是整个 VPC。
+    绝不能逐个复制给 VPC 内的实例 —— 见 map_nfm_metrics_to_ec2 的注释。
+    per-instance 数据请用 fetch_nfm_per_flow_metrics()。
+    """
     result = {}
     try:
         nfm = boto3.client('networkflowmonitor', region_name=REGION)
@@ -239,7 +249,417 @@ def fetch_nfm_ec2_metrics(cw_client) -> dict:
     return result
 
 
+# NFM per-flow 查询的 destination category。
+# 实测（2026-08-29，petsite-nfm-monitor）合法枚举由 API 校验错误反推得到：
+#   [LOCAL_ZONE, INTERNET, AMAZON_DYNAMODB, INTER_VPC, UNCLASSIFIED,
+#    AWS_SERVICE, INTER_REGION, TRANSIT_GATEWAY, INTRA_AZ, AMAZON_S3, INTER_AZ]
+# INTER_AZ **有数据且有重传**，这对本项目的 fault_boundary='az' 模型直接相关，
+# 所以必须单独统计，不能与 INTRA_AZ 混在一起。
+NFM_FLOW_CATEGORIES = ('INTRA_AZ', 'INTER_AZ', 'UNCLASSIFIED')
+
+# 做拓扑发现用的 category：服务间 + 到 AWS 托管服务。
+# `AMAZON_S3` / `AMAZON_DYNAMODB` 的远端**没有服务名** —— category 本身就是
+# 远端类型。第一版过滤器要求 remoteServiceName 非空，把这两类整批丢掉了，
+# 于是错误地得出「可用服务对 0 组」。
+NFM_TOPOLOGY_CATEGORIES = {
+    'INTRA_AZ': None,            # 远端是集群内服务，取 remoteServiceName
+    'INTER_AZ': None,
+    'AMAZON_S3': 's3',           # 远端固定，映射到 AWSServiceEndpoint 的规范名
+    'AMAZON_DYNAMODB': 'dynamodb',
+}
+
+# NFM per-flow 查询的时间窗**硬上限 1 小时**。
+# 实测传 120 分钟直接报 `Time range can not exceed 1 hour`。
+# 取 50 分钟而不是 60：60 正好擦着上限、没有余量，
+# 而窗口右端要留 5 分钟给数据落地延迟，两者叠加容易越界。
+NFM_FLOW_WINDOW_MINUTES = 50
+NFM_FLOW_QUERY_TIMEOUT = 40
+NFM_FLOW_LIMIT = 50
+
+
+def fetch_nfm_per_flow_metrics(window_minutes: int = NFM_FLOW_WINDOW_MINUTES) -> dict:
+    """
+    用 NFM 的 top-contributors 查询取**逐流**网络质量，按实例归集。
+
+    ## 为什么必须走这条路
+
+    原实现只取监视器级（VPC 级）聚合，再把同一份数字复制给 VPC 内每个实例。
+    实测后果：7 个 EC2 节点的 `net_rtt_avg_ms` 全部等于 38.25 ——
+    「PetSite-Node-az1a-1 的 RTT 是 38.25ms」这句话是**假的**，
+    那是整个 VPC 的平均值。这与把泛化的 X-Ray `S3` 节点当成某个具体 bucket
+    是同一类错误：**把粗粒度观测归属到细粒度实体**。
+
+    ⚠️ 时间窗**硬上限 1 小时**（实测传 120 分钟报 `Time range can not exceed 1 hour`）。
+    默认取 NFM_FLOW_WINDOW_MINUTES=50 而非 60 —— 60 正好擦着上限没余量。
+
+    per-flow 查询给出的字段（实测）：
+      localIp / localInstanceId / localAz / localSubnetId
+      remoteIp / remoteInstanceId / remoteAz / remoteSubnetId / targetPort
+      value（该指标在这条流上的值）
+      traversedConstructs（真实网络路径：Instance → ENI → ENI → Instance）
+      kubernetesMetadata（localServiceName/localPodName/localPodNamespace + remote 同理）
+
+    返回 {instance_id: {net_retransmissions_flow, net_retrans_inter_az,
+                        net_flow_count, nfm_scope, ...}}
+    —— 键是**实例 ID**（不可变），不是 name。
+
+    注意：这里刻意**不**写服务对之间的边。NFM 的 kubernetesMetadata 足以支撑
+    「service → service + TCP 质量」的边（那会让 NFM 成为图谱里第三个平行拓扑源），
+    但那是独立一块工作，半做出来只会留下一批语义不明的边。
+    """
+    per_inst = {}
+    try:
+        nfm = boto3.client('networkflowmonitor', region_name=REGION)
+        monitors = nfm.list_monitors().get('monitors', [])
+        end = datetime.datetime.utcnow() - datetime.timedelta(minutes=5)
+        start = end - datetime.timedelta(minutes=window_minutes)
+        ts_fmt = '%Y-%m-%dT%H:%M:%S'
+
+        for m in monitors:
+            monitor_name = m.get('monitorName', '')
+            if not monitor_name:
+                continue
+            for category in NFM_FLOW_CATEGORIES:
+                try:
+                    q = nfm.start_query_monitor_top_contributors(
+                        monitorName=monitor_name,
+                        startTime=start.strftime(ts_fmt),
+                        endTime=end.strftime(ts_fmt),
+                        metricName='RETRANSMISSIONS',
+                        destinationCategory=category,
+                        limit=NFM_FLOW_LIMIT,
+                    )
+                    qid = q.get('queryId')
+                    if not qid:
+                        continue
+                    # 轮询等结果。NFM 的查询是异步的，实测 SUCCEEDED 约需 10 秒。
+                    waited = 0
+                    status = ''
+                    while waited < NFM_FLOW_QUERY_TIMEOUT:
+                        time.sleep(4)
+                        waited += 4
+                        st = nfm.get_query_status_monitor_top_contributors(
+                            monitorName=monitor_name, queryId=qid)
+                        status = st.get('status', '')
+                        if status in ('SUCCEEDED', 'FAILED'):
+                            break
+                    if status != 'SUCCEEDED':
+                        logger.warning(
+                            "NFM per-flow 查询未成功 monitor=%s category=%s status=%s",
+                            monitor_name, category, status or 'TIMEOUT')
+                        continue
+                    res = nfm.get_query_results_monitor_top_contributors(
+                        monitorName=monitor_name, queryId=qid)
+                    for c in res.get('topContributors', []) or []:
+                        val = float(c.get('value') or 0)
+                        # 一条流的两端都要记账：本端发生重传，对端也在这条路径上。
+                        for side in ('local', 'remote'):
+                            iid = c.get(f'{side}InstanceId')
+                            if not iid:
+                                continue
+                            e = per_inst.setdefault(iid, {
+                                'net_retransmissions_flow': 0.0,
+                                'net_retrans_inter_az': 0.0,
+                                'net_flow_count': 0,
+                            })
+                            e['net_retransmissions_flow'] += val
+                            e['net_flow_count'] += 1
+                            if category == 'INTER_AZ':
+                                e['net_retrans_inter_az'] += val
+                except Exception as exc:  # noqa: BLE001
+                    # 单个 category 失败不该让整轮 NFM 采集失败 ——
+                    # 少一个类别只是覆盖面变窄，抛出去连已拿到的也白跑。
+                    logger.warning("NFM per-flow 查询失败 monitor=%s category=%s: %s",
+                                   monitor_name, category, exc)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"fetch_nfm_per_flow_metrics failed (non-fatal): {e}")
+
+    for iid, e in per_inst.items():
+        # nfm_scope 显式标注这批数字的真实粒度，避免下游再次把聚合当单机。
+        e['nfm_scope'] = 'instance'
+    logger.info("NFM per-flow: %d 个实例有逐流数据", len(per_inst))
+    return per_inst
+
+
+def _nfm_run_query(nfm, monitor_name, start, end, metric, category, limit):
+    """跑一次 NFM top-contributors 查询并返回 topContributors 列表。
+
+    查询是异步的：StartQuery → 轮询 GetQueryStatus → GetQueryResults，
+    实测 SUCCEEDED 约需 10 秒。
+    """
+    ts_fmt = '%Y-%m-%dT%H:%M:%S'
+    q = nfm.start_query_monitor_top_contributors(
+        monitorName=monitor_name,
+        startTime=start.strftime(ts_fmt),
+        endTime=end.strftime(ts_fmt),
+        metricName=metric,
+        destinationCategory=category,
+        limit=limit,
+    )
+    qid = q.get('queryId')
+    if not qid:
+        return []
+    waited, status = 0, ''
+    while waited < NFM_FLOW_QUERY_TIMEOUT:
+        time.sleep(4)
+        waited += 4
+        status = nfm.get_query_status_monitor_top_contributors(
+            monitorName=monitor_name, queryId=qid).get('status', '')
+        if status in ('SUCCEEDED', 'FAILED'):
+            break
+    if status != 'SUCCEEDED':
+        logger.warning("NFM 查询未成功 metric=%s category=%s status=%s",
+                       metric, category, status or 'TIMEOUT')
+        return []
+    res = nfm.get_query_results_monitor_top_contributors(
+        monitorName=monitor_name, queryId=qid)
+    return res.get('topContributors', []) or []
+
+
+def fetch_nfm_topology() -> dict:
+    """
+    用 NFM per-flow 发现**服务级依赖拓扑**，作为 DeepFlow / X-Ray 之外的第三个源。
+
+    ## 为什么用 DATA_TRANSFERRED 而不是 RETRANSMISSIONS
+
+    第一版用 RETRANSMISSIONS 做拓扑，实测「可用服务对 0 组」。
+    原因是 RETRANSMISSIONS **只报发生过重传的流** —— 网络正常的业务流产生零行。
+    用它做拓扑发现等于只看异常。DATA_TRANSFERRED 覆盖每条流，才是拓扑指标。
+    （重传仍然采集，但用途是质量而非拓扑，见 fetch_nfm_per_flow_metrics。）
+
+    ## 方向从 targetPort 判定，不靠推断
+
+    NFM 报的是**流**，同一条连接两端各报一次，所以每个服务对会出现两个方向。
+    实测 `targetPort` 能干净地区分：
+        service-petsite → search-service  targetPort=80   ← 客户端侧，真方向
+        search-service  → service-petsite targetPort=0    ← 镜像记录
+    所以只取 `targetPort > 0` 的记录。这是**数据自身携带的信息**，
+    不是从字节数大小去猜谁调用谁。
+
+    ## 远端类型由 category 决定
+
+    `AMAZON_S3` / `AMAZON_DYNAMODB` 的远端**没有服务名** —— category 本身就是
+    远端类型。第一版过滤器要求 remoteServiceName 非空，把这两类整批丢掉了。
+    但注意粒度：NFM 只说「访问了 S3」，**不给具体 bucket** ——
+    所以落 AWSServiceEndpoint（granularity='service'），
+    与 X-Ray 泛化 S3 节点同一处理，绝不猜具体资源。
+
+    返回 [{'src','dst','dst_kind','bytes','flows','category','cross_az'}]
+    dst_kind ∈ {'service', 'aws_service'}
+    """
+    out = {}
+    try:
+        nfm = boto3.client('networkflowmonitor', region_name=REGION)
+        monitors = nfm.list_monitors().get('monitors', [])
+        end = datetime.datetime.utcnow() - datetime.timedelta(minutes=5)
+        start = end - datetime.timedelta(minutes=NFM_FLOW_WINDOW_MINUTES)
+
+        for m in monitors:
+            monitor_name = m.get('monitorName', '')
+            if not monitor_name:
+                continue
+            for category, fixed_remote in NFM_TOPOLOGY_CATEGORIES.items():
+                try:
+                    rows = _nfm_run_query(nfm, monitor_name, start, end,
+                                          'DATA_TRANSFERRED', category,
+                                          NFM_FLOW_LIMIT)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("NFM 拓扑查询失败 category=%s: %s", category, exc)
+                    continue
+
+                for c in rows:
+                    # 只取客户端侧记录 —— 见上方 targetPort 的说明
+                    if int(c.get('targetPort') or 0) <= 0:
+                        continue
+                    k = c.get('kubernetesMetadata') or {}
+                    src = k.get('localServiceName') or ''
+                    if not src:
+                        continue          # 无服务名（裸 Pod / 控制面组件），跳过
+                    if fixed_remote:
+                        dst, dst_kind = fixed_remote, 'aws_service'
+                    else:
+                        dst = k.get('remoteServiceName') or ''
+                        # 'kubernetes' 是 API server，属控制面不是业务依赖
+                        if not dst or dst == 'kubernetes':
+                            continue
+                        dst_kind = 'service'
+                    key = (src, dst, dst_kind)
+                    e = out.setdefault(key, {
+                        'src': src, 'dst': dst, 'dst_kind': dst_kind,
+                        'bytes': 0.0, 'flows': 0, 'cross_az': False,
+                        'categories': set(),
+                    })
+                    e['bytes'] += float(c.get('value') or 0)
+                    e['flows'] += 1
+                    e['categories'].add(category)
+                    if category == 'INTER_AZ':
+                        e['cross_az'] = True
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("fetch_nfm_topology failed (non-fatal): %s", exc)
+
+    result = list(out.values())
+    for e in result:
+        e['categories'] = '; '.join(sorted(e['categories']))
+    logger.info("NFM 拓扑：%d 条有向服务级依赖", len(result))
+    return result
+
+
+def upsert_nfm_topology(edges: list) -> dict:
+    """
+    把 NFM 观测到的服务级依赖写进图谱。
+
+    ## 写入纪律与 etl_xray 完全一致
+
+    · 边**已存在**（无论谁发现）→ 只补 NFM 的度量，
+      **绝不覆盖 source / dependency_kind**。原 source 记录「谁首先发现」。
+    · 边**不存在** → 新建，`source='nfm'`。这才是 NFM 自己的贡献。
+    · 目标节点不存在 → **回读确认后计入 skipped**，不谎报成功
+      （etl_xray 踩过「没抛异常就算创建成功」这个坑）。
+
+    源服务名是 **K8s 部署名**（`search-service`），需经 service_mappings.json
+    的 k8s_alias 映射到图谱服务名（`petsearch`）—— 复用同一份映射，不另造。
+    """
+    import json as _json
+    # k8s_alias：与 etl_deepflow / etl_xray 读同一个文件，不内联副本
+    alias = {}
+    here = os.path.dirname(os.path.abspath(__file__))
+    for cand in (os.path.join(here, 'service_mappings.json'),
+                 os.path.join(here, '..', 'etl_deepflow', 'service_mappings.json')):
+        if os.path.isfile(cand):
+            try:
+                with open(cand, encoding='utf-8') as fh:
+                    alias = _json.load(fh).get('k8s_alias', {}) or {}
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("读 service_mappings.json 失败: %s", exc)
+            break
+    if not alias:
+        logger.warning("k8s_alias 为空 —— K8s 部署名不会被映射成图谱服务名，"
+                       "NFM 拓扑边可能大量落不进图谱")
+
+    def _canon(name: str) -> str:
+        # NFM 的 K8s Service 名可能带 'service-' 前缀（实测 service-petsite）
+        n = name
+        if n.startswith('service-'):
+            n = n[len('service-'):]
+        return alias.get(n, n)
+
+    ts = int(time.time())
+    stats = {'created': 0, 'corroborated': 0, 'skipped_no_node': 0, 'failed': 0}
+
+    for e in edges:
+        src = _canon(e['src'])
+        if e['dst_kind'] == 'aws_service':
+            dst_match = (f"__.hasLabel('AWSServiceEndpoint')"
+                         f".has('name','{safe_str(e['dst'])}')")
+            edge_type = 'AccessesData'
+        else:
+            dst = _canon(e['dst'])
+            dst_match = (f"__.or(__.hasLabel('Microservice').has('name','{safe_str(dst)}'),"
+                         f" __.hasLabel('LambdaFunction').has('name','{safe_str(dst)}'))")
+            edge_type = 'Calls'
+
+        src_clause = (f"g.V().or("
+                      f"__.hasLabel('Microservice').has('name','{safe_str(src)}'),"
+                      f" __.hasLabel('LambdaFunction').has('name','{safe_str(src)}'))")
+        metrics = (f".property('nfm_bytes',{float(e['bytes'])})"
+                   f".property('nfm_flow_count',{int(e['flows'])})"
+                   f".property('nfm_cross_az',{'true' if e['cross_az'] else 'false'})"
+                   f".property('nfm_categories','{safe_str(e['categories'])}')"
+                   f".property('nfm_last_seen',{ts})")
+
+        probe = (f"{src_clause}.as('s').V().where({dst_match})"
+                 f".inE('{edge_type}').where(__.outV().has('name','{safe_str(src)}'))"
+                 f".count()")
+        try:
+            resp = neptune_query(probe)
+            existing = int(_extract_count(resp))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("NFM 边探测失败 %s → %s: %s", src, e['dst'], exc)
+            stats['failed'] += 1
+            continue
+
+        if existing > 0:
+            g = (f"{src_clause}.as('s').V().where({dst_match})"
+                 f".inE('{edge_type}').where(__.outV().has('name','{safe_str(src)}'))"
+                 f"{metrics}.property('active',true).property('last_seen',{ts})")
+            key = 'corroborated'
+        else:
+            g = (f"{src_clause}.as('s').V().where({dst_match})"
+                 f".coalesce("
+                 f"  __.inE('{edge_type}').where(__.outV().has('name','{safe_str(src)}')),"
+                 f"  __.addE('{edge_type}').from('s')"
+                 f"    .property('source','nfm')"
+                 f"    .property('dependency_kind','dynamic')"
+                 f"    .property('first_seen',{ts})"
+                 f")"
+                 f"{metrics}.property('active',true).property('last_seen',{ts})")
+            key = 'created'
+
+        try:
+            neptune_query(g)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("NFM 边写入失败 %s → %s: %s", src, e['dst'], exc)
+            stats['failed'] += 1
+            continue
+
+        if key == 'corroborated':
+            stats['corroborated'] += 1
+            continue
+        # 回读确认：目标节点不存在时 .V().where() 静默产出空集、不抛异常也不写边
+        try:
+            landed = int(_extract_count(neptune_query(probe)))
+        except Exception:  # noqa: BLE001
+            landed = 0
+        if landed > 0:
+            stats['created'] += 1
+        else:
+            stats['skipped_no_node'] += 1
+            logger.info("NFM 观测到 %s -[%s]-> %s，但图谱无匹配目标节点，跳过",
+                        src, edge_type, e['dst'])
+
+    logger.info("NFM 拓扑写入：%s", stats)
+    return stats
+
+
+def _extract_count(resp) -> int:
+    """从 Gremlin count() 响应里取标量。"""
+    try:
+        data = resp['result']['data']
+        if isinstance(data, dict):
+            v = data.get('@value')
+            if isinstance(v, list) and v:
+                first = v[0]
+                return int(first.get('@value') if isinstance(first, dict) else first)
+        if isinstance(data, list) and data:
+            return int(data[0])
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
+
+
 def map_nfm_metrics_to_ec2(nfm_metrics: dict, ec2_instances: list) -> dict:
+    """
+    ⚠️ 已废弃，保留仅为兼容尚未切换的调用方。**新代码不要用它。**
+
+    这个函数把监视器级（VPC 级）的聚合指标**逐个复制给 VPC 内每个 EC2 实例**：
+
+        for inst in ec2_instances:
+            if inst.get('vpc_id') in vpc_ids or not vpc_ids:
+                ec2_nfm[inst['name']] = {...}    # ← 同一份聚合值抄 N 遍
+
+    实测后果：7 个节点的 net_rtt_avg_ms 全部是 38.25，即整个 VPC 的平均值
+    被当成了每台机器各自的 RTT。
+
+    另有一处更危险的兜底：`or not vpc_ids` —— get_monitor 一旦失败，
+    vpc_ids 为空集，于是**账号内所有实例**都会被写上这份指标，无论在哪个 VPC。
+    静默、无报错，写进去的数据与真实数据在图谱里无法区分。
+
+    正确做法：per-instance 用 fetch_nfm_per_flow_metrics()；
+    VPC 级聚合应写到 VPC 节点上（见 update_vpc_nfm_metrics）。
+    """
+    logger.warning(
+        "map_nfm_metrics_to_ec2 已废弃：它把 VPC 级聚合复制给每个实例，"
+        "使「某台机器的 RTT」变成假数据。请改用 fetch_nfm_per_flow_metrics()。")
     if not nfm_metrics:
         return {}
     ec2_nfm = {}
@@ -257,12 +677,85 @@ def map_nfm_metrics_to_ec2(nfm_metrics: dict, ec2_instances: list) -> dict:
             except Exception:
                 vpc_ids = set()
             for inst in ec2_instances:
-                if inst.get('vpc_id') in vpc_ids or not vpc_ids:
+                # 去掉了原先的 `or not vpc_ids` 兜底：拿不到监控范围时
+                # 宁可不写，也不能给所有实例写上无法与真实数据区分的假值。
+                if vpc_ids and inst.get('vpc_id') in vpc_ids:
                     ec2_nfm[inst['name']] = {k: v for k, v in metrics.items()
                                               if k != 'monitor_name'}
     except Exception as e:
         logger.warning(f"map_nfm_metrics_to_ec2 failed (non-fatal): {e}")
     return ec2_nfm
+
+
+def update_vpc_nfm_metrics(nfm_metrics: dict):
+    """
+    把监视器级聚合指标写到它真正描述的实体 —— **VPC 节点**上。
+
+    这是 D.3 缺陷的正解：数字本身没错，错的是归属对象。
+    写到 VPC 上之后，「整个 VPC 的平均 RTT 是 38.25ms」是一句真话，
+    而「某台机器的 RTT 是 38.25ms」是假话。
+    """
+    written = 0
+    try:
+        nfm = boto3.client('networkflowmonitor', region_name=REGION)
+        ts = int(time.time())
+        for monitor_arn, metrics in (nfm_metrics or {}).items():
+            monitor_name = metrics.get('monitor_name', '')
+            if not monitor_name:
+                continue
+            try:
+                detail = nfm.get_monitor(monitorName=monitor_name)
+                vpc_ids = [r.get('identifier', '').split('/')[-1]
+                           for r in detail.get('localResources', [])
+                           if 'vpc' in r.get('identifier', '')]
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("get_monitor(%s) 失败，跳过 VPC 级写入: %s",
+                               monitor_name, exc)
+                continue
+            for vpc_id in vpc_ids:
+                props = (f".property(single,'nfm_scope','vpc')"
+                         f".property(single,'nfm_monitor','{safe_str(monitor_name)}')"
+                         f".property(single,'nfm_updated_at',{ts})")
+                for k, v in metrics.items():
+                    if k == 'monitor_name':
+                        continue
+                    props += f".property(single,'{safe_str(k)}',{float(v)})"
+                try:
+                    neptune_query(
+                        f"g.V().has('VPC','vpc_id','{safe_str(vpc_id)}'){props}")
+                    written += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("写 VPC %s 的 NFM 指标失败: %s", vpc_id, exc)
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"update_vpc_nfm_metrics failed (non-fatal): {e}")
+    logger.info("NFM VPC 级指标已写入 %d 个 VPC 节点", written)
+    return written
+
+
+def update_ec2_nfm_per_flow(per_inst: dict):
+    """
+    把 per-flow 归集出的**实例级**指标写到 EC2 节点上。
+
+    以 `instance_id` 定位节点（不可变），不用 name —— name 来自 Name 标签，
+    可变，正是造成节点重复的根源。
+    """
+    written = 0
+    ts = int(time.time())
+    for iid, metrics in (per_inst or {}).items():
+        props = f".property(single,'nfm_updated_at',{ts})"
+        for k, v in metrics.items():
+            if isinstance(v, str):
+                props += f".property(single,'{safe_str(k)}','{safe_str(v)}')"
+            else:
+                props += f".property(single,'{safe_str(k)}',{float(v)})"
+        try:
+            neptune_query(
+                f"g.V().has('EC2Instance','instance_id','{safe_str(iid)}'){props}")
+            written += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("写实例 %s 的 per-flow 指标失败: %s", iid, exc)
+    logger.info("NFM per-flow 指标已写入 %d 个 EC2 节点", written)
+    return written
 
 
 def update_ec2_nfm_metrics(name: str, metrics: dict):

@@ -1,0 +1,104 @@
+{
+  "taken_at": "20260915-104132",
+  "service": "WaggleAIOrchestrator",
+  "target_label": "AgentRuntime",
+  "target": "WaggleAINutrition",
+  "irsa_role": "WaggleAIAgents-RoleWaggleAIOrchestrator6D651635-ScqHU1r865Js",
+  "severance": "iam-deny",
+  "deny_document": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Deny",
+        "Action": [
+          "bedrock-agentcore:InvokeAgentRuntime"
+        ],
+        "Resource": [
+          "*"
+        ]
+      }
+    ]
+  },
+  "channel_edge": {
+    "baseline": {
+      "ok": false,
+      "success_rate": 100.0,
+      "total_requests": 0,
+      "p99_ms": 0.0
+    },
+    "during": {
+      "ok": false,
+      "success_rate": 100.0,
+      "total_requests": 0,
+      "p99_ms": 0.0
+    },
+    "post": {
+      "ok": false,
+      "success_rate": 100.0,
+      "total_requests": 0,
+      "p99_ms": 0.0
+    }
+  },
+  "channel_business": {
+    "baseline": {
+      "ok": true,
+      "no_probe": false,
+      "per_probe": {
+        "waggle": [
+          1,
+          1,
+          1
+        ]
+      },
+      "detail": "waggle=[1, 1, 1]"
+    },
+    "during": {
+      "ok": true,
+      "no_probe": false,
+      "per_probe": {
+        "waggle": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      "detail": "waggle=[1, 1, 1, 1]"
+    },
+    "post": {
+      "ok": true,
+      "history": [
+        {
+          "waggle": 1
+        },
+        {
+          "waggle": 1
+        },
+        {
+          "waggle": 1
+        },
+        {
+          "waggle": 1
+        },
+        {
+          "waggle": 1
+        },
+        {
+          "waggle": 1
+        },
+        {
+          "waggle": 1
+        },
+        {
+          "waggle": 1
+        }
+      ],
+      "recovered": true,
+      "detail": "连续 8 次全部探针回到基线"
+    }
+  },
+  "policy_removed": true,
+  "verdict": "observation_only",
+  "why": "被测边故障期采集失败（ok=False），且未被前后夹住（基线 0 次 / 回滚后 ok=False、0 次）—— 无法区分「调用停止」与「本窗口没聚合到」",
+  "caveat": "IAM deny 证明依赖承重，不等于延迟/部分失败场景测试"
+}

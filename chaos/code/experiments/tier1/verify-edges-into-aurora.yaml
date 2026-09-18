@@ -1,0 +1,145 @@
+# 边验证实验：用 AWS FIS 证伪打进 Aurora 主库的 AccessesData 边
+#
+# 生成 2026-08-31。这是本项目**第一个用 FIS 而非 Chaos Mesh 做边验证**的实验，
+# 意义在于打开了 78 条「被依赖方是 AWS 托管资源」的边 —— Chaos Mesh 的
+# http_chaos 打不到它们，此前这批边被记为「阻塞在 T-230（SSM 改安全组）」。
+# 实测 FIS 原生就有需要的动作，不必自造：
+#   aws:rds:reboot-db-instances          ← 本实验用
+#   aws:rds:failover-db-cluster          ← 本集群不可用，见下
+#   aws:network:disrupt-vpc-endpoint     ← 可验 11 条 AWSServiceEndpoint 边
+#   aws:eks:pod-network-blackhole-port   ← T-230 想要的手术刀式单边隔离
+#
+# ── 为什么是 reboot 而不是 failover ────────────────────────────────────────
+# 实测 serviceseks2-databaseb269d8bb-efjeyzicx2ak 只有**一个实例**
+# （DBClusterMembers 仅 writer，MultiAZ=false），没有读副本可切，
+# 所以 failover-db-cluster 在这个集群上不适用。reboot writer 同样能造成
+# 连接中断，对「这个服务真的依赖这个库吗」这个断言是充分的。
+#
+# ── 这一次注入能验几条边 ──────────────────────────────────────────────────
+# 图谱里打进该集群的依赖边共 12 条，但只有观测方**有真实流量**的才判得出来：
+#   list-adoptions   -> Aurora   static  aws-etl        实测 368 请求/120s  ✅
+#   pay-for-adoption -> Aurora   static  aws-etl        实测 378 请求/120s  ✅
+#   pethistory       -> Aurora   static  aws-etl        实测  26 请求/120s  ⚠️ 勉强过 20 下限
+#   petsite          -> Aurora   dynamic deepflow-dns   实测 918 请求/120s  ✅ 单源，最可能被证伪
+# 其余 8 条判不了，如实记录而不是硬凑：
+#   order-service / auth-service / product-service / points-service
+#       —— awesomeshop 六个 Deployment 全 0 副本（166 天），观测方无流量
+#   petsite-rca-engine / petsite-ops-slack-notifier / petsite-rca-interaction /
+#   ServicesEks2-petsiteapplicationresourcecontroler
+#       —— Lambda 非持续调用，DeepFlow 没有它们的 HTTP SLI
+#
+# **petsite 那条边是本实验最有价值的靶子**：它只有 deepflow-dns 一个源，
+# 也就是「观测到 petsite 解析过 Aurora 的域名」。DNS 解析不等于真的查库
+# （SDK 启动时解析一次就复用连接，也可能只是配置里写了但代码路径没走）。
+# 判 confirmed 说明它真的依赖；判 refuted 说明 DNS 证据在这里制造了一条假边
+# —— 两种结果都是产出。
+#
+# 用法：
+#   cd chaos/code && python3.11 main.py run --file experiments/tier1/verify-edges-into-aurora.yaml
+#
+# 前置：FIS_ROLE_ARN 指向的角色需有 rds:RebootDBInstance（实测
+#       chaos-fis-experiment-role 的内联策略已具备）。
+
+name: verify-edges-into-aurora
+description: "FIS 重启 Aurora writer，观测四个微服务是否退化，以证伪打进主库的 AccessesData 边"
+backend: fis
+
+target:
+  # 必须写**图谱里的节点名**：candidate_edges 用它查入边。
+  # 同时 TargetResolver._find_rds_cluster_arn 是子串匹配，传全名同样能解析出 ARN，
+  # 一个取值满足两处需求。
+  service: serviceseks2-databaseb269d8bb-efjeyzicx2ak
+  # namespace 对 AWS 托管资源填**受影响的应用命名空间**，不是资源类型。
+  #
+  # 2026-08-31 实测：初版写 `namespace: rds` 被 PolicyGuard 的 R002
+  # （Namespace Whitelist）正确拒绝 —— 白名单是 [petsite-staging,
+  # petsite-canary, chaos-sandbox, petadoptions]。仓库原有的
+  # experiments/fis/rds/fis-aurora-reboot-petlistadoptions.yaml 同样写
+  # `namespace: rds`，据此可判断**那份模板从未真正执行过**。
+  #
+  # 这是 R002 的一个语义缺口而不是配置错误：白名单是 K8s 概念，而 FIS 打的是
+  # AWS 资源、根本没有命名空间。填「爆炸半径落在哪个命名空间」既让护栏继续
+  # 有效（petadoptions 确实在白名单里、确实是被影响方），也不需要为了让 FIS
+  # 跑起来去放宽白名单 —— 后者才是危险的做法。
+  namespace: petadoptions
+  tier: Tier0
+
+  observers:
+    # 观测方写 **K8s / DeepFlow 口径的名字**（metrics.collect 直接用它做
+    # request_domain LIKE 匹配）；runner 会用 resolve_graph_name 把它映射成
+    # 图谱规范名再去对候选边，两套命名各归其位。
+    - service: list-adoptions
+      namespace: petadoptions
+      edge_label: AccessesData
+      min_baseline_requests: 20
+    - service: pay-for-adoption
+      namespace: petadoptions
+      edge_label: AccessesData
+      min_baseline_requests: 20
+    - service: pethistory
+      namespace: petadoptions
+      edge_label: AccessesData
+      min_baseline_requests: 20
+    - service: petsite
+      namespace: petadoptions
+      edge_label: AccessesData
+      min_baseline_requests: 20
+
+fault:
+  type: fis_rds_reboot
+  mode: all
+  value: "100"
+  duration: "5m"          # FIS 动作本身约 30–60s，duration 是实验窗口上限
+  extra_params:
+    service_name: "serviceseks2-databaseb269d8bb-efjeyzicx2ak"
+    resource_type: "rds:cluster"
+    force_failover: false   # 单实例集群，无副本可切
+
+steady_state:
+  before:
+    # ⚠️ 如实说明：这一项对 RDS 目标**不是有效门禁**。
+    # metrics.collect 走 DeepFlow l7_flow_log 的 request_domain，而实测
+    # 这批 Pod→Aurora 的流只有 L4 连接事实、L7 没有解析出 PostgreSQL
+    # （见 project.graph_dependency_platform.datastore_blindspot_was_etl_bug）。
+    # 所以这里必然拿到 0 请求 → fallback 100% → 恒过。
+    # 真正的前置条件是**观测方基线**（runner 单独采集并逐个报下限）。
+    # 保留这一项只为让相位结构一致，不要把它读成「目标健康已核实」。
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "3m"
+
+stop_conditions:
+  # 护栏挂观测方（T-214b）。RDS 目标侧没有可用 SLI，注入目标护栏在这里
+  # 本来就无从设置 —— 这反过来说明 T-214b 的 target 字段不是可选项。
+  # 阈值 25% 低于 confirm 判定线，目标是让边被判 confirmed 而不是一退化就熔断。
+  - metric: success_rate
+    threshold: "< 25%"
+    window: "60s"
+    action: abort
+    target: any_observer
+
+rca:
+  enabled: false
+
+graph_feedback:
+  enabled: true
+  edges:
+    - AccessesData
+
+options:
+  max_duration: "10m"
+
+# ── 爆炸半径 ────────────────────────────────────────────────────────────────
+# 重启的是**非生产** PetSite demo 的 Aurora PostgreSQL 单写实例，
+# 集群无读副本，所以重启期间该库完全不可用（实测 AWS 侧约 30–60s）。
+# 受影响：petlistadoptions / payforadoption / pethistory 的读写路径。
+# 不受影响：DynamoDB / SQS / SNS / Neptune 均无该库参与的路径；
+#           petsearch 走 DynamoDB 不走 Aurora。
+# 恢复：RDS 重启自愈，无需人工介入；FIS 实验结束即无残留对象
+#       （不像 Chaos Mesh 会留 CRD 和 tproxy 残留）。
+# 与 Chaos Mesh 实验的一个重要差别：**FIS 路径不会打伤 Pod netns**，
+# 所以 T-214h 的 Pod readiness 判据对 fis 后端刻意跳过。

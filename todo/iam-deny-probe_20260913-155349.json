@@ -1,0 +1,87 @@
+{
+  "taken_at": "20260913-155349",
+  "service": "petsearch",
+  "target_label": "DynamoDBTable",
+  "target": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+  "irsa_role": "ServicesEks2-searchserviceServiceAccountRole588AF64-Sulrl6FvKO5F",
+  "severance": "iam-deny",
+  "deny_document": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Deny",
+        "Action": [
+          "dynamodb:*"
+        ],
+        "Resource": [
+          "arn:aws:dynamodb:ap-northeast-1:926093770964:table/ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+          "arn:aws:dynamodb:ap-northeast-1:926093770964:table/ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM/index/*"
+        ]
+      }
+    ]
+  },
+  "channel_edge": {
+    "baseline": {
+      "ok": true,
+      "success_rate": 100.0,
+      "total_requests": 676,
+      "p99_ms": 17.9
+    },
+    "during": {
+      "ok": true,
+      "success_rate": 0.0,
+      "total_requests": 13,
+      "p99_ms": 13.2
+    },
+    "post": {
+      "ok": true,
+      "success_rate": 99.47,
+      "total_requests": 374,
+      "p99_ms": 16.0
+    }
+  },
+  "channel_business": {
+    "baseline": {
+      "ok": true,
+      "pet_counts": [
+        26,
+        26,
+        26
+      ],
+      "errors": [],
+      "min_pets": 26,
+      "max_pets": 26
+    },
+    "during": {
+      "ok": true,
+      "pet_counts": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "errors": [],
+      "min_pets": 0,
+      "max_pets": 0
+    },
+    "post": {
+      "ok": true,
+      "pet_counts": [
+        26,
+        26,
+        26,
+        26,
+        26,
+        26,
+        26,
+        26
+      ],
+      "min_pets": 26,
+      "recovered": true
+    }
+  },
+  "policy_removed": true,
+  "verdict": "confirmed",
+  "why": "注入生效（边成功率 100.0% → 0.0%，降 100.0pp）且业务归零（4/4 次探针返回 0 个，基线稳定 26 个）；回滚+刷新凭证后恢复",
+  "caveat": "IAM deny 证明依赖承重，不等于延迟/部分失败场景测试"
+}

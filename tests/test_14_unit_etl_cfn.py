@@ -15,8 +15,8 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 
 # ── 0. 文件存在检查 ──────────────────────────────────────────────────────────
-CFN_PATH = '/home/ubuntu/tech/graph-dependency-platform/infra/lambda/etl_cfn'
-TRIGGER_PATH = '/home/ubuntu/tech/graph-dependency-platform/infra/lambda/etl_trigger'
+from paths import ETL_CFN_DIR as CFN_PATH
+from paths import ETL_TRIGGER_DIR as TRIGGER_PATH
 _CFN_FILE = os.path.join(CFN_PATH, 'neptune_etl_cfn.py')
 _TRIGGER_FILE = os.path.join(TRIGGER_PATH, 'neptune_etl_trigger.py')
 

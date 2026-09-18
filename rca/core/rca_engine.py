@@ -15,6 +15,16 @@ logger = logging.getLogger(__name__)
 
 from shared import get_region
 REGION = get_region()
+
+# ── 因果先验接入评分的调参 ──────────────────────────────────────────────────
+# 半衰期需与 incident_writer.CAUSAL_HALF_LIFE_DAYS 一致（同一个环境变量），
+# 否则日志里报的半衰期与实际写入时用的不同源，排查时会误导。
+CAUSAL_HALF_LIFE_DAYS = float(os.environ.get('CAUSAL_HALF_LIFE_DAYS', '30'))
+# 衰减后样本权重门槛。低于此值不计分并打日志说明 —— 小样本比率是噪声，
+# 把噪声喂进评分正是本项目一直在清除的那类"无法核实的信号"。
+# 取 3.0 而非原注释里的 "100+ 真实告警"：后者以当前故障频率永远达不到，
+# 等于让机制永久休眠；3.0 在半衰期 30 天下约等于"近一两个月有 3 次同类判定"。
+CAUSAL_MIN_SAMPLE = float(os.environ.get('CAUSAL_MIN_SAMPLE', '3.0'))
 CH_HOST = os.environ.get('CLICKHOUSE_HOST', '')
 CH_PORT = int(os.environ.get('CLICKHOUSE_PORT', '8123'))
 
@@ -440,18 +450,64 @@ def step3c_log_sampling(top_candidates: list, window_minutes: int = 5) -> dict:
 
     return results
 
+def _get_causal_prior(upstream: str, affected_service: str):
+    """读取 upstream→affected_service 边上的因果先验。
+
+    Returns:
+        (rate, sample_weight, lift) 或 None（边不存在 / 无先验数据）。
+        lift 为 None 表示无定义（该上游从未被判为任何故障的根因）。
+
+    刻意只读**活跃**边:已下线服务的历史根因判定不能用来解释现在的故障。
+    这与 incident_writer 写入侧的过滤保持一致 —— 两侧不一致会让读到的
+    分母与写入时的分母不同源。
+    """
+    from neptune import neptune_queries as nq
+    from neptune import neptune_client as nc
+
+    rows = nc.results("""
+    MATCH (u:Microservice {name: $up})-[e:Calls]->(n:Microservice {name: $svc})
+    WHERE e.active = true OR e.active IS NULL
+    RETURN e.prior_root_cause_rate AS rate,
+           e.prior_sample_weight AS sample_w,
+           e.prior_lift AS lift
+    """, {'up': upstream, 'svc': affected_service})
+    if not rows:
+        return None
+    r = rows[0]
+    rate = r.get('rate')
+    if rate is None:
+        return None
+    sample_w = r.get('sample_w') or 0.0
+    lift = r.get('lift')
+    # 写入侧用 -1.0 表示 lift 无定义（Neptune 属性不能存 None）
+    if lift is not None and float(lift) < 0:
+        lift = None
+    return (float(rate), float(sample_w),
+            float(lift) if lift is not None else None)
+
+
 def step4_score(error_services: list, cloudtrail_changes: list,
                 graph_candidates: list, affected_service: str,
                 temporal_info: dict = None,
                 l4_anomalies: list = None) -> list:
     """
     Step 4: 置信度评分
-    
-    评分维度（共100分）：
-    - 时间线最早出现异常（L7 或 L4）: +40分
-    - 有近期配置变更: +30分  
-    - 无上游故障（自身是链路起点）: +20分
-    - 历史曾发生同类故障: +10分（Phase 4 实现）
+
+    评分维度（原始分相加最高 245，末尾 min(score, 100) 截断 → confidence = score/100）：
+    - 时间线最早出现异常（L7 或 L4）: +40
+    - 有近期配置变更: +30
+    - 无上游故障（自身是链路起点）: +20
+    - 图遍历发现基础设施层故障（EC2 停止/终止）: +40
+    - 历史曾发生同类故障: +10
+    - 因果先验（曾被判定为该服务故障根因的衰减频率）: +0~10
+    - 时序验证一致（first_error × 图路径深度）: +0~10
+    - L4 SYN 重传 / TCP RST / 超时: +40 / +15 / +10
+    - Layer2 AWS probers 异常: 见 step5
+
+    ⚠️ 原文档写「共100分」与实现不符（2026-08-28 更正）。原始分上限远超 100，
+    截断的后果是**多个候选可能一起饱和在 100，排序区分度丢失**。
+    典型场景（40 最早 + 20 无上游 + 10 历史 = 70）不饱和，
+    但基础设施故障或 L4 强信号同时命中时会饱和。已记为 T-032。
     """
     if l4_anomalies is None:
         l4_anomalies = []
@@ -544,6 +600,47 @@ def step4_score(error_services: list, cloudtrail_changes: list,
         except Exception:
             pass
 
+        # 因果先验：该候选曾被判定为 affected_service 故障根因的衰减频率 +0~10
+        # 2026-08-28 接入。此前 prior_root_cause_rate（旧名 causal_weight）
+        # **只有写入方、零读取方** —— 与 cycle-1 查出的 active/last_seen
+        # 写了没人读是同一缺陷类型。
+        #
+        # 三条刻意的约束:
+        #   1. 上限 10 分 —— 它是小样本相关统计，只该做同分候选间的排序微调，
+        #      不该盖过时间线(+40)或基础设施故障(+40)这类直接证据。
+        #   2. 样本门槛 CAUSAL_MIN_SAMPLE —— 衰减后样本权重不足时**不计分**，
+        #      并打 info 日志说明为何不计，避免"静默地什么都没做"。
+        #   3. 需要 lift > 1 —— lift <= 1 说明该上游在所有故障里都被判为根因，
+        #      对本次故障没有特异性信息（基线率混杂）。
+        try:
+            prior = _get_causal_prior(svc, affected_service)
+            if prior is not None:
+                rate, sample_w, lift = prior
+                if sample_w < CAUSAL_MIN_SAMPLE:
+                    logger.info(
+                        f"因果先验不计分: {svc}→{affected_service} "
+                        f"衰减样本权重 {sample_w:.2f} < 门槛 {CAUSAL_MIN_SAMPLE}"
+                    )
+                elif lift is not None and lift <= 1.0:
+                    logger.info(
+                        f"因果先验不计分: {svc}→{affected_service} "
+                        f"lift={lift:.2f} <= 1（无特异性）"
+                    )
+                elif rate > 0:
+                    bonus = min(10, int(round(rate * 10)))
+                    if bonus > 0:
+                        score += bonus
+                        evidence.append(
+                            f"因果先验：该服务曾被判定为 {affected_service} 故障根因的"
+                            f"衰减频率 {rate:.0%}"
+                            f"（半衰期 {CAUSAL_HALF_LIFE_DAYS:.0f} 天，"
+                            f"样本权重 {sample_w:.1f}"
+                            + (f"，lift {lift:.1f}" if lift is not None else "")
+                            + f"）+{bonus}分"
+                        )
+        except Exception as e:
+            logger.warning(f"因果先验读取失败（non-fatal）: {e}")
+
         # 时序验证：DeepFlow first_error × 图路径深度一致性 +0~10
         if temporal_info and svc in temporal_info:
             ti = temporal_info[svc]
@@ -589,16 +686,32 @@ def step4_score(error_services: list, cloudtrail_changes: list,
                 score += 10
                 evidence.append(f"L4 交叉验证：集群有 {total_syn} 次 SYN 重传")
         
-        score = min(score, 100)  # 置信度上限 100%
+        # 置信度截断到 100%，但**保留原始分用于排序**。
+        # 2026-08-28:此前 score 先被截断再用于 results.sort()，于是原始分
+        # 110 与 150 的两个候选都变成 100，**排序区分度丢失** ——
+        # 而排在第一位的候选就是 DecisionEngine 拿去决策、
+        # action_executor 拿去执行动作的那一个。
+        #
+        # 生产数据佐证:126 个有置信度记录的 Incident 里 **50 个(40%) >= 1.0**。
+        # 这不是理论问题。
+        #
+        # 刻意**不**重新归一各维度权重:band 阈值(high>=80 / medium>=50)是
+        # 按现有分值校准的，重新加权会改变所有历史评分的相对关系，
+        # 进而改变 auto / semi_auto 判定。保留原始分排序是零风险的最小修法。
+        raw_score = score
+        score = min(score, 100)
         results.append({
             'service': svc,
             'confidence': round(score / 100, 2),
             'score': score,
+            'raw_score': raw_score,   # 未截断，用于排序与排查
             'evidence': evidence,
             'error_count': svc_info['error_count'],
         })
     
-    results.sort(key=lambda x: x['score'], reverse=True)
+    # 按**未截断**的原始分排序 —— 用截断后的分数排序会让饱和候选顺序退化为
+    # 字典插入顺序，即取决于 DeepFlow 返回的服务次序，而非证据强度。
+    results.sort(key=lambda x: x.get('raw_score', x['score']), reverse=True)
     return results
 
 def analyze(affected_service: str, classification: dict) -> dict:

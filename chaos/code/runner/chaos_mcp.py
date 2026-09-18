@@ -378,7 +378,19 @@ class ChaosMCPClient:
         pass   # kubectl-based，无需关闭进程
 
     def check_pods(self, service: str, namespace: str = "default") -> dict:
-        """检查目标服务 Pod 健康状态（Phase 0 / Phase 4 用）"""
+        """检查目标服务 Pod 健康状态（Phase 0 / Phase 4 / Phase 5 用）。
+
+        `restarts` 是本方法最要紧的返回值，而不是 running/total（T-214h）：
+
+        `abort` 类注入会打断 liveness 探针的请求，kubelet 据此杀掉容器重启，
+        而 tproxy 拦截残留在 **Pod 的网络命名空间**里（netns 属于 Pod sandbox
+        而非容器），所以容器重启也清不掉 —— Pod 会持续 1/2 Ready。
+        实测这个退化在 Phase 4 报 `2/2 running` 之后**还要 2.5 分钟**才显形，
+        所以任何点时刻的 running/total 都可能刚好看不见它。
+
+        `restartCount` 没有这个滞后：重启发生在注入期间，Phase 5 时已经计入。
+        因此判据是 **Phase 0 基线与 Phase 5 的 restarts 差值**，而不是某一刻是否 Ready。
+        """
         try:
             import json as _json
             r = subprocess.run(
@@ -387,8 +399,9 @@ class ChaosMCPClient:
                 capture_output=True, text=True, timeout=10,
             )
             items = _json.loads(r.stdout or "{}").get("items", [])
-            total, running = 0, 0
+            total, running, restarts = 0, 0, 0
             not_running = []
+            per_pod_restarts = {}
             for pod in items:
                 pod_name = pod["metadata"]["name"]
                 phase    = pod.get("status", {}).get("phase", "Unknown")
@@ -397,11 +410,19 @@ class ChaosMCPClient:
                 total += 1
                 cs    = pod.get("status", {}).get("containerStatuses", [])
                 ready = all(c.get("ready", False) for c in cs) if cs else False
+                n_restart = sum(int(c.get("restartCount", 0) or 0) for c in cs)
+                per_pod_restarts[pod_name] = n_restart
+                restarts += n_restart
                 if phase == "Running" and ready:
                     running += 1
                 else:
-                    not_running.append({"pod": pod_name, "phase": phase, "ready": ready})
-            return {"total": total, "running": running, "not_running": not_running}
+                    not_running.append({"pod": pod_name, "phase": phase, "ready": ready,
+                                        "restarts": n_restart})
+            return {"total": total, "running": running, "not_running": not_running,
+                    "restarts": restarts, "per_pod_restarts": per_pod_restarts}
         except Exception as e:
             logger.warning(f"check_pods 失败: {e}")
-            return {"total": 0, "running": 0, "not_running": []}
+            # restarts 用 None 而不是 0 表示「没测到」—— 0 会被读成「没有重启」，
+            # 让 Phase 5 的差值判据静默通过（与不变量 7 同类的错误）。
+            return {"total": 0, "running": 0, "not_running": [],
+                    "restarts": None, "per_pod_restarts": {}}

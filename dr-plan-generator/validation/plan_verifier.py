@@ -36,7 +36,7 @@ from validation.verification_models import (
 
 if TYPE_CHECKING:
     from models import DRPlan, DRStep, DRPhase
-    from profiles.profile_loader import EnvironmentProfile
+    from dr_profile import DRProfile
 
 logger = logging.getLogger(__name__)
 
@@ -53,16 +53,22 @@ class DRPlanVerifier:
     def __init__(
         self,
         plan: "DRPlan",
-        profile: Optional["EnvironmentProfile"] = None,
+        profile: Optional["DRProfile"] = None,
     ) -> None:
         self.plan = plan
         self._profile = profile
 
     @property
-    def profile(self) -> "EnvironmentProfile":
+    def profile(self) -> "DRProfile":
+        """Active workload profile.
+
+        Resolved lazily so that constructing a verifier does not require a
+        profile — only the checks that actually read profile values do.
+        """
         if self._profile is None:
-            from profiles.profile_loader import EnvironmentProfile
-            self._profile = EnvironmentProfile()
+            from dr_profile import get_active_profile
+
+            self._profile = get_active_profile()
         return self._profile
 
     # ==================================================================
@@ -495,6 +501,14 @@ class DRPlanVerifier:
                 phase_result.steps.append(step_result)
                 report.step_results.append(step_result)
 
+                # 回写实测耗时。这是「RTO 从设计值变成实测值」的唯一入口：
+                # 跑过几次演练之后，RTOEstimator 会改用滚动均值而不是查表。
+                # 只记**通过**的步骤——失败步骤的耗时是异常值，掺进均值会污染估算。
+                if step_result.passed and step_result.actual_duration_seconds > 0:
+                    self._record_step_duration(
+                        step, step_result.actual_duration_seconds
+                    )
+
                 if not step_result.passed:
                     report.failed_steps.append(step.step_id)
                     if strategy == "isolated":
@@ -526,6 +540,29 @@ class DRPlanVerifier:
         report.estimated_rto_minutes = self.plan.estimated_rto
 
         return report
+
+    def _record_step_duration(self, step: Any, seconds: float) -> None:
+        """把一步的实测耗时写入 measurements.json。
+
+        按 ``action`` 聚合而非 ``step_id``：step_id 含资源名，每个资源各自成桶
+        会让样本永远不够；同一 action（如 ``scale_up_and_verify``）跨资源的耗时
+        分布才有统计意义。
+
+        写失败只告警不抛：演练的价值不该因为写不了一个统计文件而丢掉。
+
+        Args:
+            step: DRStep。
+            seconds: 实测耗时。
+        """
+        action = getattr(step, "action", "") or ""
+        if not action:
+            return
+        try:
+            from assessment.rto_estimator import record_measurement
+
+            record_measurement(action, seconds)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Cannot record measurement for %s: %s", action, exc)
 
     def _verify_single_step(
         self, step: "DRStep", phase: "DRPhase"

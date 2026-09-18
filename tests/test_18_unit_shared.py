@@ -15,7 +15,7 @@ import tempfile
 
 import pytest
 
-PROJECT_ROOT = "/home/ubuntu/tech/graph-dependency-platform"
+from paths import PROJECT_ROOT
 PROFILES_DIR = os.path.join(PROJECT_ROOT, "profiles")
 SHARED_DIR = os.path.join(PROJECT_ROOT, "shared")
 

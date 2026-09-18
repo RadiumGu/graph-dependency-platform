@@ -27,16 +27,23 @@ os.environ.setdefault('ENVIRONMENT', 'test')
 os.environ.setdefault('AWS_DEFAULT_REGION', 'ap-northeast-1')
 
 AWS_REGION = 'ap-northeast-1'
-ETL_PATH = '/home/ubuntu/tech/graph-dependency-platform/infra/lambda/etl_aws'
+from paths import ETL_AWS_DIR as ETL_PATH
 
 # ── 1. Mock neptune_client_base (Lambda Layer not present in test env) ───────
+# conftest.py 已建立**唯一**的完整桩（含 REGION/NEPTUNE_ENDPOINT/NEPTUNE_PORT）。
+# 本文件原先在此**无条件**覆盖它,且桩里没有 REGION —— 因字母序本文件先执行,
+# 会让 test_13/test_14 导入真实 ETL 模块时报
+#   ImportError: cannot import name 'REGION' from 'neptune_client_base'
+# 改为仅在 conftest 未提供时兜底,与 test_13/test_14 的写法一致。
 _mock_nc_base = types.ModuleType('neptune_client_base')
 _mock_nc_base.neptune_query = MagicMock(
     return_value={'result': {'data': {'@value': []}}}
 )
 _mock_nc_base.safe_str = lambda s: str(s).replace("'", "\\'") if s is not None else ''
 _mock_nc_base.extract_value = lambda v: v.get('@value', v) if isinstance(v, dict) else v
-sys.modules['neptune_client_base'] = _mock_nc_base
+_mock_nc_base.REGION = AWS_REGION
+if 'neptune_client_base' not in sys.modules:
+    sys.modules['neptune_client_base'] = _mock_nc_base
 
 # ── 2. Merge etl_aws config into sys.modules['config'] ──────────────────────
 # conftest.py sets sys.modules['config'] to a merged rca+dr config;
@@ -728,7 +735,7 @@ def test_s1_13_handler_run_etl_upserts_ec2_vertices():
     upsert_calls_run1 = []
     upsert_calls_run2 = []
 
-    def _fake_upsert_vertex(label, name, extra_props, managed_by='manual'):
+    def _fake_upsert_vertex(label, name, extra_props, managed_by='manual', **kwargs):
         return f'vid-{label}-{name}'
 
     noop = MagicMock(return_value=None)
@@ -744,7 +751,12 @@ def test_s1_13_handler_run_etl_upserts_ec2_vertices():
         patch.object(h, 'fetch_ec2_cloudwatch_metrics_batch', MagicMock(return_value={})),
         patch.object(h, 'fetch_lambda_cloudwatch_metrics_batch', MagicMock(return_value={})),
         patch.object(h, 'fetch_nfm_ec2_metrics', MagicMock(return_value={})),
-        patch.object(h, 'map_nfm_metrics_to_ec2', MagicMock(return_value={})),
+        # NFM 已从「VPC 聚合广播给每个实例」改为两条路：
+        # 聚合写 VPC 节点（update_vpc_nfm_metrics），
+        # per-flow 逐流数据按 instance_id 写 EC2 节点（fetch/update_ec2_nfm_per_flow）。
+        patch.object(h, 'fetch_nfm_per_flow_metrics', MagicMock(return_value={})),
+        patch.object(h, 'update_vpc_nfm_metrics', MagicMock()),
+        patch.object(h, 'update_ec2_nfm_per_flow', MagicMock()),
         patch.object(h, 'update_ec2_metrics', MagicMock(return_value=False)),
         patch.object(h, 'update_ec2_nfm_metrics', MagicMock()),
         patch.object(h, 'update_lambda_metrics', MagicMock(return_value=False)),
@@ -785,7 +797,12 @@ def test_s1_14_handler_partial_failure_non_fatal():
 
     ec2_client = boto3.client('ec2', region_name=AWS_REGION)
 
-    def _fake_uv(label, name, extra_props, managed_by='manual'):
+    def _fake_uv(label, name, extra_props, managed_by='manual', **kwargs):
+        # **kwargs 吸收 identity_prop 等关键字参数 —— 与本文件 738 行的
+        # _fake_upsert_vertex 一致。替身不加 **kwargs 时，生产侧新增一个
+        # 关键字参数就会让这个测试以 TypeError 的形式假失败
+        # （实测：给 Subnet 补 identity_prop='subnet_id' 后即触发，
+        #  因为 moto 有默认 VPC/子网，这条路径会被走到）。
         return f'vid-{label}-{name}'
 
     # Capture mock reference explicitly so we can inspect call_count after patches stop
@@ -802,7 +819,12 @@ def test_s1_14_handler_partial_failure_non_fatal():
         patch.object(h, 'fetch_ec2_cloudwatch_metrics_batch', MagicMock(return_value={})),
         patch.object(h, 'fetch_lambda_cloudwatch_metrics_batch', MagicMock(return_value={})),
         patch.object(h, 'fetch_nfm_ec2_metrics', MagicMock(return_value={})),
-        patch.object(h, 'map_nfm_metrics_to_ec2', MagicMock(return_value={})),
+        # NFM 已从「VPC 聚合广播给每个实例」改为两条路：
+        # 聚合写 VPC 节点（update_vpc_nfm_metrics），
+        # per-flow 逐流数据按 instance_id 写 EC2 节点（fetch/update_ec2_nfm_per_flow）。
+        patch.object(h, 'fetch_nfm_per_flow_metrics', MagicMock(return_value={})),
+        patch.object(h, 'update_vpc_nfm_metrics', MagicMock()),
+        patch.object(h, 'update_ec2_nfm_per_flow', MagicMock()),
         patch.object(h, 'update_ec2_metrics', MagicMock(return_value=False)),
         patch.object(h, 'update_ec2_nfm_metrics', MagicMock()),
         patch.object(h, 'update_lambda_metrics', MagicMock(return_value=False)),

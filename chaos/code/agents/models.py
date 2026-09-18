@@ -102,7 +102,7 @@ class Recommendation:
 class GraphUpdate:
     """需要写回 Neptune 的更新"""
     service: str
-    property_name: str          # resilience_score | weakness_pattern | last_tested_at | test_coverage
+    property_name: str          # resilience_score | weakness_pattern | last_chaos_test | test_coverage
     value: str | float
 
 

@@ -206,6 +206,11 @@ class ExperimentRunner:
             raise PrefightFailure(f"服务 {exp.target_service} 有 Pod 未就绪: {not_ok}")
 
         logger.info(f"✅ Pre-flight 通过: {pods['total']} pods ready")
+        # T-214h：存下基线，Phase 5 用 restarts 差值判断注入是否打伤了 Pod。
+        # 必须在这里存 —— Phase 0 是唯一确定「注入还没发生」的时点。
+        result.target_pods_before = pods
+        logger.info(f"   Pod 重启基线: restarts={pods.get('restarts')} "
+                    f"({pods.get('per_pod_restarts')})")
         slog.info("phase_completed", phase=0, experiment=exp.name)
 
     # ─── PolicyGuard ─────────────────────────────────────────────────────────
@@ -263,7 +268,7 @@ class ExperimentRunner:
         logger.info("📊 Phase 1: Steady State Before")
 
         snap = self.metrics.collect_steady(
-            service=exp.target_service,
+            service=self._target_metrics_name(exp),
             namespace=exp.target_namespace,
             window_seconds=60,
             samples=self.STEADY_SAMPLES,
@@ -279,6 +284,56 @@ class ExperimentRunner:
                     f"注入前稳态检查失败: {check.describe(snap)}"
                 )
             logger.info(f"✅ 稳态检查通过: {check.describe(snap)}")
+
+        # ── 观测方基线（T-210）─────────────────────────────────────────────
+        # 验证边 A -[X]-> B 必须在 B 注入、观测 A。上面采的是注入目标自己，
+        # 「打断 B 之后 B 是否退化」近乎恒真，不构成任何边的证据。
+        self._collect_observer_baselines(exp, result)
+
+    def _collect_observer_baselines(self, exp: Experiment, result: ExperimentResult):
+        """
+        为每个观测方采一份基线。
+
+        刻意**不**因观测方无流量而让实验失败：那是数据质量问题，
+        应由 edge_verification 判成 inconclusive，而不是把实验判死。
+        判 refuted 才是有害的（会删掉真实边），判 inconclusive 只是没结论。
+        """
+        observers = getattr(exp, "observation_targets", None) or []
+        if not observers:
+            logger.info("ℹ️  未声明观测方（observation_targets 为空）—— "
+                        "本实验不能用于边验证，只能做稳态回归")
+            return
+
+        for obs in observers:
+            ns = obs.namespace or exp.target_namespace
+            try:
+                osnap = self.metrics.collect_steady(
+                    service=obs.service,
+                    namespace=ns,
+                    window_seconds=60,
+                    samples=self.STEADY_SAMPLES,
+                    interval=10,
+                )
+            except Exception as e:
+                logger.warning(f"⚠️  观测方 {obs.service} 基线采集失败: {e!r} —— 该边只能判 inconclusive")
+                continue
+
+            result.record_observer_baseline(obs.service, osnap)
+            enough = (osnap.total_requests or 0) >= obs.min_baseline_requests
+            icon = "✅" if enough else "⚠️"
+            logger.info(
+                f"{icon} 观测方基线 {obs.service} ({obs.edge_label}): "
+                f"success={osnap.success_rate:.1f}% total={osnap.total_requests} "
+                f"(下限 {obs.min_baseline_requests})"
+            )
+            if not enough:
+                # 这一条是假阴性防线：metrics.collect() 无数据时 fallback
+                # success_rate=100.0 / total_requests=0 —— 零流量和健康完全一样。
+                logger.warning(
+                    f"   观测方 {obs.service} 基线流量不足 —— "
+                    f"边 {obs.service} -[{obs.edge_label}]-> {self._graph_node(exp)} "
+                    f"只能判 inconclusive，**不得**判 refuted"
+                )
 
     # ─── Phase 2：Fault Injection ─────────────────────────────────────────────
 
@@ -353,11 +408,14 @@ class ExperimentRunner:
 
         while time.time() < end_ts:
             snap = self.metrics.collect(
-                service=exp.target_service,
+                service=self._target_metrics_name(exp),
                 namespace=exp.target_namespace,
                 window_seconds=60,
             )
             result.record_snapshot(snap)
+
+            # ── 观测方采样（T-210）——这才是边的证据 ────────────────────────
+            self._collect_observer_snapshots(exp, result)
 
             elapsed = round(time.time() - result.inject_time.timestamp(), 0)
             logger.info(
@@ -365,10 +423,10 @@ class ExperimentRunner:
                 f"p99={snap.latency_p99_ms:.0f}ms total={snap.total_requests}"
             )
 
-            # Stop Conditions 检查
-            for cond in exp.stop_conditions:
-                if cond.is_triggered(snap):
-                    msg = cond.describe(snap)
+            # Stop Conditions 检查（T-214b：按护栏对象分别求值）
+            for cond, subject, subj_snap in self._stop_condition_subjects(exp, result, snap):
+                if cond.is_triggered(subj_snap):
+                    msg = f"{subject}: {cond.describe(subj_snap)}"
                     slog.error("stop_condition_triggered", experiment=exp.name,
                                condition=msg, success_rate=snap.success_rate,
                                latency_p99=snap.latency_p99_ms)
@@ -378,7 +436,19 @@ class ExperimentRunner:
                         self.fis.stop(result.chaos_experiment_name)
                     else:
                         delete_type = self.injector.FAULT_TO_DELETE_TYPE.get(exp.fault.type, exp.fault.type)
-                        self.injector.delete(result.chaos_experiment_name, chaos_type=delete_type, namespace=exp.target_namespace)
+                        # 全部用关键字传参。ChaosMCPClient.delete(chaos_type, name, namespace)
+                        # 的第一个位置参数是 chaos_type 而不是 name —— 原先按位置传实验名、
+                        # 再用关键字传 chaos_type，会撞成
+                        # "got multiple values for argument 'chaos_type'"。
+                        # 2026-08-31 实测后果：stop condition 触发时清理直接抛异常，
+                        # HTTPChaos CRD 留在集群里继续生效，且强删仍在生效的 CRD 会把
+                        # tproxy 拦截残留在目标 Pod 的网络命名空间里 —— 容器重启清不掉，
+                        # 两个被命中的 Pod 进入 CrashLoopBackOff，只能删 Pod 重建。
+                        self.injector.delete(
+                            chaos_type=delete_type,
+                            name=result.chaos_experiment_name,
+                            namespace=exp.target_namespace,
+                        )
                     result.chaos_experiment_name = ""   # 避免 emergency_cleanup 重复删
                     raise AbortException(msg)
 
@@ -392,6 +462,79 @@ class ExperimentRunner:
             time.sleep(self.OBSERVE_INTERVAL)
 
         logger.info(f"✅ Phase 3 结束，Chaos Mesh 实验到期自动恢复")
+        self._log_observer_evidence(exp, result)
+
+    def _stop_condition_subjects(self, exp: Experiment, result: ExperimentResult,
+                                 target_snap: MetricsSnapshot):
+        """
+        产出 (条件, 主体名, 该主体的最新快照) 三元组。
+
+        T-214b：边验证实验里注入目标**本来就该失败**，所以护栏必须能挂在观测方上。
+        `target='injection'` 保持既有行为（注入目标侧只留极低地板防注入失控）；
+        `any_observer` / `observer:<svc>` 看调用方，那才是真正要防的附带损害。
+
+        观测方还没有采样点时**跳过**该条件 —— 不能拿缺失当触发，
+        否则实验一开始就会被自己的护栏打断（与不变量 7 同向：缺数据不等于坏了）。
+        """
+        for cond in exp.stop_conditions:
+            if cond.applies_to_injection():
+                yield cond, f"注入目标 {exp.target_service}", target_snap
+                continue
+            scope = cond.observer_scope()
+            if scope is None:
+                # target 写了无法识别的值：按注入目标处理并告警，不静默丢弃条件
+                logger.warning(
+                    f"⚠️ stop_condition target={cond.target!r} 无法识别，"
+                    f"按 injection 处理（合法值：injection / any_observer / observer:<svc>）")
+                yield cond, f"注入目标 {exp.target_service}", target_snap
+                continue
+            names = ([o.service for o in (getattr(exp, "observation_targets", None) or [])]
+                     if scope == "*" else [scope])
+            for svc in names:
+                snaps = result.observer_snapshots.get(svc) or []
+                if not snaps:
+                    continue          # 无采样点：跳过，不当触发
+                yield cond, f"观测方 {svc}", snaps[-1]
+
+    def _collect_observer_snapshots(self, exp: Experiment, result: ExperimentResult):
+        """注入期为每个观测方采一个点。单个观测方失败不影响其余，也不中断实验。"""
+        for obs in (getattr(exp, "observation_targets", None) or []):
+            ns = obs.namespace or exp.target_namespace
+            try:
+                osnap = self.metrics.collect(
+                    service=obs.service, namespace=ns, window_seconds=60,
+                )
+            except Exception as e:
+                logger.warning(f"⚠️  观测方 {obs.service} 采样失败: {e!r}")
+                continue
+            result.record_observer_snapshot(obs.service, osnap)
+
+    def _log_observer_evidence(self, exp: Experiment, result: ExperimentResult):
+        """
+        打印逐条边的证据。这是把「实验跑完了」变成「某条边被检验了」的地方。
+
+        注意这里只**呈现**证据，不做判定 —— 阈值与 confirmed/refuted/inconclusive
+        的划分全部在 graph_contract 的 edge_verification 里（单一声明，避免漂移）。
+        """
+        ev = result.observer_evidence()
+        if not ev:
+            return
+        logger.info("🔎 观测方证据（边验证输入）：")
+        for obs in (getattr(exp, "observation_targets", None) or []):
+            e = ev.get(obs.service)
+            if not e:
+                logger.info(f"   {obs.service} -[{obs.edge_label}]-> {self._graph_node(exp)}: 无数据 → inconclusive")
+                continue
+            deg = e["degradation_rate"]
+            thr = e.get("throughput_drop_pct")
+            eff = e.get("effective_degradation")
+            fmt = lambda v: "n/a" if v is None else f"{v:.2f}"
+            logger.info(
+                f"   {obs.service} -[{obs.edge_label}]-> {self._graph_node(exp)}: "
+                f"成功率退化={fmt(deg)}pp 吞吐塌陷={fmt(thr)}% 合成={fmt(eff)} "
+                f"基线请求={e['baseline_total_requests']} 谷值请求={e.get('min_requests')} "
+                f"采样={e['samples']} usable={e['usable']}"
+            )
 
     def _trigger_rca(self, exp: Experiment, result: ExperimentResult):
         logger.info(f"🧠 触发 RCA 分析: {exp.target_service}")
@@ -417,17 +560,272 @@ class ExperimentRunner:
                     f"(无期望根因，跳过匹配)"
                 )
 
+    def _graph_node(self, exp: Experiment) -> str:
+        """图谱里被依赖方的节点名。日志与候选边查询都必须用它而不是 target_service。
+
+        2026-08-31 实测：边切断拓扑下（切断 A 到外部服务 X 的路径），
+        target_service 是注入选择器（petsite），graph_node 才是被依赖方（ssm）。
+        日志里混用会打出 `petsite -[AccessesData]-> petsite` 这种自环假象 ——
+        判定其实正确落在 petsite->ssm 上，但读日志的人会以为写错了边。
+        """
+        return getattr(exp, 'target_graph_node', '') or exp.target_service
+
+    def _injection_took_effect(self, exp: Experiment, result: ExperimentResult):
+        """注入是否**真的生效**了。返回 True / False / None（无法判断）。
+
+        为什么必须有这个信号（T-297，2026-08-31 16:30 实测）：
+        观测方没退化有两种可能 —— 注入生效但没传导（真 refuted），
+        或者**注入根本没生效**（什么都没验证）。判据分不开这两种时，
+        判 refuted 就是凭空证伪。
+
+        实测踩到后者：`petsearch -> s3` 被 FIS `disrupt-connectivity scope=s3`
+        判 refuted（退化 1.21%），而 X-Ray 严格按故障窗口复核显示 PetSearch
+        在窗口内做了 10 次与 13 次**成功**的 S3 调用、0 错误 —— NACL 没切断它。
+
+        当前只在**注入目标自身有可用 SLI**时能判断（Chaos Mesh 路径通常有）。
+        AWS 托管资源目标（RDS/DynamoDB/S3 端点）没有 DeepFlow SLI，
+        返回 None 表示「不知道」，判定层据此拒绝判 refuted。
+
+        刻意**不**用「observer 有退化」反推注入生效 —— 那是循环论证：
+        用结论去证明前提。
+        """
+        before = result.steady_state_before
+        snaps = [s for s in result.snapshots if getattr(s, 'ok', True)]
+        if before is None or not getattr(before, 'ok', True) or not snaps:
+            return None
+        # 注入目标没有可用流量基线（AWS 托管资源目标的典型情况）→ 判不了
+        if not (before.total_requests or 0):
+            return None
+        worst_sr = min(s.success_rate for s in snaps)
+        vals = sorted(s.total_requests or 0 for s in snaps)
+        n = len(vals)
+        median_req = vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2
+        sr_drop = max(0.0, before.success_rate - worst_sr)
+        tp_drop = max(0.0, (before.total_requests - median_req) / before.total_requests * 100)
+        # 门槛刻意低（5%）：这里回答的是「注入有没有作用到目标」这个是非问题，
+        # 不是「影响有多大」。用 confirm 那条 20% 的线会把生效但影响小的注入
+        # 误判成「没生效」，反而放宽了 refuted 的条件 —— 方向错了。
+        if sr_drop >= 5.0 or tp_drop >= 5.0:
+            return True
+        return False
+
+    def _verify_edges(self, exp: Experiment, result: ExperimentResult):
+        """
+        用本次注入的**观测方**证据，对指向注入目标的依赖边逐条判定并写回图谱。
+
+        为什么必须在这里而不是在 graph_feedback 里：
+        `graph_feedback._update_calls_edges` 写的是注入目标的聚合评分，
+        而边验证需要「哪个观测方对应哪条边」的一一对应。原实现把同一个判定
+        写给注入目标的所有出入边，等于伪造验证证据。
+
+        判定阈值全部在 profiles/graph_contract.yaml 的 `edge_verification`
+        （与 ETL 写入门禁共用一份声明），这里只喂数据、不定阈值。
+        """
+        observers = getattr(exp, "observation_targets", None) or []
+        if not observers:
+            return
+        if self.dry_run:
+            logger.info("⚡ [dry-run] 跳过边验证写回")
+            return
+
+        try:
+            from .edge_verification import (
+                candidate_edges, verify_edge, write_verdict, resolve_graph_name,
+            )
+        except Exception as e:
+            logger.warning(f"边验证模块不可用（非致命）: {e!r}")
+            return
+
+        try:
+            # 图谱节点名可与注入选择器不同（边切断拓扑），见 Experiment.target_graph_node
+            cands = candidate_edges(
+                getattr(exp, 'target_graph_node', '') or exp.target_service)
+        except Exception as e:
+            logger.warning(f"候选边查询失败（非致命）: {e!r}")
+            return
+
+        ev = result.observer_evidence()
+        by_observer = {c.get('observer'): c for c in cands if c.get('observer')}
+        written = 0
+
+        took_effect = self._injection_took_effect(exp, result)
+        logger.info(
+            "🔬 注入生效性判定: %s%s",
+            {True: '已确认生效', False: '未观测到生效', None: '无法判断'}[took_effect],
+            '' if took_effect is True else
+            ' —— 本轮不会产生 refuted 判定（证伪需先证明打断确实发生）')
+
+        for obs in observers:
+            # 观测方也必须解析成图谱规范名：实验里写的是 K8s 服务名
+            # （list-adoptions），图谱里是 petlistadoptions。少了这一步，
+            # by_observer 查不到、日志说「无候选边」，而边其实在图里。
+            obs_graph_name = resolve_graph_name(obs.service)
+            cand = by_observer.get(obs_graph_name)
+            if cand is None:
+                logger.warning(
+                    f"   图谱中无 {obs_graph_name} -> {self._graph_node(exp)} 的候选边，跳过"
+                    f"（观测方 K8s 名 {obs.service}，候选边源端点有："
+                    f"{sorted(by_observer)}）")
+                continue
+
+            e = ev.get(obs.service) or {}
+            base_req = e.get('baseline_total_requests') or 0
+            # 用**合成**退化率：成功率下降与吞吐塌陷取 max。
+            # abort 类故障不产生 response 行，成功率对它是盲的（实测注入目标
+            # 成功率全程 100% 而请求量 -97%），只喂成功率会把生效的注入判成没影响。
+            deg = e.get('effective_degradation')
+            # 注入期请求量取各采样窗口的**最大值**而非求和：每个快照本身是一个
+            # 60s 窗口计数，求和会因窗口重叠而虚高。取 max 得到与基线同量纲的
+            # 代表性窗口量，且在真的零流量时仍然是 0 —— 偏向「判不了」而不是
+            # 「判边不存在」，与不变量 7 同向。
+            # 只取**采集成功**的采样点（ok=True）。失败的采样点是 (100%, 0 requests)
+            # 的 fallback，混进来会污染请求量判据。
+            snaps = [s for s in result.observer_snapshots.get(obs.service, [])
+                     if getattr(s, 'ok', True)]
+            inj_req = max((s.total_requests or 0) for s in snaps) if snaps else 0
+
+            # ── 边级流量与边级生效性（2026-09-05 补入）─────────────────────
+            #
+            # 观测方有几万请求，不代表**被测这条边**上有流量。实测
+            # `petsite -[Calls]-> payforadoption`：petsite 有 23,007 请求，
+            # 而 petsite -> pay-for-adoption 这条路径 15 分钟内 **0 次调用** ——
+            # 此时「退化 0.37%」是噪声，却与「打断生效但未传导」完全同形。
+            #
+            # 这里量的是 (观测方 -> 注入目标) 这一条 L7 流：
+            #   · 它的基线调用数    -> 判据的前置条件（够不够判）
+            #   · 它自己的退化      -> 「我真的打断了这条链路吗」的**直接**证据，
+            #                          优于拿注入目标聚合 SLI 反推（实测返回 None）
+            edge_calls, edge_took_effect, obs_total_calls = None, None, None
+            try:
+                from .metrics import DeepFlowMetrics
+                _m = DeepFlowMetrics()
+                _tgt = self._target_metrics_name(exp)
+                _base = _m.collect_edge_flow(obs.service, _tgt, window_seconds=900)
+                # 稀释上限需要**同窗口**的观测方入向总请求数 —— 窗口不同则占比无意义
+                _obs_tot_snap = _m.collect(obs.service, window_seconds=900)
+                if _obs_tot_snap.ok and _obs_tot_snap.total_requests:
+                    obs_total_calls = _obs_tot_snap.total_requests
+                if _base.ok:
+                    edge_calls = _base.total_requests
+                    # 注入期这条流的成功率：与基线比出退化。窗口取实验时长，
+                    # 保守起见只在两侧都有足够样本时才据此判定生效性。
+                    _inj = _m.collect_edge_flow(obs.service, _tgt, window_seconds=180)
+                    if edge_calls and _inj.ok and _inj.total_requests:
+                        drop = _base.success_rate - _inj.success_rate
+                        thin = (_base.total_requests - _inj.total_requests)
+                        # 门槛刻意低（5%）：这里回答的是「有没有作用到链路」这个
+                        # 是非问题，不是「影响有多大」。用 confirm 那条 20% 的线
+                        # 会把「生效但影响小」误判成「没生效」，反而放宽 refuted。
+                        edge_took_effect = bool(drop >= 5.0 or thin > 0)
+                _share = (f"{edge_calls / obs_total_calls * 100:.2f}%"
+                          if edge_calls and obs_total_calls else '未知')
+                logger.info(
+                    "🔗 边级流量 %s -> %s: 基线 %s 次调用（占观测方 %s，即聚合退化的"
+                    "理论上限），生效性=%s",
+                    obs.service, _tgt,
+                    edge_calls if edge_calls is not None else '采集失败', _share,
+                    {True: '已确认', False: '未观测到', None: '无法判断'}[edge_took_effect])
+            except Exception as ex:
+                logger.warning("边级流量采集失败（非致命）: %r", ex)
+
+            # ── DeepFlow 测不出生效性时回落到 X-Ray（2026-09-09 补入）─────────
+            # DeepFlow 抓的是集群内 Pod 的 L7 流量，**源不在集群内的边它必然
+            # 返回 None** —— 而 None 会让判定链一路走到 inconclusive，
+            # 等于付出了注入的代价却什么都没验到。
+            #
+            # 实测这个盲区占 78 条可注入边里的 41 条：
+            #     LambdaFunction -> ... 32 / StepFunction -> ... 8 / SNSTopic 1
+            #
+            # X-Ray 服务图看得见 Lambda 与 Step Functions，正好补这块。
+            # 只在 DeepFlow 给不出结论时才查 —— DeepFlow 有结论时优先用它，
+            # 因为它是 L7 实测流量，而 X-Ray 受采样率影响。
+            if edge_took_effect is None:
+                try:
+                    from .xray_metrics import XRayEdgeMetrics
+                    _xr = XRayEdgeMetrics()
+                    _eff, _why = _xr.took_effect(obs.service,
+                                                 self._target_metrics_name(exp))
+                    if _eff is not None:
+                        edge_took_effect = _eff
+                        logger.info("🔎 X-Ray 生效性回落判定: %s —— %s",
+                                    '已确认' if _eff else '未观测到', _why)
+                        # 边级调用数也一并补上（判据的前置条件要用它）。
+                        # 仅在 DeepFlow 没采到时补，避免覆盖更可靠的 L7 数字。
+                        if edge_calls is None:
+                            _snap = _xr.collect_edge_flow(
+                                obs.service, self._target_metrics_name(exp),
+                                window_seconds=900)
+                            if _snap.ok:
+                                edge_calls = _snap.total_requests
+                    else:
+                        logger.info("🔎 X-Ray 也测不出生效性: %s", _why)
+                except Exception as ex:
+                    logger.warning("X-Ray 生效性回落失败（非致命）: %r", ex)
+
+            try:
+                verdict = verify_edge(
+                    edge=cand,
+                    observer_baseline_requests=int(base_req),
+                    observer_injected_requests=int(inj_req),
+                    observer_degradation_pct=float(deg if deg is not None else 0.0),
+                    experiment_id=result.experiment_id,
+                    # 证据通道：纯吞吐证据不足以单独判 confirmed，见
+                    # graph_confidence.classify_intervention 的 docstring
+                    evidence_channel=result.observer_evidence_channel(obs.service),
+                    # 注入生效门禁：无法确认注入生效时不得判 refuted（T-297）。
+                    # 优先用**这条边自己**的流量退化（edge_took_effect）——
+                    # 它是「我真的打断了这条链路吗」的直接证据；
+                    # 拿注入目标的聚合 SLI 反推是间接的，实测会返回 None。
+                    injection_confirmed=(edge_took_effect if edge_took_effect is not None
+                                         else took_effect),
+                    # 边级流量门禁：路径本身没有调用时任何退化数字都是噪声
+                    edge_baseline_calls=edge_calls,
+                    # 稀释归一化：聚合退化要与「这条路径的流量占比」比，
+                    # 而不是与固定阈值比 —— 见 normalize_by_dilution
+                    observer_total_calls=obs_total_calls,
+                )
+            except Exception as ex:
+                logger.warning(f"边判定失败 {obs.service}: {ex!r}")
+                continue
+
+            logger.info(
+                f"🧪 {obs.service} -[{verdict.get('label')}]-> {self._graph_node(exp)}: "
+                f"{verdict['status']} (置信度 {verdict['confidence']:.3f}) — {verdict['reason']}"
+            )
+            try:
+                if write_verdict(verdict):
+                    written += 1
+            except Exception as ex:
+                # 这条路径历史上 100% 静默失败过（property(single,...) 在边属性上非法，
+                # 异常被 except 吞成 logger.error）。所以失败必须计数并显式呈现。
+                logger.error(f"❌ 边判定写回失败 {obs.service}: {ex!r}")
+
+        logger.info(f"🧪 边验证写回：{written}/{len(observers)} 条成功")
+        if written == 0 and observers:
+            logger.error(
+                "❌ 声明了观测方但零条写回成功 —— 这正是历史上被静默吞掉 21 次的症状，"
+                "不要当成「没有边可写」放过"
+            )
+
     # ─── Phase 4：Fault Recovery ─────────────────────────────────────────────
 
     def _phase4_recover(self, exp: Experiment, result: ExperimentResult):
         """
         Phase 4: 等待故障自动恢复，确认 Pods 恢复健康
 
-        Chaos Mesh duration 字段负责到期删除 CR，故障自动消除。
+        ⚠️ 原 docstring 写着「Chaos Mesh duration 字段负责到期删除 CR，故障自动消除」——
+        **这个假设是错的**（2026-08-31 实测）。duration 到期后故障停止生效，
+        但 **CRD 对象仍然存在**，而 runner 只在熔断/异常路径删 CRD，
+        正常完成路径从不删。实测后果：一个 PASSED 的实验结束后 `httpchaos` 仍有 1 条，
+        两个被注入过的 Pod 随后又从 2/2 退回 1/2（tproxy 仍挂在 netns 上），
+        而 Phase 5 在这之前采样、显示 100% 通过 —— 污染被完全掩盖，
+        并且会成为下一次实验的稳态基线污染源。
+
         Phase 4 的职责：
-          1. 等待所有 Pods 回到 Running/Ready 状态
-          2. 记录恢复耗时
-          3. 超时则告警（但不 abort，让 Phase 5 决定是否通过）
+          1. **显式删除 Chaos Mesh CRD**（不依赖「到期自动清理」这个错假设）
+          2. 等待所有 Pods 回到 Running/Ready 状态
+          3. 记录恢复耗时
+          4. 超时则告警（但不 abort，让 Phase 5 决定是否通过）
         """
         logger.info(f"♻️  Phase 4: Fault Recovery — 等待 {exp.target_service} 恢复 (backend={exp.backend})")
 
@@ -437,6 +835,27 @@ class ExperimentRunner:
             return
 
         recover_start = time.time()
+
+        # ── 正常完成路径也必须删 CRD（2026-08-31 实测缺陷）────────────────────
+        if exp.backend == "chaosmesh" and result.chaos_experiment_name:
+            try:
+                delete_type = self.injector.FAULT_TO_DELETE_TYPE.get(
+                    exp.fault.type, exp.fault.type)
+                self.injector.delete(
+                    chaos_type=delete_type,
+                    name=result.chaos_experiment_name,
+                    namespace=exp.target_namespace,
+                )
+                logger.info(f"🧹 已删除 Chaos Mesh CRD: {result.chaos_experiment_name}")
+                result.chaos_experiment_name = ""   # 避免 emergency_cleanup 重复删
+            except Exception as e:
+                # 删不掉必须显式报错：残留会污染下一次实验的稳态基线，
+                # 而 Phase 5 采样在残留生效之前，看不出问题。
+                logger.error(
+                    f"❌ 删除 Chaos Mesh CRD 失败: {e!r} —— "
+                    f"残留 CRD 会让 tproxy 继续挂在 Pod netns 上并污染后续实验，"
+                    f"请手工 kubectl delete 并遍历全部 CRD 类型确认归零"
+                )
 
         # FIS 后端：先等 FIS 实验自然完成
         if exp.backend in ("fis", "fis-scenario") and result.chaos_experiment_name:
@@ -493,6 +912,119 @@ class ExperimentRunner:
 
     # ─── Phase 5：Steady State After ─────────────────────────────────────────
 
+
+    def _target_metrics_name(self, exp: Experiment) -> str:
+        """注入目标在 **DeepFlow SLI 口径**下的名字。
+
+        这里有三套命名空间，都源自 profiles/petsite.yaml 的同一张 services 表，
+        但取值不同，混用会静默出错：
+
+            kubectl label / DeepFlow request_domain   search-service   ← 注入与 SLI 用
+            k8s Deployment 名                         search-service
+            图谱 Microservice.name (neptune_name)     petsearch        ← 候选边用
+
+        ## 2026-09-05 修：本函数此前返回的是**图谱名**，而它声称返回 SLI 名
+
+        原实现调 `resolve_graph_name()`（→ neptune_name），于是对**两套名字不同**
+        的服务，DeepFlow 查询恒为空。实测：
+
+            实验写的名   图谱名             按 k8s 名查   按图谱名查
+            list-adoptions  petlistadoptions      1,981          0
+            search-service  petsearch            60,504          0
+            pethistory      pethistory                -          - （两名一致）
+            petfood         petfood                   -          - （两名一致）
+
+        缺陷被长期掩盖的原因很具体：**原 docstring 举的例子 `pethistory` 恰好是
+        两套名字碰巧相同的那一个**，照着例子验证永远看不出问题。
+
+        后果三层，第二层最隐蔽：
+          1. petsearch / petlistadoptions 的**注入目标侧稳态检查**一直靠
+             `0 请求 → fallback success_rate=100.0` 这个**假的 100%** 通过 ——
+             正是本 docstring 自己警告的失效模式，而本函数就是成因；
+          2. `_injection_took_effect()` 对这两个服务**永远返回 None**，
+             于是注入生效门禁（T-297）被静默禁用 —— 门禁在，但判据喂不进数据；
+          3. `collect_edge_flow()` 继承同一个名字，边级流量也恒为 0。
+
+        修法：走 `SERVICE_TO_K8S_LABEL`（DeepFlow name == k8s Pod label），
+        先归一到规范名再取 k8s_label，两步都失败才回落原名。
+        这张表与 target_resolver 选 Pod 用的是**同一张**，不另立映射。
+        """
+        raw = exp.target_service
+        try:
+            from .config import SERVICE_TO_K8S_LABEL
+            from .edge_verification import resolve_graph_name
+            # 规范名 -> k8s_label。实验里既可能写 k8s 名也可能写规范名，
+            # 所以两个键都试：先按原样查，再归一到规范名后查。
+            if raw in SERVICE_TO_K8S_LABEL:
+                return SERVICE_TO_K8S_LABEL[raw]
+            canon = resolve_graph_name(raw) or raw
+            return SERVICE_TO_K8S_LABEL.get(canon, raw)
+        except Exception:
+            return raw
+
+    def _check_target_pod_health(self, exp: Experiment, result: ExperimentResult) -> bool:
+        """T-214h：注入目标的 Pod 是否被这次实验打伤。返回 False 即判 FAILED。
+
+        两条判据，缺一不可：
+
+        1. **readiness** —— 现在还有 Pod 不 Ready，说明损伤仍在持续。
+        2. **restarts 差值** —— Phase 0 基线到现在容器重启数增加了。
+           这一条才是主判据：readiness 有滞后（实测 Phase 4 报 2/2 之后
+           2.5 分钟才退化），而重启就发生在注入期间，此刻已经计入。
+
+        差值判据在基线缺失时**不判 FAILED 而是告警**：`check_pods` 失败会返回
+        `restarts=None`，拿 None 当 0 会让判据静默通过；而拿它当损伤又会把
+        「没测到」误报成「打伤了」。两者都不对，所以显式区分第三种情况。
+        """
+        pods = self.injector.check_pods(exp.target_service, exp.target_namespace)
+        result.target_pods_after = pods
+        before = result.target_pods_before or {}
+        r_before, r_after = before.get("restarts"), pods.get("restarts")
+        ok = True
+
+        # 判据 1：readiness
+        if pods.get("total", 0) == 0:
+            msg = (f"❌ 目标服务 {exp.target_service} 查不到任何 Pod"
+                   f"（label app={exp.target_service}）")
+            result.pod_damage.append(msg)
+            logger.error(f"  {msg}")
+            ok = False
+        elif pods["running"] < pods["total"]:
+            bad = [f"{p['pod']}(phase={p['phase']} ready={p['ready']} restarts={p.get('restarts')})"
+                   for p in pods["not_running"]]
+            msg = (f"❌ 注入后仍有 Pod 未就绪 {pods['running']}/{pods['total']}: {bad}。"
+                   f"处置：kubectl delete pod -n {exp.target_namespace} "
+                   f"-l app={exp.target_service} 让 ReplicaSet 重建 —— "
+                   f"abort 的 tproxy 残留在 Pod netns 里，容器重启清不掉。")
+            result.pod_damage.append(msg)
+            logger.error(f"  {msg}")
+            ok = False
+        else:
+            logger.info(f"  ✅ Pod 检查: {pods['running']}/{pods['total']} ready")
+
+        # 判据 2：重启差值（主判据）
+        if r_before is None or r_after is None:
+            logger.warning(
+                "  ⚠️ Pod 重启基线或现值缺失（before=%s after=%s），跳过重启差值判据。"
+                "这不是通过，是没测到 —— 请人工核对 kubectl get pods 的 RESTARTS 列。",
+                r_before, r_after)
+            result.pod_damage.append(
+                f"⚠️ 重启差值未能判定（before={r_before} after={r_after}），需人工核对")
+        elif r_after > r_before:
+            delta = r_after - r_before
+            msg = (f"❌ 注入导致容器重启 +{delta} 次（{r_before} → {r_after}，"
+                   f"逐 Pod: {pods.get('per_pod_restarts')}）。"
+                   f"这是 abort 打断 liveness 探针的已知代价：kubelet 杀掉容器重启，"
+                   f"而 tproxy 残留在 Pod netns（属 sandbox 不属容器）故重启清不掉。"
+                   f"处置：删 Pod 重建。不修就会把污染带进下一轮实验的基线。")
+            result.pod_damage.append(msg)
+            logger.error(f"  {msg}")
+            ok = False
+        else:
+            logger.info(f"  ✅ Pod 重启数未增加（{r_before} → {r_after}）")
+
+        return ok
+
     def _phase5_steady_state_after(self, exp: Experiment, result: ExperimentResult):
         """
         Phase 5: 验证稳态恢复 + 生成报告
@@ -512,7 +1044,7 @@ class ExperimentRunner:
 
         # 稳态验证（窗口 5min，采样 3 次）
         snap = self.metrics.collect_steady(
-            service=exp.target_service,
+            service=self._target_metrics_name(exp),
             namespace=exp.target_namespace,
             window_seconds=300,
             samples=self.STEADY_SAMPLES,
@@ -534,6 +1066,15 @@ class ExperimentRunner:
                 "desc":   f"{icon} {desc}",
             })
             logger.info(f"  {icon} 稳态检查: {desc}")
+
+        # ── T-214h：Pod readiness + 重启差值 ────────────────────────────────
+        # 为什么 SLI 全绿也不够：实测 2026-08-31 两轮 abort 注入，SLI 报 100%、
+        # 稳态检查全过、实验判 PASSED，但被注入的两个 Pod 都进了重启循环、
+        # 持续 1/2 Ready，只能人工删 Pod 重建。SLI 之所以看不见，是因为 HPA
+        # 新拉的干净 Pod 在撑着服务 —— **服务健康 ≠ 实验没造成损伤**。
+        # 一个报 PASSED 却留下坏 Pod 的实验，会让下一轮实验的基线带着污染开始。
+        if exp.backend not in ("fis", "fis-scenario"):
+            all_passed = self._check_target_pod_health(exp, result) and all_passed
 
         # 判定最终状态
         result.status = "PASSED" if all_passed else "FAILED"
@@ -566,6 +1107,9 @@ class ExperimentRunner:
                 GraphFeedback().write_back(result)
             except Exception as e:
                 logger.warning(f"Neptune 图谱反馈失败（非致命）: {e}")
+
+        # 逐条依赖边验证（T-210 / DoD-3）：把观测方证据落回图谱
+        self._verify_edges(exp, result)
 
         # Phase A2: 同步实验记录到 Neptune ChaosExperiment 节点
         try:
@@ -632,4 +1176,5 @@ class ExperimentRunner:
                 self.fis.stop(experiment_name)
             else:
                 chaos_type = self.injector.FAULT_TO_DELETE_TYPE.get(fault_type, fault_type)
-                self.injector.delete(experiment_name, chaos_type=chaos_type)
+                # 同 stop-condition 路径：必须关键字传参，见那里的注释
+                self.injector.delete(chaos_type=chaos_type, name=experiment_name)

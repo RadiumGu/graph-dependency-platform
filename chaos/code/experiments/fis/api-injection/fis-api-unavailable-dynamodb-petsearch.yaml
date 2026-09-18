@@ -1,0 +1,117 @@
+# FIS API 注入：让 petsearch 对 DynamoDB 的 API 调用返回 503
+#
+# ## 为什么用 API 层注入而不是网络层切断（2026-09-09 实测结论）
+#
+# 网络层对托管服务目标**打不断**，两条路都试过：
+#
+#   · NetworkChaos + externalTargets: dynamodb.<region>.amazonaws.com
+#     —— Chaos Mesh 在 apply 时把域名解析成 IP 再装 iptables，
+#        而 AWS 区域端点有多个轮换 IP（pod 内解析到 35.71.114.102，
+#        SDK 后续会拿到别的），规则只封住其中一个。
+#   · DNSChaos (action: error, patterns: ['dynamodb.*'])
+#     —— AllInjected=True 但依然没打断：应用用长连接 + DNS 缓存，
+#        4.7 次/秒全跑在 keep-alive 连接上，2 分钟窗口内 DNS 从不重查。
+#
+# 仓库早有同类记载：FIS `disrupt-connectivity scope=s3` 当年也没切断这条路径，
+# 那次还导致了一个假 refuted（X-Ray 复核发现故障窗口内仍有成功的 S3 调用）。
+#
+# `aws:fis:inject-api-unavailable-error` 在 **AWS API 层**动手：
+# 它按 IAM 角色 + service + operations 让 API 返回 503，
+# 与 DNS 缓存、连接复用、端点 IP 轮换全都无关。
+#
+# ## 爆炸半径：精确到一个服务
+#
+# search-service 走 **IRSA**（不是节点角色）：
+#   serviceAccountName: search-service-sa
+#   role-arn: ServicesEks2-searchserviceServiceAccountRole588AF64-Sulrl6FvKO5F
+#
+# 所以打这个角色只影响 search-service 自己的 AWS 调用。
+# 对比 chaos/code/experiments/fis/api-injection/fis-api-unavailable-rds.yaml
+# 打的是 **节点组角色**（NodegroupworkersNodeGroupRole），
+# 那会影响该节点组上**所有**用节点角色的 Pod —— 半径大得多。
+#
+# ## percentage 取 100 而不是 50
+#
+# 判据要回答的是「这条依赖成不成立」，不是「部分失败时的表现」。
+# 50% 会让一半调用成功，观测方可能靠重试完全掩盖影响 ——
+# 那读出来的零退化分不清「soft dependency」与「注入强度不足」。
+# 先用 100% 拿到是非结论，再降强度做梯度实验。
+#
+# ## 用法
+#
+#   cd chaos/code
+#   python3 main.py run --file experiments/fis/api-injection/fis-api-unavailable-dynamodb-petsearch.yaml --dry-run
+#   python3 main.py run --file experiments/fis/api-injection/fis-api-unavailable-dynamodb-petsearch.yaml
+
+name: fis-api-unavailable-dynamodb-petsearch
+description: "让 petsearch(IRSA 角色) 对 DynamoDB 的 API 调用返回 503，验证 petsearch -[AccessesData]-> DynamoDBTable 这条依赖"
+backend: fis
+
+target:
+  service: petsearch
+  namespace: petadoptions
+  tier: Tier0
+  # 图谱里被注入方的节点名。这条边的目标是 DynamoDB 表，
+  # 而 target.service 必须是**有 Running Pod 的 K8s 服务**（否则 preflight 报
+  # 「服务 xxx 无 Running Pods」）—— 两者必然不同，所以显式写出来。
+  graph_node: "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM"
+
+# ## 观测方：这是让实验「能验边」的必要条件
+#
+# 不声明 observation_targets 时 runner 会明确告知
+# 「本实验不能用于边验证，只能做稳态回归」——
+# 因为它只会采注入目标自己的指标，而「打断 B 之后 B 是否退化」近乎恒真，
+# 根本没有检验任何边（这正是历史上 72 个实验全部 passed、零失败的原因）。
+#
+# 验 `petsearch -[AccessesData]-> DynamoDBTable` 要在 **DynamoDB 侧注入**、
+# 观测 **petsearch**。而 petsearch 自己的成功率信号会被上游重试掩盖，
+# 所以真正的观测方取**上游 petsite**：petsite -> petsearch 有约 2 万次/15min，
+# 样本量足够分辨退化。
+observation_targets:
+  - service: petsite
+    namespace: petadoptions
+    edge_label: AccessesData
+    # 低于这个量只能判 inconclusive，绝不能判 refuted ——
+    # metrics 无数据时的 fallback 与「真的健康」在结构上无法区分。
+    min_baseline_requests: 20
+
+graph_feedback:
+  enabled: true
+  # 写回的边类型必须与被验的那条边一致，否则结论会落到别的边上。
+  edges:
+    - AccessesData
+
+fault:
+  type: fis_api_unavailable
+  mode: all
+  value: "100"
+  duration: "4m"
+  extra_params:
+    resource_type: "iam:role"
+    # search-service 的 IRSA 角色 —— 半径精确到这一个服务
+    role_arn: "arn:aws:iam::926093770964:role/ServicesEks2-searchserviceServiceAccountRole588AF64-Sulrl6FvKO5F"
+    percentage: 100
+    service: "dynamodb"
+    # petsearch 查宠物数据用的是读路径。列全一点：
+    # 漏掉实际用的那个 operation，注入就打空 —— 而打空的表现
+    # 与「依赖不成立」在数据上同形，会读出一个假 refuted。
+    operations: "GetItem,BatchGetItem,Query,Scan,DescribeTable"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "5m"
+
+stop_conditions:
+  # 观测方（petsite）跌破一半就中止 —— 这是演示环境，
+  # 但「故障注入必须可自动恢复」的硬约束要求有主动刹车，
+  # 不能只靠 duration 到期。
+  - metric: success_rate
+    threshold: "< 50%"
+    window: "60s"
+    action: abort

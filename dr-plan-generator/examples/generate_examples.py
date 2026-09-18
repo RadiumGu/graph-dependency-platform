@@ -1,7 +1,30 @@
 #!/usr/bin/env python3
 """
-Generate example DR plans using mock data (no Neptune connection needed).
-Produces both Markdown and JSON examples for AZ-level and Region-level switchovers.
+Generate example DR plans from a HARDCODED SYNTHETIC node list (no Neptune).
+
+⚠️ These are **synthetic** artifacts, not output from the real graph.
+
+The AZ names below are ``apne1-az1`` / ``apne1-az2`` / ``apne1-az4``. Those do
+**not exist** in the live graph — the real AZs are ``ap-northeast-1a`` /
+``ap-northeast-1c`` / ``ap-northeast-1d``, and there is no alias translation
+layer anywhere in this project.
+
+That gap mattered: because AZ scope was only ever exercised against these
+synthetic fixtures, a basic defect survived until 2026-09-07 — the AZ query
+stopped one hop short (``Microservice`` is never directly ``LocatedIn`` an AZ;
+the path is ``AZ <-LocatedIn- Pod <-RunsOn- Microservice``), so every AZ plan
+reported **zero affected services**. See
+``tests/test_60_dr_az_scope_finds_services.py``.
+
+If you change this file, do NOT "fix" the AZ names by search-replace: the
+checked-in artifacts under ``examples/`` were produced by the old synthetic
+topology, and renaming their AZ would manufacture a plan that *claims* to
+describe ``ap-northeast-1a`` while actually describing something else. Either
+regenerate honestly from the live graph, or leave the synthetic names and keep
+them labelled as synthetic (which is what README does).
+
+Produces both Markdown and JSON examples for AZ-level and Region-level
+switchovers.
 """
 import sys, os, json, time, dataclasses
 from datetime import datetime, timezone

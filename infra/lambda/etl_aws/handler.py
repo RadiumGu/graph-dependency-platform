@@ -50,7 +50,9 @@ from collectors.data_stores import (
 )
 from cloudwatch import (
     fetch_ec2_cloudwatch_metrics_batch, fetch_lambda_cloudwatch_metrics_batch,
-    fetch_nfm_ec2_metrics, map_nfm_metrics_to_ec2,
+    fetch_nfm_ec2_metrics, fetch_nfm_per_flow_metrics,
+    fetch_nfm_topology, upsert_nfm_topology,
+    update_vpc_nfm_metrics, update_ec2_nfm_per_flow,
     update_ec2_metrics, update_ec2_nfm_metrics, update_lambda_metrics,
 )
 from business_layer import upsert_business_capabilities, scan_ecr_startup_deps
@@ -95,7 +97,12 @@ def run_etl():
             'cidr': sn['cidr'],
             'az': sn['az'],
             'vpc_id': sn['vpc_id'],
-        }, 'cloudformation')
+        # identity_prop='subnet_id'：Subnet 的 name 取自 Name 标签
+        # （collectors/ec2.py:56 next((t['Value'] ... 'Name'), sn['SubnetId'])），
+        # 是**可变属性**。与 EC2Instance 同一个缺陷 —— 标签一改 mergeV 匹配不到
+        # 旧节点就新建一个，同一子网在图里裂成两份。身份键声明见
+        # profiles/graph_contract.yaml，由 test_35 的 g11 强制一致。
+        }, 'cloudformation', identity_prop='subnet_id')
         subnet_map[sn['subnet_id']] = sn['name']
         subnet_vid_map[sn['subnet_id']] = sn_vid
         stats['vertices'] += 1
@@ -136,7 +143,11 @@ def run_etl():
             'health_status': 'healthy' if inst.get('state') == 'running' else 'unhealthy',
             'log_source': _log_source_ec2,
             **extra,
-        }, inst['managed_by'])
+        # identity_prop='instance_id'：EC2 的 name 来自 Name 标签，是**可变属性**。
+        # 以它作身份键时，标签一改 mergeV 就匹配不到旧节点而新建一个 ——
+        # 实测造成 14 个 EC2Instance 里 4 个是重复实体（同一台机器两份，
+        # 一份以实例 ID 命名、88 天前冻结）。改以不可变的 instance_id 匹配。
+        }, inst['managed_by'], identity_prop='instance_id')
         inst_vid_map[inst['id']] = inst_vid
         stats['vertices'] += 1
         upsert_az_region(inst['az'])
@@ -159,12 +170,29 @@ def run_etl():
         except Exception as e:
             logger.warning(f"EC2 CW metrics {inst['name']}: {e}")
 
+    # NFM 有两种粒度，必须分别写到各自真正描述的实体上：
+    #   · 监视器级（= VPC 级）聚合 → 写 VPC 节点。
+    #     原实现把它逐个复制给 VPC 内每个 EC2 实例，实测 7 个节点的
+    #     net_rtt_avg_ms 全等于 38.25 —— 「某台机器的 RTT」成了假数据。
+    #   · per-flow 逐流数据 → 按 instance_id 归集后写 EC2 节点。
+    #     这才是真正的实例级指标，并且能区分 INTER_AZ（跨 AZ 重传），
+    #     对 fault_boundary='az' 模型直接相关。
     nfm_cw = fetch_nfm_ec2_metrics(cw_client)
     if nfm_cw:
-        ec2_nfm_map = map_nfm_metrics_to_ec2(nfm_cw, ec2_instances)
-        for ec2_name, nfm_metrics in ec2_nfm_map.items():
-            update_ec2_nfm_metrics(ec2_name, nfm_metrics)
-        logger.info(f"NFM metrics written to {len(ec2_nfm_map)} EC2 nodes")
+        update_vpc_nfm_metrics(nfm_cw)
+    nfm_flow = fetch_nfm_per_flow_metrics()
+    if nfm_flow:
+        update_ec2_nfm_per_flow(nfm_flow)
+    #   · NFM 还是第三个**拓扑**观测源（X-Ray / DeepFlow 之外）：per-flow 的
+    #     kubernetesMetadata 给出服务对，targetPort 给出方向，
+    #     destinationCategory 给出远端类型（含 AMAZON_S3 / AMAZON_DYNAMODB）。
+    #     用 DATA_TRANSFERRED 而不是 RETRANSMISSIONS —— 后者只报有重传的流，
+    #     实测拿它做拓扑得到「服务对 0 组」。
+    nfm_topo = fetch_nfm_topology()
+    if nfm_topo:
+        topo_stats = upsert_nfm_topology(nfm_topo)
+        stats['nfm_edges_created'] = topo_stats['created']
+        stats['nfm_edges_corroborated'] = topo_stats['corroborated']
 
     # ── Step 3: EKS cluster ──────────────────────────────────────────────────
     eks_cluster = collect_eks_cluster(eks_client)
@@ -217,11 +245,17 @@ def run_etl():
             lb_vid = lb_vid_map.get(lb_name)
             if not lb_vid:
                 continue
+            # 身份键 2026-09-04 从 name 切到 arn。切换前提两条都已核实：
+            #   ① 活图谱 14 个节点全带唯一 arn（tests/test_42::m08 自动核验）
+            #   ② 该类型**只有 etl_aws 写**，不在 etl_cfn 的 TYPE_TO_LABEL 里，
+            #      所以不存在两个 ETL 用不同身份键写同一类节点的风险
+            #      （那正是 test_35::g13 守的形态，也是 6 个类型至今切不了的原因）
             tg_vid = upsert_vertex('TargetGroup', tg['name'], {
+                'arn': tg['arn'],
                 'port': str(tg['port']),
                 'protocol': tg['protocol'],
                 'role': 'target-group',
-            }, 'cloudformation')
+            }, 'cloudformation', identity_prop='arn')
             stats['vertices'] += 1
             if tg_vid:
                 upsert_edge(lb_vid, tg_vid, 'RoutesTo', {'source': 'aws-etl'})
@@ -233,8 +267,9 @@ def run_etl():
         tg_arn_to_vid = {tg['arn']: None for tg in target_groups}
         for tg in target_groups:
             tg_name_v = upsert_vertex('TargetGroup', tg['name'], {
+                'arn': tg['arn'],
                 'port': str(tg['port']), 'protocol': tg['protocol'], 'role': 'target-group',
-            }, 'cloudformation')
+            }, 'cloudformation', identity_prop='arn')
             tg_arn_to_vid[tg['arn']] = tg_name_v
 
         for rule in listener_rules:
@@ -520,7 +555,13 @@ def run_etl():
                 logger.debug(f"T12 Pod→EC2 {node_name}: {e}")
 
         if pod['service_name']:
-            svc_vid = find_vertex_by_name(pod['service_name'])
+            # 必须走别名映射：K8s Service 名与 Microservice 名不同名
+            # （search-service→petsearch 等，见 collectors/eks.py:_K8S_SVC_ALIAS）。
+            # 原代码用未映射的原名 + 不带标签的查找，于是命中了同名的
+            # K8sService / Deployment / Namespace 节点 —— 实测 173 条 RunsOn
+            # 边源端点因此错误。Step 8b-post(:592) 一直是映射后再查的，两处不一致。
+            _ms_name = _K8S_SVC_ALIAS.get(pod['service_name'], pod['service_name'])
+            svc_vid = find_vertex_by_name(_ms_name, 'Microservice')
             if svc_vid and p_vid:
                 upsert_edge(svc_vid, p_vid, 'RunsOn', {'source': 'eks-etl'})
                 stats['edges'] += 1
@@ -535,7 +576,7 @@ def run_etl():
         if db_vid and rds_vid:
             upsert_edge(db_vid, rds_vid, 'BelongsTo', {'source': 'eks-etl'})
             stats['edges'] += 1
-        svc_vid = find_vertex_by_name(mapping['service'])
+        svc_vid = find_vertex_by_name(mapping['service'], 'Microservice')
         if svc_vid and db_vid:
             upsert_edge(svc_vid, db_vid, 'ConnectsTo', {'source': 'eks-etl'})
             stats['edges'] += 1
@@ -554,7 +595,7 @@ def run_etl():
                 ms_name = _K8S_SVC_ALIAS.get(pod['service_name'], pod['service_name'])
                 ms_current_ips.setdefault(ms_name, set()).add(pod['pod_ip'])
         for ms_name, ips in ms_current_ips.items():
-            ms_vid = find_vertex_by_name(ms_name)
+            ms_vid = find_vertex_by_name(ms_name, 'Microservice')
             if ms_vid:
                 ip_str = safe_str(','.join(sorted(ips)))
                 neptune_query(f"g.V('{ms_vid}').property(single,'ip','{ip_str}')")
@@ -613,7 +654,10 @@ def run_etl():
             v_vid = upsert_vertex('VPC', vpc['name'], {
                 'vpc_id': vpc['vpc_id'],
                 'cidr':   vpc['cidr'],
-            }, 'cloudformation')
+            # identity_prop='vpc_id'：VPC 的 name 取自 Name 标签
+            # （collectors/ec2.py:76 tags.get('Name', v['VpcId'])），是可变属性。
+            # 与 EC2Instance / Subnet 同一缺陷。声明见 profiles/graph_contract.yaml。
+            }, 'cloudformation', identity_prop='vpc_id')
             vpc_vid_map[vpc['vpc_id']] = v_vid
             stats['vertices'] += 1
             region_vid_q = neptune_query(
@@ -651,7 +695,10 @@ def run_etl():
                 'sg_id':       sg['sg_id'],
                 'description': sg['description'][:200],
                 'vpc_id':      sg['vpc_id'],
-            }, 'cloudformation')
+            # identity_prop='sg_id'：GroupName 在 AWS 侧创建后不可改，所以这不是
+            # 缺陷修复而是健壮性升级 —— sg_id 是资源标识符，跨账号/区域也唯一，
+            # 且已在属性里。声明见 profiles/graph_contract.yaml。
+            }, 'cloudformation', identity_prop='sg_id')
             sg_id_to_vid[sg['sg_id']] = sg_vid
             stats['vertices'] += 1
 
@@ -821,7 +868,7 @@ def run_etl():
 
             # Deployment → Microservice (Manages)
             if dep['ms_alias']:
-                ms_vid = find_vertex_by_name(dep['ms_alias'])
+                ms_vid = find_vertex_by_name(dep['ms_alias'], 'Microservice')
                 if ms_vid and dep_vid:
                     upsert_edge(dep_vid, ms_vid, 'Manages', {'source': 'eks-etl'})
                     stats['edges'] += 1
@@ -997,10 +1044,12 @@ def run_etl():
     # ── Step 12: ECR ──────────────────────────────────────────────────────────
     ecr_repos = collect_ecr_repositories(ecr_client)
     for repo in ecr_repos:
+        # 身份键 2026-09-04 从 name 切到 arn。与 TargetGroup 同理：
+        # 12 个节点全带唯一 arn，且该类型只有 etl_aws 写。
         r_vid = upsert_vertex('ECRRepository', repo['name'], {
             'arn': repo['arn'],
             'uri': repo['uri'],
-        }, repo['managed_by'])
+        }, repo['managed_by'], identity_prop='arn')
         stats['vertices'] += 1
         if r_vid and region_vid:
             try:
@@ -1044,7 +1093,7 @@ def run_etl():
                     f".coalesce("
                     f"  __.out('{edge_label}').where(__.hasLabel('{infra_label}').has('name',containing('{nc}'))),"
                     f"  __.addE('{edge_label}').to('infra')"
-                    f").property('source','aws-etl')"
+                    f").property('source', __.coalesce(__.values('source'), __.constant('aws-etl')))"
                     f".property('evidence','{evidence}')"
                     f".property('declared_in','{declared_in}')"
                     f".property('last_updated',{ts_now})"
@@ -1061,7 +1110,7 @@ def run_etl():
             f".coalesce("
             f"  __.inE('AccessesData').where(__.outV().hasLabel('LambdaFunction').has('name',containing('statusupdater'))),"
             f"  __.addE('AccessesData').from('fn')"
-            f").property('source','aws-etl')"
+            f").property('source', __.coalesce(__.values('source'), __.constant('aws-etl')))"
             f".property('evidence','source:petstatusupdater/index.js#UpdateCommand')"
             f".property('last_updated',{ts_now})"
         )
@@ -1220,6 +1269,87 @@ def run_etl():
         )
     except Exception as e:
         logger.warning(f"T04 Serves edge cleanup failed (non-fatal): {e}")
+
+    # ── Step 17b: 契约驱动的边过期收敛 ────────────────────────────────────────
+    # 按 profiles/graph_contract.yaml 里每类边声明的 expires_seconds，把超期未刷新的
+    # **dynamic** 边置 active=false。引入之前 AccessesData / DependsOn 写了 active
+    # 却没有任何路径把它翻回 false —— 观测停止后永久留在图里变成 ghost 边。
+    #
+    # 放在 etl_aws 而不是各 ETL 各做一遍：它是跨源的收敛动作，需要一个单一执行者，
+    # 否则每个源只会清理自己写的边（现状就是这样：deepflow 只管 Calls、
+    # xray 只管 source='xray'）。
+    #
+    # 默认 **dry-run**（只统计并 log），要 GRAPH_EDGE_EXPIRY_ENABLED=true 才真正改写 ——
+    # 与 deepflow 的 DROP_ENABLED 默认 false 同一姿态：部署代码不等于立刻改图。
+    # 只作用于 dependency_kind='dynamic'：static 边是架构声明，不该因为没被观测到
+    # 就置 false（那是 drift_status 的 declared_not_observed 要表达的信息）。
+    try:
+        from graph_cleanup import deactivate_stale_dynamic_edges
+        _exp = deactivate_stale_dynamic_edges(neptune_query, round_ts=int(time.time()))
+        _stale = sum(v['stale'] for v in _exp['per_label'].values())
+        _done = sum(v['deactivated'] for v in _exp['per_label'].values())
+        stats['edge_expiry_stale'] = _stale
+        stats['edge_expiry_deactivated'] = _done
+        logger.info("edge-expiry: enabled=%s stale=%d deactivated=%d",
+                    _exp['enabled'], _stale, _done)
+    except Exception as e:
+        logger.warning(f"edge expiry failed (non-fatal): {e}")
+
+    # inference 边（LLM 运行时按 query 决定的调用，如 agent → tool）**不走上面那条路**。
+    # 它们的观测是稀疏突发的（实测 agent 工具同一天 03:25 一批、07:47 一批，中间四小时
+    # 空白），所以「窗口内没看到」推不出「依赖消失」—— 只标 drift_status，不碰 active。
+    # 详见 graph_cleanup 模块 docstring 第 3 条。
+    try:
+        from graph_cleanup import mark_stale_inference_edges
+        _inf = mark_stale_inference_edges(neptune_query, round_ts=int(time.time()))
+        _silent = sum(v['silent'] for v in _inf['per_label'].values())
+        _marked = sum(v['marked'] for v in _inf['per_label'].values())
+        stats['inference_drift_silent'] = _silent
+        stats['inference_drift_marked'] = _marked
+        logger.info("inference-drift: enabled=%s silent=%d marked=%d",
+                    _inf['enabled'], _silent, _marked)
+    except Exception as e:
+        logger.warning(f"inference drift marking failed (non-fatal): {e}")
+
+    # 溯源审计：dependency 边必须能追溯到发现它的源，否则没有任何源的 reconcile
+    # 会认领它 —— 永远不刷新、也不清理。只读上报，不自动修（事后无从推断当初
+    # 是哪个源写的，猜一个填进去比留空更糟）。详见 graph_cleanup 里该函数的注释。
+    try:
+        from graph_cleanup import audit_dependency_edges_without_source
+        _aud = audit_dependency_edges_without_source(neptune_query)
+        stats['dep_edges_without_source'] = _aud['total']
+        if _aud['total']:
+            stats['dep_edges_without_source_per_label'] = {
+                k: v for k, v in _aud['per_label'].items() if v}
+    except Exception as e:
+        logger.warning(f"source audit failed (non-fatal): {e}")
+
+    # ── 节点过期收敛（2026-09-04 新增）─────────────────────────────────────
+    #
+    # 补的是契约里一句悬空的话：结构边的 `expires_seconds: None` 注解写着
+    # 「生命周期跟随两端节点」，但节点侧此前没有任何生命周期机制。
+    # 实测代价：Pod 在图里 581 个节点，集群实际 Running 70 个，
+    # 511 个（88%）超过一天没刷新。
+    #
+    # 开关与边的**分开**（GRAPH_NODE_EXPIRY_ENABLED）：节点置 active=false 会
+    # 影响以它为端点的一切遍历，风险面比边大，要能独立灰度。
+    #
+    # `unjudgeable` 必须单独看：它是「本轮对多少个节点什么都没判」，
+    # 不为 0 时 stale 这个数就**不能**读成「只有这么多陈旧节点」。
+    # 这一轮之前 TIMESTAMP_FIELD 在节点上的覆盖率只有 1.4%，
+    # 整个机制会结构上永不触发而毫无征兆 —— 所以这个字段进 stats。
+    try:
+        from graph_cleanup import expire_stale_nodes
+        _nexp = expire_stale_nodes(neptune_query, round_ts=int(time.time()))
+        _nstale = sum(v['stale'] for v in _nexp['per_label'].values())
+        _ndone = sum(v['expired'] for v in _nexp['per_label'].values())
+        stats['node_expiry_stale'] = _nstale
+        stats['node_expiry_expired'] = _ndone
+        stats['node_expiry_unjudgeable'] = _nexp['unjudgeable_total']
+        logger.info("node-expiry: enabled=%s stale=%d expired=%d unjudgeable=%d",
+                    _nexp['enabled'], _nstale, _ndone, _nexp['unjudgeable_total'])
+    except Exception as e:
+        logger.warning(f"node expiry failed (non-fatal): {e}")
 
     try:
         neptune_query(

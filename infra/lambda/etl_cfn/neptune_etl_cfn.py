@@ -24,6 +24,12 @@ import boto3
 from typing import Optional
 
 from neptune_client_base import neptune_query, safe_str, extract_value, REGION  # noqa: F401
+from graph_contract import (  # 同属 neptune-client-base Layer
+    TIMESTAMP_FIELD,
+    assert_edge_type,
+    assert_node_type,
+    is_dependency_edge,
+)
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -51,10 +57,14 @@ TYPE_TO_LABEL = {
     'AWS::Lambda::Function': 'LambdaFunction',
     'AWS::StepFunctions::StateMachine': 'StepFunction',
     'AWS::DynamoDB::Table': 'DynamoDBTable',
-    'AWS::SQS::Queue': 'Queue',
+    'AWS::SQS::Queue': 'SQSQueue',
     'AWS::ElasticLoadBalancingV2::LoadBalancer': 'LoadBalancer',
     # TargetGroup 不单独建节点（是 ALB 内部路由细节，不是业务拓扑节点）
     # 'AWS::ElasticLoadBalancingV2::TargetGroup': 'Microservice',  # 已移除：TG ≠ Microservice
+    # 下面两条本账号目前零实例，故刻意**不**写进 profiles/petsite.yaml 的 schema：
+    # schema 会喂给 LLM 做自然语言查询，声明零实例类型等于邀请它推理不存在的东西。
+    # 映射本身保留 —— 若资源将来出现，走 fallback split('::')[-1] 会得到
+    # 'RestApi'/'Stream'，比现在这两个名字更差。真出现时须同步补 schema。
     'AWS::ApiGateway::RestApi': 'APIGateway',
     'AWS::SNS::Topic': 'SNSTopic',
     'AWS::Kinesis::Stream': 'KinesisStream',
@@ -65,7 +75,23 @@ TYPE_TO_LABEL = {
 _vid_cache = {}  # (label, name) → vertex_id
 
 def get_or_create_vertex(label: str, physical_id: str, stack_name: str):
-    """mergeV upsert 顶点，返回 vertex ID，结果写入 _vid_cache"""
+    """mergeV upsert 顶点，返回 vertex ID，结果写入 _vid_cache
+
+    基数语义（2026-08-29 修复）：
+    mergeV 的 option-map **用 Gremlin 默认 SET 基数**，值会追加而不替换。
+    `last_scanned` 是每轮变化的时间戳，放在 onMatch map 里会导致每次运行
+    在同一节点上新增一个 distinct 值 —— 实测已累积到单节点 172 个值，
+    使 `MATCH (n:LambdaFunction) WHERE n.last_scanned IS NOT NULL` 从
+    9 个真节点扇出成 1,253 行（139 倍）。
+
+    因此 option-map 只保留**身份与仅创建时写一次**的字段，
+    所有需要每轮刷新的标量改用尾部 `.property(single, k, v)` 链重写。
+    这与 etl_aws/neptune_client.py:upsert_vertex 的兜底模式一致。
+
+    注意：顶点属性才有基数问题；**边属性在 Neptune/TinkerPop 里天生单值**，
+    所以 upsert_cfn_edge 里不带 single 的 `.property()` 是安全的，
+    但不要把边的写法照搬到顶点。
+    """
     key = (label, physical_id)
     if key in _vid_cache:
         return _vid_cache[key]
@@ -73,11 +99,22 @@ def get_or_create_vertex(label: str, physical_id: str, stack_name: str):
     lb = safe_str(label)
     sn = safe_str(stack_name)
     ts = int(time.time())
+
+    # 契约门禁：未在 profiles/graph_contract.yaml 声明的类型不得写入。
+    assert_node_type(lb)
+
     gremlin = (
         f"g.mergeV([(T.label): '{lb}', 'name': '{pid}'])"
         f".option(Merge.onCreate, [(T.label): '{lb}', 'name': '{pid}', "
-        f"'stack_name': '{sn}', 'source': 'cfn-etl', 'created_at': {ts}])"
-        f".option(Merge.onMatch, ['stack_name': '{sn}', 'last_scanned': {ts}])"
+        f"'created_at': {ts}])"
+        # 每轮刷新的标量一律 single 基数，避免 SET 追加
+        f".property(single,'stack_name','{sn}')"
+        f".property(single,'source','cfn-etl')"
+        f".property(single,'last_scanned',{ts})"
+        # 统一时间戳字段（契约 timestamp_field）。last_scanned 保留是过渡态 ——
+        # 跨源查询「这条记录最后何时被看到」此前无统一字段可用：
+        # aws 写 last_updated、cfn 写 last_scanned、deepflow/xray 写 last_seen。
+        f".property(single,'{TIMESTAMP_FIELD}',{ts})"
         f".id()"
     )
     result = neptune_query(gremlin)
@@ -100,6 +137,27 @@ def upsert_cfn_edge(src_vid, dst_vid, rel_type: str, stack_name: str, evidence: 
     sn = safe_str(stack_name)
     ev = safe_str(evidence)
     rt = safe_str(rel_type)
+
+    # 契约门禁：未声明的边类型不得写入。
+    assert_edge_type(rt)
+
+    # ── 溯源写一次（write-once）──────────────────────────────────────────
+    # 原实现是无条件 `.property('source','cfn-etl')` —— coalesce 命中一条**已存在**
+    # 的边之后照写，会把 deepflow / xray 先写的 source 静默改成 cfn-etl，
+    # 等于抹掉「谁首先发现了这条依赖」。而 xray / deepflow-L4 / NFM 三个源本来就
+    # 刻意保护这些属性，只有 aws 与 cfn 两处覆盖 —— 行为自相矛盾。
+    # 改法同 etl_aws：coalesce(values(k), constant(v)) —— 已有值保留，没有才写。
+    #
+    # dependency 判定改由契约提供，不再本地硬编码 ('Calls','DependsOn','AccessesData')。
+    # 那份常量原先在三个 ETL 里各存一份，作者已在 etl_aws 的注释里标为待收敛项。
+    write_once = {'source': 'cfn-etl'}
+    if is_dependency_edge(rt):
+        # dependency_kind='static'：CFN 模板「声明」的依赖，未必被实际调用过。
+        write_once['dependency_kind'] = 'static'
+    once_chain = ''.join(
+        f".property('{k}', __.coalesce(__.values('{k}'), __.constant('{safe_str(v)}')))"
+        for k, v in write_once.items())
+
     # Use V(id) lookups to get vertex refs, then coalesce to find or create edge
     gremlin = (
         f"g.V('{src_vid}').as('s').V('{dst_vid}').as('d')"
@@ -108,10 +166,13 @@ def upsert_cfn_edge(src_vid, dst_vid, rel_type: str, stack_name: str, evidence: 
         f"  __.outE('{rt}').where(__.inV().hasId('{dst_vid}')),"
         f"  __.addE('{rt}').to(__.V('{dst_vid}'))"
         f")"
+        # declared_in 是 cfn 独有的证据字段，保留不动，避免破坏既有查询
         f".property('declared_in', 'cfn')"
-        f".property('stack_name', '{sn}')"
+        + once_chain
+        + f".property('stack_name', '{sn}')"
         f".property('evidence', '{ev}')"
         f".property('last_scanned', {ts})"
+        f".property('{TIMESTAMP_FIELD}', {ts})"
     )
     neptune_query(gremlin)
     return True

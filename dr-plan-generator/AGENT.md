@@ -38,7 +38,7 @@ cd <project-root>/dr-plan-generator
 | **target** | 切换目标（可基于图谱建议） | 目标 Region / AZ |
 
 **常见场景快速映射**：
-- "AZ1 挂了" → `--scope az --source apne1-az1`
+- "AZ1 挂了" → `--scope az --source ap-northeast-1a`
 - "东京 Region 不可用" → `--scope region --source ap-northeast-1`
 - "petsite 和 petsearch 要切" → `--scope service --services petsite,petsearch`
 
@@ -191,13 +191,13 @@ python3 main.py export-chaos \
 ```
 用户: AZ1 挂了，帮我出切换计划
 Agent: 先做个影响评估...
-       → 运行: python3 main.py assess --scope az --failure apne1-az1 --format json
+       → 运行: python3 main.py assess --scope az --failure ap-northeast-1a --format json
        "AZ1 影响 7 个服务（含 4 个 Tier0），14 个资源。
         ⚠️ petsite-db (RDS) 只在 AZ1，是单点故障风险。
         建议切到 AZ2+AZ4。要排除什么服务吗？"
 
 用户: 排除 petfood，其他都切
-Agent: → 运行: python3 main.py plan --scope az --source apne1-az1 --target apne1-az2,apne1-az4 --exclude petfood
+Agent: → 运行: python3 main.py plan --scope az --source ap-northeast-1a --target ap-northeast-1c,ap-northeast-1d --exclude petfood
        "计划已生成：5 Phase、18 Step，预估 RTO 32 分钟。
         Phase 1 数据层有 3 个步骤需要审批（RDS failover + DynamoDB + SQS）。
         要看详细步骤还是生成回滚计划？"

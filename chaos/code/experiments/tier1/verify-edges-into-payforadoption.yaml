@@ -1,0 +1,83 @@
+# 边验证实验：证伪打进 `payforadoption` 的 1 条 Calls 边
+#
+# 生成 2026-08-31。这是 T-214 拿到首条判定（petsite/petlistadoptions -> petsearch
+# 双 confirmed）之后，按同一模式覆盖剩余「有流量且可注入」的边。
+#
+# payforadoption 是 Tier0。它的下游是 Aurora 写路径，但本实验只验
+# petsite -> payforadoption 这条入边，不触碰数据层。
+#
+# 三角色标注：
+#   Injection Target   = pay-for-adoption（图谱规范名 payforadoption）
+#   Observation Target = petsite
+# 一条边天然就是「在 X 注入，预期在 Y 观测到影响」的断言。
+#
+# 用法：
+#   cd chaos/code && python3.11 main.py run --file experiments/tier1/verify-edges-into-payforadoption.yaml
+#
+# 前置：kubectl 在 PATH 且 KUBECONFIG 指向 PetSite 集群。
+
+name: verify-edges-into-payforadoption
+description: "在 pay-for-adoption 注入 HTTP abort，观测 petsite 是否退化，以证伪 1 条 Calls 边"
+backend: chaosmesh
+
+target:
+  service: pay-for-adoption
+  namespace: petadoptions
+  tier: Tier0
+
+  observers:
+    - service: petsite
+      namespace: petadoptions
+      edge_label: Calls
+      # petsite 提交领养走支付
+      min_baseline_requests: 20
+
+fault:
+  # abort 而非 delay：直接短路连接，可绕过部分缓存掩盖。
+  # delay 会被缓存与连接池吸收，容易把真实依赖判成不存在（假阴性）。
+  type: http_chaos
+  mode: all
+  value: ""
+  duration: "3m"          # 需超过熔断窗口 + 重试预算耗尽才能穿透 fallback
+  action: abort
+  port: 80
+
+steady_state:
+  before:
+    # 针对**注入目标**。观测方基线由 runner 单独采集，不足只记警告。
+    - metric: success_rate
+      threshold: ">= 95%"
+      window: "1m"
+  after:
+    - metric: success_rate
+      threshold: ">= 90%"
+      window: "3m"
+
+stop_conditions:
+  # 护栏必须挂**观测方**（T-214b）：全量 abort 下注入目标成功率必然归零，
+  # 那是处理本身不是护栏信号。要防的是附带损害。
+  # 阈值刻意低于 confirm 判定线 20pp —— 目标是让边被判 confirmed，
+  # 而不是一有退化就熔断（那只会得到 inconclusive）。
+  - metric: success_rate
+    threshold: "< 30%"
+    window: "60s"
+    action: abort
+    target: any_observer
+
+rca:
+  enabled: false           # 边验证只取边的证据，不叠加 RCA 变量
+
+graph_feedback:
+  enabled: true
+  edges:
+    - Calls
+
+options:
+  max_duration: "8m"
+
+# ── 爆炸半径 ────────────────────────────────────────────────────────────────
+# 集群为**非生产** PetSite demo，流量来自 EC2 负载机 i-05f0b897988a48d17。
+# 已知固有代价：abort 会打断 liveness 探针 -> 容器重启 -> tproxy 残留在 Pod
+# netns（属 sandbox 不属容器）-> 重启清不掉，实验结束后需删 Pod 重建。
+# Phase 5 的 Pod readiness + 重启差值判据（T-214h）会把这件事判成 FAILED
+# 并在报告里给出处置命令，不再报假 PASSED。

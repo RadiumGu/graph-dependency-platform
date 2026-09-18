@@ -76,6 +76,9 @@ FIS_TARGET_KEY_MAP: dict[str, str | None] = {
     "aws:elasticache:interrupt-cluster-az-power":        "ReplicationGroups",
     "aws:s3:bucket-pause-replication":                   "Buckets",
     "aws:network:route-table-disrupt-cross-region-connectivity": "RouteTables",
+    # 编排原语：aws:fis:wait 不作用于任何资源，故 target key 为 None。
+    # 下游第 240/244 行已按 `if target_key` 分支处理，会生成 "targets": {}。
+    "aws:fis:wait":                                      None,
 }
 
 # Actions that do NOT accept a 'duration' parameter
@@ -338,6 +341,25 @@ class FISClient:
                 "resourceArns": [extra["asg_arn"]],
                 "selectionMode": "ALL",
             }
+        elif fault_type == "fis_ec2_spot_interruption":
+            # ⚠️ 必须排在下面的 `startswith("fis_ec2")` 宽分支**之前**。
+            # 2026-08-31 对账实测：原实现把这个精确分支放在宽分支后面，
+            # 于是永远走不到，spot 中断被建成 `aws:ec2:instance`，
+            # 而 `aws:ec2:send-spot-instance-interruptions` 要求
+            # `aws:ec2:spot-instance` —— 建模板即失败，该故障类型从未能执行。
+            # 同一位置还有两条同样不可达的重复分支
+            # （fis_ec2_insufficient_capacity / fis_ec2_asg_insufficient_capacity，
+            # 它们在 329/335 行已有正确实现），已一并删除。
+            target = {
+                "resourceType": "aws:ec2:spot-instance",
+                "selectionMode": extra.get("selection_mode", "COUNT(1)"),
+            }
+            if "instance_arns" in extra:
+                arns = extra["instance_arns"]
+                target["resourceArns"] = [arns] if isinstance(arns, str) else arns
+            else:
+                target["resourceTags"] = extra.get("tags", {"chaos-target": "true"})
+            return target
         elif fault_type.startswith("fis_ec2"):
             target = {
                 "resourceType": "aws:ec2:instance",
@@ -371,11 +393,61 @@ class FISClient:
                 "resourceArns": arns,
                 "selectionMode": "ALL",
             }
-        elif fault_type.startswith("fis_network") or fault_type.startswith("fis_vpc"):
+        elif fault_type.startswith("fis_vpc"):
+            # `aws:network:disrupt-vpc-endpoint` 的目标是 **aws:ec2:vpc-endpoint**，
+            # 不是子网（2026-08-31 用 `aws fis get-action` 实测）。原实现与
+            # fis_network 共用分支、建的是 aws:ec2:subnet，声明与 AWS 侧不一致 ——
+            # 所以这个故障类型从未能执行过。
+            #
+            # 另注：它只对 **interface 端点（PrivateLink）** 有效。PetSite VPC 里
+            # 只有 guardduty-data 一个端点，ssm/sts/xray/s3/dynamodb 都没有，
+            # 验证那批边要用 fis_network_disrupt 的 scope=s3|dynamodb。
+            if "vpc_endpoint_arns" in extra:
+                arns = extra["vpc_endpoint_arns"]
+                if isinstance(arns, str):
+                    arns = [arns]
+            elif "vpc_endpoint_arn" in extra:
+                arns = [extra["vpc_endpoint_arn"]]
+            else:
+                raise ValueError(
+                    f"{fault_type} 需要 vpc_endpoint_arn(s)。该 action 的目标是 "
+                    f"aws:ec2:vpc-endpoint，不能用 subnet_arn 顶替 —— "
+                    f"且只有 interface 端点可打，先确认目标 VPC 里真有该端点。")
+            return {
+                "resourceType": "aws:ec2:vpc-endpoint",
+                "resourceArns": arns,
+                "selectionMode": "ALL",
+            }
+        elif fault_type.startswith("fis_network"):
+            # subnet_arns: 多子网列表（新）。subnet_arn: 单个（旧格式，保留兼容）。
+            #
+            # 为什么必须支持多个（2026-08-31 实测）：`aws:network:disrupt-connectivity`
+            # 的目标是**子网**，而 EKS 的 Pod 跨两个私有子网分布
+            # （PetSite 实测 11.0.2.0/24 在 1a、11.0.3.0/24 在 1c）。只断一个 AZ
+            # 的子网，观测方只有一半流量受影响，退化率会落进 5%~20% 的
+            # inconclusive 中间带 —— 拿不到判定，而不是拿到"弱依赖"。
+            # 验证一条边需要注入是**总体**的，否则判据的分辨力被自己削掉。
+            if "subnet_arns" in extra:
+                arns = extra["subnet_arns"]
+                if isinstance(arns, str):
+                    arns = [arns]
+            else:
+                arns = [extra["subnet_arn"]]
             return {
                 "resourceType": "aws:ec2:subnet",
-                "resourceArns": [extra["subnet_arn"]],
+                "resourceArns": arns,
                 "selectionMode": "ALL",
+            }
+        elif fault_type == "fis_eks_inject_k8s_custom":
+            # 2026-08-31 补：目录声明了这个故障类型，但 fis_backend 只有
+            # `startswith("fis_eks_pod")` 分支，而它的前缀是 fis_eks_（无 pod），
+            # 所以调用直接抛 ValueError —— 声明了却处理不了，从未能执行。
+            # 该 action 的目标是 **aws:eks:cluster**（`aws fis get-action` 实测），
+            # 与 pod 级动作不同：它把任意 Chaos Mesh CRD 注入整个集群。
+            return {
+                "resourceType": "aws:eks:cluster",
+                "resourceArns": [extra["cluster_arn"]] if "cluster_arn" in extra else [],
+                "selectionMode": extra.get("selection_mode", "ALL"),
             }
         elif fault_type.startswith("fis_eks_pod"):
             # FIS native EKS pod actions — 通过 cluster + namespace + label 选择 Pod
@@ -415,46 +487,12 @@ class FISClient:
                 "resourceArns": [extra["role_arn"]],
                 "selectionMode": "ALL",
             }
-        elif fault_type == "fis_ec2_insufficient_capacity":
-            return {
-                "resourceType": "aws:iam:role",
-                "resourceArns": [extra["role_arn"]],
-                "selectionMode": "ALL",
-            }
-        elif fault_type == "fis_ec2_asg_insufficient_capacity":
-            return {
-                "resourceType": "aws:ec2:autoscaling-group",
-                "resourceArns": [extra["asg_arn"]],
-                "selectionMode": "ALL",
-            }
         elif fault_type == "fis_arc_zonal_autoshift":
             return {
                 "resourceType": "aws:arc:zonal-shift-managed-resource",
                 "resourceArns": [extra["managed_resource_arn"]],
                 "selectionMode": "ALL",
             }
-        elif fault_type == "fis_ec2_spot_interruption":
-            target = {
-                "resourceType": "aws:ec2:spot-instance",
-                "selectionMode": extra.get("selection_mode", "COUNT(1)"),
-            }
-            if "instance_arns" in extra:
-                arns = extra["instance_arns"]
-                target["resourceArns"] = [arns] if isinstance(arns, str) else arns
-            else:
-                target["resourceTags"] = extra.get("tags", {"chaos-target": "true"})
-            return target
-        elif fault_type == "fis_ec2_network_disrupt":
-            target = {
-                "resourceType": "aws:ec2:instance",
-                "selectionMode": extra.get("selection_mode", "ALL"),
-            }
-            if "instance_arns" in extra:
-                arns = extra["instance_arns"]
-                target["resourceArns"] = [arns] if isinstance(arns, str) else arns
-            else:
-                target["resourceTags"] = extra.get("tags", {"chaos-target": "true"})
-            return target
         elif fault_type == "fis_dynamodb_pause_replication":
             return {
                 "resourceType": "aws:dynamodb:global-table",

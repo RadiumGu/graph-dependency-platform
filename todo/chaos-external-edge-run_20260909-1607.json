@@ -1,0 +1,58 @@
+[
+  {
+    "edge": "AccessesData petsearch -> ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+    "chaos": "vx-petsearch-dynamodbtable",
+    "baseline": {
+      "observer_requests": 21051,
+      "observer_success_rate": 100.0,
+      "edge_calls": 17677
+    },
+    "all_injected_before": "True",
+    "pods_deleted": true,
+    "all_injected_after": "True",
+    "injected": {
+      "observer_requests": 1010,
+      "observer_success_rate": 100.0
+    },
+    "injection_confirmed": true,
+    "injection_confirmed_why": "调用速率 5.01 -> 0.89 次/秒（下降 82% >= 40%），打断确认生效",
+    "observer_degradation_pct": 0.0,
+    "verdict": "inconclusive",
+    "reason": "观测方退化仅 0.0% 且已确认注入生效，但该边有 1 个独立观测源看到过它 —— 这是 soft dependency（打断它本就不该影响调用方），不是「边不存在」。本次干预对存在性不可判定，强度判为 soft",
+    "dependency_class": "soft",
+    "verdict_full": {
+      "edge_id": "22ce5ef1-553d-a703-2074-8860be72e8bc",
+      "label": "AccessesData",
+      "observer": "petsite",
+      "status": "inconclusive",
+      "reason": "观测方退化仅 0.0% 且已确认注入生效，但该边有 1 个独立观测源看到过它 —— 这是 soft dependency（打断它本就不该影响调用方），不是「边不存在」。本次干预对存在性不可判定，强度判为 soft",
+      "confidence": 0.9241,
+      "degradation_pct": 0.0,
+      "evidence_channel": "both",
+      "injection_confirmed": true,
+      "edge_baseline_calls": 17677,
+      "observer_total_calls": null,
+      "dependency_class": "soft",
+      "dependency_class_reason": "已确认注入生效、观测方退化仅 0.0%，而 1 个独立观测源看到过这条边 —— 边真实存在且打断它不影响调用方，是 soft dependency。这是**设计良好**的证据，不是图谱错误",
+      "observing_sources": 1,
+      "confirm_count": 0,
+      "refute_count": 0,
+      "verified_at": 1788969970,
+      "experiment_id": "chaosmesh/vx-petsearch-dynamodbtable"
+    },
+    "written": true
+  },
+  {
+    "edge": "AccessesData petsearch -> serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+    "chaos": "vx-petsearch-s3bucket",
+    "baseline": {
+      "observer_requests": 17970,
+      "observer_success_rate": 100.0,
+      "edge_calls": 2512
+    },
+    "all_injected_before": "False",
+    "verdict": "inconclusive",
+    "reason": "注入未生效 AllInjected=False",
+    "events": "alid\n31s         Warning   Failed            dnschaos/vx-petsearch-s3bucket   Failed to apply chaos: rpc error: code = Unknown desc = insert into schema selector: pattern *.s3.* not valid\n31s         Normal    Updated           dnschaos/vx-petsearch-s3bucket   Successfully update records of resource"
+  }
+]

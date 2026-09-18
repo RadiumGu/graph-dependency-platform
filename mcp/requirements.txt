@@ -1,0 +1,11 @@
+# 图谱 MCP server 依赖 —— 刻意保持最小。
+#
+# HTTP 层用标准库 http.server，不引 uvicorn/starlette：
+# 真正的耗时在 Neptune 查询上，HTTP 不是瓶颈；依赖少则冷启动快、
+# 需要跟进安全更新的第三方栈也少。
+#
+# 没有 MCP SDK：只需实现 initialize / tools/list / tools/call / ping
+# 四个方法，自己写一百来行比引一个包更可控。
+boto3>=1.34.0          # Neptune SigV4 签名
+requests>=2.31.0       # neptune_client 的 HTTP 客户端
+pyyaml>=6.0            # 读 profiles/graph_contract.yaml

@@ -255,11 +255,23 @@ class DynamoDBProbe(BaseProbe):
 class LambdaProbe(BaseProbe):
     """Detect Lambda function errors, throttles, and timeout spikes."""
 
-    SERVICE_FUNCTION_MAP = {
-        'petsite':          ['petsite', 'statusupdater', 'StepFn'],
-        'petadoption':      ['statusupdater', 'StepFn', 'stepread', 'stepprice'],
-        'payforadoption':   ['StepFn', 'stepprice'],
-    }
+    # 服务 → Lambda 函数名模式的映射来自 profiles/petsite.yaml 的
+    # aws_resources.lambda_functions，不在此硬编码。
+    #
+    # 2026-08-28 移除背景：此处原有 SERVICE_FUNCTION_MAP 字典，与 YAML 重复维护，
+    # 而 YAML 第 88 行的注释已声称「消除 aws_probers 硬编码」—— 文档与代码矛盾。
+    # 同一份字典还在 collectors/layer2_tools.py 里有第二份副本。
+
+    @staticmethod
+    def _function_patterns(affected_service: str) -> list:
+        """取该服务关联的 Lambda 函数名模式，取不到则退回服务名本身。"""
+        try:
+            from config import profile as _profile
+            mapping = (_profile.get('aws_resources', {}) or {}).get('lambda_functions', {}) or {}
+        except Exception as e:  # profile 不可用时不能让探针整体失败
+            logger.warning(f"LambdaProbe: profile 读取失败，退回服务名匹配: {e}")
+            return [affected_service]
+        return mapping.get(affected_service, [affected_service])
 
     def is_relevant(self, signal, affected_service):
         return True
@@ -269,7 +281,7 @@ class LambdaProbe(BaseProbe):
             lam = boto3.client('lambda', region_name=REGION)
             cw  = boto3.client('cloudwatch', region_name=REGION)
 
-            patterns = self.SERVICE_FUNCTION_MAP.get(affected_service, [affected_service])
+            patterns = self._function_patterns(affected_service)
             functions = []
             paginator = lam.get_paginator('list_functions')
             for page in paginator.paginate():

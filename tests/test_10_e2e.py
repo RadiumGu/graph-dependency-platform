@@ -11,6 +11,8 @@ import logging
 
 import pytest
 
+from conftest import cleanup_incident, now_iso as _now_iso
+
 logger = logging.getLogger(__name__)
 
 
@@ -31,7 +33,7 @@ def e2e_setup(neptune_rca):
         'result': 'passed',
         'recovery_time_sec': 60,
         'degradation_rate': 0.15,
-        'timestamp': '2026-04-01T10:00:00Z',
+        'timestamp': _now_iso(),
     })
 
     # Step 3: rca incident
@@ -58,13 +60,8 @@ def e2e_setup(neptune_rca):
         )
     except Exception:
         pass
-    try:
-        neptune_rca.results(
-            "MATCH (n:Incident {id: $id}) DETACH DELETE n",
-            {'id': inc_id},
-        )
-    except Exception:
-        pass
+    # 节点 + 向量一起清，避免向量残留污染 search_similar 的 top_k
+    cleanup_incident(neptune_rca, inc_id)
 
 
 def test_e2e01_chaos_experiment_in_neptune(neptune_rca, e2e_setup):

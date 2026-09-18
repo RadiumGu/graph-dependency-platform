@@ -21,14 +21,51 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-REGION = os.environ.get('REGION', 'ap-northeast-1')
-EKS_CLUSTER = os.environ.get('EKS_CLUSTER', '')
-K8S_NAMESPACE = os.environ.get('K8S_NAMESPACE', 'default')
+from shared import get_region
+REGION = get_region()
+# 环境变量命名兼容：petsite-rca-engine 设的是 EKS_CLUSTER，
+# AlertBufferStack 给 gp-window-flush 设的是 EKS_CLUSTER_NAME（其余 collectors 也都读后者）。
+# 本模块原先只读 EKS_CLUSTER，在 flush 路径上会拿到空串，
+# 导致 get_k8s_endpoint('') 失败、半自动动作无法定位集群。
+EKS_CLUSTER = (os.environ.get('EKS_CLUSTER')
+               or os.environ.get('EKS_CLUSTER_NAME')
+               or 'PetSite')
+
+
+def _default_namespace() -> str:
+    """K8s 命名空间：环境变量优先，其次 profile，最后才是 'default'。
+
+    2026-08-28 修正：本模块原先硬编码 os.environ.get('K8S_NAMESPACE', 'default')，
+    但 PetSite 的服务实际全在 **petadoptions** 命名空间
+    （另有第二个应用 awesomeshop，其 6 个 Deployment 当前副本数均为 0）。
+    profiles/petsite.yaml 的 kubernetes.namespace 已声明 'petadoptions' 但代码不读它，
+    导致 EKS RBAC 401 修好之后，重启动作仍会去 'default' 里找不存在的 Deployment。
+
+    已知局限：本项目存在两个应用命名空间，而本模块只有单一 K8S_NAMESPACE。
+    真正的解法是按服务从 profile 取（服务→命名空间映射），记为 T-091 后续项。
+    """
+    env = os.environ.get('K8S_NAMESPACE')
+    if env:
+        return env
+    try:
+        from config import profile as _profile
+        # 顶层键是 kubernetes（不是 k8s）。chaos.default_namespace 也是同一值，
+        # 作为次级回退 —— 两处都写着 petadoptions。
+        ns = ((_profile.get('kubernetes', {}) or {}).get('namespace')
+              or (_profile.get('chaos', {}) or {}).get('default_namespace'))
+        if ns:
+            return ns
+    except Exception as e:
+        logger.warning(f"读取 profile 的 kubernetes.namespace 失败，回退 default: {e}")
+    return 'default'
+
+
+K8S_NAMESPACE = _default_namespace()
 AUDIT_LOG_GROUP = '/rca/audit'
 RATE_LIMIT_WINDOW = 1800  # 30分钟
 RATE_LIMIT_MAX = 3        # 最多3次
 
-from config import NEPTUNE_TO_DEPLOYMENT as SVC_TO_DEPLOYMENT
+from config import NEPTUNE_TO_DEPLOYMENT as SVC_TO_DEPLOYMENT, profile as _profile
 
 
 _k8s_apps_v1 = None
@@ -61,7 +98,8 @@ def _check_rate_limit(service: str) -> bool:
     返回 True = 允许执行，False = 超限
     """
     ssm = boto3.client('ssm', region_name=REGION)
-    param_name = f'/petsite/rca/rate-limit/{service}'
+    param_template = _profile.get('parameter_store.keys.rca_rate_limit', '/petsite/rca/rate-limit/{service}')
+    param_name = param_template.format(service=service)
     now = int(time.time())
     
     try:

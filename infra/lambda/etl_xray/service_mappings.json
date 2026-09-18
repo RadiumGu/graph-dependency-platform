@@ -1,0 +1,45 @@
+{
+  "tier_map": {
+    "petsite": "Tier0",
+    "petsearch": "Tier0",
+    "payforadoption": "Tier0",
+    "pethistory": "Tier1",
+    "petstatusupdater": "Tier1",
+    "petlistadoptions": "Tier1"
+  },
+  "k8s_alias": {
+    "petsite-deployment": "petsite",
+    "search-service": "petsearch",
+    "pay-for-adoption": "payforadoption",
+    "pethistory-deployment": "pethistory",
+    "petadoptionshistory": "pethistory",
+    "pethistory-service": "pethistory",
+    "list-adoptions": "petlistadoptions",
+    "petlistadoptions-deployment": "petlistadoptions",
+    "petsearch-deployment": "petsearch",
+    "payforadoption-deployment": "payforadoption",
+    "petsite": "petsite",
+    "payforadoption-api-go": "payforadoption",
+    "pethistory": "pethistory",
+    "petadoptionstatusupdater": "petstatusupdater",
+    "PetAdoptionStatusUpdater": "petstatusupdater"
+  },
+  "neptune_to_k8s": {
+    "petsite": "petsite-deployment",
+    "petsearch": "search-service",
+    "payforadoption": "pay-for-adoption",
+    "pethistory": "pethistory-deployment",
+    "petstatusupdater": "petstatusupdater",
+    "petlistadoptions": "list-adoptions"
+  },
+  "service_types": {
+    "petsite": "k8s",
+    "petsearch": "k8s",
+    "payforadoption": "k8s",
+    "pethistory": "k8s",
+    "petstatusupdater": "lambda",
+    "petlistadoptions": "k8s"
+  },
+  "namespace": "petadoptions",
+  "region": "ap-northeast-1"
+}
