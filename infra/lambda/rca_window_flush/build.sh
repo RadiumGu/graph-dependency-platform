@@ -12,7 +12,21 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RCA_DIR="$(cd "$SCRIPT_DIR/../../../rca" && pwd)"
-DEST_DIR="$SCRIPT_DIR"
+# DEST_DIR 可由外部覆盖，用于**隔离构建**。
+#
+# ⚠️ 默认值是 SCRIPT_DIR，也就是**就地构建** —— 这个目录本质是构建产物
+# （内容全部从 rca/ 复制而来），却被 git 跟踪着。于是每跑一次 build.sh
+# 工作树就多出几十项改动：2026-09-20 实测污染 80 项，还删掉了一个
+# `.so`（被上面那段 find -delete 清掉）。
+#
+# 保留就地构建作默认，是因为 CDK 的
+# `lambda.Code.fromAsset(path.join(__dirname, '../lambda/rca_window_flush'))`
+# 直接打包这个目录 —— 改默认值会让 cdk deploy 打出空包。
+#
+# 所以在干净工作树上构建时，请显式隔离：
+#     DEST_DIR=$KIROCREW_SCRATCH/wf-build bash build.sh
+# 然后把 CDK 的资产路径指向它，或构建完再 `git checkout -- .` 还原。
+DEST_DIR="${DEST_DIR:-$SCRIPT_DIR}"
 
 echo "=== gp-window-flush 打包 ==="
 echo "源码目录: $RCA_DIR"
