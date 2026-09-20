@@ -714,10 +714,94 @@ def step4_score(error_services: list, cloudtrail_changes: list,
     results.sort(key=lambda x: x.get('raw_score', x['score']), reverse=True)
     return results
 
-def analyze(affected_service: str, classification: dict) -> dict:
+def _parse_ts_utc(ts_str) -> "datetime | None":
+    """把时间字符串解析成**带时区**的 UTC datetime；失败返回 None。
+
+    为什么必须统一到 aware：要比较的两个来源格式不同 ——
+
+        DeepFlow(ClickHouse) first_error   '2026-09-20 17:00:00'    → naive
+        告警(UnifiedAlertEvent) start_time '2026-09-20T17:00:00Z'   → aware
+
+    `datetime.fromisoformat` 两种都能解析，但产出一个 naive 一个 aware，
+    而 naive 与 aware 直接比较会抛 `TypeError`。所以 naive 一律按 UTC 补齐。
+
+    （`step3b_temporal_validation` 里那个内嵌的 `parse_ts` 没做这件事，
+    因为它只处理 step1 一个来源、格式天然一致。一旦 error_services 混入
+    第二个来源，它的比较就会抛 —— 而它的调用点包着 try/except，
+    异常会被静默吞成 `{}`，时序校验无声失效。`_merge_error_services`
+    统一规范化 first_error 正是为了避免踩到这一点。）
+    """
+    if not ts_str:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(ts_str).strip().replace('Z', '+00:00'))
+    except Exception:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _merge_error_services(primary: list, extra: list) -> list:
+    """把额外的已知报错服务并入 step1 的结果，并按最早错误时间**重排**。
+
+    ## 为什么是重排而不是 append
+
+    `step4_score` 用 `error_services[0]['service']` 认定「最早出错的服务」
+    并给 **+40 分 —— 单项最大权重**。而 step1 的 SQL 带
+    `ORDER BY first_error ASC`：这个顺序是**语义的一部分**，不是巧合。
+
+    盲目 append 到末尾，组内服务就永远拿不到那 40 分，即使它其实更早出错；
+    盲目 insert 到开头，又会把 +40 硬塞给它、凭空压过 DeepFlow 的真实观测。
+    两种都是错的，所以按时间重排 —— 让"谁最早"这件事由数据决定。
+
+    ## 去重时保留哪一份
+
+    同名服务两边都有时**保留 primary（DeepFlow）那份**：它带真实的
+    error_count / error_rate_pct，而告警构造的条目这两个值是 0。
+
+    ## 时间无法解析的条目
+
+    排到末尾并保持彼此相对顺序（稳定排序），不会因为解析失败而被丢弃 ——
+    丢弃会让"少了一个候选"这件事无声发生。
+    """
+    merged = list(primary or [])
+    known = {s.get('service') for s in merged if s.get('service')}
+    for item in (extra or []):
+        svc = item.get('service')
+        if svc and svc not in known:
+            merged.append(item)
+            known.add(svc)
+
+    # 统一 first_error 格式，让后续所有消费者（step3b 的时序校验、本函数的
+    # 排序）看到同一种时间表示。无法解析的保持原值不动。
+    for s in merged:
+        dt = _parse_ts_utc(s.get('first_error'))
+        if dt is not None:
+            s['first_error'] = dt.isoformat()
+
+    # 稳定排序：能解析的按时间升序在前，不能解析的保持原相对顺序在后。
+    _FAR_FUTURE = datetime.max.replace(tzinfo=timezone.utc)
+    return sorted(
+        merged,
+        key=lambda s: _parse_ts_utc(s.get('first_error')) or _FAR_FUTURE,
+    )
+
+
+def analyze(affected_service: str, classification: dict,
+            extra_error_services: list | None = None) -> dict:
     """
     主分析入口，执行完整 RCA 流程
     目标：< 3 分钟出结果
+
+    Args:
+        affected_service: RCA 目标服务。
+        classification: fault_classifier 的输出。
+        extra_error_services: 额外的「已知在报错的服务」，由 `analyze_group()`
+            传入组内告警服务。**只增不减**：并入后 step3 的图谱候选搜索范围
+            变大、step4 多打几个候选的分，不会删掉 step1 找到的任何候选。
+            为 None 时本函数行为与加此参数之前完全一致（petsite-rca-engine
+            的 handler.py 走的就是这条路径）。
     """
     start = time.time()
     logger.info(f"RCA analysis started for: {affected_service}")
@@ -728,6 +812,16 @@ def analyze(affected_service: str, classification: dict) -> dict:
     except Exception as e:
         logger.error(f"Step1 failed: {e}")
         error_services = []
+
+    # Step 1a: 并入调用方给的已知报错服务（analyze_group 用它传组内告警服务）。
+    # 必须在 step3 / step3b / step4 之前 —— 三者都读 error_services。
+    if extra_error_services:
+        before = len(error_services)
+        error_services = _merge_error_services(error_services, extra_error_services)
+        logger.info(
+            "并入调用方提供的 %d 个已知报错服务：error_services %d → %d",
+            len(extra_error_services), before, len(error_services),
+        )
 
     # Step 1b: DeepFlow L4（TCP RST/timeout/SYN重传）
     l4_anomalies = []
@@ -818,6 +912,90 @@ def analyze(affected_service: str, classification: dict) -> dict:
     
     logger.info(f"RCA complete in {elapsed}s: {json.dumps(result, ensure_ascii=False)[:300]}")
     return result
+
+
+def analyze_group(group, classification: dict) -> dict:
+    """对一个 EventGroup 做 RCA。
+
+    ## RCA 目标为什么是单个服务
+
+    只对 `group.root_candidate_service` 跑一次 RCA，**不对组内每个服务分别跑**：
+    实测单次 RCA 约 48 秒，而 window-flush Lambda 总预算 300 秒 ——
+    N 个服务就是 N × 48s，必然超时。而 `TopologyCorrelator` 的职责就是
+    判定谁最可能是根因，RCA 应当信任并聚焦那个判定。
+
+    ## 组级信息怎么真正进入 RCA
+
+    把**组内告警服务**作为已知报错服务并入 `error_services`，喂给
+    `step3_graph_candidates`（图谱候选）与 `step4_score`（打分）。
+
+    这是本函数唯一的实质增量，也是必要的：`analyze()` 只读 classification 的
+    `signal` 和 `affected_capabilities` 两个键，所以**光把组级字段塞进
+    classification 是不起作用的** —— 组信息必须走 error_services 这条路
+    才能影响判定。
+
+    组内告警是**确凿**的故障信号（监控系统已经判定异常），而 step1 的
+    DeepFlow L7 是从流量推断的。两者互补，合并后按最早错误时间重排，
+    让"谁最早出错"由数据决定而不是由来源决定（详见 `_merge_error_services`）。
+
+    ## 一处有意的行为变化
+
+    `step4_score` 里有个分支：DeepFlow 无结果（`not error_services`）且有 L4
+    异常时，会用 L4 异常构造虚拟候选。并入组内告警后 error_services 非空，
+    该分支不再进入。这是**有意**的 —— 监控告警比 L4 流量异常更直接地
+    指认了故障服务。L4 数据本身仍作为 `l4_anomalies` 传入 step4，不丢失。
+
+    ## 历史
+
+    `window_flush_handler.py:138` 从第一天就在调这个函数，而它**从来不存在**，
+    调用被 except 接住、降级成 `analyze(根因服务)` —— 组级信息完全不进 RCA。
+    2026-09-20 补实现。
+
+    Args:
+        group: EventGroup（topology_correlator.EventGroup）。
+        classification: `fault_classifier.classify_group()` 的输出。
+
+    Returns:
+        与 `analyze()` 同构的 dict，额外带 group_* 字段。
+    """
+    root_svc = getattr(group, 'root_candidate_service', '') or ''
+    alerts = list(getattr(group, 'all_alerts', None) or [])
+
+    # 组内告警 → 已知报错服务。error_count / error_rate_pct 给 0：
+    # 告警只说明"异常"，不提供错误量，不能凭空编一个数去参与打分。
+    # source 标记留给审计 —— 一眼能看出这个候选是告警带进来的还是 DeepFlow 观测到的。
+    extra = []
+    seen = set()
+    for a in alerts:
+        svc = getattr(a, 'service_name', '') or ''
+        if not svc or svc in seen:
+            continue
+        seen.add(svc)
+        extra.append({
+            'service': svc,
+            'service_raw': '',
+            'first_error': getattr(a, 'start_time', '') or '',
+            'error_count': 0,
+            'error_rate_pct': 0,
+            'source': 'event_group_alert',
+        })
+
+    logger.info(
+        "analyze_group: group=%s root=%s 组内 %d 告警 / %d 个不同服务",
+        getattr(group, 'group_id', '?'), root_svc, len(alerts), len(extra),
+    )
+
+    out = analyze(root_svc, classification, extra_error_services=extra)
+
+    out.update({
+        'group_id': getattr(group, 'group_id', ''),
+        'correlation_type': getattr(group, 'correlation_type', 'standalone'),
+        'correlation_confidence': getattr(group, 'confidence', 0.0),
+        'group_alert_count': len(alerts),
+        'group_service_count': len(extra),
+        'group_evidence_services': [e['service'] for e in extra],
+    })
+    return out
 
 
 def check_repeat_incidents(service: str, window_days: int = 7, threshold: int = 3) -> dict:
