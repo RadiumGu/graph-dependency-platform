@@ -164,8 +164,31 @@ export class AlertBufferStack extends cdk.Stack {
       architecture: lambda.Architecture.ARM_64,
       handler: 'window_flush_handler.window_flush_handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/rca_window_flush')),
-      timeout: cdk.Duration.seconds(60),
-      memorySize: 256,
+      // ⚠️ 2026-09-20 从 60s 提到 300s —— 实测依据而非估算。
+      //
+      // 线上切到 strands（Layer 2 Prober 走 ReAct 编排）后的一次真实执行：
+      //
+      //     15:25:24  WindowFlush 启动
+      //     15:25:32  RCA 分析开始              （启动开销 8s）
+      //     15:25:43  Creating Strands MetricsClient
+      //     15:26:19  RCA complete in 46.3s     （此时已用 55s）
+      //               之后还要写图谱 / 发通知   → 60s 撞墙
+      //     结果：Sandbox.Timedout after 60.00 seconds
+      //
+      // 结构性矛盾：`rca/core/rca_engine.py:781` 给 strands 的 Step 3d
+      // timeout **本身就是 60s**，而整个 Lambda 也只有 60s ——
+      // 加上启动开销与 RCA 前后步骤，永远不可能在预算内完成。
+      // 这个组合在 direct 时代能过（Step 3d 只给 12s），切 strands 后必然超时。
+      //
+      // 300s 的取法：Step 3d 最坏 60s + RCA 其余步骤实测约 15s +
+      // 启动 8s + 写图谱与通知，留约 3 倍余量。
+      // 不设更大：这是**批处理**窗口 flush，不是交互路径，
+      // 但超时过长会让真正卡死的调用占着并发额度不放。
+      timeout: cdk.Duration.seconds(300),
+      // 256MB → 512MB：实测 strands 引擎构造峰值 67MB，本身够用；
+      // 提一档是因为 Lambda 的 CPU 配额随内存线性分配，
+      // 而 ReAct 多轮调用是 CPU 敏感的 —— 加内存反而可能降低总耗时与成本。
+      memorySize: 512,
       role: windowFlushRole,
       vpc,
       vpcSubnets,
