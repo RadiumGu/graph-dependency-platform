@@ -136,11 +136,37 @@ if ! $DRY_RUN; then
   DEP_PLATFORM="${LAMBDA_ARCH:-manylinux2014_aarch64}"
   DEP_PYVER="${LAMBDA_PY:-3.12}"
   echo "Installing deps for platform=$DEP_PLATFORM python=$DEP_PYVER"
-  pip3 install requests pyyaml pydantic \
+  # ⚠️ 2026-09-20 起 strands 必装，且必须与其余依赖一次解析 ——
+  # 分两次 pip install 会让第二次覆盖掉第一次选定的 pydantic 版本。
+  #
+  # 线上实测发现：petsite-rca-engine 的包里 strands 条目数为 0，
+  # 而 factory 的默认引擎是 strands。于是六条 LLM 路径在生产上
+  # **一直静默回退 direct**，只在日志留一行 warning。
+  # golden 基线测的是本地装了 strands 的环境、生产跑的却是 direct，
+  # 两者从未对齐过。requirements.txt:59 早已把它声明为必装，是本脚本没跟上。
+  #
+  # ⚠️ 刻意**不装** `strands-agents-tools`：实测它把 sympy（81M）与
+  # Pillow（22M）拖进来，全量解压 **251M，超过 Lambda 250M 上限**；
+  # 去掉它降到 96M。本仓库只 import `strands` 本体
+  # （Agent / models.BedrockModel / CacheConfig / tool），
+  # 代码里那几处 `strands_tools` 是项目自己的模块
+  # （rca/neptune/strands_tools.py），与 PyPI 同名包无关。
+  # 要加 tools 必须先重测体积。
+  #
+  # ⚠️ 用 `python3.11 -m pip` 而不是裸 `pip3`：构建机 pip3 指向 py3.9，
+  # 而 strands-agents 要求 >=3.10。`--python-version` 只影响选 wheel、
+  # **不改解释器自身的版本校验**，裸 pip3 会报
+  # "Packages require a different Python. 3.9.x not in: '>=3.10'"。
+  #
+  # pydantic 不显式列出：让 strands-agents 定版本。显式钉它会冲突
+  # （实测 ResolutionImpossible：pydantic==2.0 与 2.0.1 互斥）。
+  python3.11 -m pip install requests pyyaml strands-agents \
       --platform "$DEP_PLATFORM" \
       --python-version "$DEP_PYVER" \
       --only-binary=:all: \
       -t "$BUILD_DIR" -q
+  # boto3 / botocore 由 Lambda 运行时提供（27M+），装进包里纯属浪费体积。
+  rm -rf "$BUILD_DIR"/boto3* "$BUILD_DIR"/botocore* "$BUILD_DIR"/awscli* 2>/dev/null || true
   # Package
   cd "$BUILD_DIR"
   rm -f /tmp/rca-engine.zip
