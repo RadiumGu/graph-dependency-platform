@@ -325,7 +325,7 @@ def test_s6_05_nl_query_petsite_databases(nl_engine, neptune_rca):
     assert isinstance(result, dict), "结果应为 dict"
     assert "cypher" in result, "应包含 cypher 字段"
 
-    if "error" in result:
+    if result.get("error"):
         pytest.skip(f"S6-05: 查询失败（可能数据不足）: {result['error']}")
 
     assert "results" in result, "成功结果应包含 results 字段"
@@ -362,7 +362,7 @@ def test_s6_06_nl_query_petsite_upstream_downstream(nl_engine, neptune_rca):
     assert isinstance(result, dict), "结果应为 dict"
     assert "cypher" in result, "应包含 cypher 字段"
 
-    if "error" in result:
+    if result.get("error"):
         pytest.skip(f"S6-06: 查询失败: {result['error']}")
 
     assert "results" in result, "成功结果应包含 results 字段"
@@ -415,7 +415,7 @@ def test_s6_07_common_nl_query_patterns(question, expected_kw, label, nl_engine,
     assert isinstance(result, dict), f"[{label}] query() 应返回 dict，问题: {question}"
     assert "cypher" in result, f"[{label}] 应包含 cypher 字段"
 
-    if "error" in result:
+    if result.get("error"):
         # 安全拦截：skip（不算失败，guard 正常工作）
         if any(kw in result["error"] for kw in ("写操作", "unsafe", "injection")):
             pytest.skip(f"[{label}] 被安全拦截（预期行为）: {result['error']}")

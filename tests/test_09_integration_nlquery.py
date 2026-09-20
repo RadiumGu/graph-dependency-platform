@@ -18,7 +18,7 @@ def nl_engine():
 def _assert_valid_result(result: dict, label: str):
     """通用断言：result 应包含 cypher 和 results，或 error。"""
     assert isinstance(result, dict), f"{label}: 结果不是 dict"
-    if 'error' in result:
+    if result.get('error'):
         # 允许安全拦截类错误，但不允许网络/连接错误
         assert 'cypher' in result, f"{label}: error 结果缺少 cypher 字段"
         pytest.skip(f"{label}: 被安全拦截 ({result['error']})")

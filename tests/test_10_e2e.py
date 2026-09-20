@@ -163,7 +163,7 @@ def test_e2e02_nl_query_10_questions(qid, question, expected_keywords, nl_engine
 
     assert isinstance(result, dict), f"{qid}: 结果不是 dict"
 
-    if 'error' in result:
+    if result.get('error'):
         # 被安全拦截的情况（如写操作）需记录
         logger.warning(f"{qid} ({question}): 被拦截 - {result['error']}")
         pytest.skip(f"{qid}: 被安全拦截")
@@ -189,7 +189,7 @@ def test_e2e02_pass_rate(nl_engine_e2e, neptune_rca):
     for qid, question, expected_keywords in E2E_NL_QUESTIONS:
         try:
             result = nl_engine_e2e.query(question)
-            if 'error' in result:
+            if result.get('error'):
                 failed.append((qid, question, f"error: {result['error']}"))
                 continue
             cypher = result.get('cypher', '')

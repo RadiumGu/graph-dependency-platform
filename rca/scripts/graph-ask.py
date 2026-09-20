@@ -11,10 +11,20 @@ import json
 import os
 import sys
 
-# 将 rca/ 目录加入 path，使 neptune.* 等模块可直接 import
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+# 将 rca/ 与**项目根**都加入 path。
+#
+# 只加 rca/ 是不够的：`neptune/neptune_client.py` 有 `from shared import get_region`，
+# 而 `shared/` 在项目根、不在 rca/ 下 —— 所以这个 CLI 在 shared 被引入之后
+# 一直是**跑不起来**的，一执行就 `ModuleNotFoundError: No module named 'shared'`。
+# 2026-09-20 修。（同一个缺失也让 gp-window-flush 的部署包挂过一次，
+# 见 infra/lambda/rca_window_flush/build.sh 里的说明。）
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_HERE, '..'))          # rca/
+sys.path.insert(0, os.path.join(_HERE, '..', '..'))    # 项目根（shared/ 在这里）
 
-from neptune.nl_query import NLQueryEngine
+# 走 factory 而不是直接 import 某个实现 —— 引擎选择归 factory
+# （env NLQUERY_ENGINE，默认 strands），CLI 不该绑死具体实现。
+from engines.factory import make_nlquery_engine
 
 
 def main() -> None:
@@ -30,10 +40,19 @@ def main() -> None:
         sys.exit(1)
 
     question = ' '.join(sys.argv[1:])
-    engine = NLQueryEngine()
+    engine = make_nlquery_engine()
     result = engine.query(question)
 
-    if 'error' in result:
+    # ⚠️ 判据必须是 `.get('error')` 而不是 `'error' in result`。
+    #
+    # strands 引擎的 _pack() **总是**带 error 这个 key（成功时值为 None），
+    # 而 direct 只在出错时才放。用 `in` 检查 key 存在的话，切到 strands 后
+    # 每一次成功查询都会被判成失败、打印 ERROR 并 sys.exit(1) ——
+    # 实测确认过：两个引擎都成功、error 都是 None，但
+    #     strands: 'error' in result = True
+    #     direct : 'error' in result = False
+    # 这类判据看的是「字段在不在」，而该看的是「值有没有」。
+    if result.get('error'):
         print(f"ERROR: {result['error']}")
         cypher = result.get('cypher', 'N/A')
         if cypher and cypher != 'N/A':
