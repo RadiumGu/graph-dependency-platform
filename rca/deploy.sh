@@ -296,11 +296,21 @@ fi
 
 echo ""
 echo "=== Step 6: 冒烟测试（本地调用）==="
+# --cli-binary-format raw-in-base64-out 是 AWS CLI **v2 必需**的：
+# v2 默认把 --payload 当 base64 解，裸 JSON 会被拒：
+#     aws: [ERROR]: Invalid base64: "{\"source\":\"manual\",...}"
+# 而这行原本还带着 `2>/dev/null`，于是真实报错被丢弃、stdout 为空，
+# 下游 python 只报一句 `JSONDecodeError: Expecting value: line 1 column 1`
+# —— 部署其实早已成功（Step 1-5 全过、Code updated），却看起来像挂了。
+# 实测 aws-cli/2.36.34：去掉这个参数必失败，所以它不是可选优化。
+#
+# stderr 不再丢弃：吞掉 stderr 是这个 bug 藏了这么久的唯一原因。
 run aws lambda invoke \
     --function-name "$FUNCTION_NAME" \
     --payload '{"source":"manual","affected_resource":"payforadoption","metric":"error_rate","value":0.87,"threshold":0.05}' \
+    --cli-binary-format raw-in-base64-out \
     --region "$REGION" \
-    /tmp/rca-test-output.json --log-type Tail 2>/dev/null | python3 -c "
+    /tmp/rca-test-output.json --log-type Tail | python3 -c "
 import sys, json, base64
 d = json.load(sys.stdin)
 print('Status:', d.get('StatusCode'))
