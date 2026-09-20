@@ -1,20 +1,17 @@
+"""hypothesis_agent.py — 向后兼容 shim。
+
+`HypothesisAgent` 这个名字仍被 `chaos/code/main.py` 与 `orchestrator.py`
+使用（它们要的是 `.load()` / `.save()` / `.to_experiment_yamls()` 这些
+附属方法），所以名字保留。
+
+2026-09-20：指向从 `hypothesis_direct.DirectBedrockHypothesis` 改为
+`hypothesis_strands.StrandsHypothesisAgent` —— direct 实现已删除，
+三个附属方法搬到 `hypothesis_common` 并由 strands 版薄委托。
+
+`VALID_FAULT_TYPES` 现在从 `runner/fault_registry.py` 的权威表派生
+（19 个），而不是 direct 里那份过期的硬编码副本（9 个）。
 """
-hypothesis_agent.py — 向后兼容 shim（Phase 3 Module 1, PR2）。
+from .hypothesis_common import VALID_FAULT_TYPES  # noqa: F401
+from .hypothesis_strands import StrandsHypothesisAgent as HypothesisAgent  # noqa: F401
 
-PR2 将 HypothesisAgent 迁到 hypothesis_direct.py，类名改为 DirectBedrockHypothesis。
-现有调用方仍可继续：
-
-    from chaos.code.agents.hypothesis_agent import HypothesisAgent
-
-Phase 4 统一清理时删除本文件。
-"""
-from .hypothesis_direct import (  # noqa: F401
-    DirectBedrockHypothesis as HypothesisAgent,
-    FAULT_DEFAULTS,
-    TIER_CONFIG,
-    VALID_FAULT_TYPES,
-    HYPOTHESES_PATH,
-    _invoke_llm,
-    _extract_json,
-    _gremlin_query,
-)
+__all__ = ["HypothesisAgent", "VALID_FAULT_TYPES"]

@@ -23,7 +23,7 @@ modules:
     freeze_date: 2026-04-18
     delete_date: 2026-08-18
     owner: "@programming-cat"
-    status: "frozen"
+    status: "deleted"
     notes: "Phase 3 Module 1 完成（2026-04-18）；direct 18/20、strands 20/20（P0-bugfix 后，commit 5376421）。Cache hit direct 66% / strands 76.2%。冻结期内禁止修改 direct，除非 P0-bugfix label。"
 
   - name: learning-agent

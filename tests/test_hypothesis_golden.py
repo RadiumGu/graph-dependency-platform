@@ -128,10 +128,10 @@ def results_accumulator():
 
 def _extract_fault_type(fault_scenario: str) -> str:
     text = (fault_scenario or "").lower()
-    try:
-        from agents.hypothesis_direct import VALID_FAULT_TYPES  # type: ignore
-    except ImportError:
-        VALID_FAULT_TYPES = []
+    # 不再 try/except —— 原先 `except ImportError: VALID_FAULT_TYPES = []`
+    # 会让这个函数在导入失败时**永远返回空字符串**，而测试照绿：
+    # 任何基于 fault_type 的断言都静默失效。宁可 import 直接炸。
+    from agents.hypothesis_common import VALID_FAULT_TYPES  # type: ignore
     for f in VALID_FAULT_TYPES:
         if f in text:
             return f

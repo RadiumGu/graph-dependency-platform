@@ -56,29 +56,17 @@ def make_hypothesis_engine(profile: Any = None) -> "NLQueryBase":  # type: ignor
 
     默认 strands；strands 不可用 → warning + 回退 direct（回退是应急，不是常态）。
     """
-    from engines.base import HypothesisBase  # 延迟导入避免循环
-    engine = (os.environ.get("HYPOTHESIS_ENGINE") or "strands").lower()
-    if engine == "strands":
-        try:
-            from chaos.code.agents.hypothesis_strands import StrandsHypothesisAgent  # type: ignore
-            return StrandsHypothesisAgent(profile=profile)  # type: ignore[return-value]
-        except ImportError as e:
-            logger.warning(
-                "Strands HypothesisAgent 不可用 (%s)；回退 direct。", e,
-            )
-        except Exception as e:
-            logger.warning("Strands HypothesisAgent 构造失败 (%r)；回退 direct。", e)
-
-    try:
-        from chaos.code.agents.hypothesis_direct import DirectBedrockHypothesis  # type: ignore
-        return DirectBedrockHypothesis(profile=profile)  # type: ignore[return-value]
-    except ImportError:
-        # PR2 rename 前的过渡期：回退到现版 HypothesisAgent
-        from chaos.code.agents.hypothesis_agent import HypothesisAgent  # type: ignore
-        try:
-            return HypothesisAgent(profile=profile)  # type: ignore[call-arg,return-value]
-        except TypeError:
-            return HypothesisAgent()  # type: ignore[return-value]
+    # ── 2026-09-20：去掉 direct 回退，只保留 strands ──────────────────────
+    #
+    # 收尾前 `prioritize_with_meta` 其实是个假实现：strands 版整个委托给
+    # DirectBedrockHypothesis，再把结果打上 engine="strands" 标签 ——
+    # 于是打分从来没被 Strands 化，而按 engine 标签做的统计都以为它是。
+    # 现在 strands 版有了真实现（无 tools 的打分 Agent，实测 1692ms / 3087 tokens），
+    # prompt 与加权规则搬到 agents/hypothesis_common.py 两个引擎共用。
+    #
+    # ⚠️ 代价：strands 不可用时直接抛异常、不再降级。
+    from chaos.code.agents.hypothesis_strands import StrandsHypothesisAgent  # type: ignore
+    return StrandsHypothesisAgent(profile=profile)  # type: ignore[return-value]
 
 
 def make_learning_engine(profile: Any = None) -> "LearningBase":  # type: ignore[name-defined]

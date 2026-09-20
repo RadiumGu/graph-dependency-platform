@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from .models import Hypothesis
 from . import hypothesis_tools as hy_tools
+from . import hypothesis_common as hy_common
 
 logger = logging.getLogger(__name__)
 
@@ -216,25 +217,78 @@ class StrandsHypothesisAgent(HypothesisBase):
         )
 
     def prioritize_with_meta(self, hypotheses: list[Hypothesis]) -> dict:
-        """交给 Strands agent 排序——复用 Direct 的 LLM prompt 模板最省事，
-        避免重复发明。为不在 Phase 3 引入新复杂度，这里退化为调 Direct.prioritize()，
-        但打上 engine='strands'（代表 generate 部分由 Strands 产出）。
+        """用 Strands Agent 对假设做四维打分与排序。
+
+        ## 2026-09-20 之前这里是个假实现
+
+        原先整个方法委托给 DirectBedrockHypothesis：
+
+            direct = DirectBedrockHypothesis(profile=self.profile)
+            meta = direct.prioritize_with_meta(hypotheses)
+            meta["engine"] = self.ENGINE_NAME      # ← direct 的结果，strands 的标签
+
+        原 docstring 自己承认「这里退化为调 Direct.prioritize()」，但**标签
+        照打 strands**。于是 prioritize 从来没被 Strands 化，而任何按 engine
+        标签做的统计或基线都会以为它是 strands 跑的。这比静默降级更进一步 ——
+        它伪造了引擎标签。现在是真的 Strands 实现。
+
+        ## 为什么用无 tools 的 Agent
+
+        打分不需要查图谱、不需要执行任何东西 —— 输入是已生成的假设摘要，
+        输出是分数。给它挂 tools 只会让 ReAct 多跑轮次（smart-query 那边实测
+        每多一轮约 3-5 秒），所以这里构造**不带 tools** 的 Agent，
+        一轮问答拿 JSON。
+
+        评分 prompt 与加权规则都在 `hypothesis_common`，与 direct 共用一份 ——
+        权重若两处各写，改了一处就会让两个引擎排序悄悄不同，而混沌实验
+        是按这个顺序真的去打生产的。
         """
-        from .hypothesis_direct import DirectBedrockHypothesis
         t0 = time.time()
         if not hypotheses:
             return self._pack(hypotheses=[], prioritized=hypotheses, t0=t0,
                               model=DEFAULT_MODEL)
+
+        summaries = [
+            {"id": h.id, "title": h.title, "failure_domain": h.failure_domain,
+             "target_services": h.target_services, "backend": h.backend}
+            for h in hypotheses
+        ]
+        user_prompt = (
+            "## 待打分假设列表\n"
+            f"{json.dumps(summaries, ensure_ascii=False, indent=2)}\n\n"
+            "## 本次要求\n请按 system 中的评分规则，输出 JSON 数组。"
+        )
+
         try:
-            direct = DirectBedrockHypothesis(profile=self.profile)
-            meta = direct.prioritize_with_meta(hypotheses)
+            agent = self._build_prioritize_agent()
+            resp = agent(user_prompt)
+            scores_list = hy_common.extract_json(self._extract_text(resp))
         except Exception as e:
-            logger.warning("Strands prioritize (delegated) failed: %s", e)
+            # 打分失败时保留原有顺序返回，并把错误带出去 ——
+            # 不静默吞掉，否则调用方会以为这批假设"已按优先级排好"。
+            logger.warning("Strands prioritize failed: %s", e)
             return self._pack(hypotheses=[], prioritized=hypotheses, t0=t0,
                               model=DEFAULT_MODEL, error=repr(e))
-        meta["engine"] = self.ENGINE_NAME
-        meta["latency_ms"] = int((time.time() - t0) * 1000)
-        return meta
+
+        if not isinstance(scores_list, list):
+            logger.warning("Strands prioritize: LLM 未返回数组，实得 %s", type(scores_list).__name__)
+            scores_list = []
+
+        prioritized = hy_common.apply_priority_scores(hypotheses, scores_list)
+        return self._pack(
+            hypotheses=[], prioritized=prioritized, t0=t0,
+            model=DEFAULT_MODEL, token_usage=self._extract_token_usage(resp),
+        )
+
+    def _build_prioritize_agent(self):
+        """打分用的 Agent —— 刻意**不挂 tools**，理由见 prioritize_with_meta。"""
+        from strands import Agent  # type: ignore
+        model = build_bedrock_model(model_id=DEFAULT_MODEL, region=DEFAULT_REGION,
+                                    max_tokens=4096)
+        return Agent(
+            model=model,
+            system_prompt=hy_common.build_prioritize_system_prompt(),
+        )
 
     # ------------------------------------------------------------
     # Internals
@@ -311,3 +365,26 @@ class StrandsHypothesisAgent(HypothesisBase):
         if error is not None:
             out["error"] = error
         return out
+
+    # ── 持久化与实验导出（委托给 hypothesis_common）────────────────────
+    #
+    # 这三件事与引擎无关，实现在 `hypothesis_common` 里两个引擎共用。
+    # 之所以在这里留薄方法而不是让调用方直接用模块函数：
+    # `chaos/code/main.py` 和 `orchestrator.py` 拿的是 `HypothesisAgent()`
+    # 实例并调 `.save()` / `.load()` / `.to_experiment_yamls()` ——
+    # 保留这组方法名，那些调用点就不用改。
+
+    def to_experiment_yamls(self, hypotheses: list,
+                            output_dir: str = "experiments/generated") -> list[str]:
+        return hy_common.to_experiment_yamls(
+            hypotheses, output_dir, topology=getattr(self, "_topology", None),
+        )
+
+    def save(self, hypotheses: list, path: str = hy_common.HYPOTHESES_PATH):
+        return hy_common.save_hypotheses(
+            hypotheses, path, topology=getattr(self, "_topology", None),
+        )
+
+    @staticmethod
+    def load(path: str = hy_common.HYPOTHESES_PATH) -> list:
+        return hy_common.load_hypotheses(path)

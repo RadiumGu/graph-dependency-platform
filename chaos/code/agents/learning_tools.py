@@ -160,18 +160,25 @@ def invoke_hypothesis_engine(coverage_gaps_csv: str, max_hypotheses: int = 5) ->
         return "[]"
 
     try:
-        # Force direct engine to avoid nested Strands agent (memory explosion)
-        import os as _os
-        old_val = _os.environ.get("HYPOTHESIS_ENGINE", "")
-        _os.environ["HYPOTHESIS_ENGINE"] = "direct"
-        try:
-            from engines.factory import make_hypothesis_engine  # type: ignore
-            engine = make_hypothesis_engine()
-        finally:
-            if old_val:
-                _os.environ["HYPOTHESIS_ENGINE"] = old_val
-            else:
-                _os.environ.pop("HYPOTHESIS_ENGINE", None)
+        # 这里原本强制 HYPOTHESIS_ENGINE=direct，注释理由是
+        # "avoid nested Strands agent (memory explosion)"。
+        #
+        # 2026-09-20 实测推翻了这个假设 —— 内存开销几乎全在 **import
+        # strands 模块** 这一次性成本上，Agent 实例本身几乎不占：
+        #
+        #     解释器基线                      8 MB
+        #     import 两个 strands 模块后     68 MB   ← 开销在这里
+        #     + LearningAgent（外层）        69 MB
+        #     + HypothesisAgent（嵌套层）    69 MB   增量 0 MB
+        #
+        # 那条注释把「import 的固定开销」误当成「每个 agent 实例的开销」，
+        # 而固定开销外层已经付过，嵌套不会再付第二次。
+        # 加上 chaos 是 argparse CLI（不在 Lambda 里跑），内存约束本就宽松。
+        #
+        # 于是不再强制引擎，走默认 strands。若真撞上内存问题，那会是明确的
+        # OOM 而不是静默降级 —— 可观测，好过为一个未验证的担忧钉住旧实现。
+        from engines.factory import make_hypothesis_engine  # type: ignore
+        engine = make_hypothesis_engine()
         all_hypotheses = []
         for svc in services[:3]:  # limit to 3 services to control cost
             generated = engine.generate(max_hypotheses=int(max_hypotheses), service_filter=svc)
