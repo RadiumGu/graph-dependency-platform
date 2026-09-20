@@ -33,3 +33,20 @@ infra/cdk.context.json
 # 演示材料（PPT / PDF 等二进制，从外部带入的参考件，不入库）
 # 二进制进了 git 历史就删不掉，而这类文件动辄数 MB 且会反复出新版本。
 /todo/decks/
+
+# kiro CLI 的本机配置（.kiro/settings/cli.json）。
+# 机器相关、每个人一份，入库只会互相覆盖。
+/.kiro/
+
+# DR 计划生成器的产物。
+#
+# ⚠️ 刻意**不**忽略整个 plans/ 目录：`plans/measurements.json` 是
+# 演练实测值（`assessment/rto_estimator.py` 用它覆盖 RTO 基线），
+# 那是跑过演练才拿得到的数据、丢了要重新演练才能补。
+# 一刀切忽略目录会让它永远进不了 git，而这个后果要到有人需要历史
+# 实测值时才发现。
+#
+# 所以只忽略**可重新生成**的两类：生成的计划（带时间戳、单份 ~690KB）
+# 与验证报告（`validation/plan_verifier.py` 写的 *.verify-report.json）。
+/dr-plan-generator/plans/dr-*.json
+/dr-plan-generator/plans/*.verify-report.json
