@@ -164,98 +164,12 @@ def test_s9_02_bug01_regression_short_text_still_works():
 # S9-03: BUG-02 修复验证 — Bedrock 超时返回 {"error": ...} 而非抛出异常
 # ---------------------------------------------------------------------------
 
-def test_s9_03_bug02_bedrock_timeout_returns_error_dict():
-    """S9-03 (P0): BUG-02 修复验证 — query() 捕获 Bedrock 异常，返回 {"error": ...}。
-
-    BUG-02 (tests/FAILURES.md):
-      NLQueryEngine.query() 未捕获 _generate_cypher() 的异常，
-      Bedrock 超时/不可用时异常向上传播，调用者拿不到友好的 {"error": ...} 格式。
-
-    FIX (rca/neptune/nl_query.py query() 方法):
-      try:
-          cypher = self._generate_cypher(question)
-      except Exception as e:
-          return {"error": str(e), "cypher": ""}
-
-    注意: test_04_unit_nlquery.py::test_ub2_03_bedrock_timeout_raises 测试的是旧行为
-    （期望抛出异常），该测试在修复后应 FAIL（记录为已知回归）。
-    Ref: tests/FAILURES.md BUG-02
-    """
-    from neptune.nl_query import NLQueryEngine
-    from neptune.schema_prompt import build_system_prompt
-
-    engine = NLQueryEngine.__new__(NLQueryEngine)
-    engine.system_prompt = build_system_prompt()
-
-    mock_bedrock = MagicMock()
-    mock_bedrock.invoke_model = MagicMock(
-        side_effect=Exception("ReadTimeoutError: Bedrock endpoint not responding after 30s")
-    )
-    engine.bedrock = mock_bedrock
-
-    # BUG-02 修复后：不应抛出异常，应返回 {"error": ...}
-    result = engine.query("petsite 依赖哪些数据库？")
-
-    assert isinstance(result, dict), (
-        f"query() 应返回 dict，实际类型: {type(result)}。"
-        "BUG-02 修复可能未生效——检查 rca/neptune/nl_query.py query() 方法是否有 try/except。"
-    )
-    assert "error" in result, (
-        f"result 应包含 'error' key，实际 keys: {list(result.keys())}。"
-        "调用者期望收到 error dict 而非原始异常。"
-    )
-    assert "ReadTimeoutError" in result["error"] or result["error"], (
-        f"error 字段应包含异常消息，实际值: {result['error']!r}"
-    )
-    assert result.get("cypher") == "", (
-        f"超时时 cypher 应为空字符串，实际: {result.get('cypher')!r}"
-    )
 
 
 # ---------------------------------------------------------------------------
 # S9-04: BUG-02 回归 — 正常 Bedrock 响应时 query() 完整返回
 # ---------------------------------------------------------------------------
 
-def test_s9_04_bug02_regression_normal_query_works():
-    """S9-04 (P0): BUG-02 回归防护 — 正常 Bedrock 响应时 query() 返回完整结构。
-
-    确保 BUG-02 引入的 try/except 不影响正常查询路径：
-    结果应包含 question / cypher / results / summary 四个字段，不含 error。
-    Ref: tests/FAILURES.md BUG-02
-    """
-    from neptune.nl_query import NLQueryEngine
-    from neptune.schema_prompt import build_system_prompt
-
-    cypher = (
-        "MATCH (s:Microservice {name:'petsite'})-[:AccessesData]->(db) "
-        "WHERE db:RDSCluster OR db:DynamoDBTable "
-        "RETURN db.name AS database, labels(db)[0] AS type LIMIT 50"
-    )
-    engine = NLQueryEngine.__new__(NLQueryEngine)
-    engine.system_prompt = build_system_prompt()
-
-    mock_bedrock = MagicMock()
-    mock_bedrock.invoke_model = _mock_bedrock_invoke(cypher, "petsite 依赖 RDS 和 DynamoDB 两类数据库。")
-    engine.bedrock = mock_bedrock
-
-    mock_results = [{"database": "petsite-rds", "type": "RDSCluster"}]
-
-    with patch("neptune.neptune_client.results", return_value=mock_results):
-        result = engine.query("petsite 依赖哪些数据库？")
-
-    assert "error" not in result, (
-        f"正常查询不应包含 error，实际: {result}"
-    )
-    assert result.get("question") == "petsite 依赖哪些数据库？", (
-        f"question 字段应原样保留，实际: {result.get('question')!r}"
-    )
-    assert "Microservice" in result.get("cypher", ""), (
-        f"cypher 字段应包含生成的查询，实际: {result.get('cypher')!r}"
-    )
-    assert result.get("results") == mock_results, (
-        f"results 应为 Neptune 查询返回值，实际: {result.get('results')}"
-    )
-    assert result.get("summary"), "summary 字段不应为空"
 
 
 # ---------------------------------------------------------------------------
@@ -350,3 +264,19 @@ def test_s9_05_schema_drift_etl_labels_in_schema():
             "添加以上缺失的节点/边类型定义。"
         )
         pytest.fail("\n".join(failure_lines))
+
+
+# ── 以下测试于 2026-09-20 移除，契约迁到 tests/test_81_nlquery_contract_strands.py ──
+#
+#   test_s9_03_bug02_bedrock_timeout_returns_error_dict
+#   test_s9_04_bug02_regression_normal_query_works
+#
+# 它们 mock `bedrock.invoke_model` 并断言 direct 的实现细节，而 strands 引擎
+# 走 Strands Agent、没有 invoke_model —— 无法简单改指向。它们守的**契约**
+# 已由 test_81 用 strands 引擎重新覆盖：
+#     S6-04 Neptune 不可达时优雅返回 + 静态 schema 仍能生成 cypher → t81_07
+#     S6-08 query_guard 在流水线中拦截注入                        → t81_04
+#     S9-03 Bedrock 异常返回 error dict 且不静默                  → t81_03
+#     S9-04 正常查询返回完整结构                                  → t81_01
+
+

@@ -267,48 +267,6 @@ def test_s6_03_schema_cache_ttl_refresh():
 
 # ── S6-04 ─────────────────────────────────────────────────────────────────────
 
-def test_s6_04_neptune_unreachable_fallback_to_static_schema():
-    """S6-04 (P1): Neptune 不可达时，NLQueryEngine 仍使用静态 schema 生成 Cypher 并优雅返回。
-
-    mock 策略：
-      - Bedrock invoke_model → 返回固定合法 Cypher（绕过真实 Bedrock）
-      - neptune_client.results → 抛出 ConnectionError（模拟 VPC 断网）
-
-    期望：
-      - query() 返回 dict 而非传播异常（Neptune 错误被优雅捕获）
-      - 返回 dict 中包含 "cypher" 字段（静态 schema 仍可用于生成查询）
-      - 返回 dict 中包含 "error" 字段（说明 Neptune 执行阶段失败）
-
-    离线测试，无需真实 Neptune 或 Bedrock。
-    """
-    test_cypher = (
-        "MATCH (s:Microservice {name:'petsite'}) "
-        "RETURN s.name AS name, s.recovery_priority AS priority LIMIT 50"
-    )
-    engine = _make_engine_with_mock_bedrock(test_cypher)
-
-    with patch(
-        "neptune.neptune_client.results",
-        side_effect=ConnectionError("Neptune cluster unreachable: timeout"),
-    ):
-        result = engine.query("petsite 是什么服务？")
-
-    assert isinstance(result, dict), (
-        "query() 应始终返回 dict，不应将 Neptune 异常传播到调用方"
-    )
-    assert "cypher" in result, (
-        "即使 Neptune 不可达，仍应包含 cypher 字段（来自静态 schema 生成）"
-    )
-    assert "error" in result, (
-        "Neptune 不可达时应在 error 字段中记录失败原因"
-    )
-    # Generated cypher should reflect the static schema prompt (Microservice label exists)
-    assert "Microservice" in result["cypher"] or result["cypher"] == test_cypher, (
-        f"生成的 Cypher 应基于静态 schema，实际: {result['cypher']}"
-    )
-    # Error message should contain the connection failure description
-    assert result["error"], f"error 字段不应为空字符串，实际: {result['error']!r}"
-    print(f"\nS6-04 优雅返回: error='{result['error']}', cypher='{result['cypher'][:60]}...'")
 
 
 # ── S6-05 ─────────────────────────────────────────────────────────────────────
@@ -474,31 +432,17 @@ def test_s6_08_query_guard_blocks_write_injection(malicious_cypher, keyword):
     print(f"\n[BLOCKED:{keyword}] reason: {reason}")
 
 
-def test_s6_08_query_guard_blocks_via_nl_engine_pipeline():
-    """S6-08 补充 (P0): NLQueryEngine 流水线中，注入 Cypher 被 query_guard 拦截，返回 error dict。
+# ── 以下测试于 2026-09-20 移除，契约迁到 tests/test_81_nlquery_contract_strands.py ──
+#
+#   test_s6_04_neptune_unreachable_fallback_to_static_schema
+#   test_s6_08_query_guard_blocks_via_nl_engine_pipeline
+#
+# 它们 mock `bedrock.invoke_model` 并断言 direct 的实现细节，而 strands 引擎
+# 走 Strands Agent、没有 invoke_model —— 无法简单改指向。它们守的**契约**
+# 已由 test_81 用 strands 引擎重新覆盖：
+#     S6-04 Neptune 不可达时优雅返回 + 静态 schema 仍能生成 cypher → t81_07
+#     S6-08 query_guard 在流水线中拦截注入                        → t81_04
+#     S9-03 Bedrock 异常返回 error dict 且不静默                  → t81_03
+#     S9-04 正常查询返回完整结构                                  → t81_01
 
-    mock Bedrock 返回恶意 Cypher，验证 query_guard 在完整查询流水线中正确介入。
-    Neptune 也被 mock 以防万一（guard 应在 Neptune 调用前拦截）。
 
-    离线测试。
-    """
-    malicious_cypher = "MATCH (n) DETACH DELETE n"
-    engine = _make_engine_with_mock_bedrock(malicious_cypher)
-
-    with patch("neptune.neptune_client.results", return_value=[]) as mock_nc:
-        result = engine.query("删除图谱中所有节点")
-
-    # Guard should have blocked BEFORE reaching Neptune
-    mock_nc.assert_not_called(), "Neptune 不应被调用 — query_guard 应在此之前拦截"
-
-    assert isinstance(result, dict), "query() 应始终返回 dict"
-    assert "error" in result, (
-        f"恶意 Cypher 应被 query_guard 拦截并在 error 字段中说明，实际结果: {result}"
-    )
-    assert "cypher" in result, "被拦截时应包含 cypher 字段以供审计"
-    assert result["error"], f"error 字段不应为空，实际: {result['error']!r}"
-
-    print(
-        f"\nS6-08 Pipeline 拦截: "
-        f"error='{result['error']}', cypher='{result['cypher']}'"
-    )

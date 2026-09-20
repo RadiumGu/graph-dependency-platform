@@ -25,30 +25,24 @@ def make_nlquery_engine(profile: Any = None) -> NLQueryBase:
     Returns:
         NLQueryBase 具体实现。
     """
-    engine = (os.environ.get("NLQUERY_ENGINE") or "strands").lower()
-    if engine == "strands":
-        try:
-            from neptune.nl_query_strands import StrandsNLQueryEngine  # type: ignore
-            return StrandsNLQueryEngine(profile=profile)
-        except ImportError as e:
-            logger.warning(
-                "Strands engine 不可用 (%s)；回退 direct。"
-                "主环境安装：/usr/bin/pip3 install 'strands-agents>=1.36' 'strands-agents-tools>=0.5'",
-                e,
-            )
-        except Exception as e:  # 构造期失败也回退，避免线上崩
-            logger.warning("Strands engine 构造失败 (%r)；回退 direct。", e)
-
-    try:
-        from neptune.nl_query_direct import DirectBedrockNLQuery  # type: ignore
-        return DirectBedrockNLQuery(profile=profile)
-    except ImportError:
-        # PR2 rename 前的过渡期：回退到现版 NLQueryEngine
-        from neptune.nl_query import NLQueryEngine  # type: ignore
-        try:
-            return NLQueryEngine(profile=profile)
-        except TypeError:
-            return NLQueryEngine()
+    # ── 2026-09-20：去掉 direct 回退，只保留 strands ──────────────────────
+    #
+    # 这是四个模块里最后一个收尾的。卡了五个月的理由是「p99 是 direct 的
+    # 5.58 倍」，而 2026-09-20 同日重测双引擎发现那批 04-18 数据早已过期
+    # （实测 2.17x，已在 ≤2.5x 门槛内），随后把 ReAct 从 3 轮压到 2 轮，
+    # 降到 **1.57x**、token 2.28x，准确率仍 20/20。
+    #
+    # 真正的阻塞其实不是性能，是两类代码问题，都已修：
+    #   · 判据 `'error' in result` —— strands 的 _pack 总带 error key（值 None），
+    #     direct 只在出错时放，于是每次成功都被判失败（test_e2e02 的「通过率
+    #     不足」就是这么来的，不是引擎能力问题）
+    #   · 七个测试文件绑定 direct 的实现方式（mock invoke_model、patch
+    #     nl_query_direct.nc.results、调 _generate_cypher 私有方法），
+    #     契约已由 tests/test_81_nlquery_contract_strands.py 用 strands 重写
+    #
+    # ⚠️ 代价：strands 不可用时直接抛异常、不再降级。
+    from neptune.nl_query_strands import StrandsNLQueryEngine  # type: ignore
+    return StrandsNLQueryEngine(profile=profile)
 
 
 def make_hypothesis_engine(profile: Any = None) -> "NLQueryBase":  # type: ignore[name-defined]
