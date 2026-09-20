@@ -45,10 +45,38 @@ echo "Copying source files..."
 cp "$RCA_DIR"/*.py "$DEST_DIR/" 2>/dev/null || true
 
 # 子目录（core / neptune / actions / collectors / data / search）
-for dir in core neptune actions collectors data search; do
+# 子目录
+#
+# ⚠️ `engines` 是 2026-09-20 补的：`core/rca_engine.py:775` 调
+# `from engines.factory import make_layer2_engine`，缺了它 Layer 2 直接 ImportError。
+for dir in core neptune actions collectors data search engines; do
   if [ -d "$RCA_DIR/$dir" ]; then
     cp -r "$RCA_DIR/$dir" "$DEST_DIR/"
     echo "  Copied: $dir/"
+  fi
+done
+
+# ── shared/ 与 profiles/（2026-09-20 补）─────────────────────────────────────
+#
+# `rca/deploy.sh:93,122` 一直复制这两个目录，本脚本从不复制 ——
+# 两个脚本打**同一份 rca/ 源码**却各自维护一份清单，漂移的代价：
+# 2026-09-20 一次部署连撞三个缺失，而且是**逐个报错逐个修**出来的，
+# 每轮都要一次真部署 + 一次真调用才暴露一个。
+#
+#   shared/    neptune/neptune_client.py 有 `from shared import get_region`
+#              缺它 → 冷启动就挂：Unable to import module 'window_flush_handler'
+#   profiles/  EnvironmentProfile 动态加载要读
+#              缺它 → **冷启动能过**，运行到 `_process_group` 才炸：
+#              ModuleNotFoundError: No module named 'profiles'
+#
+# 后者值得单记：它证明"部署前验证 import 通过"**不足以**保证可用 ——
+# 缺失只在运行时路径上暴露。
+for extra in shared profiles; do
+  if [ -d "$RCA_DIR/../$extra" ]; then
+    cp -r "$RCA_DIR/../$extra" "$DEST_DIR/"
+    echo "  Copied: $extra/"
+  else
+    echo "  ⚠️ $extra/ 不存在 —— 运行时会 ModuleNotFoundError"
   fi
 done
 
@@ -84,6 +112,24 @@ python3.11 -m pip install requests pyyaml strands-agents \
     -t "$DEST_DIR" -q
 # boto3 / botocore 由 Lambda 运行时提供（27M+），装进包里纯属浪费体积。
 rm -rf "$DEST_DIR"/boto3* "$DEST_DIR"/botocore* "$DEST_DIR"/awscli* 2>/dev/null || true
+
+# ── 打包自检（2026-09-20 加）─────────────────────────────────────────────────
+#
+# 把"部署后才发现"提前到"构建时就失败"。清单与 rca/deploy.sh 对齐 ——
+# 那边加了什么这边也要加，否则又是一轮漂移。
+echo "Verifying package completeness..."
+_missing=""
+for req in window_flush_handler.py core/rca_engine.py engines/factory.py \
+           shared/__init__.py profiles neptune/neptune_client.py; do
+  [ -e "$DEST_DIR/$req" ] || _missing="$_missing $req"
+done
+if [ -n "$_missing" ]; then
+  echo "  ✗ 包不完整，缺:$_missing"
+  echo "    这些是运行时必需项，缺了会在 Lambda 里 ModuleNotFoundError。"
+  echo "    对照 rca/deploy.sh 的复制清单补齐后重跑。"
+  exit 1
+fi
+echo "  ✓ 必需项齐全"
 
 # ── 清理不必要文件 ─────────────────────────────────────────────────────────
 find "$DEST_DIR" -name "*.pyc" -delete
