@@ -155,28 +155,61 @@ def probe_neptune(affected_service: str) -> str:
     """探查 Neptune 图谱中的拓扑异常：依赖链、服务状态、最近变更。
 
     返回 JSON：服务拓扑信息和异常标记。
+
+    ## 2026-09-20 修：这个探针从来没成功过一次
+
+    线上日志里它一直是：
+
+        | ⚠️ probe_neptune | ERROR | +0 | ImportError — NeptuneGraphManager missing |
+
+    原实现两条路径**都不通**：
+
+      · 主路径 `from runner.neptune_helpers import query_topology` —— `runner/`
+        是 chaos 模块的代码，而它**不在任何 rca 部署包清单里**
+        （build.sh 只复制 core/neptune/actions/collectors/data/search/engines，
+        rca/deploy.sh 同样没有）。所以在 Lambda 里必然 ImportError。
+        而且 rca 的 collector 依赖 chaos 的 runner 本身就是方向错误的耦合。
+
+      · fallback `from neptune.neptune_queries import NeptuneGraphManager` ——
+        那个类**整个仓库里不存在**，没有任何 class 定义。
+        `# type: ignore` 把类型检查的警告一并压掉了，所以没人发现。
+
+    与 `classify_group` / `analyze_group` 同一形状：调用一个不存在的符号，
+    靠 except 兜住。区别是这次失败被如实记成 ERROR 且 +0 分 —— 可见，
+    不是静默降级，所以线上日志里能查到。
+
+    改用 rca 自有的 `neptune_queries`（本来就在部署包里）：
+      · `q4_service_info` 给服务属性，其中 `priority` 就是 tier
+      · `q3_upstream_deps(kind="live")` 给「该服务依赖谁」——
+        按其 docstring，根因定位应当用 live（只看当前仍存在的观测依赖）
     """
     findings = {"topology": None, "error": None}
     try:
-        from runner.neptune_helpers import query_topology  # type: ignore
-        topo = query_topology(affected_service)
-        findings["topology"] = topo
-    except ImportError:
-        # Fallback: 直接查 Neptune
-        try:
-            from neptune.neptune_queries import NeptuneGraphManager  # type: ignore
-            gm = NeptuneGraphManager()
-            svc = gm.get_service(affected_service)
-            if svc:
-                findings["topology"] = {
-                    "service": affected_service,
-                    "tier": svc.get("tier", "unknown"),
-                    "deps": svc.get("dependencies", []),
-                }
-        except Exception as e2:
-            findings["error"] = str(e2)
+        from neptune import neptune_queries as nq  # type: ignore
+
+        info = nq.q4_service_info(affected_service) or {}
+        # kind="live"：只看当前仍存在的观测依赖。q3 的 docstring 明确写了
+        # 「根因定位应该用这个」—— 不过滤会把已失效的历史依赖也算进来。
+        deps = nq.q3_upstream_deps(affected_service, kind="live") or []
+
+        findings["topology"] = {
+            "service": affected_service,
+            # 图谱里这个字段叫 recovery_priority，q4 返回时映射为 priority。
+            # 原实现取的是 svc.get("tier")，那个键在图谱里根本不存在 ——
+            # 即使 NeptuneGraphManager 存在，tier 也只会永远是 "unknown"。
+            "tier": info.get("priority") or "unknown",
+            "fault_boundary": info.get("fault_boundary"),
+            "az": info.get("az"),
+            "replicas": info.get("replicas"),
+            "deps": [d.get("name") for d in deps if d.get("name")],
+            "dep_count": len(deps),
+        }
+        if not info:
+            # 服务不在图谱里是有意义的发现，不是错误 —— 但要说出来，
+            # 否则调用方会把「查不到」误读成「没有异常」。
+            findings["note"] = f"服务 {affected_service} 不在图谱中"
     except Exception as e:
-        findings["error"] = str(e)
+        findings["error"] = f"{type(e).__name__}: {e}"
 
     return json.dumps(findings, default=str)
 
