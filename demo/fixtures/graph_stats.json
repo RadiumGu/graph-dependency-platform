@@ -2,66 +2,50 @@
   "nodes_by_label": [
     {
       "label": "Pod",
-      "c": 689
+      "c": 1539
     },
     {
       "label": "Incident",
-      "c": 126
-    },
-    {
-      "label": "ChaosExperiment",
-      "c": 86
-    },
-    {
-      "label": "SecurityGroup",
-      "c": 57
-    },
-    {
-      "label": "S3Bucket",
-      "c": 34
+      "c": 135
     },
     {
       "label": "TopologyChange",
-      "c": 31
+      "c": 93
+    },
+    {
+      "label": "ChaosExperiment",
+      "c": 91
+    },
+    {
+      "label": "SecurityGroup",
+      "c": 60
+    },
+    {
+      "label": "S3Bucket",
+      "c": 35
     },
     {
       "label": "LambdaFunction",
-      "c": 28
-    },
-    {
-      "label": "ECRRepository",
-      "c": 17
-    },
-    {
-      "label": "TargetGroup",
-      "c": 17
+      "c": 30
     },
     {
       "label": "Subnet",
       "c": 16
     },
     {
-      "label": "Microservice",
-      "c": 15
+      "label": "TargetGroup",
+      "c": 16
     },
     {
-      "label": "K8sService",
-      "c": 13
+      "label": "AWSServiceEndpoint",
+      "c": 12
     },
     {
-      "label": "Deployment",
-      "c": 13
-    },
-    {
-      "label": "HPA",
+      "label": "ECRRepository",
       "c": 11
     },
     {
       "label": "EC2Instance",
-      "c": 11
-    },
-    {
-      "label": "AgentTool",
       "c": 10
     },
     {
@@ -69,7 +53,15 @@
       "c": 9
     },
     {
+      "label": "Microservice",
+      "c": 8
+    },
+    {
       "label": "ListenerRule",
+      "c": 8
+    },
+    {
+      "label": "AgentTool",
       "c": 8
     },
     {
@@ -77,11 +69,19 @@
       "c": 7
     },
     {
-      "label": "AWSServiceEndpoint",
+      "label": "K8sService",
+      "c": 7
+    },
+    {
+      "label": "Deployment",
       "c": 7
     },
     {
       "label": "DynamoDBTable",
+      "c": 6
+    },
+    {
+      "label": "AgentRuntime",
       "c": 6
     },
     {
@@ -93,7 +93,7 @@
       "c": 5
     },
     {
-      "label": "AgentRuntime",
+      "label": "HPA",
       "c": 5
     },
     {
@@ -159,67 +159,51 @@
   ],
   "edges_by_type": [
     {
-      "t": "LocatedIn",
-      "c": 779
-    },
-    {
       "t": "RunsOn",
-      "c": 352
+      "c": 1955
     },
     {
-      "t": "Manages",
-      "c": 254
+      "t": "LocatedIn",
+      "c": 1617
     },
     {
       "t": "BelongsTo",
-      "c": 248
+      "c": 1068
+    },
+    {
+      "t": "Manages",
+      "c": 1062
     },
     {
       "t": "Routes",
-      "c": 231
+      "c": 1050
     },
     {
       "t": "TriggeredBy",
-      "c": 127
-    },
-    {
-      "t": "TestedBy",
-      "c": 62
+      "c": 136
     },
     {
       "t": "AccessesData",
-      "c": 56
+      "c": 69
+    },
+    {
+      "t": "TestedBy",
+      "c": 64
+    },
+    {
+      "t": "MentionsResource",
+      "c": 34
     },
     {
       "t": "AffectedService",
       "c": 28
     },
     {
-      "t": "DependsOn",
-      "c": 23
+      "t": "HasSG",
+      "c": 20
     },
     {
       "t": "RoutesTo",
-      "c": 22
-    },
-    {
-      "t": "HasSG",
-      "c": 21
-    },
-    {
-      "t": "OwnedBy",
-      "c": 20
-    },
-    {
-      "t": "Calls",
-      "c": 20
-    },
-    {
-      "t": "Implements",
-      "c": 18
-    },
-    {
-      "t": "MentionsResource",
       "c": 16
     },
     {
@@ -228,10 +212,30 @@
     },
     {
       "t": "ForwardsTo",
-      "c": 15
+      "c": 14
+    },
+    {
+      "t": "Implements",
+      "c": 13
+    },
+    {
+      "t": "OwnedBy",
+      "c": 13
+    },
+    {
+      "t": "DependsOn",
+      "c": 13
+    },
+    {
+      "t": "Calls",
+      "c": 12
     },
     {
       "t": "Involves",
+      "c": 8
+    },
+    {
+      "t": "InvokesTool",
       "c": 8
     },
     {
@@ -239,12 +243,16 @@
       "c": 8
     },
     {
-      "t": "InvokesTool",
+      "t": "RoutesToRuntime",
       "c": 5
     },
     {
       "t": "WritesTo",
       "c": 4
+    },
+    {
+      "t": "Delegates",
+      "c": 3
     },
     {
       "t": "Contains",
@@ -255,11 +263,11 @@
       "c": 2
     },
     {
-      "t": "Delegates",
-      "c": 2
+      "t": "ProtectsAccess",
+      "c": 1
     },
     {
-      "t": "ProtectsAccess",
+      "t": "RoutesVia",
       "c": 1
     },
     {
@@ -275,9 +283,9 @@
       "c": 1
     }
   ],
-  "node_total": 1251,
-  "edge_total": 2344,
+  "node_total": 2154,
+  "edge_total": 7246,
   "node_label_count": 39,
-  "edge_type_count": 29,
-  "captured_at": "2026-09-05T06:05:52Z"
+  "edge_type_count": 31,
+  "captured_at": "2026-09-20T10:43:07Z"
 }

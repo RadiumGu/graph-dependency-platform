@@ -2,18 +2,28 @@
   "by_edge_type_status": [
     {
       "edge_type": "AccessesData",
-      "status": "confirmed",
-      "c": 6
-    },
-    {
-      "edge_type": "AccessesData",
-      "status": "inconclusive",
+      "status": "bootstrap_only",
       "c": 2
     },
     {
       "edge_type": "AccessesData",
+      "status": "confirmed",
+      "c": 10
+    },
+    {
+      "edge_type": "AccessesData",
+      "status": "inconclusive",
+      "c": 3
+    },
+    {
+      "edge_type": "AccessesData",
+      "status": "modeling_artifact",
+      "c": 5
+    },
+    {
+      "edge_type": "AccessesData",
       "status": "untested",
-      "c": 48
+      "c": 49
     },
     {
       "edge_type": "Calls",
@@ -23,10 +33,25 @@
     {
       "edge_type": "Calls",
       "status": "inconclusive",
-      "c": 16
+      "c": 6
+    },
+    {
+      "edge_type": "Calls",
+      "status": "untested",
+      "c": 2
     },
     {
       "edge_type": "Delegates",
+      "status": "inconclusive",
+      "c": 1
+    },
+    {
+      "edge_type": "Delegates",
+      "status": "untested",
+      "c": 2
+    },
+    {
+      "edge_type": "DependsOn",
       "status": "confirmed",
       "c": 2
     },
@@ -38,27 +63,68 @@
     {
       "edge_type": "DependsOn",
       "status": "untested",
-      "c": 17
+      "c": 5
     },
     {
       "edge_type": "InvokesTool",
       "status": "untested",
-      "c": 5
+      "c": 8
     },
     {
       "edge_type": "Retrieves",
-      "status": "confirmed",
+      "status": "untested",
       "c": 1
     }
   ],
   "totals_by_status": {
-    "confirmed": 13,
-    "inconclusive": 24,
-    "untested": 70
+    "bootstrap_only": 2,
+    "confirmed": 16,
+    "inconclusive": 16,
+    "modeling_artifact": 5,
+    "untested": 67
   },
-  "dependency_edge_total": 107,
-  "verified_ratio": 0.1215,
+  "dependency_edge_total": 106,
+  "verified_ratio": 0.1509,
   "decided_edges": [
+    {
+      "source": "payforadoption",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "status": "bootstrap_only",
+      "confidence": 0.4,
+      "degradation": null,
+      "experiment": "source-audit-20260915",
+      "verified_at": 1789631020,
+      "reason": "｜【粒度归并】本判定原记录在服务粒度边 AWSServiceEndpoint:dynamodb 上，因证据作用域是**资源级**（severance=source-audit）而搬到这条资源粒度边。证据本身未重新采集，severance / evidence_channel / experiment 逐字保留。",
+      "evidence_channel": "source-code+iac",
+      "edge_source": "aws-etl"
+    },
+    {
+      "source": "payforadoption",
+      "edge_type": "AccessesData",
+      "target": "dynamodb",
+      "status": "bootstrap_only",
+      "confidence": 1.0,
+      "degradation": 96.88,
+      "experiment": "source-audit-20260915",
+      "verified_at": 1789626733,
+      "reason": "DynamoDB 调用只出现在引导端点 POST /api/triggerseeding，不在业务请求路径上｜证据：payforadoption/repository.go:499 TriggerSeeding 是唯一的 DynamoDB 调用点（:528 dynamo.New、:529 db.Table、:531-534 Batch().Write() 批量 Put 宠物目录）；路由挂在 payforadoption/transport.go:69 POST /api/triggerseeding；业务端点 /api/completeadoption（transport.go:54）无任何 ",
+      "evidence_channel": "source-code+iac",
+      "edge_source": "nfm"
+    },
+    {
+      "source": "petsearch",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "status": "confirmed",
+      "confidence": 0.9,
+      "degradation": 100.0,
+      "experiment": "iam-deny-probe_20260913-155349",
+      "verified_at": 1789322680,
+      "reason": "注入生效（边成功率 100.0% → 0.0%，降 100.0pp）且业务归零（4/4 次探针返回 0 个，基线稳定 26 个）；回滚+刷新凭证后恢复",
+      "evidence_channel": "xray-edge+business-probe",
+      "edge_source": "aws-etl"
+    },
     {
       "source": "petlistadoptions",
       "edge_type": "AccessesData",
@@ -70,6 +136,19 @@
       "verified_at": 1788174652,
       "reason": "观测方退化 63.9% >= 20.0%，依赖成立",
       "evidence_channel": null,
+      "edge_source": "aws-etl"
+    },
+    {
+      "source": "petsearch",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+      "status": "confirmed",
+      "confidence": 0.9,
+      "degradation": 0.0,
+      "experiment": "iam-deny-probe_20260917-072110",
+      "verified_at": 1789629670,
+      "reason": "边级通道结构性不可测，判定由业务通道 + 对照承担：home 未退化（26）；images 归零（3 → 0，采样 [0, 0, 0, 0]）；对照探针未退化：home（26 → 26）；回滚后恢复。**证据范围**：生效性依据是业务功能退化而非被测边流量归零",
+      "evidence_channel": "business-probe-only",
       "edge_source": "aws-etl"
     },
     {
@@ -88,19 +167,6 @@
     {
       "source": "petsite",
       "edge_type": "AccessesData",
-      "target": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
-      "status": "confirmed",
-      "confidence": 0.982,
-      "degradation": 36.21,
-      "experiment": "exp-serviceseks2-databaseb269d8bb-efjeyzicx2ak-fis-rds-reboot-20260831-110323",
-      "verified_at": 1788174652,
-      "reason": "观测方退化 36.2% >= 20.0%，依赖成立",
-      "evidence_channel": null,
-      "edge_source": "deepflow-dns"
-    },
-    {
-      "source": "petsite",
-      "edge_type": "AccessesData",
       "target": "ssm",
       "status": "confirmed",
       "confidence": 0.989,
@@ -112,17 +178,56 @@
       "edge_source": "xray"
     },
     {
+      "source": "petsite",
+      "edge_type": "AccessesData",
+      "target": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "status": "confirmed",
+      "confidence": 0.9,
+      "degradation": 100.0,
+      "experiment": "stepfn-three-ring-1789627178",
+      "verified_at": 1789627179,
+      "reason": "三环齐全 + 类型条件阴性对照通过。基线：bunny 023/024/025 领养成功、状态机执行 3 次；deny states:*（收窄到该状态机与其执行 ARN）后：这三只 bunny 领养全部失败、执行归零，而**非 bunny（001/003 puppy）照常 2/2 成功** —— 该对照排除了「rollout restart 本身造成影响」与「deny 打宽」两种替代解释；回滚撤策略 + rollout restart 后执行回到 3 次、三只 bunny 全部恢复。触发条件见 PaymentController.cs:124（仅 pettype==bunny 调 StartEx",
+      "evidence_channel": "stepfn-execution-history+business-probe",
+      "edge_source": "xray"
+    },
+    {
+      "source": "petlistadoptions",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-databasewriter2462cc03-fwgfu4gossqe",
+      "status": "confirmed",
+      "confidence": 0.9,
+      "degradation": 0.0,
+      "experiment": "rds-fault-probe_20260915-044945",
+      "verified_at": 1789447841,
+      "reason": "重启期间业务退化（list 归零（1 → 0，采样 [0]）），SQL 边成功率 100.0% → 100.0%（降 0.0pp）；故障后恢复；证据范围＝瞬时读实例丢失（重启 serviceseks2-databasewriter2462cc03-fwgfu4gossqe，当时角色 reader），**不覆盖「数据库彻底不可用」**",
+      "evidence_channel": "xray-edge+business-probe",
+      "edge_source": "deepflow-l4"
+    },
+    {
+      "source": "pethistory",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-databasereader1f54479b8-hpyukqlufzus",
+      "status": "confirmed",
+      "confidence": 0.9,
+      "degradation": 0.0,
+      "experiment": "rds-fault-probe_20260915-052215",
+      "verified_at": 1789449735,
+      "reason": "重启期间业务退化（history 归零（1 → 0，采样 [0]））；生效证据＝RDS 事件（RDS 事件：shutdown → restarted，中断 16.2 秒）。⚠️ 消费方侧无 SQL 边遥测，本判定的生效性由资源自身事件证明，非消费方观测；故障后恢复；证据范围＝瞬时写实例丢失（重启 serviceseks2-databasereader1f54479b8-hpyukqlufzus，当时角色 writer），**不覆盖「数据库彻底不可用」**",
+      "evidence_channel": "rds-event+business-probe",
+      "edge_source": "deepflow-l4"
+    },
+    {
       "source": "payforadoption",
       "edge_type": "AccessesData",
-      "target": "dynamodb",
+      "target": "serviceseks2-databasereader1f54479b8-hpyukqlufzus",
       "status": "confirmed",
-      "confidence": 0.9999,
-      "degradation": 96.88,
-      "experiment": "exp-dynamodb-fis-network-disrupt-20260831-160742",
-      "verified_at": 1788192783,
-      "reason": "观测方退化 96.9% >= 20.0%（仅吞吐通道），依赖成立",
-      "evidence_channel": "throughput_only",
-      "edge_source": "nfm"
+      "confidence": 0.9,
+      "degradation": 0.28,
+      "experiment": "rds-fault-probe_20260914-022850",
+      "verified_at": 1789352976,
+      "reason": "重启期间业务退化（adopt 归零（1 → 0，采样 [0]）），SQL 边成功率 100.0% → 99.7%（降 0.3pp）；故障后恢复；证据范围＝瞬时写实例丢失（重启 serviceseks2-databasereader1f54479b8-hpyukqlufzus），**不覆盖「数据库彻底不可用」**",
+      "evidence_channel": "xray-edge+business-probe",
+      "edge_source": "deepflow-l4"
     },
     {
       "source": "petsearch",
@@ -142,12 +247,12 @@
       "edge_type": "Calls",
       "target": "pethistory",
       "status": "confirmed",
-      "confidence": 0.9959,
-      "degradation": 100.0,
-      "experiment": "networkchaos-partition:petsite->pethistory",
-      "verified_at": 1788561271,
-      "reason": "观测方退化 77.5% >= 20.0%，依赖成立",
-      "evidence_channel": null,
+      "confidence": 0.9999,
+      "degradation": 10.06,
+      "experiment": "exp-pethistory-http-chaos-20260905-064354",
+      "verified_at": 1788590903,
+      "reason": "原始退化 10.1% 落在中间带，但按**稀释上限归一化**后为 84.6% >= 20.0% —— 该路径占观测方流量 11.89%（即聚合退化的理论上限 11.9pp）；实测退化 10.1pp = 上限的 84.6% —— 走这条路径的请求有这么多失败了。依赖成立",
+      "evidence_channel": "throughput_only",
       "edge_source": "deepflow-etl"
     },
     {
@@ -155,25 +260,12 @@
       "edge_type": "Calls",
       "target": "petsearch",
       "status": "confirmed",
-      "confidence": 0.9959,
-      "degradation": 100.0,
-      "experiment": "networkchaos-partition:petsite->petsearch",
-      "verified_at": 1788561271,
-      "reason": "观测方退化 74.9% >= 20.0%，依赖成立",
-      "evidence_channel": null,
-      "edge_source": "deepflow-etl"
-    },
-    {
-      "source": "petlistadoptions",
-      "edge_type": "Calls",
-      "target": "petsearch",
-      "status": "confirmed",
-      "confidence": 0.9959,
-      "degradation": 100.0,
-      "experiment": "networkchaos-partition:petlistadoptions->petsearch",
-      "verified_at": 1788561271,
-      "reason": "观测方退化 71.9% >= 20.0%，依赖成立",
-      "evidence_channel": null,
+      "confidence": 1.0,
+      "degradation": 62.21,
+      "experiment": "exp-search-service-http-chaos-20260905-073516",
+      "verified_at": 1788594005,
+      "reason": "观测方退化 62.2% >= 20.0%（仅吞吐通道），依赖成立",
+      "evidence_channel": "throughput_only",
       "edge_source": "deepflow-etl"
     },
     {
@@ -190,43 +282,43 @@
       "edge_source": "deepflow-etl"
     },
     {
-      "source": "WaggleAIOrchestrator",
-      "edge_type": "Delegates",
-      "target": "WaggleAIAdoption",
+      "source": "payforadoption",
+      "edge_type": "Calls",
+      "target": "petsearch",
+      "status": "confirmed",
+      "confidence": 0.9,
+      "degradation": 0.0,
+      "experiment": "svc-blackhole-probe_20260915-101103",
+      "verified_at": 1789467063,
+      "reason": "完全切断：被测边基线 656 次 → 故障期从服务图消失 → 回滚后 36 次（前后夹住，排除聚合延迟），且业务归零（adopt 归零（1 → 0，采样 [0]））；回滚后恢复",
+      "evidence_channel": "xray-edge+business-probe",
+      "edge_source": "deepflow-etl"
+    },
+    {
+      "source": "search_available_pets",
+      "edge_type": "DependsOn",
+      "target": "petsearch",
       "status": "confirmed",
       "confidence": 0.989,
-      "degradation": 100.0,
-      "experiment": "agent-invoke:orchestrator log adoption x19 in one request",
-      "verified_at": 1788561271,
-      "reason": null,
-      "evidence_channel": null,
+      "degradation": 96.15,
+      "experiment": "active-probe:WaggleAIAdoption.search_available_pets vs petsearch-container-outage",
+      "verified_at": 1788594554,
+      "reason": "主动探测 WaggleAIAdoption 的 search_available_pets 工具：petsearch 健康时 25/26 次返回 10-11 只幼犬；petsearch 业务容器全挂时 22 次全部零宠物数据、成功调用均自述 pet search service temporarily unavailable。观测方用 agent 自身信号而非基础设施指标（工具级故障被 agent 优雅处理后计为成功调用，对基础设施指标不可见）。",
+      "evidence_channel": "success_rate",
       "edge_source": "agentcore-etl"
     },
     {
-      "source": "WaggleAIOrchestrator",
-      "edge_type": "Delegates",
-      "target": "WaggleAINutrition",
+      "source": "petsite",
+      "edge_type": "DependsOn",
+      "target": "ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj",
       "status": "confirmed",
-      "confidence": 0.989,
-      "degradation": 100.0,
-      "experiment": "agent-invoke:orchestrator log nutrition_advisor x5 in one request",
-      "verified_at": 1788561271,
-      "reason": null,
-      "evidence_channel": null,
-      "edge_source": "agentcore-etl"
-    },
-    {
-      "source": "WaggleAINutrition",
-      "edge_type": "Retrieves",
-      "target": "waggle-ai-nutrition-kb",
-      "status": "confirmed",
-      "confidence": 0.989,
-      "degradation": 100.0,
-      "experiment": "agent-invoke:bedrock KB Invocations=7 during probe window",
-      "verified_at": 1788561271,
-      "reason": null,
-      "evidence_channel": null,
-      "edge_source": "agentcore-etl"
+      "confidence": 0.9,
+      "degradation": 0.0,
+      "experiment": "iam-deny-probe_20260913-212633",
+      "verified_at": 1789334931,
+      "reason": "完全切断：被测边基线 32 次 → 故障期从服务图消失 → 回滚后 29 次（前后夹住，排除聚合延迟），且业务归零（adopt 归零（1 → 0，采样 [0, 0, 0, 0]）；home 未退化（26）；list 未退化（1）；waggle 未退化（1））；回滚后恢复",
+      "evidence_channel": "xray-edge+business-probe",
+      "edge_source": "xray"
     },
     {
       "source": "pethistory",
@@ -242,6 +334,19 @@
       "edge_source": "aws-etl"
     },
     {
+      "source": "payforadoption",
+      "edge_type": "AccessesData",
+      "target": "ssm",
+      "status": "inconclusive",
+      "confidence": 0.4,
+      "degradation": 100.0,
+      "experiment": "iam-deny-probe_20260913-220634",
+      "verified_at": 1789337194,
+      "reason": "注入生效（边成功率降 100.0pp）但业务探针全部未退化（adopt 未退化（1））—— 消费方存在降级路径，该依赖非业务关键路径。**不写 confirmed**：证明了调用失败，没证明业务受损",
+      "evidence_channel": "xray-edge+business-probe",
+      "edge_source": "xray"
+    },
+    {
       "source": "petsearch",
       "edge_type": "AccessesData",
       "target": "s3",
@@ -255,69 +360,17 @@
       "edge_source": "xray"
     },
     {
-      "source": "trafficgenerator",
+      "source": "petlistadoptions",
       "edge_type": "Calls",
-      "target": "petsite",
+      "target": "petsearch",
       "status": "inconclusive",
-      "confidence": 0.0,
+      "confidence": 0.9959,
       "degradation": 0.0,
-      "experiment": "synthetic-traffic-source: cutting it only silences the generator itself; no dependent consumer would degrade, so degradation test is not meaningful",
-      "verified_at": 1788561677,
-      "reason": null,
-      "evidence_channel": null,
-      "edge_source": null
-    },
-    {
-      "source": "gateway-service",
-      "edge_type": "Calls",
-      "target": "auth-service",
-      "status": "inconclusive",
-      "confidence": 0.0,
-      "degradation": 0.0,
-      "experiment": "target-scaled-to-zero: awesomeshop deployments have replicas=0 and no pods; intra-app edge may be real but cannot be exercised while scaled down",
-      "verified_at": 1788561677,
-      "reason": null,
-      "evidence_channel": null,
-      "edge_source": null
-    },
-    {
-      "source": "pethistory",
-      "edge_type": "Calls",
-      "target": "petlistadoptions",
-      "status": "inconclusive",
-      "confidence": 0.6225,
-      "degradation": 0.0,
-      "experiment": "exp-list-adoptions-http-chaos-20260905-055404",
-      "verified_at": 1788588242,
+      "experiment": "exp-search-service-http-chaos-20260905-073516",
+      "verified_at": 1788594005,
       "reason": "**被测依赖路径本身**近期只有 0 次调用（需 >= 20）—— 观测方总流量再大也无关：没有调用就无从打断，此时任何退化数字都是噪声。需先给这条路径造出流量再验",
       "evidence_channel": "none",
-      "edge_source": null
-    },
-    {
-      "source": "artillery",
-      "edge_type": "Calls",
-      "target": "gateway-service",
-      "status": "inconclusive",
-      "confidence": 0.0,
-      "degradation": 0.0,
-      "experiment": "source-absent-from-cluster: no svc/deploy/pod named artillery in any namespace; load-generator edge is historical telemetry",
-      "verified_at": 1788561677,
-      "reason": null,
-      "evidence_channel": null,
-      "edge_source": null
-    },
-    {
-      "source": "gateway-service",
-      "edge_type": "Calls",
-      "target": "order-service",
-      "status": "inconclusive",
-      "confidence": 0.0,
-      "degradation": 0.0,
-      "experiment": "target-scaled-to-zero: awesomeshop deployments have replicas=0 and no pods; intra-app edge may be real but cannot be exercised while scaled down",
-      "verified_at": 1788561677,
-      "reason": null,
-      "evidence_channel": null,
-      "edge_source": null
+      "edge_source": "deepflow-etl"
     },
     {
       "source": "petsite",
@@ -338,97 +391,19 @@
       "target": "petlistadoptions",
       "status": "inconclusive",
       "confidence": 0.9959,
-      "degradation": 19.94,
-      "experiment": "exp-list-adoptions-http-chaos-20260905-055404",
-      "verified_at": 1788588242,
-      "reason": "**被测依赖路径本身**近期只有 0 次调用（需 >= 20）—— 观测方总流量再大也无关：没有调用就无从打断，此时任何退化数字都是噪声。需先给这条路径造出流量再验",
+      "degradation": 24.66,
+      "experiment": "exp-list-adoptions-http-chaos-20260905-064919",
+      "verified_at": 1788591555,
+      "reason": "退化 24.7% 全部来自**吞吐塌陷**、成功率通道无信号，而吞吐下降分不清「观测方自己失败」与「上游不再调它」。纯吞吐证据需 >= 60.0% 才判 confirmed，故不下结论",
       "evidence_channel": "throughput_only",
       "edge_source": "deepflow-etl"
-    },
-    {
-      "source": "gateway-service",
-      "edge_type": "Calls",
-      "target": "petsite",
-      "status": "inconclusive",
-      "confidence": 0.6225,
-      "degradation": 0.0,
-      "experiment": "static:awesomeshop replicas=0 pods=0, zero petsite refs in all deployment specs",
-      "verified_at": 1788561271,
-      "reason": "2026-09-05 按独立证据门禁撤销 refuted。该边有独立观测源看到过它（DeepFlow calls 计数非零），按 2026-09-05 引入的门禁，有独立观测证据的边永不得判 refuted —— 打断后无影响的正确结论是 soft dependency 而非边不存在，二者在干预数据上同形，区分依据正是独立观测源。原判定未经该门禁，且其中一条的 verify_reason 自述流量不足不能证伪、status 却写 refuted，状态与理由自相矛盾。现置回 inconclusive（保守方向，不丢信息），待用带门禁的判据重验。",
-      "evidence_channel": null,
-      "edge_source": null
-    },
-    {
-      "source": "gateway-service",
-      "edge_type": "Calls",
-      "target": "points-service",
-      "status": "inconclusive",
-      "confidence": 0.0,
-      "degradation": 0.0,
-      "experiment": "target-scaled-to-zero: awesomeshop deployments have replicas=0 and no pods; intra-app edge may be real but cannot be exercised while scaled down",
-      "verified_at": 1788561677,
-      "reason": null,
-      "evidence_channel": null,
-      "edge_source": null
-    },
-    {
-      "source": "order-service",
-      "edge_type": "Calls",
-      "target": "petsite",
-      "status": "inconclusive",
-      "confidence": 0.6225,
-      "degradation": 0.0,
-      "experiment": "static:awesomeshop replicas=0 pods=0, zero petsite refs in all deployment specs",
-      "verified_at": 1788561271,
-      "reason": "2026-09-05 按独立证据门禁撤销 refuted。该边有独立观测源看到过它（DeepFlow calls 计数非零），按 2026-09-05 引入的门禁，有独立观测证据的边永不得判 refuted —— 打断后无影响的正确结论是 soft dependency 而非边不存在，二者在干预数据上同形，区分依据正是独立观测源。原判定未经该门禁，且其中一条的 verify_reason 自述流量不足不能证伪、status 却写 refuted，状态与理由自相矛盾。现置回 inconclusive（保守方向，不丢信息），待用带门禁的判据重验。",
-      "evidence_channel": null,
-      "edge_source": null
-    },
-    {
-      "source": "order-service",
-      "edge_type": "Calls",
-      "target": "points-service",
-      "status": "inconclusive",
-      "confidence": 0.0,
-      "degradation": 0.0,
-      "experiment": "target-scaled-to-zero: awesomeshop deployments have replicas=0 and no pods; intra-app edge may be real but cannot be exercised while scaled down",
-      "verified_at": 1788561677,
-      "reason": null,
-      "evidence_channel": null,
-      "edge_source": null
-    },
-    {
-      "source": "artillery-write",
-      "edge_type": "Calls",
-      "target": "gateway-service",
-      "status": "inconclusive",
-      "confidence": 0.0,
-      "degradation": 0.0,
-      "experiment": "source-absent-from-cluster: no svc/deploy/pod named artillery in any namespace; load-generator edge is historical telemetry",
-      "verified_at": 1788561677,
-      "reason": null,
-      "evidence_channel": null,
-      "edge_source": null
-    },
-    {
-      "source": "gateway-service",
-      "edge_type": "Calls",
-      "target": "product-service",
-      "status": "inconclusive",
-      "confidence": 0.0,
-      "degradation": 0.0,
-      "experiment": "target-scaled-to-zero: awesomeshop deployments have replicas=0 and no pods; intra-app edge may be real but cannot be exercised while scaled down",
-      "verified_at": 1788561677,
-      "reason": null,
-      "evidence_channel": null,
-      "edge_source": null
     },
     {
       "source": "ServicesEks2-StepFnlambdasteppriceGreaterThan55AD1-kkACGO1yh30X",
       "edge_type": "Calls",
       "target": "ServicesEks2-StepFnlambdasteppriceGreaterThan55AD1-kkACGO1yh30X",
       "status": "inconclusive",
-      "confidence": 0.0,
+      "confidence": 0.6225,
       "degradation": 0.0,
       "experiment": "self-loop-from-trace: same-function edge inferred from trace spans; no distinct downstream to partition",
       "verified_at": 1788561677,
@@ -441,7 +416,7 @@
       "edge_type": "Calls",
       "target": "ServicesEks2-StepFnlambdastepreadDDBF7497E96-n1Bd1OUQqf2A",
       "status": "inconclusive",
-      "confidence": 0.0,
+      "confidence": 0.6225,
       "degradation": 0.0,
       "experiment": "self-loop-from-trace: same-function edge inferred from trace spans; no distinct downstream to partition",
       "verified_at": 1788561677,
@@ -454,7 +429,7 @@
       "edge_type": "Calls",
       "target": "ServicesEks2-StepFnlambdasteppriceLessThan556D8B30-2POHnQIjCcYJ",
       "status": "inconclusive",
-      "confidence": 0.0,
+      "confidence": 0.6225,
       "degradation": 0.0,
       "experiment": "self-loop-from-trace: same-function edge inferred from trace spans; no distinct downstream to partition",
       "verified_at": 1788561677,
@@ -463,11 +438,24 @@
       "edge_source": "xray"
     },
     {
+      "source": "WaggleAIOrchestrator",
+      "edge_type": "Delegates",
+      "target": "WaggleAIAdoption",
+      "status": "inconclusive",
+      "confidence": 0.6225,
+      "degradation": null,
+      "experiment": null,
+      "verified_at": 1788561271,
+      "reason": "干预确实生效：源侧运行时日志 403 达 6.89 次/分（基线 0.02，413 倍），\"gateway call to 'adoption' failed: 403 Forbidden\" 168 次 —— 委派被真实切断。但业务探针全程未退化（Orchestrator 把 403 包成 JSON 错误喂给 LLM，LLM 用对话历史编出看似正常的回答），因此拿不到 confirmed 所需的退化幅度。证据轴记 inconclusive（不是\"没测出来\"，而是\"测到切断生效但无业务退化\"），承重轴记 soft。⚠️ 该降级是静默错误而非优雅降级：回答基于过时数据。",
+      "evidence_channel": "source-denial-log+business-probe",
+      "edge_source": "agentcore-etl"
+    },
+    {
       "source": "payforadoption",
       "edge_type": "DependsOn",
       "target": "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1",
       "status": "inconclusive",
-      "confidence": 0.0,
+      "confidence": 0.5,
       "degradation": 0.0,
       "experiment": "image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable",
       "verified_at": 1788561628,
@@ -480,7 +468,7 @@
       "edge_type": "DependsOn",
       "target": "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1",
       "status": "inconclusive",
-      "confidence": 0.0,
+      "confidence": 0.5,
       "degradation": 0.0,
       "experiment": "image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable",
       "verified_at": 1788561628,
@@ -493,7 +481,7 @@
       "edge_type": "DependsOn",
       "target": "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1",
       "status": "inconclusive",
-      "confidence": 0.0,
+      "confidence": 0.5,
       "degradation": 0.0,
       "experiment": "image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable",
       "verified_at": 1788561628,
@@ -506,7 +494,7 @@
       "edge_type": "DependsOn",
       "target": "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1",
       "status": "inconclusive",
-      "confidence": 0.0,
+      "confidence": 0.5,
       "degradation": 0.0,
       "experiment": "image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable",
       "verified_at": 1788561628,
@@ -519,7 +507,7 @@
       "edge_type": "DependsOn",
       "target": "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1",
       "status": "inconclusive",
-      "confidence": 0.0,
+      "confidence": 0.5,
       "degradation": 0.0,
       "experiment": "image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable",
       "verified_at": 1788561628,
@@ -532,14 +520,79 @@
       "edge_type": "DependsOn",
       "target": "cdk-hnb659fds-container-assets-926093770964-ap-northeast-1",
       "status": "inconclusive",
-      "confidence": 0.0,
+      "confidence": 0.5,
       "degradation": 0.0,
       "experiment": "image-repo-dependency: cutting ECR affects only new Pod image pulls, not already-running Pods; no runtime degradation observable",
       "verified_at": 1788561628,
       "reason": null,
       "evidence_channel": null,
       "edge_source": "deepflow-etl"
+    },
+    {
+      "source": "payforadoption",
+      "edge_type": "AccessesData",
+      "target": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
+      "status": "modeling_artifact",
+      "confidence": 1.0,
+      "degradation": null,
+      "experiment": "source-audit-20260915",
+      "verified_at": 1789626733,
+      "reason": "payforadoption 不调 Step Functions｜证据：go.mod 中无 sfn/stepfunctions 依赖（连 indirect 都没有）｜搜过：stepfunctions, sfn, service/sfn, StartExecution, StateMachine｜附注：状态机的真实调用方是 petsite（PaymentController.cs:211，仅 pettype==bunny 时）",
+      "evidence_channel": "source-code+iac",
+      "edge_source": "deepflow-dns"
+    },
+    {
+      "source": "petsite",
+      "edge_type": "AccessesData",
+      "target": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+      "status": "modeling_artifact",
+      "confidence": 1.0,
+      "degradation": null,
+      "experiment": "source-audit-20260915",
+      "verified_at": 1789626733,
+      "reason": "petsite 无 DynamoDB 客户端；宠物数据经 petsearch/payforadoption 的 HTTP 接口取｜证据：PetSite.csproj 无 AWSSDK.DynamoDBv2；全树 grep 零命中｜搜过：dynamo, IAmazonDynamoDB, AWSSDK.DynamoDBv2｜附注：IRSA 角色的两条内联策略与四个托管策略也都无 DynamoDB 权限 —— 既无代码也无权限",
+      "evidence_channel": "source-code+iac",
+      "edge_source": "deepflow-dns"
+    },
+    {
+      "source": "petsite",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-databaseb269d8bb-efjeyzicx2ak",
+      "status": "modeling_artifact",
+      "confidence": 1.0,
+      "degradation": 36.21,
+      "experiment": "source-audit-20260915",
+      "verified_at": 1789626733,
+      "reason": "petsite 无任何数据库客户端，不可能直连 RDS｜证据：PetSite.csproj 无 Npgsql、无 EF 运行时 provider（仅 Microsoft.EntityFrameworkCore.Tools 9.0.10 且 PrivateAssets=all，是设计期脚手架、不入运行时）｜搜过：npgsql, postgres, SqlConnection, DbContext, UseNpgsql, connectionstring, :5432, entityframework｜附注：此前被标为 confirmed —— 那是一条假 confirmed，本次修正",
+      "evidence_channel": "source-code+iac",
+      "edge_source": "deepflow-dns"
+    },
+    {
+      "source": "petsearch",
+      "edge_type": "AccessesData",
+      "target": "sts",
+      "status": "modeling_artifact",
+      "confidence": 1.0,
+      "degradation": null,
+      "experiment": "source-audit-20260915",
+      "verified_at": 1789626733,
+      "reason": "petsearch 源码无显式 STS 调用｜证据：WebConfig.java 只构建 S3/S3Presigner/DynamoDb/Ssm 四个 bean（:46/:53/:60/:67），无 STS bean；唯一 grep 命中是 requeStStartTime / statusCode 的子串假阳性｜搜过：sts, securitytoken, getcalleridentity, assumerole, stsclient｜附注：build.gradle 确实把 sts SDK 放进 classpath，运行在 EKS 上时默认凭证链（IRSA / AssumeRoleWith",
+      "evidence_channel": "source-code+iac",
+      "edge_source": "xray"
+    },
+    {
+      "source": "petsite",
+      "edge_type": "AccessesData",
+      "target": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+      "status": "modeling_artifact",
+      "confidence": 1.0,
+      "degradation": null,
+      "experiment": "source-audit-20260915",
+      "verified_at": 1789626733,
+      "reason": "petsite 无 S3 客户端；页面上的宠物图片是 petsearch 签发的预签名 URL，由浏览器直取｜证据：PetSite.csproj 无 AWSSDK.S3（包清单里有 SSM/SQS/SNS/StepFunctions/BedrockAgentCore/SecurityToken/XRay，唯独没有 S3）；全树 grep 零命中｜搜过：AmazonS3, IAmazonS3, AWSSDK.S3, GetPreSignedURL, PutObject, GetObject｜附注：真实签发者是 petsearch，三条独立证据一致：① 源码 petsearch-java/.../",
+      "evidence_channel": "source-code+iac",
+      "edge_source": "deepflow-dns"
     }
   ],
-  "captured_at": "2026-09-05T06:05:52Z"
+  "captured_at": "2026-09-20T10:43:07Z"
 }

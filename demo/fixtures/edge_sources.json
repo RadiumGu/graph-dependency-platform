@@ -2,33 +2,33 @@
   "by_source": [
     {
       "source": "eks-etl",
-      "edge_type": "LocatedIn",
-      "c": 630
+      "edge_type": "RunsOn",
+      "c": 1955
     },
     {
       "source": "eks-etl",
-      "edge_type": "RunsOn",
-      "c": 352
+      "edge_type": "LocatedIn",
+      "c": 1472
     },
     {
       "source": "eks-etl",
       "edge_type": "Manages",
-      "c": 254
+      "c": 1062
     },
     {
       "source": "eks-etl",
       "edge_type": "BelongsTo",
-      "c": 241
+      "c": 1060
     },
     {
       "source": "eks-etl",
       "edge_type": "Routes",
-      "c": 231
+      "c": 1050
     },
     {
       "source": "aws-etl",
       "edge_type": "LocatedIn",
-      "c": 142
+      "c": 135
     },
     {
       "source": "manual-fix",
@@ -36,48 +36,38 @@
       "c": 28
     },
     {
-      "source": "deepflow-dns",
+      "source": "xray",
       "edge_type": "AccessesData",
-      "c": 22
+      "c": 27
     },
     {
       "source": "aws-etl",
       "edge_type": "HasSG",
-      "c": 20
+      "c": 19
     },
     {
-      "source": "eks-etl",
-      "edge_type": "OwnedBy",
-      "c": 20
+      "source": "deepflow-dns",
+      "edge_type": "AccessesData",
+      "c": 18
     },
     {
       "source": "aws-etl",
       "edge_type": "RoutesTo",
-      "c": 17
+      "c": 16
     },
     {
-      "source": "xray",
-      "edge_type": "AccessesData",
-      "c": 15
+      "source": "eks-etl",
+      "edge_type": "OwnedBy",
+      "c": 13
     },
     {
       "source": "aws-etl",
       "edge_type": "ForwardsTo",
-      "c": 14
-    },
-    {
-      "source": "deepflow-etl",
-      "edge_type": "DependsOn",
       "c": 13
     },
     {
       "source": "aws-etl",
       "edge_type": "Invokes",
-      "c": 12
-    },
-    {
-      "source": "eks-etl",
-      "edge_type": "Implements",
       "c": 12
     },
     {
@@ -87,23 +77,33 @@
     },
     {
       "source": "aws-etl",
-      "edge_type": "HasRule",
+      "edge_type": "BelongsTo",
+      "c": 8
+    },
+    {
+      "source": "agentcore-etl",
+      "edge_type": "InvokesTool",
       "c": 8
     },
     {
       "source": "aws-etl",
-      "edge_type": "BelongsTo",
+      "edge_type": "HasRule",
+      "c": 8
+    },
+    {
+      "source": "deepflow-etl",
+      "edge_type": "DependsOn",
+      "c": 8
+    },
+    {
+      "source": "eks-etl",
+      "edge_type": "Implements",
       "c": 7
     },
     {
       "source": "deepflow-etl",
       "edge_type": "Calls",
-      "c": 6
-    },
-    {
-      "source": "business-layer",
-      "edge_type": "DependsOn",
-      "c": 6
+      "c": 7
     },
     {
       "source": "business-layer",
@@ -111,18 +111,23 @@
       "c": 6
     },
     {
+      "source": "deepflow-l4",
+      "edge_type": "AccessesData",
+      "c": 6
+    },
+    {
       "source": "agentcore-etl",
-      "edge_type": "InvokesTool",
+      "edge_type": "RoutesToRuntime",
+      "c": 5
+    },
+    {
+      "source": "xray",
+      "edge_type": "Calls",
       "c": 5
     },
     {
       "source": "agentcore-etl",
-      "edge_type": "RoutesTo",
-      "c": 5
-    },
-    {
-      "source": "aws-etl",
-      "edge_type": "Contains",
+      "edge_type": "Delegates",
       "c": 3
     },
     {
@@ -131,18 +136,13 @@
       "c": 3
     },
     {
-      "source": "deepflow-l4",
-      "edge_type": "AccessesData",
-      "c": 3
-    },
-    {
       "source": "nfm",
       "edge_type": "AccessesData",
       "c": 3
     },
     {
-      "source": "xray",
-      "edge_type": "Calls",
+      "source": "aws-etl",
+      "edge_type": "Contains",
       "c": 3
     },
     {
@@ -156,6 +156,21 @@
       "c": 2
     },
     {
+      "source": "cfn-etl",
+      "edge_type": "AccessesData",
+      "c": 2
+    },
+    {
+      "source": "agentcore-etl",
+      "edge_type": "DependsOn",
+      "c": 2
+    },
+    {
+      "source": "appsignals-etl",
+      "edge_type": "AccessesData",
+      "c": 2
+    },
+    {
       "source": "aws-etl-static",
       "edge_type": "WritesTo",
       "c": 2
@@ -166,13 +181,13 @@
       "c": 2
     },
     {
-      "source": "agentcore-etl",
-      "edge_type": "Delegates",
-      "c": 2
-    },
-    {
       "source": "aws-etl-static",
       "edge_type": "Invokes",
+      "c": 1
+    },
+    {
+      "source": "xray",
+      "edge_type": "DependsOn",
       "c": 1
     },
     {
@@ -181,23 +196,8 @@
       "c": 1
     },
     {
-      "source": "aws-etl",
-      "edge_type": "TriggeredBy",
-      "c": 1
-    },
-    {
-      "source": "eks-etl",
-      "edge_type": "ConnectsTo",
-      "c": 1
-    },
-    {
-      "source": "aws-etl",
-      "edge_type": "InvokesVia",
-      "c": 1
-    },
-    {
-      "source": "cfn-etl",
-      "edge_type": "AccessesData",
+      "source": "agentcore-etl",
+      "edge_type": "RoutesVia",
       "c": 1
     },
     {
@@ -206,20 +206,25 @@
       "c": 1
     },
     {
+      "source": "eks-etl",
+      "edge_type": "ConnectsTo",
+      "c": 1
+    },
+    {
       "source": "agentcore-etl",
       "edge_type": "Retrieves",
       "c": 1
     },
     {
-      "source": "agentcore-etl",
-      "edge_type": "DependsOn",
+      "source": "aws-etl",
+      "edge_type": "InvokesVia",
       "c": 1
     },
     {
-      "source": "xray",
-      "edge_type": "DependsOn",
+      "source": "aws-etl",
+      "edge_type": "TriggeredBy",
       "c": 1
     }
   ],
-  "captured_at": "2026-09-05T06:05:53Z"
+  "captured_at": "2026-09-20T10:43:07Z"
 }

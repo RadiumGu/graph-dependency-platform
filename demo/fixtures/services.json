@@ -1,41 +1,6 @@
 {
   "services": [
     {
-      "name": "artillery",
-      "tier": null,
-      "az": "ap-northeast-1c",
-      "fault_boundary": "az",
-      "recovery_priority": "Tier2"
-    },
-    {
-      "name": "artillery-write",
-      "tier": null,
-      "az": "ap-northeast-1c",
-      "fault_boundary": "az",
-      "recovery_priority": "Tier2"
-    },
-    {
-      "name": "auth-service",
-      "tier": null,
-      "az": "ap-northeast-1c",
-      "fault_boundary": "az",
-      "recovery_priority": "Tier2"
-    },
-    {
-      "name": "gateway-service",
-      "tier": null,
-      "az": "ap-northeast-1c",
-      "fault_boundary": "az",
-      "recovery_priority": "Tier2"
-    },
-    {
-      "name": "order-service",
-      "tier": null,
-      "az": "ap-northeast-1c",
-      "fault_boundary": "az",
-      "recovery_priority": "Tier2"
-    },
-    {
       "name": "payforadoption",
       "tier": "Tier0",
       "az": "ap-northeast-1a",
@@ -62,6 +27,13 @@
       "az": "ap-northeast-1c",
       "fault_boundary": "az",
       "recovery_priority": "Tier2"
+    },
+    {
+      "name": "pethistory",
+      "tier": "Tier1",
+      "az": "ap-northeast-1a",
+      "fault_boundary": "az",
+      "recovery_priority": "Tier1"
     },
     {
       "name": "pethistory",
@@ -120,20 +92,6 @@
       "recovery_priority": "Tier1"
     },
     {
-      "name": "points-service",
-      "tier": null,
-      "az": "ap-northeast-1c",
-      "fault_boundary": "az",
-      "recovery_priority": "Tier2"
-    },
-    {
-      "name": "product-service",
-      "tier": null,
-      "az": "ap-northeast-1c",
-      "fault_boundary": "az",
-      "recovery_priority": "Tier2"
-    },
-    {
       "name": "trafficgenerator",
       "tier": null,
       "az": "ap-northeast-1a",
@@ -141,5 +99,5 @@
       "recovery_priority": "Tier2"
     }
   ],
-  "captured_at": "2026-09-05T06:05:53Z"
+  "captured_at": "2026-09-20T10:43:10Z"
 }

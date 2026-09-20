@@ -41,53 +41,48 @@
       "arn": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIOrdering-Mnr1HiASuX"
     },
     {
+      "label": "AgentRuntime",
+      "name": "graph_dependency_mcp",
+      "arn": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/graph_dependency_mcp-12Vg2Z9XXu"
+    },
+    {
       "label": "AgentTool",
-      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#adoption",
+      "name": "adoption",
       "arn": null
     },
     {
       "label": "AgentTool",
-      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#concierge",
+      "name": "concierge_chat",
       "arn": null
     },
     {
       "label": "AgentTool",
-      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#nutrition",
+      "name": "food_ordering",
       "arn": null
     },
     {
       "label": "AgentTool",
-      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#orchestrator",
+      "name": "get_available_foods",
       "arn": null
     },
     {
       "label": "AgentTool",
-      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#ordering",
+      "name": "list_available_foods",
       "arn": null
     },
     {
       "label": "AgentTool",
-      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIAdoption-4gnHUlDACh#search_available_pets",
+      "name": "nutrition_advisor",
       "arn": null
     },
     {
       "label": "AgentTool",
-      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAINutrition-2NEiCS7VJw#get_available_foods",
+      "name": "retrieve_nutrition_guidance",
       "arn": null
     },
     {
       "label": "AgentTool",
-      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAINutrition-2NEiCS7VJw#retrieve_nutrition_guidance",
-      "arn": null
-    },
-    {
-      "label": "AgentTool",
-      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIOrchestrator-K85tG867Xt#adoption",
-      "arn": null
-    },
-    {
-      "label": "AgentTool",
-      "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIOrchestrator-K85tG867Xt#nutrition_advisor",
+      "name": "search_available_pets",
       "arn": null
     },
     {
@@ -104,11 +99,110 @@
   "edges": [
     {
       "source_label": "AgentRuntime",
+      "source": "WaggleAIOrdering",
+      "edge_type": "AccessesData",
+      "target_label": "AWSServiceEndpoint",
+      "target": "bedrockruntime",
+      "verify_status": "untested",
+      "edge_source": "xray"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAIAdoption",
+      "edge_type": "AccessesData",
+      "target_label": "AWSServiceEndpoint",
+      "target": "bedrockruntime",
+      "verify_status": "untested",
+      "edge_source": "xray"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAINutrition",
+      "edge_type": "AccessesData",
+      "target_label": "AWSServiceEndpoint",
+      "target": "bedrockruntime",
+      "verify_status": "untested",
+      "edge_source": "xray"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAIOrchestrator",
+      "edge_type": "AccessesData",
+      "target_label": "AWSServiceEndpoint",
+      "target": "ssm",
+      "verify_status": "untested",
+      "edge_source": "xray"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAIOrdering",
+      "edge_type": "AccessesData",
+      "target_label": "AWSServiceEndpoint",
+      "target": "ssm",
+      "verify_status": "untested",
+      "edge_source": "xray"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAINutrition",
+      "edge_type": "AccessesData",
+      "target_label": "AWSServiceEndpoint",
+      "target": "bedrock",
+      "verify_status": "untested",
+      "edge_source": "xray"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAIAdoption",
+      "edge_type": "AccessesData",
+      "target_label": "AWSServiceEndpoint",
+      "target": "ssm",
+      "verify_status": "untested",
+      "edge_source": "xray"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAINutrition",
+      "edge_type": "AccessesData",
+      "target_label": "AWSServiceEndpoint",
+      "target": "ssm",
+      "verify_status": "untested",
+      "edge_source": "xray"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAIOrchestrator",
+      "edge_type": "AccessesData",
+      "target_label": "AWSServiceEndpoint",
+      "target": "bedrockruntime",
+      "verify_status": "untested",
+      "edge_source": "xray"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAIAdoption",
+      "edge_type": "Calls",
+      "target_label": "Microservice",
+      "target": "petsearch",
+      "verify_status": "untested",
+      "edge_source": "xray"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAIOrchestrator",
+      "edge_type": "Delegates",
+      "target_label": "AgentRuntime",
+      "target": "WaggleAIOrdering",
+      "verify_status": "untested",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentRuntime",
       "source": "WaggleAIOrchestrator",
       "edge_type": "Delegates",
       "target_label": "AgentRuntime",
       "target": "WaggleAINutrition",
-      "verify_status": "confirmed",
+      "verify_status": "untested",
       "edge_source": "agentcore-etl"
     },
     {
@@ -117,15 +211,33 @@
       "edge_type": "Delegates",
       "target_label": "AgentRuntime",
       "target": "WaggleAIAdoption",
-      "verify_status": "confirmed",
+      "verify_status": "inconclusive",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "Microservice",
+      "source": "petsite",
+      "edge_type": "DependsOn",
+      "target_label": "AgentRuntime",
+      "target": "WaggleAIOrchestrator",
+      "verify_status": "untested",
       "edge_source": "agentcore-etl"
     },
     {
       "source_label": "AgentTool",
-      "source": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIAdoption-4gnHUlDACh#search_available_pets",
+      "source": "search_available_pets",
       "edge_type": "DependsOn",
       "target_label": "Microservice",
       "target": "petsearch",
+      "verify_status": "confirmed",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAIOrdering",
+      "edge_type": "InvokesTool",
+      "target_label": "AgentTool",
+      "target": "list_available_foods",
       "verify_status": "untested",
       "edge_source": "agentcore-etl"
     },
@@ -134,7 +246,7 @@
       "source": "WaggleAIOrchestrator",
       "edge_type": "InvokesTool",
       "target_label": "AgentTool",
-      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIOrchestrator-K85tG867Xt#nutrition_advisor",
+      "target": "nutrition_advisor",
       "verify_status": "untested",
       "edge_source": "agentcore-etl"
     },
@@ -143,7 +255,7 @@
       "source": "WaggleAIAdoption",
       "edge_type": "InvokesTool",
       "target_label": "AgentTool",
-      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIAdoption-4gnHUlDACh#search_available_pets",
+      "target": "search_available_pets",
       "verify_status": "untested",
       "edge_source": "agentcore-etl"
     },
@@ -152,7 +264,25 @@
       "source": "WaggleAIOrchestrator",
       "edge_type": "InvokesTool",
       "target_label": "AgentTool",
-      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAIOrchestrator-K85tG867Xt#adoption",
+      "target": "concierge_chat",
+      "verify_status": "untested",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAIOrchestrator",
+      "edge_type": "InvokesTool",
+      "target_label": "AgentTool",
+      "target": "food_ordering",
+      "verify_status": "untested",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAIOrchestrator",
+      "edge_type": "InvokesTool",
+      "target_label": "AgentTool",
+      "target": "adoption",
       "verify_status": "untested",
       "edge_source": "agentcore-etl"
     },
@@ -161,7 +291,7 @@
       "source": "WaggleAINutrition",
       "edge_type": "InvokesTool",
       "target_label": "AgentTool",
-      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAINutrition-2NEiCS7VJw#retrieve_nutrition_guidance",
+      "target": "retrieve_nutrition_guidance",
       "verify_status": "untested",
       "edge_source": "agentcore-etl"
     },
@@ -170,7 +300,7 @@
       "source": "WaggleAINutrition",
       "edge_type": "InvokesTool",
       "target_label": "AgentTool",
-      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/WaggleAINutrition-2NEiCS7VJw#get_available_foods",
+      "target": "get_available_foods",
       "verify_status": "untested",
       "edge_source": "agentcore-etl"
     },
@@ -180,56 +310,65 @@
       "edge_type": "Retrieves",
       "target_label": "KnowledgeBase",
       "target": "waggle-ai-nutrition-kb",
-      "verify_status": "confirmed",
-      "edge_source": "agentcore-etl"
-    },
-    {
-      "source_label": "AgentGateway",
-      "source": "WaggleAIGateway",
-      "edge_type": "RoutesTo",
-      "target_label": "AgentTool",
-      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#orchestrator",
       "verify_status": "untested",
       "edge_source": "agentcore-etl"
     },
     {
       "source_label": "AgentGateway",
       "source": "WaggleAIGateway",
-      "edge_type": "RoutesTo",
-      "target_label": "AgentTool",
-      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#concierge",
+      "edge_type": "RoutesToRuntime",
+      "target_label": "AgentRuntime",
+      "target": "WaggleAIOrdering",
       "verify_status": "untested",
       "edge_source": "agentcore-etl"
     },
     {
       "source_label": "AgentGateway",
       "source": "WaggleAIGateway",
-      "edge_type": "RoutesTo",
-      "target_label": "AgentTool",
-      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#nutrition",
+      "edge_type": "RoutesToRuntime",
+      "target_label": "AgentRuntime",
+      "target": "WaggleAIAdoption",
       "verify_status": "untested",
       "edge_source": "agentcore-etl"
     },
     {
       "source_label": "AgentGateway",
       "source": "WaggleAIGateway",
-      "edge_type": "RoutesTo",
-      "target_label": "AgentTool",
-      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#ordering",
+      "edge_type": "RoutesToRuntime",
+      "target_label": "AgentRuntime",
+      "target": "WaggleAIOrchestrator",
       "verify_status": "untested",
       "edge_source": "agentcore-etl"
     },
     {
       "source_label": "AgentGateway",
       "source": "WaggleAIGateway",
-      "edge_type": "RoutesTo",
-      "target_label": "AgentTool",
-      "target": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p#adoption",
+      "edge_type": "RoutesToRuntime",
+      "target_label": "AgentRuntime",
+      "target": "WaggleAINutrition",
+      "verify_status": "untested",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentGateway",
+      "source": "WaggleAIGateway",
+      "edge_type": "RoutesToRuntime",
+      "target_label": "AgentRuntime",
+      "target": "WaggleAIConcierge",
+      "verify_status": "untested",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentRuntime",
+      "source": "WaggleAIOrchestrator",
+      "edge_type": "RoutesVia",
+      "target_label": "AgentGateway",
+      "target": "WaggleAIGateway",
       "verify_status": "untested",
       "edge_source": "agentcore-etl"
     }
   ],
-  "node_total": 20,
-  "edge_total": 14,
-  "captured_at": "2026-09-05T06:05:52Z"
+  "node_total": 19,
+  "edge_total": 30,
+  "captured_at": "2026-09-20T10:43:07Z"
 }
