@@ -55,8 +55,12 @@ e2.metric("契约 few-shot", len(FEW_SHOT),
           help="每组是「一个自然语言问题 + 它对应的正确 openCypher」，"
                "来自 `profiles/petsite.yaml`。左侧折叠区可逐条查看。")
 e3.caption(
-    f"引擎由 `rca/engines/factory.py` 按环境变量 `NLQUERY_ENGINE` 选择，"
-    f"**默认 `strands`**；strands 不可用时会记一条 warning 并静默回落 `direct`。\n\n"
+    f"引擎由 `rca/engines/factory.py` 构造，**只有 strands** 一种实现。\n\n"
+    f"2026-09-20 起 direct 实现已删除、factory 也去掉了回退分支 —— "
+    f"strands 不可用时**直接抛异常**，不再静默降级。\n\n"
+    f"去掉回退是有意的：那个回退曾让线上在包里没装 strands 的情况下"
+    f"一直静默跑 direct，而 golden 基线测的是装了 strands 的环境 —— "
+    f"两者不一致了五个月没人发现。\n\n"
     f"上面显示的是**实际构造出来的**引擎名，不是猜的环境变量值。"
 )
 

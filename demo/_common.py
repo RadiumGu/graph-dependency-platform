@@ -295,7 +295,8 @@ def active_engine_name() -> str:
 
     不能用 `os.environ.get("NLQUERY_ENGINE") or "direct"` 猜——
     `rca/engines/factory.py` 的默认值是 `strands`，而且 strands 不可用时
-    会静默回落 direct。改造前页面就是这么猜的，于是在不设环境变量时
+    曾会静默回落 direct（2026-09-20 起 direct 已删、回退已去掉，
+    strands 不可用时直接抛异常）。改造前页面就是这么猜的，于是在不设环境变量时
     显示 direct、实际跑 strands，还据此选错了「工作原理」的说明文字。
     """
     try:

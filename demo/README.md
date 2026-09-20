@@ -66,7 +66,7 @@ NEPTUNE_ENDPOINT=<cluster-endpoint> REGION=ap-northeast-1 streamlit run app.py
 | `NEPTUNE_ENDPOINT` | Neptune 集群端点（**不要**带 `:8182`） | 进离线快照模式 |
 | `REGION` | AWS 区域 | `ap-northeast-1` |
 | `BEDROCK_MODEL` | Smart Query / RCA 用的模型 | `global.anthropic.claude-sonnet-4-6` |
-| `NLQUERY_ENGINE` | `direct` \| `strands` | 由 `rca/engines/factory.py` 决定（默认 `strands`，失败回落 `direct`） |
+| `NLQUERY_ENGINE` | `strands` | 由 `rca/engines/factory.py` 构造。2026-09-20 起只有 strands 一种实现，direct 已删除、回退分支已去掉 —— 不可用时直接抛异常 |
 | `DEMO_ALLOW_INJECTION` | 设为 `1` 才在混沌页显示真实注入入口 | **不显示**（线上刻意不设） |
 
 > ⚠️ `DEMO_ALLOW_INJECTION` 是安全闸门。改造前混沌页有一个 `subprocess.Popen`
