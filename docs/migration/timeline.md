@@ -47,7 +47,7 @@ modules:
     freeze_date: 2026-04-19
     delete_date: 2026-08-19
     owner: "@programming-cat"
-    status: "frozen"
+    status: "deleted"
     notes: "Phase 3 Module 4 完成（2026-04-19）；Direct 12/12、Strands 12/12。Shadow 12/12。缓存方案 A（1839 tokens）。"
 
   - name: chaos-runner

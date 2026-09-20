@@ -12,7 +12,11 @@ import time
 from typing import Any
 
 from policy.base import PolicyGuardBase  # type: ignore
-from policy.guard_direct import _load_rules, _build_system_prompt  # type: ignore
+# 这两个函数 2026-09-20 从 guard_direct 搬到 guard_common —— 它们既不是
+# direct 特有逻辑也与 LLM 调用方式无关，只是恰好先写在那个文件里，
+# 却把「删掉 direct」这件事卡住了。搬家时逐字照搬并比对过输出：
+# 10 条规则一致、6408 字符 system prompt 逐字相同。
+from policy.guard_common import _load_rules, _build_system_prompt  # type: ignore
 
 logger = logging.getLogger(__name__)
 
