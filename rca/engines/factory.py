@@ -78,7 +78,17 @@ def make_learning_engine(profile: Any = None) -> "LearningBase":  # type: ignore
     # 由 strands 版继承提供 —— mixin 用 self.ENGINE_NAME，标签自然正确。
     #
     # ⚠️ 代价：strands 不可用时直接抛异常、不再降级。
-    from agents.learning_strands import StrandsLearningAgent  # type: ignore
+    # 路径写法与上面 hypothesis 保持一致（chaos.code.agents.*）——
+    # 原来这里写的是短路径 `from agents.learning_strands import`，
+    # 依赖 sys.path 里恰好有 chaos/code。两处不一致纯属历史遗留。
+    #
+    # ⚠️ 注意：`agents/` **不在 rca 的部署包清单里**
+    # （build.sh 只复制 core/neptune/actions/collectors/data/search/engines），
+    # 所以这个函数在 Lambda 里调用会 ImportError。当前无碍 ——
+    # make_learning_engine 只被 chaos/code/main.py（CLI）与测试调用，
+    # 两个 Lambda 都不走 learning。若将来 Lambda 需要它，必须先把
+    # agents/ 加进打包清单，否则就是又一个「本地跑得通、线上必挂」。
+    from chaos.code.agents.learning_strands import StrandsLearningAgent  # type: ignore
     return StrandsLearningAgent(profile=profile)  # type: ignore[return-value]
 
 def make_layer2_engine(profile: Any = None) -> "Layer2ProberBase":  # type: ignore[name-defined]
