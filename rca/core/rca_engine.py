@@ -544,7 +544,16 @@ def step4_score(error_services: list, cloudtrail_changes: list,
         # 时间线：最早出现错误
         if svc == earliest:
             score += 40
-            evidence.append(f"最早出现 5xx 错误（{svc_info['first_error']}）")
+            # 证据文案必须诚实反映数据来源。error_services 现在有两个来源：
+            # step1 的 DeepFlow L7 观测（真的看到 5xx），以及 analyze_group
+            # 并入的组内告警（只是监控判定异常，没有 5xx 观测）。
+            # 两者都可能成为 earliest 拿到这 +40 分，但说法不能混 ——
+            # 把"告警带进来的候选"写成"观测到 5xx 错误"是在伪造证据强度，
+            # 而这份 evidence 会直接进 Incident 节点和值班人看的报告。
+            if svc_info.get('source') == 'event_group_alert':
+                evidence.append(f"组内最早触发的告警（{svc_info['first_error']}）")
+            else:
+                evidence.append(f"最早出现 5xx 错误（{svc_info['first_error']}）")
         
         # 配置变更
         related_changes = [c for c in cloudtrail_changes

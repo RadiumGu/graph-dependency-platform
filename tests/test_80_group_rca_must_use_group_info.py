@@ -270,3 +270,43 @@ def test_t80_09_组内告警条目必须带审计来源标记():
     assert item["error_count"] == 0, (
         "告警只说明异常、不提供错误量，不得凭空编造 error_count 去参与打分"
     )
+
+
+def test_t80_10_证据文案不得把告警说成观测到5xx():
+    """拿到 +40 分的证据措辞必须反映真实来源。
+
+    `step4_score` 给「最早出错的服务」+40 分并写一条 evidence。那条文案原本
+    写死成「最早出现 5xx 错误」—— 在 error_services 只有 DeepFlow L7 一个
+    来源时是对的。analyze_group 并入组内告警后就有了第二个来源：告警只说明
+    监控判定异常，**没有 5xx 观测**。
+
+    这不是措辞洁癖：这份 evidence 会直接进 Incident 节点、进值班人看的报告。
+    把"告警带进来的候选"写成"观测到 5xx 错误"是在伪造证据强度。
+
+    （这个缺陷是 2026-09-20 线上真实驱动一次 Layer2 后从日志里发现的 ——
+    单元测试当时全绿，因为没有任何断言检查文案与来源是否一致。）
+    """
+    from core.rca_engine import step4_score
+
+    alert_born = [{
+        "service": "petsearch", "first_error": "2026-09-20T17:00:00+00:00",
+        "error_count": 0, "error_rate_pct": 0, "source": "event_group_alert",
+    }]
+    scored = step4_score(alert_born, [], [], "petsearch", l4_anomalies=[])
+
+    ev = " ".join(scored[0]["evidence"]) if scored else ""
+    assert "5xx" not in ev, (
+        f"告警带进来的候选不得被描述成观测到 5xx。实得证据：{ev}"
+    )
+    assert "告警" in ev, f"应当说明这是告警来源。实得证据：{ev}"
+
+    # 反向：DeepFlow 来源仍应说 5xx（不能为了修上面那条把话说含糊）
+    deepflow_born = [{
+        "service": "petsite", "first_error": "2026-09-20T17:00:00+00:00",
+        "error_count": 12, "error_rate_pct": 40,
+    }]
+    scored2 = step4_score(deepflow_born, [], [], "petsite", l4_anomalies=[])
+    ev2 = " ".join(scored2[0]["evidence"]) if scored2 else ""
+    assert "5xx" in ev2, (
+        f"DeepFlow 观测到的 5xx 仍应如实说明，不该被改含糊。实得：{ev2}"
+    )
