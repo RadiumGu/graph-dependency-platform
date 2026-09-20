@@ -73,11 +73,60 @@ def test_t67_01_contract_declares_blocked_reason_attr():
         '没有它，「后端打不到」只能混在 untested 里'
     )
     statuses = set(ev.get('statuses') or [])
-    assert statuses == {'untested', 'confirmed', 'refuted', 'inconclusive'}, (
+    assert statuses == {'untested', 'confirmed', 'refuted', 'inconclusive',
+                        'modeling_artifact', 'bootstrap_only'}, (
         f'verify_status 的取值集合变了: {sorted(statuses)}\n'
-        f'「打不到」**刻意不做成第五个 status** —— 它是能力维度而非结果维度，'
+        f'「打不到」**刻意不做成一个 status** —— 它是能力维度而非结果维度，'
         f'一条边可以同时「被阻断」且「未测试」。'
-        f'加第五个取值会让「不可验」看起来像一种验证结论。'
+        f'把「不可验」做成 status 会让它看起来像一种验证结论。\n'
+        f'⚠️ 也不要把 `soft` 加进来：它属于 verify_dependency_class'
+        f'（承重程度），不属于本字段（证据）。'
+    )
+
+
+def test_t67_01b_契约声明必须覆盖图谱实际在用的status(neptune_rca):
+    """契约是单一事实来源，所以它必须**覆盖数据**，不只是自己自洽。
+
+    ## 为什么补这一条（2026-09-20）
+
+    上面那条断言只校验契约文件里的列表，不校验图谱里实际写着什么。
+    于是三个会话各自往 `verify_status` 写了新值
+    （`modeling_artifact` / `bootstrap_only` / 错写的 `soft`），
+    而契约停在四个值 —— **三次漂移，门禁一次都没报警**。
+
+    盲区的形状值得记住：门禁守着"契约自己说了什么"，
+    没守着"实现是不是照契约做的"。契约与实现脱节时它永远是绿的。
+
+    本用例改为从图谱取实际取值集合，与契约声明求差集：
+      · 图谱有、契约没有 -> 契约过期，补登记（或者那个写入是错的）
+      · 契约有、图谱没有 -> 允许，取值可以暂时没有边在用
+    """
+    import yaml
+    import pathlib
+    gc = yaml.safe_load(
+        (pathlib.Path(__file__).resolve().parents[1] / 'profiles'
+         / 'graph_contract.yaml').read_text(encoding='utf-8'))
+    declared = set((gc.get('edge_verification') or {}).get('statuses') or [])
+
+    rows = neptune_rca.results("""
+MATCH ()-[r]->() WHERE r.verify_status IS NOT NULL
+RETURN DISTINCT r.verify_status AS st
+""")
+    actual = {r['st'] for r in rows if r.get('st')}
+    undeclared = actual - declared
+    assert not undeclared, (
+        f'图谱里这些 verify_status 取值没在契约里登记: {sorted(undeclared)}\n'
+        f'契约声明: {sorted(declared)}\n'
+        f'两种可能，必须分清再动手：\n'
+        f'  1. 取值是对的、契约过期 -> 往 profiles/graph_contract.yaml 的\n'
+        f'     edge_verification.statuses 补登记，并写清它是哪个轴的值；\n'
+        f'  2. 写入本身是错的（把别的轴挤进了 verify_status）->\n'
+        f'     改数据，不要改契约。\n'
+        f'判断依据看 chaos/code/runner/edge_verification.py:437 的三轴定义：\n'
+        f'  verify_status=取到了什么证据 / verify_dependency_class=承重程度 /\n'
+        f'  verify_assessability=为什么能或不能靠切断实验拿到 confirmed。\n'
+        f'实例：2026-09-17 有人（我）把 soft 写进 verify_status，'
+        f'那属于情况 2。'
     )
 
 

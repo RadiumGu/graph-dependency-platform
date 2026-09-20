@@ -1,0 +1,124 @@
+{
+  "taken_at": "20260917-070614",
+  "service": "petsearch",
+  "target_label": "S3Bucket",
+  "target": "serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+  "irsa_role": "ServicesEks2-searchserviceServiceAccountRole588AF64-Sulrl6FvKO5F",
+  "severance": "iam-deny",
+  "deny_document": {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Deny",
+        "Action": [
+          "s3:*"
+        ],
+        "Resource": [
+          "arn:aws:s3:::serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb",
+          "arn:aws:s3:::serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb/*"
+        ]
+      }
+    ]
+  },
+  "channel_edge": {
+    "baseline": {
+      "ok": true,
+      "success_rate": 0.0,
+      "total_requests": 222,
+      "p99_ms": 420.9
+    },
+    "during": {
+      "ok": true,
+      "success_rate": 0.0,
+      "total_requests": 217,
+      "p99_ms": 35.7
+    },
+    "post": {
+      "ok": true,
+      "success_rate": 0.0,
+      "total_requests": 182,
+      "p99_ms": 239.2
+    }
+  },
+  "channel_business": {
+    "baseline": {
+      "ok": true,
+      "no_probe": false,
+      "per_probe": {
+        "home": [
+          26,
+          26,
+          26
+        ],
+        "images": [
+          3,
+          3,
+          3
+        ]
+      },
+      "detail": "home=[26, 26, 26]; images=[3, 3, 3]"
+    },
+    "during": {
+      "ok": true,
+      "no_probe": false,
+      "per_probe": {
+        "home": [
+          26,
+          26,
+          26,
+          26
+        ],
+        "images": [
+          0,
+          0,
+          0,
+          0
+        ]
+      },
+      "detail": "home=[26, 26, 26, 26]; images=[0, 0, 0, 0]"
+    },
+    "post": {
+      "ok": true,
+      "history": [
+        {
+          "home": 26,
+          "images": 3
+        },
+        {
+          "home": 26,
+          "images": 3
+        },
+        {
+          "home": 26,
+          "images": 3
+        },
+        {
+          "home": 26,
+          "images": 3
+        },
+        {
+          "home": 26,
+          "images": 3
+        },
+        {
+          "home": 26,
+          "images": 3
+        },
+        {
+          "home": 26,
+          "images": 3
+        },
+        {
+          "home": 26,
+          "images": 3
+        }
+      ],
+      "recovered": true,
+      "detail": "连续 8 次全部探针回到基线"
+    }
+  },
+  "policy_removed": true,
+  "verdict": "observation_only",
+  "why": "业务归零（home 未退化（26）；images 归零（3 → 0，采样 [0, 0, 0, 0]））但被测边成功率只降 0.0pp —— 退化原因可能不是这次注入，信号混淆，拒绝出判定",
+  "caveat": "IAM deny 证明依赖承重，不等于延迟/部分失败场景测试"
+}

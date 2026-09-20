@@ -756,6 +756,27 @@ edge_verification:
   - confirmed
   - refuted
   - inconclusive
+  # 2026-09-20 补登记。这两个值早在实现里用着（图谱里 7 条边），
+  # 而这张表停在四个 —— 契约是单一事实来源，脱节的是它。
+  #
+  # 判断依据是 chaos/code/runner/edge_verification.py:437 的三轴定义：
+  # 本字段回答「取到了什么证据」，下面两个值都是**证据陈述**，所以属于这里。
+  #
+  #   modeling_artifact  源码证明这条依赖不可能发生（带 file:line 证据）。
+  #                      与 refuted 同为「不成立」，区别在证据来源：
+  #                      refuted 靠注入实验，它靠静态源码。
+  #                      写入受 scripts/classify_modeling_artifacts.py 约束
+  #                      （声明式白名单 + evidence 必填 + searched 必填 + 绝不删边）。
+  #   bootstrap_only     这条边只在启动引导期成立，稳态下不承载调用，
+  #                      所以切断实验拿不到 confirmed。
+  #
+  # ⚠️ **不要**把 `soft` 加进来。它是 `verify_dependency_class`
+  # （承重程度：hard/degraded/soft/unclassified）的取值。
+  # 2026-09-17 我把一条 Delegates 边写成 `verify_status='soft'`，
+  # 就是又一次「两套轴挤进一个字段」—— 09-20 已改成
+  # status=confirmed + dependency_class=soft。
+  - modeling_artifact
+  - bootstrap_only
   thresholds:
     confirm_degradation_pct: 20.0
     hard_degradation_pct: 70.0
