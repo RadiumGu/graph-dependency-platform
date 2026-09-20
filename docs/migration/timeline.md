@@ -16,7 +16,7 @@ modules:
     delete_date: 2026-04-29   # 冻结一周（大乖乖指定）
     owner: "@programming-cat"
     status: "frozen"
-    notes: "Phase 2 L1 POC 完成（2026-04-18）；direct 20/20, strands 20/20。2026-04-22 冻结，一周后解冻。2026-09-20 更正：此处原写 strands 19/20，与实测基线矛盾 —— tests/golden/BASELINE-strands.md（Last run 2026-04-18 08:43:19 UTC，与 direct 同一次运行、同一提交 6ac836a）记的是 Pass 20/20 = 100.0%。基线由测试直接产出，本 notes 是手写的，以基线为准。⚠️ 真正的卡点不是准确率而是尾延迟与成本：strands p99 42897ms vs direct 7690ms（5.58x，而验收门槛是 ≤2.5x）、token 462863 vs 115747（4.00x）、cache 命中率 90.9% vs 99.6%。两者相关：ReAct 多轮工具调用打散了 prompt 前缀，缓存复用变差，既慢又贵。删除 direct 在代码耦合上零风险（strands 不复用它，只需去掉 factory 回退分支），但会把这个劣化固定下来、没有退路。且这批数据已过五个月未重跑，当前真实差距未知。"
+    notes: "Phase 2 L1 POC 完成（2026-04-18）；direct 20/20, strands 20/20。2026-04-22 冻结，一周后解冻。2026-09-20 更正：此处原写 strands 19/20，与实测基线矛盾 —— tests/golden/BASELINE-strands.md（Last run 2026-04-18 08:43:19 UTC，与 direct 同一次运行、同一提交 6ac836a）记的是 Pass 20/20 = 100.0%。基线由测试直接产出，本 notes 是手写的，以基线为准。2026-09-20 重跑双引擎并完成调优，**卡点已消除**。① 重测发现那批 04-18 数据早已过期：strands p99 自然降到 15851ms（vs direct 7297ms = 2.17x），原记的 5.58x 五个月前就不再成立 —— 卡了五个月只因为没人重跑。② 随后做了两处结构调优：ReAct 从 3 轮压到 2 轮（删掉强制前置的 validate_cypher —— 安全校验在 execute_cypher 内部无条件执行、从不依赖 Agent 先调 validate，那一轮是净亏；安全性不变），并删掉 get_schema_section（同一份 schema 已完整在 system prompt 里，实测被调用 0 次）。③ 引擎侧不再为拿完整结果重跑一次 Neptune（tool 执行时就把未截断 rows 存下）。调优后 p99 11476ms = **1.57x**（门槛 ≤2.5x，余量 37%）、token 2.28x、p50 5197ms、准确率仍 20/20。三次测量同日、同 20 条用例、同环境。"
 
   - name: hypothesis-agent
     direct_file: chaos/code/agents/hypothesis_direct.py

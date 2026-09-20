@@ -84,12 +84,14 @@ with st.sidebar:
     st.markdown("### 工作原理")
     if engine_name == "strands":
         st.caption(
-            "**Strands Agent（ReAct 多轮）**\n\n"
+            "**Strands Agent（ReAct 2 轮）**\n\n"
             "1. 按关键词选模型：Sonnet，命中「完整/影响/路径」等复杂词升 Opus\n"
-            "2. Agent 调 `get_schema_section` 按需取 schema\n"
-            "3. Agent 调 `validate_cypher` 做安全校验\n"
-            "4. Agent 调 `execute_cypher`——内部强制 `query_guard.is_safe()`\n"
-            "5. Agent 生成中文摘要\n\n"
+            "2. cycle 1：据 system prompt 里的完整 schema 生成 Cypher → "
+            "调 `execute_cypher`（内部强制 `query_guard.is_safe()`）\n"
+            "3. cycle 2：据结果生成中文摘要\n\n"
+            "2026-09-20 调优：原为 3 轮（中间一轮 `validate_cypher`）。"
+            "安全校验在 `execute_cypher` 内部无条件执行、不依赖 Agent 先调 validate，"
+            "那一轮是净亏 → p99 降 27.6%、token 降 33.4%，准确率仍 20/20。\n\n"
             "每个回答下方可展开完整的工具调用链。"
         )
     elif engine_name == "direct":
@@ -196,8 +198,11 @@ def _render_trace(trace: list) -> None:
             elif tool == "validate_cypher":
                 st.markdown(f"**{i}. {tool}** {'✅' if t.get('safe') else '⚠️'} — {t.get('reason', '')}")
             elif tool == "get_schema_section":
+                # 该 tool 已于 2026-09-20 删除（schema 完整在 system prompt，实测调用 0 次）。
+                # 这个分支保留用于渲染删除前存档的历史 trace。
                 st.markdown(
                     f"**{i}. {tool}** — section=`{t.get('section', 'all')}`，{t.get('chars', 0)} 字符"
+                    "  ·  _该工具已于 2026-09-20 移除_"
                 )
             else:
                 st.markdown(f"**{i}. {tool}**")

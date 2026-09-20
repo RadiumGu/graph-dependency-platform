@@ -1,6 +1,6 @@
 # Smart Query Golden Baseline — engine: strands
 
-_Last run: 2026-04-18 08:43:19 UTC_
+_Last run: 2026-09-20 16:42:12 UTC_
 
 | Metric | Value |
 |--------|-------|
@@ -8,12 +8,12 @@ _Last run: 2026-04-18 08:43:19 UTC_
 | Pass (all checks) | 20/20 = 100.0% |
 | Feature match | 20/20 = 100.0% |
 | Result correctness | 20/20 = 100.0% |
-| Latency p50 | 9823 ms |
-| Latency p99 | 42897 ms |
-| Total tokens (approx) | 462863 |
-| Cache read tokens | 400620 |
-| Cache write tokens | 8287 |
-| Avg Cache Hit Ratio | 90.9% |
+| Latency p50 | 5197 ms |
+| Latency p99 | 11476 ms |
+| Total tokens (approx) | 513876 |
+| Cache read tokens | 462046 |
+| Cache write tokens | 13813 |
+| Avg Cache Hit Ratio | 94.3% |
 
 ## Failures
 

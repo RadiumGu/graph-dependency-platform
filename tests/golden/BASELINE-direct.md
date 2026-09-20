@@ -1,6 +1,6 @@
 # Smart Query Golden Baseline — engine: direct
 
-_Last run: 2026-04-18 08:43:19 UTC_
+_Last run: 2026-09-20 16:34:46 UTC_
 
 | Metric | Value |
 |--------|-------|
@@ -8,12 +8,12 @@ _Last run: 2026-04-18 08:43:19 UTC_
 | Pass (all checks) | 20/20 = 100.0% |
 | Feature match | 20/20 = 100.0% |
 | Result correctness | 20/20 = 100.0% |
-| Latency p50 | 5202 ms |
-| Latency p99 | 7690 ms |
-| Total tokens (approx) | 115747 |
-| Cache read tokens | 106376 |
-| Cache write tokens | 7169 |
-| Avg Cache Hit Ratio | 99.6% |
+| Latency p50 | 4055 ms |
+| Latency p99 | 7297 ms |
+| Total tokens (approx) | 225197 |
+| Cache read tokens | 199956 |
+| Cache write tokens | 22725 |
+| Avg Cache Hit Ratio | 99.7% |
 
 ## Failures
 

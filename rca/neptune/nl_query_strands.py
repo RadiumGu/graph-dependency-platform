@@ -1,12 +1,14 @@
 """
 nl_query_strands.py - Strands Agents 实现的 Smart Query 引擎。
 
-流程（ReAct）:
-  1. Agent 收到自然语言问题
-  2. Agent 自行决定调用 get_schema_section / validate_cypher / execute_cypher
-  3. execute_cypher 内部强制 query_guard.is_safe()
-  4. 引擎从 trace 中提取最终 cypher + results
-  5. 调用 _summarize 生成中文摘要（与 direct 版共用逻辑，但不复用代码以保持解耦）
+流程（ReAct，2026-09-20 起 2 轮）:
+  1. Agent 收到自然语言问题（schema 已完整在 system prompt 里）
+  2. cycle 1: 生成 Cypher → 直接调 execute_cypher（内部强制 query_guard.is_safe()）
+  3. cycle 2: 收到结果 → 生成 2-4 句中文摘要
+  4. 引擎从 st_tools.last_rows() 取**完整**结果（不再重跑 Neptune）
+
+  优化前是 3 轮：中间多一轮 validate_cypher，而安全校验在 execute 内部
+  本就无条件执行，那一轮纯属浪费。详见 _AGENT_RULES 下方注释。
 
 硬约束（TASK § 6）:
   - 不启用 Wave 4 的 _should_retry_on_empty 逻辑（依赖 Strands 原生 ReAct 多轮）
@@ -32,15 +34,42 @@ logger = logging.getLogger(__name__)
 
 _AGENT_RULES = (
     "\n\n## Agent 调用规则\n"
-    "1. 先思考问题涉及哪些节点/关系。如不确定，调用 get_schema_section。\n"
-    "2. 生成 Cypher 后先调用 validate_cypher 校验；通过后再调用 execute_cypher。\n"
-    "3. 不得直接拼接未经 validate_cypher 的查询。\n"
+    "1. 上面已给出**完整** schema，直接据此生成 Cypher。\n"
+    "2. 生成 Cypher 后**直接调用 execute_cypher**。它内部强制安全校验，"
+    "不安全会返回 \"ERROR: guard blocked...\"，届时你再修正重试即可。\n"
+    "3. 不必在执行前先调 validate_cypher —— 那会多花一轮。"
+    "只在你对某个可疑写法想预检时才用它。\n"
     "4. 必须完整保留问题中的所有过滤条件（如 severity='P0'、tier='Tier0'、name='petsite' 等），不得泛化。"
     "例：问“所有 P0 故障”必须生成 WHERE inc.severity = 'P0'，不得返回全部 Incident。\n"
     "5. 如果结果为空且你怀疑关系名写错了（尤其 AccessesData vs DependsOn），换一个常见关系名重试最多 1 次。\n"
     "6. 微服务访问数据库（RDS / DynamoDB / S3）用 AccessesData，不是 DependsOn。\n"
     "7. 最后用 2-4 句中文总结结果，直接给结论。"
 )
+
+# ── 2026-09-20 规则调优：3 轮 ReAct 压到 2 轮 ────────────────────────────
+#
+# 实测（6 条 golden 查询）优化前每次查询固定 3 个 cycle：
+#
+#   cycle 1  LLM 生成 cypher      → 调 validate_cypher
+#   cycle 2  LLM 收到 "OK"        → 调 execute_cypher
+#   cycle 3  LLM 收到结果         → 生成中文总结
+#
+# 中间那轮**纯属浪费**：`execute_cypher` 内部无条件执行
+# `query_guard.is_safe()`，安全性从来不依赖 Agent 先调 validate。
+# 原规则 2/3（"先 validate 再 execute"、"不得直接拼接未经 validate 的查询"）
+# 是在**请求 Agent 配合**做一件代码已经强制了的事。
+#
+# ⚠️ 这不降低安全性，理由必须说清楚，否则以后会被误读成削弱防线：
+#   · 真正的防线是 `execute_cypher` 里那句无条件的 `is_safe()`，
+#     它挡的是 Agent **已经决定要执行**的语句，Agent 配合与否都挡得住；
+#   · 对不安全查询，两条路径的轮数完全相同 —— 直接 execute 被 guard 挡回
+#     的反馈，和 validate 返回 UNSAFE 的反馈，都是一轮；
+#   · 对安全查询（绝大多数），先 validate 是净亏一轮。
+#   · `validate_cypher` 工具本身保留，Agent 想预检仍可调。
+#
+# 同时删掉 `get_schema_section`（规则 1 原本引导 Agent 调它）：
+# 那份 schema 已完整在 system prompt 里，实测被调用 0 次。
+# 详见 `neptune/strands_tools.py` 里删除处的注释。
 
 
 class StrandsNLQueryEngine(NLQueryBase):
@@ -88,19 +117,14 @@ class StrandsNLQueryEngine(NLQueryBase):
                               t0=t0, error=repr(e))
 
         trace = st_tools.get_trace()
-        last = st_tools.last_execution()
-        cypher = last.get("cypher", "")
-        # 真正的结果不在 trace（被截断 4000 字符）；重新执行确认拿完整 results
-        results: list = []
-        if cypher:
-            from neptune import neptune_client as nc
-            from neptune import query_guard
-            safe, _ = query_guard.is_safe(cypher)
-            if safe:
-                try:
-                    results = nc.results(query_guard.ensure_limit(cypher))
-                except Exception as e:
-                    logger.warning("Strands engine re-exec failed: %s", e)
+        # 完整结果直接从 tool 取 —— 它执行时就存下了未截断的 rows。
+        #
+        # 2026-09-20 之前这里是**重新跑一次 Neptune 查询**：因为给 LLM 的
+        # tool 返回被截断到 4000 字符，引擎拿不到完整 results。于是每次查询
+        # 都白跑两趟 Neptune（Agent 一趟、引擎一趟）查同一条 cypher。
+        full = st_tools.last_rows()
+        cypher = full.get("cypher") or ""
+        results: list = full.get("rows") if full.get("rows") is not None else []
 
         summary = self._extract_agent_text(resp) or self._fallback_summary(results)
         tokens = self._extract_token_usage(resp)
@@ -122,7 +146,9 @@ class StrandsNLQueryEngine(NLQueryBase):
         model = build_bedrock_model(model_id=model_id, region=DEFAULT_REGION)
         return Agent(
             model=model,
-            tools=[st_tools.get_schema_section, st_tools.validate_cypher, st_tools.execute_cypher],
+            # get_schema_section 已删（schema 完整在 system prompt，实测调用 0 次）。
+            # validate_cypher 保留但不再强制前置，见 _AGENT_RULES 下方注释。
+            tools=[st_tools.validate_cypher, st_tools.execute_cypher],
             system_prompt=self.system_prompt,
         )
 
