@@ -40,7 +40,36 @@ done
 
 # ── 安装第三方依赖 ──────────────────────────────────────────────────────────
 echo "Installing dependencies..."
-pip3 install requests -t "$DEST_DIR" -q
+# ⚠️ 2026-09-20 修正：原先只装 `requests`，而本包里的
+# `core/rca_engine.py:775` 会调 `make_layer2_engine()` ——
+# **gp-window-flush 才是真正执行 RCA 分析的那个 Lambda**
+# （petsite-rca-engine 只做告警缓冲，窗口到期后交给这里）。
+#
+# 实测线上包里 strands 条目数为 0，于是 factory ImportError →
+# warning + 回退 direct。也就是说 Layer 2 探测一直跑的是 direct 实现。
+#
+# 这个缺陷比 rca/deploy.sh 那处更严重：那个包只缓冲、不跑分析，
+# 所以给它装上 strands 之后"回退 direct 日志为 0"看起来像切换成功，
+# 实际只是那条路径没被走到 —— 差点据此得出错误结论。
+#
+# 依赖清单与平台参数与 rca/deploy.sh 保持一致（两处必须同步，
+# 因为它们装的是同一份 rca/ 源码）：
+#   · 刻意不装 strands-agents-tools：它带 sympy 81M + Pillow 22M，
+#     全量解压 251M 超 Lambda 250M 上限；本仓库只 import strands 本体。
+#   · 不显式钉 pydantic：显式钉会与 strands 冲突
+#     （ResolutionImpossible：pydantic==2.0 与 2.0.1 互斥）。
+#   · 用 python3.11 -m pip 而非裸 pip3：构建机 pip3 是 py3.9，
+#     而 strands-agents 要求 >=3.10，`--python-version` 只影响选 wheel、
+#     不改解释器自身的版本校验。
+#   · 平台定向 aarch64 + py3.12：与 Lambda 运行时一致，
+#     否则 pydantic-core / _yaml 这类二进制扩展在运行时 ImportError。
+python3.11 -m pip install requests pyyaml strands-agents \
+    --platform "${LAMBDA_ARCH:-manylinux2014_aarch64}" \
+    --python-version "${LAMBDA_PY:-3.12}" \
+    --only-binary=:all: \
+    -t "$DEST_DIR" -q
+# boto3 / botocore 由 Lambda 运行时提供（27M+），装进包里纯属浪费体积。
+rm -rf "$DEST_DIR"/boto3* "$DEST_DIR"/botocore* "$DEST_DIR"/awscli* 2>/dev/null || true
 
 # ── 清理不必要文件 ─────────────────────────────────────────────────────────
 find "$DEST_DIR" -name "*.pyc" -delete
