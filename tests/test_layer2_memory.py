@@ -87,22 +87,13 @@ def test_strands_memory_under_2gb():
     assert after_mb < 2048, f"Total RSS {after_mb:.0f} MB exceeds 2 GB limit"
 
 
-def test_direct_memory_baseline():
-    """Direct engine should be very lightweight."""
-    import gc
-    gc.collect()
-    baseline_mb = _get_rss_mb()
+# 注：`test_direct_memory_baseline` 于 2026-09-20 删除。
+#
+# 它断言 `LAYER2_ENGINE=direct` 时 `engine.ENGINE_NAME == "direct"`，
+# 而 `collectors/layer2_direct.py` 已随迁移收尾删除、factory 也去掉了
+# 回退分支 —— 现在无论 env 设什么都只有 strands 一种实现，
+# 这个测试必然红且没有可修复的语义（它比较的对象不存在了）。
+#
+# 保留 `test_strands_memory_under_2gb`：内存预算仍然要守，
+# 实测 strands 引擎构造峰值 67MB。
 
-    os.environ["LAYER2_ENGINE"] = "direct"
-    from engines.factory import make_layer2_engine
-
-    engine = make_layer2_engine()
-    assert engine.ENGINE_NAME == "direct"
-
-    gc.collect()
-    after_mb = _get_rss_mb()
-    delta_mb = after_mb - baseline_mb
-    print(f"\nDirect engine: {after_mb:.0f} MB (delta: {delta_mb:.0f} MB)")
-
-    # Direct should add almost nothing
-    assert delta_mb < 100, f"Direct engine added {delta_mb:.0f} MB, unexpected"

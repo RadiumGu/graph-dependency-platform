@@ -1648,3 +1648,128 @@ reason 里写清「不是『没测出来』,而是『测到切断生效但无业
 
 2. **校验"契约自洽"的门禁挡不住漂移,必须校验"契约覆盖数据"。**
    凡是有单一事实来源的地方,都要问一句:它和实际数据比过吗?
+
+---
+
+## 2026-09-20 晚 — 把线上换成 strands:五个坑,一条主线
+
+主线是一句话:**"回退"把"从未真正运行过"藏了五个月。**
+
+factory 的默认引擎是 strands、strands 不可用时 warning 回退 direct。
+而线上 Lambda 包里**根本没装 strands**（实测条目数 0），
+于是六条 LLM 路径全在静默跑 direct，只在日志里留一行 warning。
+golden 基线测的是本地装了 strands 的环境、生产跑的却是 direct ——
+**两套东西被当成同一套看了五个月。**
+
+`requirements.txt:59` 早就把 strands 声明为必装，注释还写着
+"缺它会让全部六条路径静默回退 direct"。问题被记录过，打包脚本没跟上。
+
+### 坑一:只部署了一半,而且验证给出了假绿
+
+给 `petsite-rca-engine` 装上 strands 后发告警验证，
+"回退 direct" 日志 **0 条** —— 看起来成功了。
+
+**那条路径根本没被走到。** 它只做缓冲（返回 202 buffered），
+日志里没有任何 Layer2 痕迹。真正跑 `make_layer2_engine()` 的是
+`gp-window-flush`，它的包里 strands 条目**仍然是 0**。
+
+**如果把那个 0 当成切换成功，结论就完全反了。**
+这是本台账里"拿没看到错误当成功证据"的第 N 次，
+而这次的伪装特别好：判据本身是对的（回退日志确实该变 0），
+错的是**它在一条不经过被测代码的路径上取样**。
+
+教训:**验证判据必须落在被测代码实际执行的路径上。**
+判据正确 + 取样位置错误 = 假绿，比没有判据更危险。
+
+### 坑二:包体积 251M 超限,而罪魁不是 strands
+
+    251M  + strands-agents + strands-agents-tools   ✗ 超 Lambda 250M
+     69M  只加 strands-agents                        ✓
+      7.8M  strands 本体
+
+`strands-agents-tools` 拖进 **sympy 81M + Pillow 22M**（计算器、图像处理），
+RCA 链路一个都不用。而代码里那几处 `strands_tools` 是项目自己的模块
+（`rca/neptune/strands_tools.py`），与 PyPI 同名包无关 ——
+**差点因为名字相同而认为必须装它**。去掉一项省 155M。
+
+### 坑三:两个打包脚本的清单漂移,连撞三次
+
+`build.sh` 与 `rca/deploy.sh` 打**同一份 rca/ 源码**，各自维护复制清单。
+差集：
+
+    engines/    Layer2 的 factory 就在里面 → 缺了直接 ImportError
+    shared/     neptune_client 有 from shared import get_region
+                → **冷启动就挂**
+    profiles/   EnvironmentProfile 动态加载要读
+                → **冷启动能过**，运行到 _process_group 才炸
+
+三个是**逐个报错逐个修**出来的，每轮都要一次真部署 + 一次真调用才暴露一个。
+已加打包自检，把"部署后才发现"提前到"构建时就失败"。
+
+其中 `profiles` 那次证明一条：**"部署前验 import 通过"不足以保证可用。**
+我确实在部署前跑过 `import window_flush_handler` 并通过，
+但 profiles 的缺失只在**运行时路径**上暴露，不在导入期。
+冷启动验证只能挡住 shared 那一类。
+
+### 坑四:`git checkout -- <构建产物目录>` 会还原同目录的构建脚本
+
+我前两次对 `build.sh` 的修改（engines / shared）就这样被冲掉了，
+部署时用的还是旧脚本。而 shared 那次"没报错"只是因为就地构建目录里
+残留着上一轮的文件 —— **一个假通过**。
+
+根因是 `infra/lambda/rca_window_flush/` 有三重身份：
+git 跟踪的源码位置、CDK 的 `fromAsset` 资产目录、build.sh 的就地输出目录。
+
+规矩:**改构建脚本必须先提交再构建。**
+已让 `DEST_DIR` 可覆盖以支持隔离构建，但默认仍是就地
+（改默认会让 `cdk deploy` 打出空包）。
+
+### 坑五:超时是结构性矛盾,不是调参问题
+
+切 strands 后第一次真实执行就撞墙：
+
+    15:25:24  启动
+    15:25:32  RCA 开始        （启动开销 8s）
+    15:26:19  RCA complete in 46.3s  （已用 55s）
+              之后还要写图谱/通知 → 撞 60s
+    Sandbox.Timedout after 60.00 seconds
+
+`rca_engine.py:781` 给 strands 的 Step 3d timeout **本身就是 60s**，
+而整个 Lambda 也只有 60s。写那行的人预见到 strands 慢
+（`timeout_sec=60 if ENGINE_NAME == 'strands' else 12`），
+**但没有同步放大 Lambda 的总预算**。direct 时代能过（只给 12s），
+切 strands 后必然超时。
+
+改 300s / 512MB。内存不是为了容量（实测构造峰值仅 67MB），
+而是 Lambda 的 CPU 配额随内存线性分配，ReAct 多轮调用是 CPU 敏感的。
+
+### 最终结果
+
+    回退 direct 日志              0 条（这次取样在真实执行路径上）
+    Creating Strands MetricsClient  ✓
+    Step3d AWS probers: 6 results
+    RCA complete in 48.8s
+    完整链路 78s，groups_processed=1，groups_failed=0
+
+Layer 2 的 agent 编排了 probe_deployment / probe_xray / probe_logs
+并推出 "Failure Domain = Compute/Pod Layer" —— direct 产不出的 ReAct 轨迹。
+
+随后删掉档 A 三个模块（layer2 / runner / dr-executor）的 direct 实现
+与 factory 回退分支，CI 迁移债务 **7 条减到 4 条**，
+三个 factory 实测都返回 strands。
+
+### 顺带发现一笔新债务
+
+`window_flush_handler.py:115` 调 `fault_classifier.classify_group()`，
+而 `rca/core/fault_classifier.py` **只有 `classify()`，从来没有
+`classify_group()`**。同理 `rca_engine.analyze_group()` 也不存在。
+两处都被 `except` 接住并降级，所以 `groups_failed=0` 看不出问题 ——
+但意味着「按 EventGroup 分类」这个设计**从写下来就没成功过一次**，
+跑的始终是降级的「用根因告警直接分类」。
+
+这是第三次遇到同一形状：**try/except 把设计缺陷变成了静默降级。**
+前两次是 `_via_gateway` 把 403 包成 JSON 喂给 LLM、
+以及 handler 把 DevOps Agent 的失败吞成 warning。
+
+可迁移的一条:**给"增强功能"写 except 是对的，
+但每条降级路径都必须留下可读的痕迹**，否则它会把缺陷藏到没人发现。

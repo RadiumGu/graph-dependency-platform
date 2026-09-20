@@ -23,14 +23,14 @@ def make_runner_engine(dry_run: bool = True):
     if not effective_dry_run:
         logger.warning("⚠️ Runner dry_run=False — 将执行真实故障注入！")
 
-    if engine == "strands":
-        try:
-            from runner.runner_strands import StrandsRunner  # type: ignore
-            return StrandsRunner(dry_run=effective_dry_run)
-        except ImportError as e:
-            logger.warning("Strands Runner 不可用 (%s)；回退 direct。", e)
-        except Exception as e:
-            logger.warning("Strands Runner 构造失败 (%r)；回退 direct。", e)
-
-    from runner.runner_direct import DirectRunner  # type: ignore
-    return DirectRunner(dry_run=effective_dry_run)
+    # ── 2026-09-20：去掉 direct 回退，只保留 strands ──────────────────────
+    #
+    # 那个回退在生产上**一直是实际路径**：线上包里没装 strands
+    # （实测条目数 0），于是 LLM 路径全在静默跑 direct，而 golden 基线
+    # 测的是本地装了 strands 的环境 —— 两者从未对齐过五个月。
+    # 补上依赖并部署后实测确认线上已真正走 strands（"回退 direct" 0 条）。
+    #
+    # ⚠️ 代价：strands 不可用时现在**直接抛异常**、不再降级。
+    # 这是迁移目标（回退掩盖了真相），但要求所有部署环境装齐 strands。
+    from runner.runner_strands import StrandsRunner  # type: ignore
+    return StrandsRunner(dry_run=effective_dry_run)

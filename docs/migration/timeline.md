@@ -39,7 +39,7 @@ modules:
     freeze_date: 2026-04-19
     delete_date: 2026-08-19
     owner: "@programming-cat"
-    status: "frozen"
+    status: "deleted"
     notes: "Phase 3 Module 3 PR1-5 完成（2026-04-19）；Direct 6/6、Strands 6/6。灰度切换完成。"
 
   - name: chaos-policy-guard
@@ -55,7 +55,7 @@ modules:
     freeze_date: 2026-04-20
     delete_date: 2026-08-20
     owner: "@programming-cat"
-    status: "frozen"
+    status: "deleted"
     notes: "Phase 3 Week 16-18；L1 Golden 6/6 both engines；dry_run double gate；7 tools"
 
   - name: dr-executor
@@ -63,7 +63,7 @@ modules:
     freeze_date: 2026-04-21
     delete_date: 2026-08-21
     owner: "@programming-cat"
-    status: "frozen"
+    status: "deleted"
     notes: "Phase 3 最终模块；L1 Golden 2/2 both engines；8 tools + failure strategy + partial caching"
 
 tags:

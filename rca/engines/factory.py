@@ -111,22 +111,33 @@ def make_learning_engine(profile: Any = None) -> "LearningBase":  # type: ignore
 
 
 def make_layer2_engine(profile: Any = None) -> "Layer2ProberBase":  # type: ignore[name-defined]
-    """\u6784\u9020 Layer2 Prober \u5f15\u64ce\uff0c\u5207\u6362 env\uff1aLAYER2_ENGINE=direct|strands\u3002
+    """构造 Layer2 Prober 引擎。**只有 strands 一种实现**（2026-09-20 起）。
 
-    \u9ed8\u8ba4 direct\uff1bstrands \u4e0d\u53ef\u7528 \u2192 warning + \u56de\u9000 direct\u3002
+    ## 为什么去掉了 direct 回退
+
+    原先是 `LAYER2_ENGINE=direct|strands` 双轨 + strands 不可用时
+    warning 回退 direct。那个回退在生产上**一直是实际路径** ——
+    线上 Lambda 包里根本没装 strands（实测 strands 条目数 0），
+    于是 LLM 路径全在静默跑 direct，而 golden 基线测的是本地装了
+    strands 的环境，两者从未对齐过整整五个月。
+
+    2026-09-20 给 `rca/deploy.sh` 与
+    `infra/lambda/rca_window_flush/build.sh` 补上 strands 并部署，
+    实测确认线上已真正走 strands："回退 direct" 日志 0 条、
+    日志里有 `Creating Strands MetricsClient`、
+    Step3d 产出 6 个 prober 结果、RCA complete in 48.8s。
+
+    `collectors/layer2_direct.py` 的 delete_date 是 2026-08-19，
+    已过期一个月，CI 的 check-deadlines 每次 push 都报红。
+
+    ## 去掉回退的代价，必须知道
+
+    strands 不可用时现在会**直接抛异常**，不再降级。这是迁移的目标
+    （回退掩盖了"生产从未跑过 strands"这个事实五个月），
+    但它要求 strands 依赖在**所有**部署环境里装齐。
+    新增部署目标时先确认打包脚本装了 strands，否则 Layer 2 直接挂。
     """
-    from engines.base import Layer2ProberBase  # \u5ef6\u8fdf\u5bfc\u5165\u907f\u514d\u5faa\u73af
-    engine = (os.environ.get("LAYER2_ENGINE") or "strands").lower()
-    if engine == "strands":
-        try:
-            from collectors.layer2_strands import StrandsLayer2Prober  # type: ignore
-            return StrandsLayer2Prober(profile=profile)  # type: ignore[return-value]
-        except ImportError as e:
-            logger.warning(
-                "Strands Layer2Prober \u4e0d\u53ef\u7528 (%s)\uff1b\u56de\u9000 direct\u3002", e,
-            )
-        except Exception as e:
-            logger.warning("Strands Layer2Prober \u6784\u9020\u5931\u8d25 (%r)\uff1b\u56de\u9000 direct\u3002", e)
+    from engines.base import Layer2ProberBase  # 延迟导入避免循环
+    from collectors.layer2_strands import StrandsLayer2Prober  # type: ignore
+    return StrandsLayer2Prober(profile=profile)  # type: ignore[return-value]
 
-    from collectors.layer2_direct import DirectLayer2Prober  # type: ignore
-    return DirectLayer2Prober(profile=profile)  # type: ignore[return-value]
