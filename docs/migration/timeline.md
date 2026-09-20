@@ -16,7 +16,7 @@ modules:
     delete_date: 2026-04-29   # 冻结一周（大乖乖指定）
     owner: "@programming-cat"
     status: "frozen"
-    notes: "Phase 2 L1 POC 完成（2026-04-18）；direct 20/20, strands 19/20。2026-04-22 冻结，一周后解冻。"
+    notes: "Phase 2 L1 POC 完成（2026-04-18）；direct 20/20, strands 20/20。2026-04-22 冻结，一周后解冻。2026-09-20 更正：此处原写 strands 19/20，与实测基线矛盾 —— tests/golden/BASELINE-strands.md（Last run 2026-04-18 08:43:19 UTC，与 direct 同一次运行、同一提交 6ac836a）记的是 Pass 20/20 = 100.0%。基线由测试直接产出，本 notes 是手写的，以基线为准。⚠️ 真正的卡点不是准确率而是尾延迟与成本：strands p99 42897ms vs direct 7690ms（5.58x，而验收门槛是 ≤2.5x）、token 462863 vs 115747（4.00x）、cache 命中率 90.9% vs 99.6%。两者相关：ReAct 多轮工具调用打散了 prompt 前缀，缓存复用变差，既慢又贵。删除 direct 在代码耦合上零风险（strands 不复用它，只需去掉 factory 回退分支），但会把这个劣化固定下来、没有退路。且这批数据已过五个月未重跑，当前真实差距未知。"
 
   - name: hypothesis-agent
     direct_file: chaos/code/agents/hypothesis_direct.py
