@@ -43,9 +43,9 @@ from .models import (
     CoverageGap, Trend, Recommendation, GraphUpdate,
 )
 from . import learning_tools as lt
-from .learning_direct import (
+from .learning_common import (  # noqa: F401
     _ddb_str, _ddb_num, ALL_FAULT_DOMAINS, FAULT_TYPE_DOMAIN,
-    DirectBedrockLearning,
+    LearningCommonMixin,
 )
 from runner.neptune_helpers import gremlin_query  # type: ignore
 
@@ -196,7 +196,7 @@ def _extract_json_array(text: str) -> list:
     return []
 
 
-class StrandsLearningAgent(LearningBase):
+class StrandsLearningAgent(LearningCommonMixin, LearningBase):
     """Strands Agent-based Learning engine."""
 
     ENGINE_NAME = "strands"
@@ -224,10 +224,13 @@ class StrandsLearningAgent(LearningBase):
 
         _assert_cacheable(self.system_prompt, min_tokens=1024)
 
-        # Reuse Direct engine for pure-Python methods (analyze, graph, report)
-        self._direct = DirectBedrockLearning(
-            hypothesis_engine=hypothesis_engine, profile=profile,
-        )
+        # 2026-09-20：不再持有一个 DirectBedrockLearning 实例。
+        #
+        # 原先这里构造它，是为了把 analyze / iterate_hypotheses / update_graph /
+        # generate_report 四个方法整个委托过去（注释写着 "Reuse Direct engine
+        # for pure-Python methods"）。那四个方法连同私有辅助共 304 行、
+        # **没有一行 LLM 调用**，所以它们已搬到 `LearningCommonMixin`，
+        # 由继承提供 —— 见类声明与下方 generate_recommendations 上的说明。
 
     def _build_agent(self):
         from strands import Agent  # type: ignore
@@ -281,13 +284,6 @@ class StrandsLearningAgent(LearningBase):
         except Exception:
             return None
 
-    # ── analyze (delegate to Direct — pure Python, no LLM) ──────────
-
-    def analyze(self, experiment_results: list[dict]) -> dict:
-        result = self._direct.analyze(experiment_results)
-        result["engine"] = self.ENGINE_NAME
-        return result
-
     # ── generate_recommendations (Strands ReAct) ────────────────────
 
     def generate_recommendations(self, analysis: dict) -> dict:
@@ -318,9 +314,18 @@ class StrandsLearningAgent(LearningBase):
             agent = self._build_agent()
             resp = agent(prompt)
         except Exception as e:
-            logger.warning("Strands learning agent failed: %s", e)
-            # Fallback to direct
-            return self._direct.generate_recommendations(analysis)
+            # 不再回退 direct（2026-09-20）：回退会让「建议由 strands 生成」
+            # 这件事在失败时静默变成 direct 产出，而返回值里的 engine 仍写
+            # strands —— 与本轮在 hypothesis-agent 修掉的假标签同一个毛病。
+            # 现在把错误如实带出去，由调用方决定怎么办。
+            logger.warning("Strands generate_recommendations failed: %s", e)
+            return {
+                "recommendations": [], "engine": self.ENGINE_NAME,
+                "model_used": DEFAULT_MODEL,
+                "latency_ms": int((time.time() - t0) * 1000),
+                "token_usage": None, "trace": lt.get_trace(),
+                "error": repr(e),
+            }
 
         text = self._extract_text(resp)
         raw_list = _extract_json_array(text)
@@ -348,24 +353,3 @@ class StrandsLearningAgent(LearningBase):
             "trace": trace,
             "error": None,
         }
-
-    # ── iterate_hypotheses (delegate to Direct) ─────────────────────
-
-    def iterate_hypotheses(self, coverage: dict, existing_hypotheses: list) -> dict:
-        result = self._direct.iterate_hypotheses(coverage, existing_hypotheses)
-        result["engine"] = self.ENGINE_NAME
-        return result
-
-    # ── update_graph (delegate to Direct — pure Gremlin writes) ─────
-
-    def update_graph(self, learning_data: dict) -> dict:
-        result = self._direct.update_graph(learning_data)
-        result["engine"] = self.ENGINE_NAME
-        return result
-
-    # ── generate_report (delegate to Direct — pure string formatting) ─
-
-    def generate_report(self, analysis: dict) -> dict:
-        result = self._direct.generate_report(analysis)
-        result["engine"] = self.ENGINE_NAME
-        return result

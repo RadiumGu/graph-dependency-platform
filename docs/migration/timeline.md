@@ -31,7 +31,7 @@ modules:
     freeze_date: 2026-04-26
     delete_date: 2026-08-26
     owner: "@programming-cat"
-    status: "active"
+    status: "deleted"
     notes: "Phase 3 Module 2 完成（2026-04-19）；direct 10/10、strands 10/10。灰度中，4/26 冻结。"
 
   - name: rca-layer2-probers

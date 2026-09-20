@@ -74,29 +74,18 @@ def make_learning_engine(profile: Any = None) -> "LearningBase":  # type: ignore
 
     默认 strands；strands 不可用 → warning + 回退 direct（回退是应急，不是常态）。
     """
-    from engines.base import LearningBase  # 延迟导入避免循环
-    engine = (os.environ.get("LEARNING_ENGINE") or "strands").lower()
-    if engine == "strands":
-        try:
-            from agents.learning_strands import StrandsLearningAgent  # type: ignore
-            return StrandsLearningAgent(profile=profile)  # type: ignore[return-value]
-        except ImportError as e:
-            logger.warning(
-                "Strands LearningAgent 不可用 (%s)；回退 direct。", e,
-            )
-        except Exception as e:
-            logger.warning("Strands LearningAgent 构造失败 (%r)；回退 direct。", e)
-
-    try:
-        from agents.learning_direct import DirectBedrockLearning  # type: ignore
-        return DirectBedrockLearning(profile=profile)  # type: ignore[return-value]
-    except ImportError:
-        from agents.learning_agent import LearningAgent  # type: ignore
-        try:
-            return LearningAgent(profile=profile)  # type: ignore[call-arg,return-value]
-        except TypeError:
-            return LearningAgent()  # type: ignore[return-value]
-
+    # ── 2026-09-20：去掉 direct 回退，只保留 strands ──────────────────────
+    #
+    # 收尾前 learning 的迁移只做了 `generate_recommendations` 一个方法，
+    # 另外四个（analyze / iterate_hypotheses / update_graph / generate_report，
+    # 共 304 行、零 LLM 调用）在 strands 版里是**纯委托**给
+    # DirectBedrockLearning，再盖上 engine="strands" 标签。
+    # 现在那四个搬到 `agents/learning_common.LearningCommonMixin`，
+    # 由 strands 版继承提供 —— mixin 用 self.ENGINE_NAME，标签自然正确。
+    #
+    # ⚠️ 代价：strands 不可用时直接抛异常、不再降级。
+    from agents.learning_strands import StrandsLearningAgent  # type: ignore
+    return StrandsLearningAgent(profile=profile)  # type: ignore[return-value]
 
 def make_layer2_engine(profile: Any = None) -> "Layer2ProberBase":  # type: ignore[name-defined]
     """构造 Layer2 Prober 引擎。**只有 strands 一种实现**（2026-09-20 起）。

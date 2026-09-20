@@ -1,11 +1,24 @@
-"""
-learning_direct.py — Direct Bedrock Learning 引擎（Phase 3 Module 2）。
+"""learning_common.py — LearningAgent 两个引擎共用的非 LLM 逻辑。
 
-从 learning_agent.py 主体迁移而来。
-类名 LearningAgent → DirectBedrockLearning，继承 engines.base.LearningBase。
-所有方法返回带迁移元数据的 dict。
+## 为什么是 mixin 而不是模块函数
 
-原 learning_agent.py 改为 shim（re-export DirectBedrockLearning as LearningAgent）。
+`learning_strands.py` 原先持有一个 `DirectBedrockLearning` 实例
+（`self._direct`），并把**五个方法里的四个**整个委托过去：
+
+    analyze / iterate_hypotheses / update_graph / generate_report
+
+也就是说 learning-agent 的迁移只做了 `generate_recommendations` 一个方法
+（那个确实被真正 Strands 化了，构造 agent、发 prompt、解析输出）。
+其余四个连同它们的四个私有辅助方法，一共 **304 行，全都不含任何 LLM 调用**
+—— `update_graph` 的注释明写 "pure Gremlin writes"。
+
+所以收尾不是「重新实现 agent」，是**代码搬家**。
+
+搬成 mixin 而不是模块级函数，是因为这些方法只用到两个实例属性
+（`self.ENGINE_NAME`、`self.hypothesis_engine`，后者在 `LearningBase` 里），
+再加上互相调用那四个私有方法 —— 继承下来 self 引用全部照旧有效，
+签名一个字不用改，改写风险最低。改成模块函数则要把 self 逐个参数化，
+每处都是一次可能出错的手工改动，换不来任何好处。
 """
 from __future__ import annotations
 
@@ -17,30 +30,14 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any
 
-import boto3
-from botocore.config import Config as BotocoreConfig
-
-import sys as _sys
-_CHAOS_CODE = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if _CHAOS_CODE not in _sys.path:
-    _sys.path.insert(0, _CHAOS_CODE)
-_RCA = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "rca"))
-if _RCA not in _sys.path:
-    _sys.path.insert(0, _RCA)
-
-from engines.base import LearningBase  # type: ignore
-from .models import (
+from .models import (  # noqa: F401
     Hypothesis, LearningReport, ServiceStats, FailurePattern,
     CoverageGap, Trend, Recommendation, GraphUpdate,
 )
-from runner.query import ExperimentQueryClient  # type: ignore
-from runner.config import REGION  # type: ignore
 from runner.neptune_helpers import gremlin_query  # type: ignore
 
 logger = logging.getLogger(__name__)
 
-BEDROCK_REGION = os.environ.get("BEDROCK_REGION") or os.environ.get("AWS_REGION") or REGION
-BEDROCK_MODEL = os.environ.get("BEDROCK_MODEL", "global.anthropic.claude-sonnet-4-6")
 
 ALL_FAULT_DOMAINS = {"compute", "data", "network", "dependencies", "resources"}
 
@@ -82,17 +79,13 @@ def _extract_json(text: str) -> list | dict:
     raise ValueError(f"无法从 LLM 输出中提取 JSON: {text[:200]}")
 
 
-class DirectBedrockLearning(LearningBase):
-    """直调 Bedrock 的学习引擎 — 业务逻辑等价于原 LearningAgent。"""
+class LearningCommonMixin:
+    """四个不含 LLM 的 Learning 方法 + 它们的私有辅助。
 
-    ENGINE_NAME = "direct"
-
-    def __init__(self, hypothesis_engine: Any = None, profile: Any = None) -> None:
-        super().__init__(hypothesis_engine=hypothesis_engine, profile=profile)
-        self._query_client = ExperimentQueryClient()
-        self._last_tokens: dict | None = None
-
-    # ── analyze ──────────────────────────────────────────────────────
+    使用方需自己提供：
+      · `self.ENGINE_NAME` —— 用于在返回值里标明引擎
+      · `self.hypothesis_engine` —— `LearningBase.__init__` 会设
+    """
 
     def analyze(self, experiment_results: list[dict]) -> dict:
         t0 = time.time()
@@ -177,113 +170,6 @@ class DirectBedrockLearning(LearningBase):
             "error": None,
         }
 
-    # ── generate_recommendations ─────────────────────────────────────
-
-    def generate_recommendations(self, analysis: dict) -> dict:
-        t0 = time.time()
-        report: LearningReport = analysis.get("report", LearningReport())
-
-        summary = {
-            "total": report.total_experiments,
-            "pass_rate": report.pass_rate,
-            "avg_recovery": report.avg_recovery_seconds,
-            "repeated_failures": [
-                {"service": f.service, "fault": f.fault_type, "count": f.failure_count}
-                for f in report.repeated_failures
-            ],
-            "coverage_gaps": [
-                {"service": g.service, "missing": g.missing_domains}
-                for g in report.coverage_gaps
-            ],
-            "trends": [
-                {"service": t.service, "metric": t.metric, "direction": t.direction}
-                for t in report.improvement_trends
-            ],
-        }
-        prompt = f"""你是混沌工程改进顾问。基于以下实验分析结果，生成 3-5 条改进建议。
-
-## 分析摘要
-{json.dumps(summary, ensure_ascii=False, indent=2)}
-
-## 输出格式
-JSON 数组，每个元素: {{"priority": 1, "category": "coverage|resilience|process", "title": "标题", "description": "描述", "target_services": ["svc1"]}}
-
-```json
-[...]
-```"""
-
-        recommendations: list[Recommendation] = []
-        error = None
-        model_used = BEDROCK_MODEL
-        token_usage = None
-
-        try:
-            client = boto3.client(
-                "bedrock-runtime",
-                region_name=BEDROCK_REGION,
-                config=BotocoreConfig(retries={"mode": "adaptive", "max_attempts": 5}),
-            )
-            resp = client.invoke_model(
-                modelId=BEDROCK_MODEL,
-                body=json.dumps({
-                    "anthropic_version": "bedrock-2023-05-31",
-                    "max_tokens": 2048,
-                    "messages": [{"role": "user", "content": prompt}],
-                }),
-            )
-            result = json.loads(resp["body"].read())
-            llm_text = result["content"][0]["text"]
-
-            # token usage
-            usage = result.get("usage", {})
-            token_usage = {
-                "input": usage.get("input_tokens", 0),
-                "output": usage.get("output_tokens", 0),
-                "total": usage.get("input_tokens", 0) + usage.get("output_tokens", 0),
-                "cache_read": usage.get("cache_read_input_tokens", 0),
-                "cache_write": usage.get("cache_creation_input_tokens", 0),
-            }
-
-            raw_list = _extract_json(llm_text)
-            recommendations = [
-                Recommendation(
-                    priority=r.get("priority", 5),
-                    category=r.get("category", "resilience"),
-                    title=r.get("title", ""),
-                    description=r.get("description", ""),
-                    target_services=r.get("target_services", []),
-                )
-                for r in raw_list
-            ]
-        except Exception as e:
-            logger.warning(f"LLM 建议生成失败: {e}")
-            error = str(e)
-            # fallback: 基于规则生成
-            for i, gap in enumerate(report.coverage_gaps[:3], 1):
-                recommendations.append(Recommendation(
-                    priority=i, category="coverage",
-                    title=f"补充 {gap.service} 故障域覆盖",
-                    description=gap.suggestion, target_services=[gap.service],
-                ))
-            for fp in report.repeated_failures[:2]:
-                recommendations.append(Recommendation(
-                    priority=len(recommendations) + 1, category="resilience",
-                    title=f"修复 {fp.service} 的 {fp.fault_type} 弱点",
-                    description=fp.description, target_services=[fp.service],
-                ))
-
-        return {
-            "recommendations": [r.__dict__ for r in recommendations],
-            "engine": self.ENGINE_NAME,
-            "model_used": model_used,
-            "latency_ms": int((time.time() - t0) * 1000),
-            "token_usage": token_usage,
-            "trace": [],
-            "error": error,
-        }
-
-    # ── iterate_hypotheses ───────────────────────────────────────────
-
     def iterate_hypotheses(self, coverage: dict, existing_hypotheses: list) -> dict:
         t0 = time.time()
         # 从 analysis dict 提取 report 对象（如果传了 analysis 而非 coverage）
@@ -335,8 +221,6 @@ JSON 数组，每个元素: {{"priority": 1, "category": "coverage|resilience|pr
             "error": error,
         }
 
-    # ── update_graph ─────────────────────────────────────────────────
-
     def update_graph(self, learning_data: dict) -> dict:
         t0 = time.time()
         report = learning_data.get("report") if isinstance(learning_data, dict) else None
@@ -366,8 +250,6 @@ JSON 数组，每个元素: {{"priority": 1, "category": "coverage|resilience|pr
             "latency_ms": int((time.time() - t0) * 1000),
             "error": error,
         }
-
-    # ── generate_report ──────────────────────────────────────────────
 
     def generate_report(self, analysis: dict) -> dict:
         t0 = time.time()
@@ -447,8 +329,6 @@ JSON 数组，每个元素: {{"priority": 1, "category": "coverage|resilience|pr
             "latency_ms": int((time.time() - t0) * 1000),
             "error": None,
         }
-
-    # ── 内部 helper（从原 LearningAgent 迁移） ──────────────────────
 
     def _find_repeated_failures(self, by_service: dict[str, list[dict]]) -> list[FailurePattern]:
         patterns = []

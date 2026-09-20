@@ -1,5 +1,5 @@
 """
-sample_for_golden_learning.py — 用 DirectBedrockLearning 采样建立 Golden baseline。
+sample_for_golden_learning.py — 用 StrandsLearningAgent 采样建立 Golden baseline。
 
 抗 SIGPIPE + 场景级 try/except + 进度写文件（retro § 6 Top 1）。
 
@@ -40,7 +40,8 @@ fh.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
 logger = logging.getLogger("sample_learning")
 logger.addHandler(fh)
 
-from agents.learning_direct import DirectBedrockLearning  # noqa: E402
+# 2026-09-20: direct 已删除，改用 strands —— baseline 本就该与线上同引擎。
+from agents.learning_strands import StrandsLearningAgent  # noqa: E402
 
 
 def load_fixture(fixture_file: str) -> list[dict]:
@@ -54,7 +55,7 @@ def main():
     with open(SCENARIOS_PATH) as f:
         scenarios = yaml.safe_load(f)
 
-    engine = DirectBedrockLearning()
+    engine = StrandsLearningAgent()
     # Resume support: load existing samples
     output_path = os.path.join(SAMPLES_DIR, "all_samples.json")
     if os.path.exists(output_path):
