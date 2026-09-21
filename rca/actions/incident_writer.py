@@ -110,12 +110,21 @@ def write_incident(
     now_iso = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
 
     # 写入 Incident 节点（补 timestamp 字段）
+    #
+    # `scope` 按契约 node_scope.type_map 就是常量 'platform' ——
+    # 「平台自己产出的分析件：按构造即 platform，无需查任何外部系统」。
+    # 2026-09-21 补：此前不写 scope，导致 test_48::t306_11（活图谱核验）
+    # 把每个 Incident 都列为「缺 scope 且超出宽限窗口」。那道门禁的提示
+    # 正是「若某类节点反复出现，说明它的写入方该在 upsert 时就写 scope」——
+    # Incident 的 scope 不依赖任何外部查询，本就不该留给对账脚本补。
     cypher = """
     MERGE (inc:Incident {id: $id})
     ON CREATE SET
         inc.severity = $severity,
         inc.start_time = $start_time,
         inc.timestamp = $timestamp,
+        inc.last_seen = $epoch,
+        inc.scope = 'platform',
         inc.status = 'investigating',
         inc.root_cause = $root_cause,
         inc.root_cause_confidence = $confidence,
@@ -128,6 +137,10 @@ def write_incident(
         'severity': severity,
         'start_time': now_iso,
         'timestamp': now_iso,
+        # `last_seen` 用 epoch 秒：契约的 timestamp_field 是数值型，
+        # 而上面的 start_time/timestamp 是 ISO 字符串（供人读）。
+        # 两种表示并存是既有约定，不在本次改动范围内。
+        'epoch': int(time.time()),
         'root_cause': root_cause,
         'confidence': confidence,
         'resolution': resolution,

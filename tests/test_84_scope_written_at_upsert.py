@@ -43,10 +43,19 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
-#: 每项：(说明, 源文件, 该文件里必须出现的 scope 字面量)
+#: 每项：(说明, 源文件, 节点标签, 该文件里必须出现的 scope 字面量)
 #:
 #: 刻意写成「文件 + 期望值」而不是去解析 Gremlin/Cypher 语法 —— 解析器会比
 #: 被测代码更容易出错，而这里要守的事实很简单：这个写入点有没有带上那个常量。
+#:
+#: ⚠️ 2026-09-21 更正：`Incident` 一项原先指向
+#: `infra/lambda/rca_window_flush/actions/incident_writer.py` —— **那是构建产物，
+#: 不是权威源**。`build.sh` 会 `find $DEST_DIR -delete` 后从 `rca/` 单向重拷
+#: （见该脚本第 14/29/36 行），所以打在产物上的修复下次构建即被抹掉，
+#: 而门禁守着产物会一直是绿的。
+#:
+#: 这正是本文件要防的那类错误，却在本文件自己身上发生了一次。
+#: 现改为守 `rca/actions/incident_writer.py`，并由 t84_04 断言产物与源一致。
 WRITERS = [
     (
         "DeepFlow ETL 写 TopologyChange",
@@ -55,8 +64,8 @@ WRITERS = [
         "platform",
     ),
     (
-        "RCA window flush 写 Incident",
-        "infra/lambda/rca_window_flush/actions/incident_writer.py",
+        "RCA window flush 写 Incident（权威源）",
+        "rca/actions/incident_writer.py",
         "Incident",
         "platform",
     ),
@@ -72,6 +81,13 @@ WRITERS = [
         "AWSServiceEndpoint",
         "external",
     ),
+]
+
+#: `rca/` 下的权威源 → `infra/lambda/rca_window_flush/` 下的构建产物。
+#: build.sh 从前者单向拷到后者，所以两者必须一致；不一致意味着有人改了产物。
+BUILD_ARTIFACT_PAIRS = [
+    ("rca/actions/incident_writer.py",
+     "infra/lambda/rca_window_flush/actions/incident_writer.py"),
 ]
 
 
@@ -148,3 +164,44 @@ def test_t84_03_契约里的常量scope类型都该有人负责():
           f"未走 ETL 热路径）: {uncovered}")
     assert covered <= set(type_map), (
         f"这些类型不在契约 type_map 里: {sorted(covered - set(type_map))}")
+
+
+@pytest.mark.parametrize(
+    "src_rel,artifact_rel", BUILD_ARTIFACT_PAIRS,
+    ids=[p[0].split("/")[-1] for p in BUILD_ARTIFACT_PAIRS])
+def test_t84_04_构建产物必须与权威源一致(src_rel: str, artifact_rel: str):
+    """`infra/lambda/rca_window_flush/` 下的文件是 build.sh 从 `rca/` 拷来的产物。
+
+    ## 为什么需要这条
+
+    `infra/lambda/rca_window_flush/build.sh` 的流程是
+    `find "$DEST_DIR" -mindepth 1 -delete` 然后从 `$RCA_DIR`（= `rca/`）重拷，
+    而 `DEST_DIR` 默认就是那个**被 git 跟踪的目录**。所以：
+
+      · 改产物不改源 → 下次 `bash build.sh` 抹掉改动
+      · 而如果测试守的是产物，它会一直绿，改动消失也没人知道
+
+    2026-09-21 这件事真的发生了：`scope='platform'` 的修复被打在产物上，
+    本文件的 t84_01 又恰好指向产物，于是门禁绿着、源里没有修复。
+    修正后由本条断言两者一致，让「只改了产物」这件事本身可被发现。
+
+    ⚠️ 这条比对的是**字节一致**。若将来 build.sh 开始做转换（改写 import
+    路径、注入版本号等），这条会失败 —— 那时应当改为比对语义或只比关键片段，
+    而不是删掉它。
+    """
+    src = ROOT / src_rel
+    artifact = ROOT / artifact_rel
+    assert src.exists(), f"权威源不存在: {src_rel}"
+    if not artifact.exists():
+        pytest.skip(f"构建产物不存在（尚未构建过）: {artifact_rel}")
+
+    s = src.read_text(encoding="utf-8")
+    a = artifact.read_text(encoding="utf-8")
+    assert s == a, (
+        f"构建产物与权威源不一致：\n"
+        f"  源:   {src_rel} ({len(s)} 字节)\n"
+        f"  产物: {artifact_rel} ({len(a)} 字节)\n\n"
+        f"build.sh 从源单向重拷到产物，所以产物里多出来的改动会在下次构建时丢失。\n"
+        f"若改动是你想要的，请把它搬到源；若源是新的，跑一次 "
+        f"`DEST_DIR=$KIROCREW_SCRATCH/wf-build bash "
+        f"infra/lambda/rca_window_flush/build.sh` 重建产物。")
