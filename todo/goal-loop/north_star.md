@@ -20,7 +20,7 @@
 | 3 | 处理依赖的退化与变化 | ~40% |
 | 4 | 被各种 agent 快速调用 | ~55% |
 
-完整评估证据见 `../design-goals-assessment_20260828-1705.md`。
+完整评估证据见 `../design-goals-assessment.md`。
 
 ---
 
@@ -140,7 +140,7 @@ cd /home/ec2-user/works/graph-dependency-platform && ls tests/ | grep -i "live.*
 ## 3. 问题发现来源(每轮无卡可领时执行)
 
 1. `tasks.md` 中状态为 `todo` 且无未完成依赖的条目
-2. `../design-goals-assessment_20260828-1705.md` 第 7 节的 P0→P3 清单
+2. `../design-goals-assessment.md` 第 7 节的 P0→P3 清单
 3. 活图实测:重跑 DoD 的各条查询,任何未通过项即为新卡来源
 4. 生产日志:`gp-window-flush` 与 `petsite-rca-engine` 的 `[WARNING]` / `[ERROR]`
    ——本项目历史上 11 个缺陷里 9 个是静默失败,日志是主要发现渠道

@@ -537,7 +537,7 @@ EDGE_TYPES = {   'AccessesData': {   'dependency': True,
                             'RoutesToRuntime。\n'
                             '**这一对暂时保留不能删**：删了之后 assert_edge_type 会在生产里拒写并抛错， 因为已部署的 '
                             'etl_agentcore 还在写这种边。删除必须排在 「ETL 改完 + 部署 + 存量清理」之后，顺序见 '
-                            'todo/agentobv/agent-layer-taxonomy-design_20260905-1640.md §4。\n'
+                            'docs/design/agent-layer-taxonomy-design.md §4。\n'
                             '保留的那一对 [LoadBalancer, TargetGroup] 是纯转发配置，dependency: false 正确。',
                     'pairs': [['AgentGateway', 'AgentTool'], ['LoadBalancer', 'TargetGroup']],
                     'src': ['AgentGateway', 'LoadBalancer']},

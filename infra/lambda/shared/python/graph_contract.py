@@ -7,7 +7,7 @@
 `upsert_edge` 拿到什么 label 就往 Gremlin 里直拼。后果是任何拼错的或新造的
 标签都会被**静默**写进 Neptune，而所谓「权威 schema」
 （profiles/petsite.yaml 的 graph_schema_text）只在测试期被比对一次。
-参见 todo/graph-correctness-audit-and-gaps_20260830-1435.md 缺口 1。
+参见 docs/lessons/graph-correctness-audit-and-gaps.md 缺口 1。
 
 业界的对照做法是 New Relic 的 entity-definitions：身份定义是声明式 YAML，
 配 PR + 自动校验 + owner 双评审，而不是散在代码里的字符串字面量。

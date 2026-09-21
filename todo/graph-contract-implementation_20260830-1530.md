@@ -12,7 +12,7 @@
 
 ## 一、做了什么
 
-对应 `todo/dependency-graph-improvement-roadmap_20260830-1435.md` 的 P0/P1。
+对应 `docs/design/dependency-graph-improvement-roadmap.md` 的 P0/P1。
 
 ### P0-1 让 schema 在运行时具备否决权 —— 已落地
 

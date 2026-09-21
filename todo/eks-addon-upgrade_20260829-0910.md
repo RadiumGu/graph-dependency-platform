@@ -50,5 +50,5 @@ eks-pod-identity-agent             v1.3.10-eksbuild.2
 
 升级本身干净，但升级后被问到"采集量有无跳变"，由此查出两条与升级无关的既存问题，分别记录在：
 
-- `containerinsights-iam-zero-writes_20260829-0910.md`
-- `cloudwatch-cost-findings_20260829-0910.md`
+- `containerinsights-iam-zero-writes.md`
+- `cloudwatch-cost-findings.md`

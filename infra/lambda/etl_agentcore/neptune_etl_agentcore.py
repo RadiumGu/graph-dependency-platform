@@ -580,7 +580,7 @@ def collect_spans(runtime_count: int = 0) -> tuple:
     """从**各 runtime 自己的**日志组抽 agent 调用关系。
 
     ⚠️ 硬前置：Transaction Search 必须已开（destination=CloudWatchLogs）。
-    开启记录见 todo/agentobv/05-etl_xray影响面量化_20260904-0835.md
+    开启记录见 docs/lessons/05-etl_xray影响面量化.md
     第六节（2026-09-04 08:49:33Z ACTIVE，索引采样 100%）。
 
     ⚠️ **不要改回 `aws/spans`** —— 那里没有 agent 的 span。实测对比与三个后果

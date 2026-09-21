@@ -1,0 +1,567 @@
+<!-- 归档溯源：本文件由 2026-09-21 的文档整理从下述原路径移入 docs/ -->
+> 📄 **原路径**：`todo/agentobv/02-agent可观测性方案_20260904-0815.md`　**成文于**：2026-09-04 08:15
+
+# Agent 系统的可观测性：接入现有观测栈与依赖图谱
+
+**日期**：2026-09-04 08:15 UTC
+**问题**：在目前的系统里实现对 agent 系统的观测。
+**核心结论**：**能接，但有一个账号级的硬前置门槛（CloudWatch Transaction Search），它会改变整个账号 X-Ray 的摄入模式——而本项目已有一条 `etl_xray` 依赖 X-Ray，这个交互必须先量化再开。**
+
+> 证据等级：**[官方文档]** = docs.aws.amazon.com 原文；**[上游代码]** = `git fetch origin` 后从 `FETCH_HEAD` 实读；**[实测]** = 本机对活环境实际执行。
+
+---
+
+## 〇、与线上实现的对账（2026-09-05 08:20 UTC 全量实测）
+
+本节是**事后**对账：`etl_agentcore` 已经写完并跑起来了，把当初的设计与实际落地逐条比对。
+**结论不是「文档过时了」这么简单——两边各有对错，而且最重要的一条是文档对、实现错。**
+
+| # | 主题 | 判定 | 一句话 |
+|---|---|---|---|
+| 1 | Transaction Search 状态 | ❌ 文档过时 | 文档记「当前根本没开」，实际 **09-04 09:52 已 ACTIVE**、索引采样 **100%** |
+| 2 | **span 落在哪个日志组** | ✅ **文档对，实现错** | **实现读 `aws/spans` 得 0 行；文档所指的 per-runtime 日志组得 3 行** |
+| 3 | 契约节点/边命名 | 🔀 实现全面改写且更对 | `Agent`→`AgentRuntime`、`Tool`→`AgentTool`，`Model`/`Session`/`MCPServer` 未落地 |
+| 4 | `Tool` 的身份键 | ✅ 文档的 ⚠️ 是对的 | 文档自标「需确认会不会被 Gateway 改写」→ 实现改用复合 `tool_key` |
+| 5 | `dependency_kind` 现状 | ⚠️ **我的「纠正」才是错的** | 文档说取值是 `dynamic`/`static` —— **这是对的**（数据里 dynamic 91 / static 21），我只查了契约 YAML 就下结论 |
+| 6 | ETL 数据源 | 🔀 实现更广 | 文档只写 span；实现是**控制面 API + span 双路** |
+| 7 | ETL 触发方式 | ❌ 未落地 | 文档写「定时 5 分钟 Lambda、arm64」；实际**没部署、没定时规则，本地手工跑** |
+| 8 | Session 归并 | ❌ 未落地 | 文档 4.3 称「真难点，不要低估」——确实没做，零相关代码 |
+| 9 | **「三源交叉」核心价值主张** | ❌ **文档错** | **DeepFlow 对 agent 的 6 个 ENI 零记录**，L7/L4 都没有 |
+| 10 | 第三节「自建 ADOT 路径」 | ⚠️ 前提不成立 | 6 个 runtime 全在**托管 AgentCore Runtime** 上，这一节当前是备选而非现实路径 |
+
+### 最要紧的那条：实现读错了 span 日志组 **[实测]**
+
+文档第二节引的官方原文是对的：
+
+> "spans go to the `spans` log stream in `/aws/bedrock-agentcore/runtimes/<agent_id>-<endpoint_name>`,
+> **instead of the shared `aws/spans` log group**."
+
+而 `neptune_etl_agentcore.py` 第 58 行是：
+
+```python
+SPAN_LOG_GROUP = os.environ.get('AGENTCORE_SPAN_LOG_GROUP', 'aws/spans')
+```
+
+把 ETL 自己那条 Insights 查询原样打到两个日志组上，结果相反：
+
+| 日志组 | ETL 的 span 查询 | 说明 |
+|---|--:|---|
+| `aws/spans`（实现当前读的） | **0 行** | 日志组存在且有数据，但里头是别的服务的 span（实测最新两条是 SSM `Get parameter`） |
+| `/aws/bedrock-agentcore/runtimes/WaggleAIAdoption-4gnHUlDACh-DEFAULT` | **3 行** | `op=invoke_agent calls=234`、`op=chat calls=312`、**`op=execute_tool tool=search_available_pets calls=78`** |
+
+**这一个默认值解释了三个一直没解释的现象：**
+
+1. 每轮 ETL 的 `collection_status.spans` 都是 `empty`——不是「agent 没被调用」，是**查错了地方**
+2. `AgentTool` 里 runtime 侧那 5 个节点始终拿不到 `name` 属性（gateway 侧 5 个是控制面写的，已修好）——因为它们**只能从 span 发现**，而 span 路一直空转
+3. 本轮 ETL 输出 `"edges": {}`——所有 agent 依赖边都来自 span 路
+
+值得注意的是：`_probe_status` 那段注释花了很大篇幅论证「必须区分『空』与『拿不到』」，而这次的形态是**第三种**：
+**采集成功、返回确实为空、但空是因为问过错的对象**。`empty` 状态诚实地报告了「这里没有」，却无法表达「这里不该是我要问的地方」。
+对应的守门缺口：ETL 没有任何断言检查「已知有 N 个 agent runtime 日志组，span 路却零命中」这个矛盾。
+
+修法不是简单改个默认值——AgentCore 的 span **按 runtime 分散在 7 个日志组**里
+（实测：5 个 WaggleAI + `graph_dependency_mcp` + 一个空的 `graph-dep-chaos-agent`），
+Insights 单次查询支持多日志组，应改为把 `/aws/bedrock-agentcore/runtimes/` 前缀下的日志组全部列出来一起查。
+
+### 三源交叉主张的实测否证 **[实测]**
+
+文档 4.4 把「Agent → Tool → PetSite 微服务是全系统唯一同时被三个独立源看见的依赖」称为本项目核心价值。
+**DeepFlow 这一源不成立。**
+
+AgentCore 托管运行时的 ENI 在 EC2 里有专门的接口类型 **`agentic_ai`**，本账号有 6 个：
+`11.0.2.240` / `11.0.0.136` / `11.0.2.5` / `11.0.3.180` / `11.0.1.235` / `11.0.3.167`。
+对这 6 个 IP 在 DeepFlow ClickHouse 里查近 6 小时：
+
+| 查询 | 结果 |
+|---|--:|
+| `l7_flow_log` 中它们作为客户端（`ip4_0`） | **0 行** |
+| `l7_flow_log` 中它们作为服务端（`ip4_1`） | **0 行** |
+| `l4_flow_log` 中它们出现在任一端 | **0 行** |
+
+而同期 `search-service` 有 40 万+ 条 L7 记录，客户端全部是 EKS Pod（`pod_id_0` 非 0）或 ELB ENI。
+即：**DeepFlow 的 eBPF DaemonSet 装在 EKS 节点上，看不到非 Pod 的 AgentCore 托管 ENI**。
+
+所以能独立看见 `AgentTool → petsearch` 这条边的只有两个源：
+**AgentCore span**（`op=execute_tool tool=search_available_pets calls=78`）与**主动探测**
+（`invoke_agent_runtime`，见 `injection-found-defects` #35 的剂量-反应曲线）。
+这两个源都是**agent 自身信号**——恰好就是 FIS chaos 模板 README 那句警告要求的：
+「工具级故障对基础设施指标不可见，必须用 agent 自己的信号」。
+
+**这个否证反而强化了项目的论点**：文档原本设想的价值是「三源互证」，
+实测发现 agent 层根本没有第三个源可用，于是**「主动探测」从可选手段升级成必需手段**。
+被动观测在 agent 层是不完备的，这正是「我看到的是真的吗」比「我看到了什么」更难的地方。
+
+另外两处措辞纠正：
+- 4.4 写「DeepFlow L7（Lattice 到 ClusterIP 的流量）」——实测没有任何 Lattice 痕迹，
+  DeepFlow 看到的 `request_domain` 是 `search-service.petadoptions.svc.cluster.local`（直连 ClusterIP）。
+- 命名空间是 `petadoptions`，不是 `default`。
+
+---
+
+## 一、必须先讲清的那个硬前置：Transaction Search
+
+### 它是硬门槛，不是可选项 **[官方文档]**
+
+> "**Only once, first-time users must enable CloudWatch Transaction Search** to view Bedrock Amazon Bedrock AgentCore spans and traces. As a one time setup per AWS account, first time users need to enable Transaction Search on Amazon CloudWatch."
+> — https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-get-started.html
+
+X-Ray 侧同样点明：
+
+> "To use X-Ray with AgentCore, you need to enable CloudWatch Transaction Search in your AWS account. This is a one-time setup that allows AgentCore to send trace data to X-Ray."
+> — https://docs.aws.amazon.com/xray/latest/devguide/xray-services-agentcore.html
+
+**不开 Transaction Search，就看不到任何 agent 的 span / trace。**
+
+### 它的作用域是整个账号，会切换摄入模式 **[官方文档]**
+
+> "Transaction search is configured for **the entire account** and switches **all spans ingestion through X-Ray** into cost effective collection mode using Amazon CloudWatch Pricing."
+> — https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/Enable-TransactionSearch.html
+
+具体机制：
+
+> "**Ingest 100 percent of spans as structured logs in CloudWatch** to get complete visibility. ... **Index a percentage of spans as trace summaries in X-Ray** to unlock end to end trace search and analytics."
+> "X-Ray traces automatically convert to the semantic convention format before they're stored in a log group called `aws/spans`."
+> — https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch-Transaction-Search.html
+
+### 为什么这条对本项目是真风险，不是形式主义
+
+本项目有一条 **`neptune-etl-from-xray`** Lambda **[实测]**，它靠 X-Ray 建依赖边。Transaction Search 开启后：
+
+- 100% 的 span 进 CloudWatch Logs 的 `aws/spans`（新增 CloudWatch 计费）
+- **只有设定百分比的 span 在 X-Ray 里被索引成 trace summary**
+
+如果 `etl_xray` 依赖的是 X-Ray 的 trace summary / service graph，那么**索引百分比若设得低，它能看到的依赖证据就会变少**。这正是此前一轮刻意没开 Transaction Search 的原因——当时的顾虑现在被官方文档坐实为真实机制，而不是猜测。
+
+> ✅ **这项量化已于 2026-09-04 08:35 完成，结论见 `05-etl_xray影响面量化.md`。**
+> 要点：`etl_xray` **只调 `GetServiceGraph` 一个 API**，且**只取拓扑字段**（Name/Type/ReferenceId/Edges），
+> **不调** `GetTraceSummaries` / `BatchGetTraces` —— 而后两者才是「索引一定百分比作为 trace summary」直接影响的对象。
+> 所以本节原文那个「如果 `etl_xray` 依赖 trace summary」的假设**不成立**，风险面比这里写的窄。
+
+> 🔄 **2026-09-05 08:20 复测：Transaction Search 已经开了，本节「当前根本没开」已过时。** **[实测]**
+>
+> ```
+> aws xray get-trace-segment-destination  →  Destination: CloudWatchLogs, Status: ACTIVE
+> aws xray get-indexing-rules             →  Default / Probabilistic 100.0%（ModifiedAt 2026-09-04T09:52:32Z）
+> ```
+>
+> 两个后果：
+> 1. **索引采样是 100%，不是某个低百分比**——本节担心的「索引百分比设低会让 `etl_xray` 看到的依赖证据变少」
+>    在现状下不成立（叠加上面那条量化结论：`etl_xray` 压根不读 trace summary，双重不成立）。
+> 2. `aws/spans` 日志组**已存在且有数据**——但里头是别的服务的 span，**没有 agent 的**。
+>    详见第〇节：agent span 在 per-runtime 日志组，这是实现当前的 bug 所在。
+
+**原计划的量化步骤（已完成，保留供追溯）**：
+1. 读 `etl_xray` 源码，确认它调的是哪些 X-Ray API（`GetServiceGraph`？`GetTraceSummaries`？`BatchGetTraces`？）。
+2. 判断这些 API 的返回是否受"索引百分比"影响。
+3. 若受影响，评估把索引百分比设成 100% 的成本，或改用 `aws/spans` 日志组作为 `etl_xray` 的替代数据源。
+4. 开启前先记录一次 `etl_xray` 的产出基线（边数、覆盖率），开启后复测对比。
+
+> 这是「先量基线再改配置」的同一条纪律：不先取基线，开完之后就无法区分变化是 Transaction Search 造成的还是流量波动。
+
+---
+
+## 二、遥测到底落在哪（三个落点都有确切命名）
+
+**[官方文档]** 按资源类型，默认给什么、要开什么：
+
+| AgentCore 资源类型 | 默认提供 | 需显式开启 |
+|---|---|---|
+| Agent（Runtime） | Metrics | Spans\*、Logs\* |
+| Memory | Metrics | Spans\*、Logs\* |
+| Gateway | Metrics、Spans | Logs\* |
+| Tools | Metrics | Spans\*、Logs\* |
+| Policy | Metrics、Logs | Spans\* |
+| Payments | Metrics、Spans、Logs（全默认） | — |
+
+> "\* Signals marked with an asterisk require explicit enablement. **Metrics are provided by default for all resource types.**"
+> "For agents running in the AgentCore runtime, AgentCore automatically generates a set of session metrics which you can view in the Amazon CloudWatch Logs generative AI observability page."
+> — https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-service-provided.html
+
+### 一个反直觉点，容易踩 **[官方文档]**
+
+> "When you create an AgentCore runtime resource (agent), by default, AgentCore runtime creates a CloudWatch log group for the service-provided logs. However, **for memory, gateway, and built-in tool resources, AgentCore doesn't configure log destinations for you automatically.**"
+> — https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-configure.html
+
+即：**Runtime 的 log group 自动建，Memory / Gateway / 内置工具的不自动建**，要手工配。忘了配就会得到「agent 有日志但工具调用没日志」这种半盲状态。
+
+### Runtime span 的 log group 命名 **[官方文档]**
+
+> "spans go to the `spans` log stream in `/aws/bedrock-agentcore/runtimes/<agent_id>-<endpoint_name>`, instead of the shared `aws/spans` log group."
+
+这是新 ETL 要读的确切位置。
+
+> ✅ **2026-09-05 实测证实这条，而且实现违反了它。** **[实测]**
+>
+> 账号内实际存在 **7 个** 该前缀的日志组，命名与官方所述完全吻合（endpoint 名是 `DEFAULT`）：
+> ```
+> /aws/bedrock-agentcore/runtimes/WaggleAIAdoption-4gnHUlDACh-DEFAULT
+> /aws/bedrock-agentcore/runtimes/WaggleAIConcierge-Yi6Ub97Ylw-DEFAULT
+> /aws/bedrock-agentcore/runtimes/WaggleAINutrition-2NEiCS7VJw-DEFAULT
+> /aws/bedrock-agentcore/runtimes/WaggleAIOrchestrator-K85tG867Xt-DEFAULT
+> /aws/bedrock-agentcore/runtimes/WaggleAIOrdering-Mnr1HiASuX-DEFAULT
+> /aws/bedrock-agentcore/runtimes/graph_dependency_mcp-12Vg2Z9XXu-DEFAULT
+> /aws/bedrock-agentcore/runtimes/graph-dep-chaos-agent          ← runtime-logs 流为空，未使用
+> ```
+> 每个日志组里确实有名为 **`spans`** 的流（另有 `otel-rt-logs` 与 `2026/MM/DD/[runtime-logs]<uuid>`），
+> 数据新鲜（实测 `spans` 流最新事件 09-05 07:47Z）。
+>
+> 而 `neptune_etl_agentcore.py:58` 读的是 `aws/spans` —— 同一条查询在那里 **0 行**、在这里 **3 行**。
+> 完整对比见第〇节。
+>
+> 顺带一个线索：`graph-dep-chaos-agent` 这个日志组已被建出来但从未产生数据，
+> 看起来是为 `agentcore-strands-agent-faults` 模板要求的「与生产分离的专用 chaos runtime」预留的。
+
+---
+
+## 三、Agent 不跑在托管 Runtime 上时怎么办（本项目大概率会遇到）
+
+> ⚠️ **2026-09-05 实测：这一节的前提在当前线上环境不成立，整节应视为「备选路径，当前未采用」。** **[实测]**
+>
+> 6 个 agent 全部跑在**托管 AgentCore Runtime** 上（`bedrock-agentcore-control list-agent-runtimes`
+> 返回 6 条，`networkMode: VPC`，各自有 `agentic_ai` 类型 ENI）。所以：
+> - 遥测走的是托管路径，**不需要**自建 ADOT SDK 那套（下面的 `OTEL_*` 环境变量与 CloudWatch Logs
+>   resource policy 在当前部署里都不适用）
+> - 本节「集群里已有 4 个 `aws-otel-collector` sidecar 但不能用」的判断仍然正确，只是无关——
+>   agent 压根不在那些 Pod 里
+>
+> 保留本节的价值：如果以后要落地 `agentcore-strands-agent-faults` 那条注入路径，
+> 需要建一个**与生产分离的 chaos runtime** 并把 chaos 模块 vendored 进构建，
+> 那时这一节讲的进程内埋点细节会重新变成现实约束。
+> （账号里那个空的 `/aws/bedrock-agentcore/runtimes/graph-dep-chaos-agent` 日志组，看起来正是为此预留的。）
+
+**[官方文档]** 官方明确支持，但有一条**关键限制**：
+
+> "For agents running outside of the AgentCore runtime, you can deliver the same monitoring capabilities for agents deployed on your own infrastructure. For a complete example, see the **Agents on Amazon EKS** sample on the GitHub website."
+> — https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-get-started.html
+
+> **ADOT Collector 不支持 agent observability，只能用 ADOT SDK 或 Lambda Layer。**
+
+### 这条限制直接否掉一个想当然的做法
+
+**[实测]** 集群里已有 4 个 `aws-otel-collector` sidecar（list-adoptions / pay-for-adoption / pethistory / search-service）。
+**不能**靠它们承载 agent 的 GenAI 遥测——必须在 agent 进程内用 **ADOT SDK**（`aws-opentelemetry-distro`）并以 `opentelemetry-instrument` 启动。
+
+上游正是这么做的 **[上游代码]**，五个 Dockerfile 全部：
+
+```dockerfile
+CMD ["opentelemetry-instrument", "python", "-m", "waggle_ai_agents.<agent>.server"]
+```
+
+五份 requirements 全部含 `aws-opentelemetry-distro>=0.18.0`，且 `requirements.txt` 注释写明分工：
+
+> "Observability — ADOT auto-instruments CrewAI, LangChain/LangGraph, LlamaIndex, and OpenAI Agents; **Strands emits OTel natively**."
+
+**这解释了上游为什么要用五种框架**——它在证明「ADOT 自动埋点能跨框架统一采集」，而 Strands 是唯一不需要 ADOT 自动埋点的（原生发 OTel）。
+
+### 自建路径的完整环境变量 **[官方文档，原文照贴]**
+
+```bash
+export OTEL_PYTHON_DISTRO=aws_distro
+export OTEL_PYTHON_CONFIGURATOR=aws_configurator
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_LOGS_HEADERS=x-aws-log-group=<YOUR-LOG-GROUP>,x-aws-log-stream=<YOUR-LOG-STREAM>,x-aws-metric-namespace=<YOUR-NAMESPACE>
+export OTEL_EXPORTER_OTLP_TRACES_HEADERS=x-aws-log-group=<YOUR-LOG-GROUP>,x-aws-log-stream=<YOUR-TRACES-LOG-STREAM>
+export OTEL_RESOURCE_ATTRIBUTES=service.name=<YOUR-AGENT-NAME>
+```
+
+运行：`opentelemetry-instrument python agent.py`
+
+**一个容易漏的 IAM 前置** **[官方文档]**：
+
+> "If you set `OTEL_EXPORTER_OTLP_TRACES_HEADERS` to deliver spans to your own log group, you must also add an Amazon CloudWatch Logs **resource policy**. The policy must allow X-Ray (`xray.amazonaws.com`) to call `logs:PutLogEvents` on that log group."
+> — https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/observability-configure.html
+
+官方 EKS 样例：
+https://github.com/awslabs/agentcore-samples/tree/main/03-integrations/agents-hosted-outside-runtime/agents-on-eks
+
+---
+
+## 四、接进本项目依赖图谱的设计
+
+### 4.1 新增一条 ETL，不要改现有的
+
+本项目现有 5 条 ETL **[实测]**：`etl_aws` / `etl_cfn` / `etl_deepflow` / `etl_xray` / `etl_trigger`（活的 Lambda：`neptune-etl-from-{aws,cfn,deepflow,xray}` + `neptune-etl-trigger`）。
+
+**新增 `etl_agentcore`（独立 Lambda）**，理由与当初 `etl_xray` 独立的理由相同：独立观测源必须架构独立，否则一个源的故障会污染另一个源的产出。
+
+| 属性 | 设计 |
+|---|---|
+| 数据源 | CloudWatch Logs `/aws/bedrock-agentcore/runtimes/<agent_id>-<endpoint>` 的 `spans` 流；以及 `aws/spans`（Transaction Search 转存的 semantic convention 格式） |
+| 触发 | 定时 5 分钟，与 `etl_deepflow` 对齐 |
+| 写入 | Agent / Model / Tool / KnowledgeBase / Session 节点 + Invokes / Delegates / ExecutesOn / RetrievesFrom 边 |
+| 架构 | arm64（与 `gp-window-flush`、`petsite-rca-engine` 一致；现有 4 条 ETL 是 x86_64） |
+| 契约 | 必须先扩 `profiles/graph_contract.yaml`，否则运行时写入门禁会拒（**[实测]** 契约当前 33 节点类型 / 26 边类型，`GRAPH_CONTRACT_MODE` 默认 `enforce`） |
+
+> 🔄 **2026-09-05 实测对照：实现比这张表更广，但触发方式完全没落地。** **[实测]**
+>
+> | 属性 | 本节的设计 | 实际实现 | 判定 |
+> |---|---|---|---|
+> | 数据源 | 只写了 CloudWatch Logs span | **控制面 API + span 双路** | 🔀 实现更广 |
+> | 触发 | 定时 5 分钟 Lambda | **没有 EventBridge 规则、未部署 Lambda**，本地手工跑 | ❌ 未落地 |
+> | 架构 | arm64 | 不适用（没部署） | ❌ |
+> | 写入 | Agent/Model/Tool/KnowledgeBase/Session + Invokes/Delegates/ExecutesOn/RetrievesFrom | 见 4.2 的对账表 | 🔀 |
+> | 契约先行 | 必须先扩契约 | ✅ 做到了 | ✅ |
+>
+> **控制面这条路是本节漏掉的、但事后证明最关键的一条**——它是唯一能拿到
+> `role_arn` / `subnet_ids` / `security_group_ids`（即**注入目标属性**）的来源。
+> 实际调用的 API：
+>
+> ```
+> bedrock-agentcore-control : list_agent_runtimes + get_agent_runtime（逐个，list 不返回角色与网络配置）
+>                             list_gateways + get_gateway + list_gateway_targets
+>                             list_memories
+> bedrock                   : list_guardrails
+> bedrock-agent             : list_knowledge_bases
+> logs                      : start_query / get_query_results（Insights 查 span）
+> ```
+>
+> 没有这条路，图谱能说「这条 agent 依赖存在」，却答不出「要验证它该往哪注入」——
+> 而后者才是本项目的命题。设计文档只想到「怎么发现依赖」，没想到「怎么可注入」。
+>
+> **触发方式没落地这件事有实际后果**：ETL 只在人手动跑的时候更新，
+> 而 agent 边的 `expires_seconds` 是 21600s（6h）——超过 6 小时没人跑，
+> 图里的 agent 依赖边就会全部进入「过期但没被收敛」的状态。
+> 现有 4 条 ETL 的 EventBridge 规则是 `neptune-etl-every-5min` / `every-15min` /
+> `cfn-daily` / `xray-hourly`，agentcore 没有对应的规则。
+>
+> （契约总数也变了：现在是 **39 节点类型 / 29 边类型**，本节写的 33/26 是扩契约之前的数。）
+
+### 4.2 契约扩展的具体条目
+
+**[实测]** 现有 dependency 边只有 3 种：`AccessesData` / `Calls` / `DependsOn`。
+
+新增节点类型（身份键必须不可变——这是契约的硬约束）：
+
+| 节点类型 | 身份键 | 不可变性判断 |
+|---|---|---|
+| `Agent` | `agent_id` | ✅ AgentCore 分配，不可变 |
+| `Model` | `(provider, model_name)` 复合键 | ✅ 复合键必要——要区分同名不同 provider |
+| `Tool` | `tool_name` | ⚠️ 需确认 MCP tool 名是否会因 Gateway 聚合而改写 |
+| `MCPServer` | `server_id` | ✅ |
+| `KnowledgeBase` | `kb_id` | ✅ Bedrock 分配 |
+| `Session` | `conversation_id` | ⚠️ 见 4.3 |
+
+新增边类型：
+
+| 边类型 | 方向 | dependency | TTL 建议 |
+|---|---|---|---|
+| `Invokes` | Agent → Tool | true | 30min（同 `Calls`） |
+| `Delegates` | Agent → Agent | true | 30min |
+| `ExecutesOn` | Agent → Model | true | 6h（模型选择相对稳定） |
+| `RetrievesFrom` | Agent → KnowledgeBase | true | 6h |
+| `HostsTool` | MCPServer → Tool | false（结构边） | null |
+| `PartOfSession` | Agent → Session | false（结构边） | null |
+
+**`dependency_kind` 需要第三个取值 `inference`**。现有两个取值表达不了 agent 的依赖性质：
+
+- `dynamic` = 持续观测到流量（微服务间 HTTP）
+- `static` = 配置声明但未观测到流量（CFN / AWS API）
+- **`inference` = LLM 在运行时按 query 决定的调用** —— 既不是配置写死的，也不是持续存在的
+
+这个区分对边过期收敛有直接影响：`inference` 边的 TTL 语义与 `dynamic` 不同，一条低频 query 才触发的边不该因为 30 分钟没出现就被判失效。
+
+> 🔄 **2026-09-05 实测对账：实现全面改写了本节方案，多数改动更对；本节还有一处事实性错误。** **[实测]**
+>
+> **节点类型对账**
+>
+> | 本节提议 | 提议的身份键 | 实际落地 | 实际身份键 | 判定 |
+> |---|---|---|---|---|
+> | `Agent` | `agent_id` | `AgentRuntime` | **`arn`** | 🔀 改名 + 改键 |
+> | `Tool` | `tool_name`（本节自标 ⚠️） | `AgentTool` | **`tool_key`** = `<owner_arn>#<tool_name>` | ✅ **本节的 ⚠️ 是对的** |
+> | `Model` | `(provider, model_name)` | — | — | ❌ 未落地 |
+> | `MCPServer` | `server_id` | — | — | ❌ 未落地 |
+> | `KnowledgeBase` | `kb_id` | `KnowledgeBase` | **`arn`** | 🔀 键改成 arn |
+> | `Session` | `conversation_id` | — | — | ❌ 未落地（见 4.3） |
+> | — | — | `AgentGateway` | `arn` | ➕ 本节没想到 |
+> | — | — | `AgentMemory` | `arn` | ➕ 本节没想到 |
+> | — | — | `Guardrail` | `arn` | ➕ 本节没想到 |
+>
+> **`Tool` 的身份键是本节唯一一处「自己标了 ⚠️、后来被实现证实」的地方。** 契约里的 note 写得很清楚：
+>
+> > tool **没有 ARN** —— 它是 agent 进程内注册的函数，或 Gateway 聚合出来的虚拟 MCP 工具。
+> > 所以身份键是复合键 `<owner_arn>#<tool_name>`。**不能只用 tool_name** —— 两个 agent
+> > 各注册一个同名 `get_pet` 会被并成一个节点，那正是 FIS chaos 模板里「tool 名精确匹配」
+> > 踩过的同一个坑（名字对不上就零注入而实验仍报成功）。
+>
+> 身份键统一用 `arn` 而不是各自的 `*_id`，理由也比本节的提议强：`arn` 全局唯一且跨账号可辨，
+> `agent_id` 只在账号内唯一，而依赖图谱本身要支持跨账号拓扑。
+>
+> **边类型对账**（TTL 字段的真实名字是 `expires_seconds`，不是 `ttl_seconds`）
+>
+> | 本节提议 | 提议 TTL | 实际落地 | 实际 dependency / expires_seconds | 判定 |
+> |---|---|---|---|---|
+> | `Invokes`（Agent→Tool） | 30min | **`InvokesTool`** | true / **21600** | 🔀 刻意不复用 `Invokes` |
+> | `Delegates` | 30min | `Delegates` | true / **21600** | ✅ 名字对，TTL 不同 |
+> | `ExecutesOn`（→Model） | 6h | — | — | ❌ 未落地 |
+> | `RetrievesFrom`（→KB） | 6h | **`Retrieves`** | true / 21600 | 🔀 改名 |
+> | `HostsTool` | null | — | — | ❌ 未落地 |
+> | `PartOfSession` | null | — | — | ❌ 未落地 |
+> | — | — | `RoutesTo` | **false** / 21600 | ➕ Gateway→Runtime 的结构边 |
+> | — | — | `DependsOn`（复用） | true / 21600 | ➕ **AgentTool→微服务的桥接边** |
+>
+> 两处实现的理由比本节强：
+>
+> 1. **不复用 `Invokes`**。契约 note：现有 `Invokes` 是 Lambda/SNS/StepFunction → LambdaFunction
+>    且 `dependency: false`，而 agent 对 tool 是**真依赖**。「把两种语义塞进一个标签会让
+>    『按 dependency 过滤』的查询同时命中结构边与依赖边」。本节提议直接叫 `Invokes` 会踩这个坑。
+> 2. **TTL 全部取 21600 而不是本节建议的 30min**。代码注释给的理由是
+>    「与 span 采集窗口 `SPAN_LOOKBACK_SECONDS` **刻意取同一个值**——采集窗口小于 TTL 会让边在
+>    『还没到期但本轮没看到』时被误判失活；大于 TTL 则写进来的边立刻就是过期的」。
+>    这个约束本节没考虑到，而它恰好也回答了本节自己提出的 `inference` 边不该被 30 分钟判死的顾虑——
+>    **不需要新增取值，把窗口与 TTL 对齐就解决了。**
+>
+> **关于本节说的「现有两个取值 `dynamic` / `static`」——这句是对的，我先前的「纠正」才是错的。**
+> 我一度只查契约 YAML（那里 `dynamic` 出现 0 次）就断言实际取值是 `static`/`observed`。
+> 但这条主张说的是**数据约定**：图里实测 `dependency_kind='dynamic'` **91 条**、
+> `'static'` **21 条**，本节的描述准确。
+> **用错的数据源去「纠正」一个正确的说法，比原说法更有害** —— 它带着「已实测」的权威。
+> 契约 YAML 只声明结构，取值约定在 ETL 写入侧，查前者回答不了后者。
+>
+> `inference` 未落地这一点仍然成立，且**不需要落地**：本节担心的「低频 query 触发的边
+> 不该被 30 分钟判死」已由实现的另一条约束解决 —— span 采集窗口与 `expires_seconds`
+> **刻意取同值**（都是 21600s）。而这条约束还有实际后果：agent 边确实带
+> `dependency_kind='dynamic'`，所以它们**在** `deactivate_stale_dynamic_edges` 的作用
+> 范围内 —— 桥接边在 2026-09-04 20:11 被置 `active=False` 就是实证（见
+> `injection-found-defects` #36）。
+
+### 4.3 Session 归并是真难点，不要低估
+
+一个多轮对话产生多个 `trace_id` 但共享一个会话标识。**问题是这个标识经常拿不到**：
+
+**[官方文档 / 社区]** OTel GenAI semconv 里 `gen_ai.conversation.id` 存在，但**很多 instrumentor 不发**。上游用五种框架恰好会暴露这个问题——ADOT 对 CrewAI / LangGraph / LlamaIndex / OpenAI Agents 的自动埋点各自发什么，需要**实测**而不是照规范假设。
+
+设计上要准备 fallback 链，并且**把实测到的每种框架的实际属性名记录成映射表**（类似 `etl_xray` 当初为 `SSM`/`SimpleSystemsManagement` 做的别名表）。
+
+> 这与本项目已记录的一条模式同源：**缺陷不是"少采了数据"，而是"粒度错配 / 写了没人读 / 身份不唯一"**。Session 归并正是第三类——身份不唯一。所以要在契约里把 `Session` 的身份键规则写死并加守门测试，而不是等 ETL 跑出重复实体再补。
+
+> ❌ **2026-09-05 实测：完全未落地。** **[实测]** 契约里没有 `Session` 节点类型、没有 `PartOfSession` 边，
+> ETL 代码里没有任何 session / conversation 相关逻辑。
+>
+> 这不算错误决策——在 span 路本身还在读错日志组、一条边都没写出来的情况下，
+> 先做 session 归并是**在没有数据的前提上做归并**。合理的顺序是先修日志组、
+> 拿到真实 span 属性、再看 `gen_ai.conversation.id` 到底有没有值。
+>
+> 而且实测已经能看到 span 里有什么了：查 per-runtime 日志组拿到的字段是
+> `attributes.gen_ai.operation.name`（值有 `invoke_agent` / `chat` / `execute_tool`）、
+> `resource.attributes.cloud.resource_id`（= runtime arn）、`attributes.gen_ai.tool.name`。
+> 本节说的「实测各框架实际发出的属性名，不要按规范假设」这条纪律**仍然有效且尚未执行**——
+> 因为 span 路从没真正跑通过。
+
+### 4.4 与现有观测源的对账关系（这是本项目的核心价值）
+
+Agent 系统接入后，同一条依赖会有**多个独立观测源**，可以互相印证：
+
+| 依赖 | AgentCore Observability | X-Ray | DeepFlow L7 | 能对出什么 |
+|---|---|---|---|---|
+| Agent → Model（Bedrock） | ✅ span | ✅（Bedrock 调用） | ❌（走 AWS API 不过 eBPF） | AgentCore 是唯一带 token 数与模型名的源 |
+| Agent → Tool（Gateway → VPC 内服务） | ✅ span | ✅ | ✅（Lattice 到 ClusterIP 的流量） | **三源交叉**——最强的证据组合 |
+| Agent → Agent（delegate） | ✅ span | ⚠️ 需确认是否跨 Runtime 传播 | ❌ | 委派链只有 AgentCore 看得见 |
+| Agent → KnowledgeBase | ✅ span | ✅（Bedrock KB API） | ❌ | 两源 |
+
+**「Agent → Tool → PetSite 微服务」这条链会是全系统唯一同时被三个独立源看见的依赖**，对验证图谱正确性的价值最高。
+
+> ❌ **2026-09-05 实测否证：DeepFlow 这一源不成立，「三源交叉」是错的。** **[实测]**
+>
+> AgentCore 托管运行时的 ENI 在 EC2 里是专门的接口类型 **`agentic_ai`**，本账号 6 个。
+> 对这 6 个 IP 查 DeepFlow ClickHouse 近 6 小时，三个方向全部 **0 行**：
+> `l7_flow_log` 作客户端 0、作服务端 0、`l4_flow_log` 任一端 0。
+> 同期 `search-service` 有 40 万+ 条 L7 记录，客户端全是 EKS Pod（`pod_id_0` 非 0）或 ELB ENI。
+>
+> **机制**：DeepFlow 的 eBPF 采集器是 EKS 节点上的 DaemonSet，
+> 而 AgentCore 托管运行时不是 Pod、有自己的 ENI，不在采集覆盖范围内。
+>
+> 修正后的对账表：
+>
+> | 依赖 | AgentCore span | X-Ray | DeepFlow L7 | 主动探测 | 实际可用源数 |
+> |---|---|---|---|---|--:|
+> | Agent → Model（Bedrock） | ✅ | ✅ | ❌ | ⚠️ 间接 | 2 |
+> | Agent → Tool → 微服务 | ✅ 实测 `op=execute_tool tool=search_available_pets calls=78` | ⚠️ 待验 | **❌ 实测零记录** | ✅ 实测 | **2** |
+> | Agent → Agent（delegate） | ✅ | ⚠️ 待验 | ❌ | ✅ | 1–2 |
+> | Agent → KnowledgeBase | ✅ | ✅ | ❌ | ⚠️ 间接 | 2 |
+>
+> 两处措辞也需纠正：写的是「Lattice 到 ClusterIP 的流量」，但实测没有任何 Lattice 痕迹——
+> DeepFlow 看到的 `request_domain` 是 `search-service.petadoptions.svc.cluster.local`（直连 ClusterIP），
+> 且命名空间是 `petadoptions` 而不是 `default`。
+>
+> **这个否证反而把项目的论点推进了一步。** 本节原本设想的价值是「三源互证」；
+> 实测发现 agent 层根本凑不出第三个被动源，于是**「主动探测」从可选手段变成必需手段**。
+> 这与 FIS chaos 模板 README 的警告完全一致：
+> 「工具级故障被 agent 优雅处理后计为成功调用，**对基础设施指标不可见**，必须用 agent 自己的信号」。
+> 也就是说 agent 层的证据方法论与微服务层**不同构**：微服务层靠多源被动观测互证，
+> agent 层必须靠主动探测 + agent 自身信号。这条差异是本项目在 agent 层的真正结论，
+> 比原来那个「三源交叉」的设想更有价值，因为它是被实测逼出来的而不是设计出来的。
+>
+> 落地证据见 `injection-found-defects.md` #35：
+> `AgentTool(search_available_pets) -[DependsOn]-> petsearch` 用主动探测判定
+> confirmed / 强度 hard / 置信度 0.989，基线 25/26 返回宠物数据、petsearch 全挂时 0/22。
+
+---
+
+## 五、Agent 的证伪比微服务难，判据必须换
+
+现有混沌验证的判据是 `success_rate` / 延迟 / 容器重启差值。**这套对 agent 不成立**——agent 的"故障"表现为输出质量下降而不是 HTTP 500。
+
+需要的注入手段与判据（这部分**尚需进一步落地调研**，见 `03` 的未决项）：
+
+| 注入 | 验证什么 | 判据 |
+|---|---|---|
+| 禁用某个 MCP tool | Agent 是否真依赖它 | 输出质量 + tool_call 成功率 |
+| 下线某个子 agent | 父 agent 能否 fallback | 委派链是否改道 |
+| 让 Model 返回低质量结果 | 输出对模型质量的敏感度 | LLM-as-judge 评分 |
+| 清空 Knowledge Base | 是否真依赖 RAG 上下文 | groundedness / faithfulness |
+
+**[官方文档]** AWS FIS 的 action 清单里**没有** Bedrock / AgentCore / GenAI action。但**这不代表 FIS 用不上**——官方样例用通用的 `aws:ssm:start-automation-execution` 把 FIS 当编排器，注入点放在 agent 进程内。完整机制见 `04-FIS模板库与agent注入`。
+
+### 观测判据必须换：基础设施错误率对 agent 故障是盲的
+
+这是官方模板给出的诊断，与本节开头的判断一致：
+
+> "Because a tool-level fault that the agent handles gracefully **completes as a successful invocation, it is invisible to infrastructure error metrics.** Surface the agent's own signal instead."
+
+所以 agent 故障注入的可观测性判据是**agent 自己发出的信号**：
+
+| 层 | 判据 | 怎么取 |
+|---|---|---|
+| 注入是否生效 | `activated chaos execution=<...> tools=<...>` 日志行 | 在构建里设 `logging.getLogger("strands_agentcore_chaos").setLevel(logging.INFO)`，然后在 CloudWatch Logs 上对 `activated chaos` 建 **metric filter** |
+| 注入范围 | `/chaos/{runtime_id}/` 的 SSM 参数 | `aws ssm get-parameters-by-path` |
+| 业务影响 | task-success rate / response-quality score / downstream action correctness | 不是 infrastructure error rate |
+| 跨源关联 | `execution_id`（SSM Automation 执行 ID） | 它同时出现在 CloudWatch Logs、CloudTrail 与 FIS 记录里 |
+
+**`activated chaos` 那条 metric filter 是本项目「注入生效门禁」在 agent 场景的落点**——没有它，一个 tool 名拼错就会产出「实验成功但零注入」的假 PASS（详见 `04` 陷阱 1）。
+
+---
+
+## 六、推荐的执行顺序（依赖关系已排过）
+
+> 🔄 **2026-09-05 实测复核后的实际状态**（原顺序保留在下面供追溯）：
+>
+> | # | 原步骤 | 状态 |
+> |---|---|---|
+> | 1 | 先量 `etl_xray` 基线 | ✅ 已做（`05` 文档） |
+> | 2 | 评估 Transaction Search 影响并开启 | ✅ 已开，采样 100%，09-04 09:52 ACTIVE |
+> | 3 | 扩契约 + 守门测试 | ✅ 已做（39 节点 / 29 边），但命名与本文档方案不同，见 4.2 对账 |
+> | 4 | 部署 agent | ✅ 已做，6 个托管 runtime（VPC 模式） |
+> | 5 | 实测各框架 span 属性名并写映射表 | ❌ **未做**——因为 span 路一直读错日志组，从没拿到真实 span |
+> | 6 | 写 `etl_agentcore` 并部署 | ⚠️ 写完了，**但没部署**（无 Lambda、无定时规则，本地手工跑） |
+> | 7 | 复测 `etl_xray` 与基线对比 | ❌ 未做 |
+> | 8 | agent 侧故障注入与证伪 | ⚠️ **已做了一条**——桥接边用主动探测判定 confirmed/hard（见 4.4 末尾） |
+>
+> **新的最高优先项（原顺序里没有，因为当时不知道有这个 bug）：**
+>
+> **0. 修 `SPAN_LOG_GROUP`**——从 `aws/spans` 改为把 `/aws/bedrock-agentcore/runtimes/` 前缀下的
+> 日志组全部列出来一起查（Insights 单次查询支持多日志组）。这一条**阻塞步骤 5**，
+> 并且是 runtime 侧 5 个 `AgentTool` 拿不到 `name`、每轮 `edges: {}` 的根因。
+> 同时应补一条守门断言：**「已知有 N 个 agent runtime 日志组，span 路却零命中」是矛盾，
+> 不能只报 `empty`**——现有 `_probe_status` 区分了「空」与「拿不到」，
+> 但缺第三种「问错了对象」的检测。
+>
+> 修完后的合理顺序：0 → 5 → 6（补 EventBridge 定时规则）→ 7 → 继续 8。
+
+1. **先量 `etl_xray` 基线**——读源码确认它调哪些 X-Ray API，记录当前产出边数与覆盖率。**这一步必须在开 Transaction Search 之前**，否则失去对照。
+2. **评估 Transaction Search 的影响并决定索引百分比**，然后开启。
+3. **扩契约**（`graph_contract.yaml` 加 6 类节点 + 6 类边 + `inference` 取值）并补守门测试。契约必须先于 ETL，否则写入门禁会拒。
+4. **部署 agent**（见 `01`，路径 A）。
+5. **实测各框架实际发出的 span 属性名**，据此写 legacy-compat 映射表。**不要按 semconv 规范假设**。
+6. **写 `etl_agentcore`** 并部署（arm64）。
+7. **复测 `etl_xray`** 与步骤 1 的基线对比，确认 Transaction Search 没有让它退化。
+8. 最后才做 agent 侧的故障注入与证伪。

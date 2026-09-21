@@ -1380,7 +1380,7 @@ D4 特别值一提：cycle-0 时 6 小时窗口下 `WaggleAIAdoption` **不可�
      提交 `83b06979`，2 files / +686 −1
    - **没有提交到另一会话的 `feat/dr-plan-generator-cross-region` 分支**，
      也没有提交到 PetSite 的 `main`。
-   - 刻意未暂存：`todo/agentobv/agent-layer-taxonomy-design_20260905-1640.md`
+   - 刻意未暂存：`docs/design/agent-layer-taxonomy-design.md`
      （agent 分类学设计，非本会话产出）、`scripts/_tmp_source_audit.py`
      （另一会话的临时脚本）、`docs/fault-injection-coverage-and-production-safety.md`
      （归属不明）、PetSite 的 `issues.md` 与 `doc/` 下另两个文件。

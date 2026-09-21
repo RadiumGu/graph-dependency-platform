@@ -476,7 +476,7 @@ HEADER = """# 图谱契约 —— 机器可读的权威声明
 #
 # 为什么需要它：在引入本文件之前，四个写入 ETL 无一 import profiles，
 # 运行时对节点/边类型零校验 —— 任何拼错或新造的标签都会被静默写进 Neptune。
-# 参见 todo/graph-correctness-audit-and-gaps_20260830-1435.md 缺口 1。
+# 参见 docs/lessons/graph-correctness-audit-and-gaps.md 缺口 1。
 #
 # 由 scripts/bootstrap_graph_contract.py 初次生成，此后手工维护。
 # Lambda 层产物 infra/lambda/shared/python/graph_contract.py

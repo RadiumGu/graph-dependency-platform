@@ -171,7 +171,7 @@ MCP 端点            握手 ✅ 真实查询 ✅ 跨模块 q16 ✅ DETACH DELET
 - `T-094` 其余 20+ 测试文件的硬编码路径
 
 完整看板见 `todo/goal-loop/tasks.md`,评估依据见
-`todo/design-goals-assessment_20260828-1705.md`。
+`docs/design/design-goals-assessment.md`。
 
 ## 生产侧已应用(不在本 PR 的代码里)
 

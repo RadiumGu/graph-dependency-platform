@@ -1,7 +1,7 @@
 # Roadmap — 分阶段路线
 
 > 每轮由代理重读。阶段内可并行,阶段间尽量按序(后一阶段常依赖前一阶段的产出)。
-> 详细证据见 `../design-goals-assessment_20260828-1705.md`。
+> 详细证据见 `../design-goals-assessment.md`。
 
 ---
 

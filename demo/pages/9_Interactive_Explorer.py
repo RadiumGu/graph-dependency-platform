@@ -641,7 +641,7 @@ with st.expander("图例与设计说明"):
     )
     st.markdown("---")
     st.markdown(
-        "**为什么不渲染全图**：本仓 `todo/webui/05-图谱展示方案调研_20260905-0645.md` "
+        "**为什么不渲染全图**：本仓 `docs/lessons/05-图谱展示方案调研.md` "
         "记录的调研里，10 个成熟依赖图产品（Datadog / Dynatrace / Bloom / "
         "graph-explorer / Kiali / Grafana …）没有一个默认渲染全图。"
         "认知上也有硬数字：Yoghourdjian 等（IEEE TVCG 2020，EEG + 眼动对照）测得"

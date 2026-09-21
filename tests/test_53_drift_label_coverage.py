@@ -239,7 +239,7 @@ def test_m06_部署包里不得有从handler不可达的模块():
         gp-window-flush      handler = window_flush_handler.window_flush_handler
                              （由 infra/lib/alert-buffer-stack.ts:166 部署）
         petsite-rca-engine   handler = handler.lambda_handler
-                             （CFN 外部署 —— 见 todo/tech-debt-etl-lambdas-outside-cfn.md，
+                             （CFN 外部署 —— 见 docs/lessons/tech-debt-etl-lambdas-outside-cfn.md，
                                所以 grep CDK 找不到它，只能从线上配置读出来）
 
     单入口假设会让这条门禁每次都红，而一条总是红的门禁等于没有门禁。

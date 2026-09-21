@@ -1470,10 +1470,10 @@ payforadoption -[AccessesData]-> dynamodb     首发=nfm           观测源=nfm
 若干长期成立的假设。
 
 > 与本附录并行，同环境另有四份专项文档（同一天 15:18 产出，未纳入本文件以免重复）：
-> `trafficgenerator-config-rootcause_20260829-1518.md`（静默失效 95 天的根因）、
-> `crossvpc-loadgen-internal-alb_20260829-1518.md`（跨 VPC 内网入口）、
-> `petsite-traffic-coverage_20260829-1518.md`（覆盖度实测）、
-> `sqs-orphan-and-topology-hints_20260829-1518.md`（SQS 孤儿队列 + 拓扑路由钉死）。
+> `trafficgenerator-config-rootcause.md`（静默失效 95 天的根因）、
+> `crossvpc-loadgen-internal-alb.md`（跨 VPC 内网入口）、
+> `petsite-traffic-coverage.md`（覆盖度实测）、
+> `sqs-orphan-and-topology-hints.md`（SQS 孤儿队列 + 拓扑路由钉死）。
 > 本附录只记与**依赖关系建图**直接相关的部分。
 
 ## G.1 新增 EC2：跨 VPC 压测源

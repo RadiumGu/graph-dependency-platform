@@ -358,4 +358,4 @@ scope 过滤跑在能力矩阵**之前**：先问「该不该打」再问「能�
 
 ---
 
-_相关文档：`profiles/graph_contract.yaml`（唯一权威声明）、`todo/neptune-selection-assessment_20260905-0650.md`（存储选型评估）、`todo/research-lab-graphdb-necessity-FINDINGS_20260905-0634.md`（业界调研，含四种范式对比）_
+_相关文档：`profiles/graph_contract.yaml`（唯一权威声明）、`docs/lessons/neptune-selection-assessment.md`（存储选型评估）、`docs/lessons/research-lab-graphdb-necessity-FINDINGS.md`（业界调研，含四种范式对比）_

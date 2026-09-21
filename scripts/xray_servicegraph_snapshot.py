@@ -6,7 +6,7 @@
   这与本项目已有的纪律同源 —— 缩短注入时长会制造出正好要防的假 refuted。
 
 它只测 `GetServiceGraph`，因为 etl_xray 只调这一个 API（见
-todo/agentobv/05-etl_xray影响面量化_20260904-0835.md 第二节）。刻意不测 Neptune
+docs/lessons/05-etl_xray影响面量化.md 第二节）。刻意不测 Neptune
 里的边数：那要经过 ETL 的合并语义与失效判定，会把 ETL 逻辑混进「X-Ray API 行为是否
 变化」这个问题里。
 

@@ -14,7 +14,7 @@
 后果是 `AccessesData` / `DependsOn` 写了 `active=true` 与 `last_seen`，
 却**没有任何路径把 `active` 翻回 false** —— 观测停止后这些边永久留在图里变成
 ghost 边，而影响面分析会把它们与真实依赖等权对待。
-参见 todo/graph-correctness-audit-and-gaps_20260830-1435.md 缺口 4。
+参见 docs/lessons/graph-correctness-audit-and-gaps.md 缺口 4。
 
 ## 两种失效语义，刻意不混
 

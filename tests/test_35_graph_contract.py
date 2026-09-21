@@ -13,7 +13,7 @@
            这是最要紧的一条：没有它，契约可以和代码任意脱节。
 - g12      时间戳字段唯一。
 
-参见 todo/graph-correctness-audit-and-gaps_20260830-1435.md 缺口 1、2、7。
+参见 docs/lessons/graph-correctness-audit-and-gaps.md 缺口 1、2、7。
 """
 from __future__ import annotations
 

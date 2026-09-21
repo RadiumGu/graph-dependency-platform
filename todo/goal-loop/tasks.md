@@ -920,7 +920,7 @@ cycle-9(18:12)一次性批量提交了前 8 轮改动,那些代码 16:39 就已�
 
 完整评估(含 arm64 平台 targeting、ETL 不要跑 pip、绝不对生产跑完整 `deploy.sh`、
 行为变更清单、建议的三步顺序)见
-`../production-drift-audit_20260828-2205.md`。
+`../production-drift-audit.md`。
 
 ---
 

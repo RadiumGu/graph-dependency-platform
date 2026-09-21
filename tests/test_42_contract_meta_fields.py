@@ -23,7 +23,7 @@
   m06      三个元字段都必须有 accessor —— 直接反「写了但没人读」那一类
   m07      **live**：preferred 的解锁条件对活图谱自动核验（显式 opt-in）
 
-参见 todo/injection-found-defects_20260831-1705.md 第 24 节。
+参见 docs/lessons/injection-found-defects.md 第 24 节。
 """
 from __future__ import annotations
 

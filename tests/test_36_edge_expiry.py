@@ -12,7 +12,7 @@
 - c07      单个类型查询失败不中断整轮
 - c08      同一轮所有判定用调用方传入的同一个 round_ts 基准
 
-参见 todo/graph-correctness-audit-and-gaps_20260830-1435.md 缺口 4。
+参见 docs/lessons/graph-correctness-audit-and-gaps.md 缺口 4。
 """
 from __future__ import annotations
 

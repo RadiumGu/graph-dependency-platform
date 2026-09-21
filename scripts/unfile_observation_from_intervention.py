@@ -47,7 +47,7 @@
 experiment / degradation），加第七个要改 `profiles/graph_contract.yaml`
 并同步 ETL 与门禁 —— 为了记一句「这条判定是怎么来的」去动契约，
 爆炸半径不成比例。判定方法的分类记在
-`todo/injection-found-defects_20260831-1705.md` 与本文件里。
+`docs/lessons/injection-found-defects.md` 与本文件里。
 
 ## 来源
 
