@@ -45,7 +45,21 @@ FIXTURES_DIR = os.path.join(_PROJ, "experiments", "strands-poc", "fixtures")
 CASES_PATH = os.path.join(_HERE, "golden", "learning", "cases.yaml")
 
 RUN_GOLDEN = os.environ.get("RUN_GOLDEN", "").lower() in ("1", "true", "yes")
-ENGINE = os.environ.get("LEARNING_ENGINE", "direct").lower()
+
+# ⚠️ 2026-09-21：默认值原为 "direct"。direct 实现已于 2026-09-20 全部删除、
+# factory 也去掉了回退分支，`make_learning_engine()` 只可能返回 strands。
+# 于是第 157 行的 `assert rec_result["engine"] == ENGINE` 恒假 ——
+# 实测报错 `assert 'strands' == 'direct'`。
+#
+# 这不是引擎退化，是断言的期望值过期。与 4cbcf23 修掉的「golden 跟自己对比」
+# 同源：都是 direct 删除后遗留在测试侧的期望。那次改的是引擎 matrix，
+# 漏了本文件这个默认值（本文件没有 matrix，只有一个 env 默认值）。
+ENGINE = os.environ.get("LEARNING_ENGINE", "strands").lower()
+if ENGINE == "direct":
+    raise RuntimeError(
+        "设了 LEARNING_ENGINE=direct，但 direct 实现已于 2026-09-20 删除，"
+        "factory 会返回 strands —— 跑下去只会得到一条 "
+        "`assert 'strands' == 'direct'` 的假失败。请去掉这个 env。")
 
 
 def load_cases():

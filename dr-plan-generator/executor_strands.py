@@ -612,9 +612,33 @@ Begin with Phase 1. For cross-region plans, call check_cross_region_health first
 
     @staticmethod
     def _assert_cacheable(text: str, min_tokens: int = 1024) -> None:
-        import tiktoken
-        enc = tiktoken.get_encoding("cl100k_base")
-        count = len(enc.encode(text))
+        """验证稳定段达到 Bedrock prompt cache 的 token 下限。
+
+        ⚠️ 2026-09-21 补 tiktoken 缺失时的兜底。此前这里是裸 `import tiktoken`，
+        而该包**未在任何依赖清单里声明**，实测本机没有 —— 于是 dr_executor
+        golden 直接 `ModuleNotFoundError: No module named 'tiktoken'`。
+
+        本项目同一功能有五份副本，另外四份
+        （chaos 的 learning/guard/runner、rca 的 layer2）都带 try/except 兜底并
+        降级为粗略估算，只有这一份没有。补齐以保持一致。
+
+        为什么不是改去装 tiktoken：`rca/chunker.py` 的文件头写明了项目的取舍 ——
+        「不引入 tiktoken 之类的额外依赖（Lambda 包体积与 arm64 轮子可用性都是
+        约束）」。既然装它与项目决定相反，正确做法是让缺失时能降级。
+
+        这个缺陷能存在到今天，是因为这条路径只在 golden 跑时执行，
+        而 golden 在 CI 从不跑、本地默认 skip —— 2026-09-21 首次完整跑
+        七套才把它暴露出来。
+        """
+        try:
+            import tiktoken
+            enc = tiktoken.get_encoding("cl100k_base")
+            count = len(enc.encode(text))
+        except ImportError:
+            # 与另外四份副本一致的粗略估算：1 token ≈ 3 chars（中英混排偏高估）
+            count = len(text) // 3
+            logger.warning(
+                "tiktoken not available, using rough estimate: %d tokens", count)
         assert count >= min_tokens, (
             f"Stable segment {count} tokens < {min_tokens} minimum for Bedrock cache"
         )
