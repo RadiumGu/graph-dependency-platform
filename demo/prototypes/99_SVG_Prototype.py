@@ -1,5 +1,21 @@
 """99_SVG_Prototype.py —— dagre + 自绘 SVG 的原型（不替换现有页面）。
 
+## 为什么在 prototypes/ 而不是 pages/
+
+2026-09-21 从 `demo/pages/` 移到这里。放在 pages/ 下会被 Streamlit
+自动注册成页面，但它**不在 NAV_GROUPS 的四段论证线里** —— 而
+`tests/test_61_site_structure_argument_line.py::test_m02` 正是为此设的门禁：
+「页面不在导航里等于不存在 —— 而且不会报任何错，它就是静静地消失」。
+
+把原型塞进主导航会破坏首页的主张（「不是十个并列的功能 —— 是四段」），
+给门禁开例外又会削弱它。所以正确位置是 pages/ 之外：
+它是开发期的并排对比实验，不是给访客看的论证环节。
+
+单独运行：
+
+    cd demo && streamlit run prototypes/99_SVG_Prototype.py
+
+
 单独一页，为了能和 3_Graph_Explorer（pyvis）、9_Interactive_Explorer
 （st-link-analysis）并排对比，而不是先拆掉能用的东西。
 
