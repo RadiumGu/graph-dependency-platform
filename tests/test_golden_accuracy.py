@@ -6,11 +6,23 @@ test_golden_accuracy.py - Smart Query 准确率 Golden CI
   2. 执行结果是否达到 min_rows + 含必要字段
 
 默认 skip（成本考虑）。启用：
-  cd rca && PYTHONPATH=.:.. RUN_GOLDEN=1 NLQUERY_ENGINE=direct  pytest ../tests/test_golden_accuracy.py -v
+  cd rca && PYTHONPATH=.:.. RUN_GOLDEN=1 NLQUERY_ENGINE=direct  # ← 已失效，direct 已删除  pytest ../tests/test_golden_accuracy.py -v
   cd rca && PYTHONPATH=.:.. RUN_GOLDEN=1 NLQUERY_ENGINE=strands pytest ../tests/test_golden_accuracy.py -v
 
 引擎矩阵（PR4）: 通过 env NLQUERY_ENGINE 选 direct|strands，
 BASELINE 按 engine 分别写入 BASELINE-direct.md / BASELINE-strands.md。
+
+⚠️ 2026-09-21：本文件头原先写的运行命令带 `NLQUERY_ENGINE=direct`，
+而 direct 实现已于当天全部删除 —— 照那条命令跑会以为在测 direct，
+实际拿到的仍是 strands（factory 已去掉回退分支，只有一种实现）。
+
+七套 golden 的跑法现在收在**唯一权威**的
+`scripts/run_golden_suite.sh` 里（各自 cd 的目录与 PYTHONPATH 都不同，
+七份各自维护的命令必然漂移，这次就漂了）：
+
+    bash scripts/run_golden_suite.sh smart_query   # 只跑本套
+    bash scripts/run_golden_suite.sh --list    # 看全部套件
+    bash scripts/run_golden_suite.sh           # 全跑（约 $3-5、10-15 分钟）
 """
 from __future__ import annotations
 

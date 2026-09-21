@@ -9,8 +9,20 @@ Usage:
   PYTHONPATH=rca:chaos/code pytest tests/test_learning_golden.py -v -k "not goldenreal"
 
   # Golden CI (real Bedrock + DynamoDB, has cost):
-  PYTHONPATH=rca:chaos/code RUN_GOLDEN=1 LEARNING_ENGINE=direct pytest tests/test_learning_golden.py -v
+  PYTHONPATH=rca:chaos/code RUN_GOLDEN=1 LEARNING_ENGINE=direct  # ← 已失效，direct 已删除 pytest tests/test_learning_golden.py -v
   PYTHONPATH=rca:chaos/code RUN_GOLDEN=1 LEARNING_ENGINE=strands pytest tests/test_learning_golden.py -v
+
+⚠️ 2026-09-21：本文件头原先写的运行命令带 `LEARNING_ENGINE=direct`，
+而 direct 实现已于当天全部删除 —— 照那条命令跑会以为在测 direct，
+实际拿到的仍是 strands（factory 已去掉回退分支，只有一种实现）。
+
+七套 golden 的跑法现在收在**唯一权威**的
+`scripts/run_golden_suite.sh` 里（各自 cd 的目录与 PYTHONPATH 都不同，
+七份各自维护的命令必然漂移，这次就漂了）：
+
+    bash scripts/run_golden_suite.sh learning   # 只跑本套
+    bash scripts/run_golden_suite.sh --list    # 看全部套件
+    bash scripts/run_golden_suite.sh           # 全跑（约 $3-5、10-15 分钟）
 """
 from __future__ import annotations
 

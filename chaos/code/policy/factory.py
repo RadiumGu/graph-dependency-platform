@@ -10,7 +10,11 @@ logger = logging.getLogger(__name__)
 
 
 def make_policy_guard(rules_path: str | None = None):
-    """构造 PolicyGuard 引擎，切换 env：POLICY_GUARD_ENGINE=direct|strands。"""
+    """构造 PolicyGuard 引擎。
+
+    ⚠️ 2026-09-21：env `POLICY_GUARD_ENGINE` 已无作用 —— direct 实现已删除、
+    回退分支已去掉，只有 strands 一种。设 `=direct` 不报错但也不生效。
+    """
     # ── 2026-09-20：去掉 direct 回退，只保留 strands ──────────────────────
     #
     # 回退分支删除前的问题是它**掩盖真相**：strands 不可用时只留一行

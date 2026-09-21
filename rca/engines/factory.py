@@ -46,7 +46,10 @@ def make_nlquery_engine(profile: Any = None) -> NLQueryBase:
 
 
 def make_hypothesis_engine(profile: Any = None) -> "NLQueryBase":  # type: ignore[name-defined]
-    """构造 HypothesisAgent 引擎，切换 env：HYPOTHESIS_ENGINE=direct|strands。
+    """构造 HypothesisAgent 引擎。
+
+    ⚠️ 2026-09-21：env `HYPOTHESIS_ENGINE` 已无作用 —— direct 实现已删除、
+    回退分支已去掉，只有 strands 一种。设 `=direct` 不报错但也不生效。
 
     默认 strands；strands 不可用 → warning + 回退 direct（回退是应急，不是常态）。
     """
@@ -64,7 +67,10 @@ def make_hypothesis_engine(profile: Any = None) -> "NLQueryBase":  # type: ignor
 
 
 def make_learning_engine(profile: Any = None) -> "LearningBase":  # type: ignore[name-defined]
-    """构造 LearningAgent 引擎，切换 env：LEARNING_ENGINE=direct|strands。
+    """构造 LearningAgent 引擎。
+
+    ⚠️ 2026-09-21：env `LEARNING_ENGINE` 已无作用 —— direct 实现已删除、
+    回退分支已去掉，只有 strands 一种。设 `=direct` 不报错但也不生效。
 
     默认 strands；strands 不可用 → warning + 回退 direct（回退是应急，不是常态）。
     """
