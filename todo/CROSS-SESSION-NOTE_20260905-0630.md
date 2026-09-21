@@ -1773,3 +1773,134 @@ Layer 2 的 agent 编排了 probe_deployment / probe_xray / probe_logs
 
 可迁移的一条:**给"增强功能"写 except 是对的，
 但每条降级路径都必须留下可读的痕迹**，否则它会把缺陷藏到没人发现。
+
+---
+
+## 2026-09-20/21 — 迁移债务清零,以及一类反复骗过我的"假信号"
+
+这轮把七个模块的 direct 实现全删了、`check_migration_deadlines.py`
+退出码归零。但最值钱的不是清掉的债务,是认出了**一类缺陷的形状**。
+
+### 那个形状:判据看起来对,但取样位置或语义错了
+
+它在一天里出现了七次,正反两个方向都有:
+
+1. **假绿** — 给 `petsite-rca-engine` 装上 strands 后查"回退 direct"日志,
+   0 条,看着成功。但那条路径只做缓冲、**根本不执行 Layer2**。
+   判据是对的(回退日志确实该变 0),错的是它在一条不经过被测代码的路径上取样。
+
+2. **假红** — `test_e2e02_pass_rate` 判 `if 'error' in result`,
+   而 strands 的 `_pack()` **总是**带 error 这个 key(成功时值为 None),
+   direct 只在出错时才放。两个引擎都成功、error 都是 None,
+   strands 只因为多带一个 key 就每题被判失败。差点因此断定"strands 能力不足"。
+
+3. **扫描器可能空跑** — 写了 `scan_missing_symbols.py` 扫"引用不存在的符号",
+   它报"未发现"。但若它因路径问题扫到 0 个文件,也会报"未发现"。
+   所以先用 git 历史里的旧版文件自检(三个已知缺陷必须全部命中),
+   再统计它实际覆盖 160 文件 / 1270 import / 11673 属性访问。
+
+4. **重启成功 ≠ 代码更新** — 部署 Streamlit 时 `systemctl restart` 报 active、
+   健康检查也通,但 `git pull` 其实失败了(被本地未提交改动挡住)。
+   只看前两项就会误判部署成功。
+
+5. **测试在跟自己对比** — 删掉 direct 后 `test_learning_shadow.py` 还在跑,
+   它设 `ENGINE=direct` 拿一个引擎、设 `strands` 再拿一个,而 factory 已去回退,
+   **两个都是 strands**。实测 `type(e1) is type(e2) == True`。
+   它必然通过、零价值,而 CI 绿灯让人以为"两个引擎的等价性有守护"。
+
+6. **空快照上做判断** — 验证 Streamlit 页面时 `snapshot` 对 Streamlit
+   抓不到内容(只返回 1 行 `generic > banner`),我差点据此报"异常=0 处"。
+   改用截图并**实际读图**才算看到页面。
+
+7. **用 7 小时前的截图验证刚才的部署** — 浏览器进程跨夜死了,
+   `screenshot` 没生成新文件,我复制的是上一轮的旧图。
+   靠对比文件时间戳才发现。
+
+**可迁移的判据**:每次拿"没看到问题"当结论之前,先问一句 ——
+我的观测点在被测代码的执行路径上吗?我看到的数据是这次产生的吗?
+如果答案不确定,那个"没问题"就不算证据。
+
+我给几条门禁加了**守门禁自己**的断言(如 `t83_02` 断言扫描器不得空跑)。
+一个可能空跑还一直报绿的门禁,比没有门禁更糟 —— 它提供虚假的安心。
+
+### 第二类:调用一个不存在的符号,外面包着 except
+
+一天里抓到三个,全是**靠线上日志偶然暴露**的:
+
+    fault_classifier.classify_group()   从来不存在 → except 降级,五个月没人发现
+    rca_engine.analyze_group()          同上
+    NeptuneGraphManager                 整个仓库无定义,`# type: ignore` 压掉警告
+
+共同点不是"写错名字",而是**不报错、不变红、也不让任何指标异常**。
+`groups_failed` 一直是 0,所以「按 EventGroup 分类」这个设计从写下来
+就没生效过一次,而一切看起来正常。
+
+`probe_neptune` 更彻底:两条路径都不通 —— 主路径 import 的 `runner/` 是
+chaos 模块的代码、**不在 rca 部署包清单里**(本地跑得通、线上必挂),
+fallback 的类整个仓库都没有。它从来没成功过一次。
+
+靠运气发现三个之后做了 `scripts/scan_missing_symbols.py`,
+扫 `from X import Y` 与 `alias.attr` 两种形式(后者是关键,
+`classify_group` 那类只扫 import 抓不到)。
+
+### 第三类:伪造标签与伪造证据强度
+
+`hypothesis_strands.prioritize_with_meta()` 整个委托给 direct,
+然后 `meta["engine"] = self.ENGINE_NAME` —— **direct 的结果、strands 的标签**。
+原 docstring 自己承认"退化为调 Direct",但标签照打。
+任何按 engine 标签做的统计都会以为它是 strands 跑的。
+这比静默降级更进一步。
+
+同一形状的第二处:我给 `analyze_group` 并入组内告警后,
+`step4_score` 那条 evidence 仍写着"最早出现 **5xx 错误**",
+而那个候选是**告警**带进来的,DeepFlow 一个 5xx 都没观测到。
+这份 evidence 会直接进 Incident 节点和值班人看的报告 ——
+把"告警带进来的候选"写成"观测到 5xx"是在伪造证据强度。
+
+而且我上一提交的 9 条门禁全绿却没测出来:
+**我在数据层加了 source 标记并断言它存在,却没断言下游真的读它。**
+标记了来源但下游不读,等于没标记。
+
+### 第四类:过期数据把一个已消失的障碍挂在路上
+
+smart-query 卡了五个月,理由是"p99 是 direct 的 5.58 倍"。
+今日同日重测双引擎:**2.17x**,早就在 ≤2.5x 门槛内了。
+那批数据是 2026-04-18 的、五个月没人重跑。
+
+顺带发现指标读法也有问题:p99 的算法是 `latencies[int(len*0.99)]`,
+20 个样本时 `int(19.8)=19` 就是最后一个元素 —— 所谓"p99"实际是**最大值**,
+对单个慢 case 极度敏感。
+
+同一形状在别处也有:线上 Streamlit 的 `neptune_queries.py` 兜底边类型清单
+只有 7 种、main 有 10 种,于是**线上一直漏统计 24 条依赖边**
+(106 vs 130),覆盖率显示 15.09% 而真实值是 13.85% ——
+**虚高是因为分母漏了边**。而被删掉的那段注释正好写着
+"上一次漂移的代价是 Lambda 里漏掉 16 条 Invokes 边"。
+
+### 顺带修掉的"从来没成功过"清单
+
+  · `rca/deploy.sh` 的冒烟测试 —— AWS CLI v2 把 `--payload` 当 base64 解,
+    裸 JSON 被拒;而那行带着 `2>/dev/null`,真实报错被丢弃,
+    只剩一个与原因毫无关系的 `JSONDecodeError: Expecting value`
+  · `rca/scripts/graph-ask.py` —— 只把 `rca/` 加进 sys.path,
+    而 `shared/` 在项目根,所以自 shared 被引入后一执行就挂。没人跑过
+  · `VALID_FAULT_TYPES` —— direct 里硬编码 9 个,权威表有 19 个,
+    后来新增的 10 种故障**永远匹配不到**、静默落到 fallback 的 pod_kill
+
+### 一条关于部署主机的教训
+
+Streamlit 的部署主机停在 main 的一个旧提交上,靠 **40 项未提交改动**
+承载线上真正在跑的代码 —— 旧页面以删除存在、新页面以未跟踪文件存在。
+线上状态**没有可靠的 git 记录**,无法用一个 commit 复现、无法可靠回滚。
+
+而 2026-09-13 有人记录过这件事(`todo/webui/07-*.md`),
+但那次选择了绕过(`git checkout origin/<分支> -- <指定文件>` 只取需要的路径)
+而不是修复。于是八天后我又困惑了一遍 —— 文档自己预言了这一点:
+"下一个人(包括未来的自己)会重新困惑一遍"。
+
+这次真正修掉了:`git stash push -u` 留回滚点 → `git pull --ff-only` 快进到
+`fde216c` → 从 stash 取回 main 里没有的那个原型页。
+线上现在有可靠的 git 记录了。
+
+**可迁移的一条**:发现"线上状态无法用 git 描述"时,绕过它只会让下一个人
+再付一次同样的代价。修不了就至少让它有回滚点,别只留一份说明。

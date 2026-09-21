@@ -50,3 +50,10 @@ infra/cdk.context.json
 # 与验证报告（`validation/plan_verifier.py` 写的 *.verify-report.json）。
 /dr-plan-generator/plans/dr-*.json
 /dr-plan-generator/plans/*.verify-report.json
+
+# playwright-cli state-save 产物（含认证 cookie/storage state）——
+# 2026-09-21 验证 Streamlit 页面时用 `playwright-cli state-save streamlit-auth`
+# 保存过登录态，它落在仓库根目录且是**凭据**，绝不能提交。
+streamlit-auth
+*-auth.json
+playwright-state-*.json
