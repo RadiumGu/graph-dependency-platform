@@ -245,13 +245,49 @@ def test_hypothesis_case(engines, results_accumulator, engine_name, case):
             reasons.append(f"backends {backends} missing any of {must_bks}")
 
     # must_not_include: list of {match: substring} against fault_scenario
+    #
+    # ⚠️ 2026-09-21：加否定语境豁免。原先是纯子串匹配，实测把**正确行为**判成
+    # 违规 —— S007 要求「不得对 Lambda 提议 pod_kill」，而 Agent 的产出是：
+    #
+    #     pod_kill 不适用（Lambda 服务）；使用 FIS
+    #     aws:lambda:put-function-concurrency-response 将预留并发设为 1…
+    #
+    # 它**识别出 petstatusupdater 是 Lambda、显式排除了 pod_kill、改用了正确的
+    # FIS 动作** —— 这比压根不提 pod_kill 更好，却因为文本里出现了那个词而判失败。
+    #
+    # 这与 M9 那次是同一个错误：`dr-plan-generator/validation/plan_validator.py`
+    # 第一版按「命令里有没有 TODO 字样」判违规，把「为何刻意不留 TODO」的解释性
+    # 注释判成了违规，后来改成「命令有没有可执行行」——**抓行为，不抓关键词**。
+    # 那条纪律写在 plan_validator 的 docstring 里，这里重犯了一次。
+    #
+    # 本实现的边界要说清：它仍是**文本启发式**，不是语义理解。
+    # 更彻底的解法是让 Hypothesis 带结构化的 fault_type 字段（现在 fault_type 是
+    # 用 `_extract_fault_type` 从自由文本里子串匹配出来的，同样会被这类表述误导），
+    # 那是更大的改动，不在本次范围内。
+    _NEGATION_MARKERS = (
+        "不适用", "不可用", "不支持", "不适合", "不适宜", "无法使用", "不宜",
+        "避免", "排除", "替代", "而非", "不是", "没有 pod", "无 pod",
+        "not applicable", "n/a", "instead of", "rather than", "cannot",
+    )
     for rule in expected.get("must_not_include") or []:
         needle = (rule.get("match") or "").lower()
         if not needle:
             continue
         for h in hyps:
-            if needle in (h.fault_scenario or "").lower():
-                reasons.append(f"forbidden match '{needle}' found: {h.fault_scenario!r} ({rule.get('reason')})")
+            scenario = (h.fault_scenario or "")
+            low = scenario.lower()
+            pos = low.find(needle)
+            if pos < 0:
+                continue
+            # 取禁止词周围的窗口判断是否处于「显式排除」语境
+            window = low[max(0, pos - 40): pos + len(needle) + 60]
+            if any(m in window for m in _NEGATION_MARKERS):
+                reasons.append(
+                    f"__note__: '{needle}' 出现在否定语境中，判为**正确排除**而非违规："
+                    f"{scenario[:120]!r}")
+                continue
+            reasons.append(
+                f"forbidden match '{needle}' found: {scenario!r} ({rule.get('reason')})")
 
     # `__note__:` 前缀的条目是**说明而非问题** —— 它要进 BASELINE 供人看见
     # （「这条为什么算过」和「这条为什么算不过」同样重要），但不参与判定。
