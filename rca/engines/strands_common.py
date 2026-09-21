@@ -1,9 +1,26 @@
 """engines/strands_common.py — Strands BedrockModel / tool helpers 共享代码。
 
-Phase 1 仅占位。Phase 2 PR3 会在此补：
-  - build_bedrock_model(model_id, region=ap-northeast-1)
-  - wrap_tool_trace(func): 给 @tool 套 trace 采集
-  - OTel 接入 hook（TODO）
+⚠️ 2026-09-21：本 docstring 原先写着「Phase 1 仅占位。Phase 2 PR3 会在此补：
+build_bedrock_model / wrap_tool_trace / OTel 接入 hook（TODO）」。
+那是**反向过期** —— 说没做，其实早做完了，而这比标记未完成更有害：
+看文档的人会以为没有可观测性能力，于是不去用它，或者去重复实现一遍。
+
+真实状态：
+
+  ✅ build_bedrock_model()   已实现（本文件 build_bedrock_model）
+  ✅ OTel 接入 hook          已实现且**在执行路径上**：
+        ensure_telemetry()        三档开关 off|console|otlp，幂等
+        _setup_xray_id_generator() 处理 X-Ray 要求 trace ID 前 32 bit
+                                   为 unix timestamp（标准 OTel 随机 ID
+                                   会被 X-Ray 直接丢弃）
+     调用点：rca/neptune/nl_query_strands.py:85、
+             chaos/code/agents/hypothesis_strands.py:123、
+             chaos/code/agents/learning_strands.py:206
+     一键启用：chaos/scripts/enable_agentcore_observability.sh
+               （内含 ADOT Collector 的 awsxray + awsemf exporter 配置）
+  ⛔ wrap_tool_trace()       没做，也不需要 —— Strands SDK 自带 tool-call
+                             trace，各引擎的 `trace` 字段直接取 SDK 的，
+                             再包一层只会多一份要维护的采集逻辑。
 
 硬约束：
   - model_id 必须用 inference profile（global.* / apac.* / us.*），不能裸 model id

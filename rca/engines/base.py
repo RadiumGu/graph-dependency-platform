@@ -21,7 +21,7 @@ class NLQueryBase(ABC):
       - results: list
       - summary: str
       - retried: bool        # Wave 4；strands 固定 False
-      - engine: str          # "direct" | "strands"
+      - engine: str          # 实现标签。2026-09-21 起只有 "strands"（direct 已删）
       - model_used: str | None
       - latency_ms: int
       - token_usage: dict | None   # {"input","output","total","cache_read","cache_write"}
@@ -38,10 +38,24 @@ class NLQueryBase(ABC):
         """执行自然语言查询。实现必须填齐上面所有字段。"""
 
 
-# TODO(phase-3): 以下 Base 为未来模块预留占位。
-# - class ChaosPolicyGuardBase(ABC): ...
-# - class ChaosRunnerBase(ABC): ...
-# - class DRExecutorBase(ABC): ...
+# ── Phase 3 三模块的 Base 住在各自模块里，不在本文件 ──────────────────────
+#
+# 这里原先写着 `TODO(phase-3): 以下 Base 为未来模块预留占位`，列出
+# ChaosPolicyGuardBase / ChaosRunnerBase / DRExecutorBase 三个待建类。
+#
+# ⚠️ 2026-09-21 更正：那条注释**双重过期**，照它做会白干一遍 ——
+#
+#   1. 这三个模块的 Phase 3 早已完成（2026-09-20 起 direct 实现全部删除、
+#      七个模块全部 strands 化），它们不是「未来」；
+#   2. 它们的 Base **已经存在**，只是按模块就近放置而非集中到本文件：
+#
+#          PolicyGuardBase  → chaos/code/policy/base.py:10
+#          RunnerBase       → chaos/code/runner/base.py:19
+#          ExecutorBase     → dr-plan-generator/executor_base.py:16
+#
+# 所以本文件只收 rca 自己用的四个 Base（NLQuery / Hypothesis / Learning /
+# Layer2Prober）。就近放置是有意的：chaos 与 dr-plan-generator 是独立部署
+# 单元，把它们的抽象基类拖进 rca/ 会让部署包多带一个跨目录依赖。
 
 
 class HypothesisBase(ABC):
@@ -50,11 +64,11 @@ class HypothesisBase(ABC):
     *核心契约*：子类实现 generate_with_meta() / prioritize_with_meta()，返回 dict：
       - hypotheses: list  # 业务产出，generate 有值；prioritize 可为空
       - prioritized: list # 有排序的版本，generate 为空；prioritize 有值
-      - engine: str       # "direct" | "strands"
+      - engine: str       # 实现标签。2026-09-21 起只有 "strands"（direct 已删）
       - model_used: str | None
       - latency_ms: int
       - token_usage: dict | None  # {input,output,total,cache_read,cache_write}
-      - trace: list[dict]         # Strands tool-call 链；direct 为 []
+      - trace: list[dict]         # Strands tool-call 链
       - error: str | None
 
     *向后兼容*：提供默认 generate()/prioritize() 包装 _with_meta()，返回 list
@@ -99,11 +113,11 @@ class LearningBase(ABC):
     """Chaos 学习引擎基类（Phase 3 Module 2）。
 
     *核心契约*：子类实现 5 个方法，返回 dict 包含标准元数据字段：
-      - engine: str           # "direct" | "strands"
+      - engine: str           # 实现标签。2026-09-21 起只有 "strands"（direct 已删）
       - model_used: str | None
       - latency_ms: int
       - token_usage: dict | None  # {input,output,total,cache_read,cache_write}
-      - trace: list[dict]         # Strands tool-call 链；direct 为 []
+      - trace: list[dict]         # Strands tool-call 链
       - error: str | None
 
     LLM 调用点只有 generate_recommendations()，其余 4 个方法是纯 Python 逻辑。
@@ -228,7 +242,7 @@ class Layer2ProberBase(ABC):
                 "probe_results": list[dict],   # ProbeResult dicts
                 "summary": str,                # 汇总摘要
                 "score_delta": int,            # 总分增量 (cap 40)
-                "engine": str,                 # "direct" | "strands"
+                "engine": str,                 # 只有 "strands"（direct 已删）
                 "model_used": str | None,
                 "latency_ms": int,
                 "token_usage": dict | None,
