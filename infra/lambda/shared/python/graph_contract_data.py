@@ -636,7 +636,7 @@ EDGE_VERIFICATION = {   'attrs': [   'verify_status',
 # （ParentId 非空即嵌套栈 ⇒ scaffolding），K8s 对象走 namespace。
 # 靶点选择 / 爆炸半径 / DR 计划只该看 primary_query_scope。
 NODE_SCOPE = {   'attr': 'scope',
-    'authority': ['scope-labeler'],
+    'authority': ['node-type-writer', 'scope-labeler'],
     'name_prefix_map': {'neptune-etl-from-': 'platform', 'neptune-etl-trigger': 'platform'},
     'namespace_map': {   'amazon-cloudwatch': 'observability',
                          'amazon-guardduty': 'observability',

@@ -798,7 +798,28 @@ node_attr_authority:
     - business-layer
 node_scope:
   attr: scope
+  # scope 有两个写入方，能力不同，**不是权限放宽而是分工声明**
+  # （2026-09-21 校准：此前只列 scope-labeler，与现实不符）：
+  #
+  #   node-type-writer  —— 下面 type_map 列出的类型，scope 由节点类型唯一确定，
+  #                        写入方在 upsert 时手上就有、无需任何外部查询。
+  #                        由各 ETL 就地写（etl_deepflow 写 TopologyChange、
+  #                        etl_xray / etl_appsignals 写 AWSServiceEndpoint、
+  #                        rca_window_flush 写 Incident）。
+  #                        守门禁：tests/test_84_scope_written_at_upsert.py
+  #
+  #   scope-labeler     —— 需要解析才能定档的（K8s namespace、CloudFormation
+  #                        栈归属），在 Lambda 里对每个资源调 describe-stacks
+  #                        既慢又撞限流，只能由 scripts/label_node_scope.py
+  #                        周期性补。它是 g.V() 全图覆盖写，所以也会重算上面
+  #                        那批常量——两者结论一致，不冲突。
+  #
+  # 为什么要分工而不是全交给 labeler：labeler 是周期任务，ETL 刚写进来的节点
+  # 在下一轮 labeler 跑之前是「缺 scope」状态。对常量类型而言这个空窗期毫无
+  # 必要，而且它让 tests/test_48::t306_11 反复闪红（实测 TopologyChange 18 个、
+  # Incident 18 个常驻失败列表）——「反复闪红的门禁会被无视」。
   authority:
+  - node-type-writer
   - scope-labeler
   namespace_map:
     amazon-cloudwatch: observability
