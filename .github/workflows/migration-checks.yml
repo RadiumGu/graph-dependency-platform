@@ -4,6 +4,12 @@ name: migration-checks
 #   - check-deadlines: 对 docs/migration/timeline.md 里过了 delete_date 的 direct_file
 #     在仓库中仍存在时阻断 CI
 #   - check-frozen:    阻止 PR 修改 🔒 FROZEN 标记文件（除非带 P0-bugfix label）
+#   - offline-tests:   离线子集 + 通过数下限（2026-09-21 加，见该 job 的注释）
+#
+# ⚠️ 这个 CI **不是**测试套件的守护者，别把它绿了当成安全。
+# 全量 1101 个测试里离线只能跑 26 个（2.4%）—— 剩下 987 个需要真实
+# AWS 凭据与 VPC 内的 Neptune，GitHub 托管 runner 两个都没有。
+# 真正的行为守护（含 golden / 活图谱核验）必须在 VPC 内有凭据的机器上跑。
 
 on:
   pull_request:
@@ -25,6 +31,40 @@ jobs:
         run: pip install pyyaml
       - name: Run check_migration_deadlines.py
         run: python3 scripts/check_migration_deadlines.py
+
+  offline-tests:
+    name: Offline test subset (with pass-count floor)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test deps
+        run: pip install -q pytest pyyaml boto3 requests
+      - name: Run offline subset
+        env:
+          # `GDP_OFFLINE=1` 只把「确认是云访问不可达」的失败转成 skip
+          # （判据是本仓库 9 处签名路径抛的「凭据未解析到」文本 + 连接层错误），
+          # **业务断言失败照旧是失败**。见 tests/conftest.py 的详细说明。
+          GDP_OFFLINE: "1"
+          # ⚠️ 这一行是这个 job 的全部价值所在。
+          #
+          # 离线模式会把 987 个用云测试 skip 掉，于是「全部 skip」的运行
+          # 看起来是绿的 —— 那比没有 CI 更糟，因为它把「测试没跑」
+          # 伪装成「测试通过了」。下限校验（passed >= 这个数）是唯一能
+          # 挡住这种假绿的东西。
+          #
+          # 2026-09-21 实测离线通过 26 个，设 24 留一点波动余量。
+          # **新增离线可跑的测试后请上调这个数**，否则它会越来越松。
+          GDP_OFFLINE_MIN_PASSED: "24"
+        run: python3 -m pytest tests/ -q
+      - name: Remind that this is not full coverage
+        if: always()
+        run: |
+          echo "::notice::离线子集只覆盖全量 1101 个测试里的约 26 个（2.4%）。"
+          echo "::notice::golden 与活图谱核验需要 AWS 凭据 + VPC 内 Neptune，不在此 job 范围内。"
 
   check-frozen:
     name: Frozen-file edit guard
