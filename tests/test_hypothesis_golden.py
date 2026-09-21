@@ -199,17 +199,50 @@ def test_hypothesis_case(engines, results_accumulator, engine_name, case):
     failure_domains = {(h.failure_domain or "") for h in hyps}
     backends = {(h.backend or "") for h in hyps}
 
-    must_fts = expected.get("fault_type_must_include_any") or []
-    if must_fts and not (set(must_fts) & fault_types):
-        reasons.append(f"fault_types {fault_types} missing any of {must_fts}")
+    # ── 合法的空结果不受 must_include_any 约束 ────────────────────────────
+    #
+    # 一条用例可以同时声明 `min_hypotheses: 0`（允许产出 0 个假设）和
+    # `*_must_include_any`（产出的假设必须覆盖某些维度）。这两者在结果为空时
+    # **逻辑上不可同时满足** —— 0 个假设必然给出空的 fault_types /
+    # failure_domains / backends，而空集不包含任何值。
+    #
+    # 2026-09-21 实测这正是 S014 的失败原因：
+    #
+    #     Failed: [strands] failure_domains set() missing any of ['network', 'compute']
+    #
+    # 而该用例自己的 notes 早就写明了意图：
+    # 「sparse topology / broad scan — may legitimately produce 0」。
+    # 也就是说**用例作者允许空结果，是校验逻辑没实现这个意图**。
+    #
+    # 查下去发现引擎的行为是对的：`gateway-service` 属于 awesomeshop，
+    # 2026-09-04 已把它指向 petsite 的边证伪清除（该 namespace 六个 Deployment
+    # 副本数全为 0），实测它在图里 0 节点 0 条边。Agent 的 trace 写着
+    # 「query_topology 对 gateway-service 返回了空列表 []，根据规则：」——
+    # 它**拒绝为不存在的服务编造假设**，这恰恰是最该保住的行为。
+    #
+    # 所以空结果时跳过 must_include_any，而不是放宽 must_include_any 本身：
+    #   · 用例要求至少 1 个假设（min_hypotheses >= 1）时，空结果仍由上面的
+    #     数量断言判失败 —— 那条没被绕过；
+    #   · `must_not_include`（禁止项）**照旧校验**，因为空结果天然满足它，
+    #     不存在矛盾。
+    _empty_is_allowed = not hyps and min_h == 0
+    if _empty_is_allowed:
+        reasons.append(
+            "__note__: 产出 0 个假设，而用例声明 min_hypotheses=0 允许这种情况，"
+            "故跳过 *_must_include_any 校验（空集无法包含任何值）")
 
-    must_fds = expected.get("failure_domain_must_include_any") or []
-    if must_fds and not (set(must_fds) & failure_domains):
-        reasons.append(f"failure_domains {failure_domains} missing any of {must_fds}")
+    if not _empty_is_allowed:
+        must_fts = expected.get("fault_type_must_include_any") or []
+        if must_fts and not (set(must_fts) & fault_types):
+            reasons.append(f"fault_types {fault_types} missing any of {must_fts}")
 
-    must_bks = expected.get("backend_must_include_any") or []
-    if must_bks and not (set(must_bks) & backends):
-        reasons.append(f"backends {backends} missing any of {must_bks}")
+        must_fds = expected.get("failure_domain_must_include_any") or []
+        if must_fds and not (set(must_fds) & failure_domains):
+            reasons.append(f"failure_domains {failure_domains} missing any of {must_fds}")
+
+        must_bks = expected.get("backend_must_include_any") or []
+        if must_bks and not (set(must_bks) & backends):
+            reasons.append(f"backends {backends} missing any of {must_bks}")
 
     # must_not_include: list of {match: substring} against fault_scenario
     for rule in expected.get("must_not_include") or []:
@@ -220,7 +253,11 @@ def test_hypothesis_case(engines, results_accumulator, engine_name, case):
             if needle in (h.fault_scenario or "").lower():
                 reasons.append(f"forbidden match '{needle}' found: {h.fault_scenario!r} ({rule.get('reason')})")
 
-    status = "pass" if not reasons else "fail"
+    # `__note__:` 前缀的条目是**说明而非问题** —— 它要进 BASELINE 供人看见
+    # （「这条为什么算过」和「这条为什么算不过」同样重要），但不参与判定。
+    # 不做这个区分的话，上面那条跳过说明会让用例直接判失败。
+    real_reasons = [r for r in reasons if not r.startswith("__note__:")]
+    status = "pass" if not real_reasons else "fail"
     results_accumulator.append({
         "id": case["id"], "desc": case.get("desc"), "engine": engine_name,
         "status": status, "reasons": reasons,
@@ -228,4 +265,4 @@ def test_hypothesis_case(engines, results_accumulator, engine_name, case):
     })
 
     if status != "pass":
-        pytest.fail(f"[{engine_name}] " + "; ".join(reasons))
+        pytest.fail(f"[{engine_name}] " + "; ".join(real_reasons))

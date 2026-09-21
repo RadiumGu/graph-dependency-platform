@@ -63,7 +63,16 @@ cases:
     failure_domain_must_include_any:
     - dependencies
     - data
-    notes: sparse topology / broad scan — may legitimately produce 0
+    notes: >-
+      2026-09-21 实测产出 0 个假设，而这是**正确行为**：gateway-service
+      属于 awesomeshop，2026-09-04 已把它指向 petsite 的边证伪清除（该
+      namespace 六个 Deployment 副本数全为 0），实测它在图里 0 节点 0 条边。
+      Agent 的 trace 写着「query_topology 对 gateway-service 返回了空列表
+      []，根据规则：」—— 它拒绝为不存在的服务编造假设。
+      原 notes「sparse topology / broad scan — may legitimately produce 0」
+      的判断是对的，但 min_hypotheses:0 与 failure_domain_must_include_any
+      并存在结果为空时逻辑上不可同时满足；已在 test_hypothesis_golden.py
+      里让空结果跳过 must_include_any 校验。
 - id: S004
   desc: petlistadoptions（Tier1）
   service_filter: petlistadoptions
