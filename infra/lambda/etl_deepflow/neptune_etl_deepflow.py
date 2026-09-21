@@ -1443,6 +1443,18 @@ def _emit_topology_changes(events: list) -> int:
                 f"g.mergeV([(T.label):'TopologyChange','change_id':'{cid}'])"
                 f".option(Merge.onCreate, ["
                 f"  'ts': {ts},"
+                # `last_seen` 是契约的 timestamp_field（权威字段），`ts` 不在
+                # timestamp_legacy_aliases 里。两个都写：`ts` 是「变更发生时刻」
+                # 且本文件的过期清理按它筛（见下方 lt(cutoff) 查询），
+                # `last_seen` 则让依赖契约字段的消费者能判断节点新旧 ——
+                # 2026-09-21 实测 test_48::t306_11 因为 TopologyChange 只有 `ts`
+                # 而查不到 last_seen/last_updated，把它**永远**判为「超出 scope
+                # 宽限窗口」，于是这类节点会一直挂在失败列表里。
+                f"  'last_seen': {ts},"
+                # scope 按契约 node_scope.type_map 就是常量 platform
+                # （「平台自己产出的分析件：按构造即 platform，无需查任何外部系统」）。
+                # 写入方手上不需要查任何东西，所以不该留给对账脚本补。
+                f"  'scope': 'platform',"
                 f"  'kind': '{kind}',"
                 f"  'subject': '{subject}',"
                 f"  'edge_type': '{safe_str(ev.get('edge_type', ''))}',"

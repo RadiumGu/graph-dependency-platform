@@ -392,6 +392,10 @@ def ensure_service_endpoints(writable: list, neptune_query,
              f"   .property(single,'granularity','service')"
              f"   .property(single,'source','{SOURCE}')"
              f"   .property(single,'first_seen',{round_ts}))"
+             # scope 按契约 node_scope.type_map 就是常量 'external'（见
+             # etl_xray 同处注释）。放在 coalesce 之后用 single 覆盖写，
+             # 这样既给新建节点写上，也给历史遗留的旧节点补上。
+             f".property(single,'scope','external')"
              f".property(single,'last_seen',{round_ts})")
         if not apply:
             print(f'  [dry] 确保服务级端点节点 AWSServiceEndpoint:{name}')

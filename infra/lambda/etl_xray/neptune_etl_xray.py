@@ -705,6 +705,13 @@ def upsert_aws_service_endpoints(nodes: dict, round_ts: int) -> int:
             f".coalesce(__.unfold(),"
             f" __.addV('AWSServiceEndpoint').property(single,'name','{safe_str(name)}'))"
             f".property(single,'granularity','service')"
+            # scope 按契约 node_scope.type_map 就是常量 'external' ——
+            # 「AWS 托管服务端点：按定义就是被观测系统之外的 AWS 服务，
+            #   不属任何栈、不在任何 K8s namespace 里」。
+            # 2026-09-21 补：此前不写，导致 test_48::t306_11 把 bedrock /
+            # bedrockruntime 等端点列为「缺 scope 且超出宽限窗口」。
+            # 这个值不需要查 CloudFormation，写入方就该就地写。
+            f".property(single,'scope','external')"
             f".property(single,'xray_type','{safe_str(types)}')"
             f".property(single,'xray_aliases','{safe_str(aliases)}')"
             f".property(single,'last_seen',{round_ts})"
