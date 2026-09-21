@@ -35,15 +35,37 @@ scope_policy:
     - RoutesTo          # 同上
     - Invokes           # Lambda 调用链
     - InvokesVia
+    - RoutesToRuntime   # 服务 → AgentRuntime：运行时属于该 workload
+    - RoutesVia         # 服务 → AgentGateway：网关属于该 workload
+    # ⚠️ 2026-09-21 补上面两项：它们在契约里是 dependency: true，却既不在
+    # 本清单也不在 ordering 里 —— 与 ordering 漏 4 种同源（契约新增边类型时
+    # 两份清单都没同步）。依赖边必须同时进 scope 与 ordering，否则
+    # tests/test_scope.py 的「ordering ⊂ scope 真子集」断言会直接红。
 
   # 决定**启动/恢复先后**只认真正的依赖边（契约 dependency: true）。
   ordering_edge_types:
+    # ⚠️ 2026-09-21 补齐 4 种。此前只列 6 项，而契约 dependency: true 已是
+    # 10 种 —— 漏了 Invokes / PublishesTo / RoutesToRuntime / RoutesVia。
+    #
+    # 后果不是文档不一致，是恢复顺序真的算错：拓扑排序看不见这些边，就会
+    # 把该先恢复的排到后面。tests/test_53 的 docstring 早在 2026-09 就写明
+    # 了这个后果（举例：漏 Invokes 16 条）。
+    #
+    # 为什么一直没被发现：tests/test_53::test_m04 守的是 graph/scope.py 的
+    # _FALLBACK_ORDERING_EDGES（实测 10 种、与契约一致、门禁通过），而
+    # ScopeResolver 取值是 `ordering_edge_types or _FALLBACK_ORDERING_EDGES`
+    # —— 配置优先，兜底永不生效。门禁守在了不被执行的那条路上。
+    # 新增 tests/test_85_* 守这份配置本身。
     - AccessesData
     - Calls
     - Delegates
     - DependsOn
+    - Invokes           # Lambda 调用链：被调方要先就绪
     - InvokesTool
+    - PublishesTo       # 消息发布：队列/主题要先可用
     - Retrieves
+    - RoutesToRuntime   # 路由到 AgentRuntime：运行时要先起来
+    - RoutesVia         # 经网关路由：网关要先就绪
 
   # 这些验证结论的边不参与范围与排序。
   # 'refuted' = 已由故障注入证伪；采信它会把不存在的依赖写进恢复顺序。
