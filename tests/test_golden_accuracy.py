@@ -53,11 +53,34 @@ def _load_cases() -> list[dict]:
 
 
 def _engine_names() -> list[str]:
-    """允许通过 NLQUERY_ENGINE env 收窄 matrix。未设置 → 两个都跑。"""
+    """本套 golden 要跑的引擎清单。
+
+    ⚠️ 2026-09-21：原先默认返回 `["direct", "strands"]`，而 2026-09-20 起
+    direct 实现已全部删除、factory 也去掉了回退分支 —— 于是这个 matrix 让
+    **同一个 strands 引擎被跑了两遍**，然后把两次结果分别写进
+    `BASELINE-strands.md` 与 `BASELINE-direct.md`，看起来像有 direct 对比数据。
+
+    两个可观测后果（都是 2026-09-21 首次 cron 触发全量 golden 时实测到的）：
+
+      1. 耗时翻倍。这是全量 golden 跑到超时的主要原因之一。
+      2. 假基线。`BASELINE-direct.md` 里的数字是 strands 的第二次运行，
+         两份数据的差异只是运行间波动（实测 p50 6210 vs 6929 ms、
+         token 513487 vs 514544），会被读成「两个引擎的性能差异」。
+
+    这与 f5900d3 删掉的那两个「跟自己对比」的空壳 shadow 测试是同一形状，
+    当时漏了 golden 这两处。
+
+    env 仍可显式指定引擎名以便将来扩展，但默认只跑实际存在的那一个。
+    """
     req = (os.environ.get("NLQUERY_ENGINE") or "").strip().lower()
-    if req in ("direct", "strands"):
+    if req == "strands":
         return [req]
-    return ["direct", "strands"]
+    if req == "direct":
+        raise RuntimeError(
+            f"{__name__}: 设了 NLQUERY_ENGINE=direct，但 direct 实现已于 "
+            "2026-09-20 删除，factory 会返回 strands —— 跑下去会得到一份"
+            "标着 direct 的 strands 数据。请去掉这个 env。")
+    return ["strands"]
 
 
 @pytest.fixture(scope="module")

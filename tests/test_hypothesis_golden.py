@@ -58,9 +58,14 @@ def _load_cases() -> list[dict]:
 
 def _engine_names() -> list[str]:
     req = (os.environ.get("HYPOTHESIS_ENGINE") or "").strip().lower()
-    if req in ("direct", "strands"):
+    if req == "strands":
         return [req]
-    return ["direct", "strands"]
+    if req == "direct":
+        raise RuntimeError(
+            f"{__name__}: 设了 HYPOTHESIS_ENGINE=direct，但 direct 实现已于 "
+            "2026-09-20 删除，factory 会返回 strands —— 跑下去会得到一份"
+            "标着 direct 的 strands 数据。请去掉这个 env。")
+    return ["strands"]
 
 
 @pytest.fixture(scope="module")
