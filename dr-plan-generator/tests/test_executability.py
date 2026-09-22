@@ -275,3 +275,86 @@ class TestValidatorCatchesPlaceholders(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LambdaAndK8sServiceExecutabilityTest(unittest.TestCase):
+    """2026-09-22：补上自产自销测试的覆盖缺口。
+
+    原 `_plan()` 的 snapshot 只有 Microservice / LoadBalancer / 一个未知类型
+    三个节点，**不含 LambdaFunction 与 K8sService** —— 所以这两类步骤里的缺陷
+    结构性地测不到：
+
+        lambda 回滚引用未绑定的 $EVENT_SOURCE_UUID
+        k8sservice 用 `--context {target}-cluster` 拼出必然不存在的 context
+
+    刻意不加 NeptuneCluster / SQSQueue / StepFunction：它们会落到 generic-*
+    兜底路径，产出纯注释步骤而被正确判为 ERROR。那是真实的能力缺口
+    （缺专门的 step builder），属于功能开发，不该混进本测试。
+    """
+
+    def _plan(self):
+        from graph.graph_analyzer import GraphAnalyzer
+        from planner.plan_generator import PlanGenerator
+        from planner.step_builder import StepBuilder
+
+        gen = PlanGenerator(GraphAnalyzer(), StepBuilder(strategy="warm_standby"))
+        return gen.generate_plan(
+            scope="region", source="ap-northeast-1", target="us-west-2",
+            snapshot={
+                "nodes": [
+                    {"name": "petsite", "type": "Microservice", "tier": "Tier0"},
+                    {"name": "petstatusupdater", "type": "LambdaFunction", "tier": "Tier1"},
+                    {"name": "petsite-svc", "type": "K8sService",
+                     "namespace": "petadoptions", "tier": "Tier0"},
+                ],
+                "edges": [
+                    {"from": "petsite-svc", "to": "petsite", "type": "RoutesTo"},
+                    {"from": "petsite", "to": "petstatusupdater", "type": "DependsOn"},
+                ],
+            },
+        )
+
+    def _steps_of_type(self, plan, rtype):
+        return [s for p in plan.phases for s in p.steps if s.resource_type == rtype]
+
+    def test_lambda回滚不得引用未绑定变量(self):
+        plan = self._plan()
+        steps = self._steps_of_type(plan, "LambdaFunction")
+        self.assertTrue(steps, "snapshot 里有 LambdaFunction 却没生成步骤")
+        for s in steps:
+            self.assertNotIn(
+                "$EVENT_SOURCE_UUID", s.rollback_command,
+                "回滚仍引用未赋值的 $EVENT_SOURCE_UUID —— 它展开成空串，"
+                "`--uuid ` 后紧跟下一个参数，aws CLI 报的错离根因很远",
+            )
+            unbound = PlanValidator()._unbound_shell_vars(s.rollback_command)
+            self.assertEqual(
+                unbound, [],
+                f"Lambda 回滚里仍有未绑定变量 {unbound}",
+            )
+
+    def test_k8sservice不得使用拼接的context名(self):
+        plan = self._plan()
+        steps = self._steps_of_type(plan, "K8sService")
+        self.assertTrue(steps, "snapshot 里有 K8sService 却没生成步骤")
+        for s in steps:
+            for field in (s.command, s.validation, s.rollback_command):
+                self.assertNotIn(
+                    "-cluster", field,
+                    f"仍在用拼接出来的 kube context: {field!r}",
+                )
+
+    def test_这批步骤不得触发校验器的ERROR(self):
+        """自产自销：Lambda 与 K8sService 步骤必须过自己的校验器。"""
+        plan = self._plan()
+        report = PlanValidator().validate(plan)
+        errors = [
+            i for i in report.issues
+            if i.severity in ("ERROR", "CRITICAL")
+            and ("lambda" in i.message or "k8ssvc" in i.message)
+        ]
+        self.assertEqual(
+            errors, [],
+            "Lambda / K8sService 步骤触发了 ERROR：\n"
+            + "\n".join(f"  [{i.severity}] {i.message}" for i in errors),
+        )

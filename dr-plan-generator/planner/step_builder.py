@@ -922,11 +922,25 @@ class StepBuilder:
                 f"--query 'State' --output text"
             ),
             expected_result="Active",
+            # 回滚要自己查出 UUID。原实现引用 $EVENT_SOURCE_UUID 而从不赋值 ——
+            # 它展开成空串，`--uuid ` 后面紧跟下一个参数，aws CLI 报的错离根因很远。
+            #
+            # 这个缺陷此前检不出来：校验器的未绑定变量判据只作用于 command，
+            # 而它在 rollback_command 里。回滚命令写错比正常命令写错更危险 ——
+            # 它只在出事之后才被执行，那时没人有余裕调试参数错位。
+            #
+            # 用 for 遍历而不是取 [0]：一个函数可以有多个 event source mapping，
+            # 只恢复第一个会留下静默未启用的其余映射。无映射时 for 的列表为空、
+            # 循环体不执行，天然是无操作，不需要额外判空。
             rollback_command=(
-                f"# Lambda functions are stateless; update event source mapping\n"
-                f"aws lambda update-event-source-mapping "
-                f"--region {source} "
-                f"--uuid $EVENT_SOURCE_UUID --enabled"
+                f"# Lambda functions are stateless; re-enable the source-region "
+                f"event source mappings\n"
+                f"for U in $(aws lambda list-event-source-mappings "
+                f"--region {source} --function-name {fn_name} "
+                f"--query 'EventSourceMappings[].UUID' --output text); do\n"
+                f"  aws lambda update-event-source-mapping "
+                f"--region {source} --uuid \"$U\" --enabled\n"
+                f"done"
             ),
             estimated_time=30,
             requires_approval=False,
@@ -949,6 +963,40 @@ class StepBuilder:
             DRStep for K8s service DR activation.
         """
         svc_name = node["name"]
+        # context 必须走 profile，不能把 region 名拼上 "-cluster"。
+        #
+        # 原实现是 `--context {target}-cluster` —— 本文件 _kubectl_target() 的
+        # docstring 早就写明这个拼法「几乎必然不存在，而 kubectl 对不存在的
+        # context 是直接报错退出，整条恢复链就断在这里」，但这个方法没改用它。
+        # 又一次「正确实现早就有，某处没用它」（同 runner.py 的 parse_duration）。
+        #
+        # 这里用 _context_only() 而非 _kubectl_target()：后者会带上 profile 的
+        # 默认 namespace，而 K8sService 的 namespace 应当取节点自己的属性 ——
+        # 用默认值会去错误的 namespace 查 endpoints，查不到却看不出是找错了地方。
+        ctx_arg = self._context_only()
+        ns = node.get("namespace") or ""
+        target_args = " ".join(x for x in (ctx_arg, f"-n {ns}" if ns else "") if x)
+
+        if not ctx_arg:
+            # 没有 context 就会落到 kubeconfig 的**当前** context 上 —— 命令能跑，
+            # 但可能跑在源区集群上，而输出看起来完全正常。这种「静默在错误目标上
+            # 执行成功」比报错危险，所以必须让它出现在计划产物里而不只是日志。
+            logger.warning(
+                "kubernetes.context_target 未配置，K8sService 步骤将落在 kubeconfig "
+                "的当前 context 上（可能是源区集群），且输出看不出目标错了"
+            )
+            self.compute_layer_gaps.append({
+                "component": "kubernetes_context_target",
+                "requirement": "profile 需配置 kubernetes.context_target 指向恢复区集群",
+                "actual": "未配置",
+                "implication": (
+                    "K8sService 相关步骤不会带 --context，kubectl 会使用 kubeconfig 的"
+                    "当前 context。若那是源区集群，命令会成功返回源区的 endpoints，"
+                    "而运维看到的是「验证通过」——静默在错误目标上执行成功，"
+                    "比命令报错危险得多。执行本计划前必须补齐此配置。"
+                ),
+            })
+
         return DRStep(
             step_id=f"k8ssvc-{svc_name}",
             order=ctx.get("order", 0),
@@ -957,22 +1005,18 @@ class StepBuilder:
             resource_name=svc_name,
             action="verify_k8s_service_endpoints",
             command=(
-                f"kubectl get endpoints {svc_name} "
-                f"--context {target}-cluster\n"
-                f"kubectl describe service {svc_name} "
-                f"--context {target}-cluster"
-            ),
+                f"kubectl get endpoints {svc_name} {target_args}\n"
+                f"kubectl describe service {svc_name} {target_args}"
+            ).replace("  ", " ").strip(),
             validation=(
-                f"kubectl get endpoints {svc_name} "
-                f"--context {target}-cluster "
+                f"kubectl get endpoints {svc_name} {target_args} "
                 f"-o jsonpath='{{.subsets[0].addresses[0].ip}}'"
-            ),
+            ).replace("  ", " ").strip(),
             expected_result="<non-empty IP>",
             rollback_command=(
-                f"kubectl delete endpoints {svc_name} "
-                f"--context {target}-cluster\n"
+                f"kubectl delete endpoints {svc_name} {target_args}\n"
                 f"# Service endpoints will repopulate from source cluster"
-            ),
+            ).replace("  ", " ").strip(),
             estimated_time=60,
             requires_approval=False,
             tier=node.get("tier"),

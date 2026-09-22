@@ -431,3 +431,66 @@ class CommandQualityAcrossAllFieldsTest(unittest.TestCase):
         self.assertTrue(hits, "command 纯注释没被报 ERROR —— 演练会假通过")
 
 
+
+
+class K8sServiceContextTest(unittest.TestCase):
+    """2026-09-22：K8sService 步骤的 kube context 不得由字符串拼接得出。
+
+    原实现是 `--context {target}-cluster`，把 region/AZ 名拼上 "-cluster" 当作
+    kube context。真实 context 名由使用者的 kubeconfig 决定，拼出来的几乎必然
+    不存在，而 kubectl 对不存在的 context 是**直接报错退出** —— 整条恢复链断在
+    这里。
+
+    而本文件所在模块的 `_kubectl_target()` docstring 早就写明了这一点，
+    只是这个方法没改用它。又一次「正确实现早就有，某处没用它」。
+    """
+
+    def _builder(self):
+        from planner.step_builder import StepBuilder
+        return StepBuilder()
+
+    def _step(self, sb, namespace="petadoptions"):
+        node = {"name": "petsite-svc", "namespace": namespace,
+                "id": "v1", "tier": "Tier0"}
+        return sb._build_k8sservice_step(node, "apne1-az1", "apne1-az2", {"order": 1})
+
+    def test_不得出现拼接的context名(self):
+        sb = self._builder()
+        step = self._step(sb)
+        for field in (step.command, step.validation, step.rollback_command):
+            self.assertNotIn(
+                "-cluster", field,
+                f"命令里仍有拼接出来的 context 名: {field!r}",
+            )
+            self.assertNotIn("apne1-az2-cluster", field)
+
+    def test_namespace取自节点而非profile默认值(self):
+        """K8sService 的 namespace 必须用节点自己的属性。
+
+        用 profile 默认 namespace 会去错误的 namespace 查 endpoints，
+        查不到却看不出是找错了地方。
+        """
+        sb = self._builder()
+        step = self._step(sb, namespace="awesomeshop")
+        self.assertIn("-n awesomeshop", step.command)
+
+    def test_context缺失必须记入计划产物而不只是日志(self):
+        """没有 --context 会落到 kubeconfig 的当前 context 上 —— 命令能跑，
+        但可能跑在源区集群，输出看起来完全正常。
+
+        这种「静默在错误目标上执行成功」比报错危险，所以必须出现在计划产物里。
+        只记日志不够：运维拿到的仍是一份看起来完整的计划。
+        """
+        sb = self._builder()
+        self._step(sb)
+        gaps = [g for g in sb.compute_layer_gaps
+                if g.get("component") == "kubernetes_context_target"]
+        # profile 里 context_target 是 ${K8S_CONTEXT_TARGET} 占位符，
+        # 未设环境变量时应当记 gap。
+        if "--context" not in sb._context_only():
+            self.assertTrue(
+                gaps,
+                "context_target 未配置却没有记入 compute_layer_gaps",
+            )
+            self.assertIn("源区", gaps[0]["implication"],
+                          "缺口说明里应当讲清「可能跑在源区集群」这个后果")

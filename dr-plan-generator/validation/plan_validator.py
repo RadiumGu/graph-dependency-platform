@@ -303,7 +303,23 @@ class PlanValidator:
     def _unbound_shell_vars(command: str) -> List[str]:
         """找出命令里引用了但从未赋值的 shell 变量。
 
-        只看同一步骤内：``VAR=$(...)`` 形式的赋值算已绑定。
+        只看同一步骤内。视为「已绑定」的形式：
+
+        - ``VAR=...`` / ``VAR=$(...)`` 直接赋值
+        - ``for VAR in ...`` 循环变量
+        - ``while read VAR`` / ``read VAR`` 读入
+        - ``export VAR=...``
+
+        ## 为什么必须认全这些形式（2026-09-22 补 for / read）
+
+        判据原先只认 ``VAR=``。于是把 Lambda 回滚改成遍历写法::
+
+            for U in $(aws lambda list-event-source-mappings ... --output text); do
+              aws lambda update-event-source-mapping --uuid "$U" --enabled
+            done
+
+        时，``$U`` 会被报成未绑定 —— 一个**误报**。而这条判据的消费方会因为
+        误报而失去信任：误判的代价比漏判高，一次误报就足以让人把整个校验器关掉。
 
         Args:
             command: 步骤命令（可能多行）。
@@ -315,15 +331,17 @@ class PlanValidator:
 
         if not command:
             return []
-        assigned = set(re.findall(r"^\s*([A-Z_][A-Z0-9_]*)=", command, re.M))
-        referenced = set(re.findall(r'\$\{?([A-Z_][A-Z0-9_]*)\}?', command))
         # 注释行里的引用不算——那是说明文字。
-        code_lines = [
-            ln for ln in command.splitlines() if ln.strip() and not ln.strip().startswith("#")
-        ]
-        code = "\n".join(code_lines)
-        referenced_in_code = set(re.findall(r'\$\{?([A-Z_][A-Z0-9_]*)\}?', code))
-        return sorted(referenced_in_code - assigned)
+        code = "\n".join(
+            ln for ln in command.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        )
+        assigned = set(re.findall(r"^\s*(?:export\s+)?([A-Z_][A-Z0-9_]*)=", code, re.M))
+        # for VAR in ... / while read VAR / read -r VAR
+        assigned |= set(re.findall(r"\bfor\s+([A-Z_][A-Z0-9_]*)\s+in\b", code))
+        assigned |= set(re.findall(r"\bread\s+(?:-\w+\s+)*([A-Z_][A-Z0-9_]*)", code))
+        referenced = set(re.findall(r'\$\{?([A-Z_][A-Z0-9_]*)\}?', code))
+        return sorted(referenced - assigned)
 
     def _check_cycles(self, plan: DRPlan) -> List[List[str]]:
         """Detect dependency cycles across all plan steps.
