@@ -16,7 +16,8 @@ from botocore.awsrequest import AWSRequest
 
 logger = logging.getLogger(__name__)
 
-REGION = os.environ.get('REGION', 'ap-northeast-1')
+from shared import get_region
+REGION = get_region()
 
 
 def get_k8s_endpoint(cluster_name: str) -> tuple[str, str]:

@@ -43,6 +43,46 @@ find "$DEST_DIR" -mindepth 1 ... -delete             # 第 36 行
 2. CDK asset 指向隔离构建目录，`cdk deploy` 前置钩子强制 `build.sh`
 3. 扩展 `scan_missing_symbols.py` 与相关门禁到打包目录（治标，漂移仍在）
 
+### 2026-09-22 实测与处置
+
+**结论未变，证据强化，并纠正一处易被误读的表述。**
+
+逐个下载线上 `gp-window-flush` 的部署包比对（`aws lambda get-function` →
+`Code.Location`），结果 **11/11 全部 `线上 ≡ rca/` 逐字节一致**：
+
+```
+core/fault_classifier.py     线上 17acb42e7c92 ≡ 权威 17acb42e7c92   产物 d51190a70b97
+core/rca_engine.py           线上 0b6fb3e4f78c ≡ 权威 0b6fb3e4f78c   产物 6309e3ec7ec7
+window_flush_handler.py      线上 240450088621 ≡ 权威 240450088621   产物 7b19a1b692c9
+（其余 8 个同样一致）
+combined_tier0 出现次数：线上 0 / 权威源 0 / 陈旧产物 6
+```
+
+比原文「日志有 `analyze_group` 输出」更强：不是推断而是逐字节等价。
+
+⚠️ **表述纠正**：上表「**窗口聚合 RCA 从未生效**」描述的是**产物那份代码**
+被执行时的后果，不是线上状态（本节下方原文已写明「线上当前是对的」）。
+但这句话在脱离上下文引用时会被读成线上结论 —— 2026-09-22 的回顾里就被这样
+误读过一次。判断线上行为必须下载部署包，不能读产物、也不能只读这张表。
+
+**新发现（原表未列）**：漂移是 11 个文件而非 4 个，且 `handler.py` 是**反向
+漂移** —— 产物 471 行比权威源 338 行**多** 133 行，即产物里有权威源已删除的
+旧代码。`neptune_queries.py` 差 410 行。
+
+**已处置（零风险部分）**：
+
+- 11 个 `.py` 已从 `rca/` 同步，产物不再陈旧（线上≡权威已证，故同步安全）
+- 新增 `infra/lambda/rca_window_flush/GENERATED.md`：声明这是产物、权威源是
+  `rca/`、如何下载部署包核实线上
+- 新增 `tests/test_90_build_artifact_must_not_drift.py`：逐字节断言被 git 跟踪
+  的产物 `.py` 与 `rca/` 一致，漂移即变红；并断言 `GENERATED.md` 存在、
+  CDK 仍从该目录打包（前提变了要回来复核）
+
+**仍需拍板**：上面三个方案。零风险处置只做到「漂移可见且当前为零」，
+产物入库这件事本身没解决 —— `.so` 与 `bin/normalizer` 两个二进制产物也还在
+版控里。方案 1 最彻底，代价是 `cdk deploy` 前必须先 `build.sh`，否则
+`fromAsset` 找不到目录而失败（这是好的失败：明确报错胜过打包陈旧代码）。
+
 ---
 
 ## 二、chaos/ 四条高危：故障注入的闸门失效或失败未上报

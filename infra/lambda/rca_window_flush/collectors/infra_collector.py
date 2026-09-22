@@ -11,7 +11,8 @@ import os, json, logging, base64, datetime, ssl, urllib.request
 import boto3
 
 logger = logging.getLogger()
-REGION = os.environ.get('REGION', 'ap-northeast-1')
+from shared import get_region
+REGION = get_region()
 EKS_CLUSTER = os.environ.get('EKS_CLUSTER_NAME', 'PetSite')
 
 # ---- DB Mapping ----

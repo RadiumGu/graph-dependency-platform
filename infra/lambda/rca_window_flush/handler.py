@@ -1,5 +1,5 @@
 """
-handler.py - RCA Lambda 入口（Phase 3 + Alert Aggregation）
+handler.py - RCA Lambda 入口（Phase 3）
 
 Note on import structure
 ------------------------
@@ -11,12 +11,6 @@ first invocation, but subsequent invocations in the same container reuse the
 already-loaded modules via the module cache. Keeping top-level imports minimal
 also makes unit-testing the handler easier because heavyweight AWS dependencies
 are not imported until actually needed.
-
-Alert Aggregation Flow (Phase 4 新增)
---------------------------------------
-P0 告警: bypass 缓冲 → 立即执行完整 RCA（_fast_track_rca）
-P1/P2 告警: 标准化(EventNormalizer) → 写缓冲(AlertBuffer) → 返回 202
-到期处理: EventBridge Scheduler 触发 window_flush_handler.py
 """
 import os, json, logging
 
@@ -53,11 +47,12 @@ def lambda_handler(event, context):
 
     logger.info(f"RCA triggered: {json.dumps(event)[:300]}")
 
-    if 'Records' in event:
+    is_sns_event = 'Records' in event
+    if is_sns_event:
         msg_str = event['Records'][0]['Sns']['Message']
         try:
             msg = json.loads(msg_str)
-        except Exception:
+        except:
             return {'statusCode': 400, 'body': 'invalid SNS message'}
         signal = _parse_cw_alarm(msg) if 'AlarmName' in msg else msg
         if signal is None:
@@ -65,7 +60,11 @@ def lambda_handler(event, context):
     else:
         signal = event
 
-    # 支持 resolve 操作（由 Slack interaction 或手动调用）— 保持不变
+    affected_service = signal.get('affected_resource', '')
+    if not affected_service:
+        return {'statusCode': 400, 'body': 'missing affected_resource'}
+
+    # 支持 resolve 操作（由 Slack interaction 或手动调用）
     if signal.get('action') == 'resolve' and signal.get('incident_id'):
         try:
             from actions import incident_writer
@@ -79,194 +78,62 @@ def lambda_handler(event, context):
             logger.error(f"Resolve failed: {e}")
             return {'statusCode': 500, 'body': str(e)}
 
-    # ── Alert Aggregation Flow ────────────────────────────────────────────────
-    # 检查 FEATURE_FLAGS：alert_buffer_enabled
-    try:
-        from config import FEATURE_FLAGS
-        buffer_enabled = FEATURE_FLAGS.get('alert_buffer_enabled', False)
-    except Exception:
-        buffer_enabled = False
-
-    if buffer_enabled:
-        return _aggregation_flow(signal, fault_classifier, rca_engine,
-                                 playbook_engine, semi_auto)
-
-    # ── 原有直通流程（feature flag 关闭时） ───────────────────────────────────
-    affected_service = signal.get('affected_resource', '')
-    if not affected_service:
-        return {'statusCode': 400, 'body': 'missing affected_resource'}
-
-    return _direct_rca_flow(affected_service, signal,
-                            fault_classifier, rca_engine,
-                            playbook_engine, semi_auto)
-
-
-def _aggregation_flow(signal: dict,
-                      fault_classifier, rca_engine,
-                      playbook_engine, semi_auto) -> dict:
-    """告警聚合分流入口。
-
-    P0 → bypass 缓冲，直接走 _fast_track_rca
-    P1/P2 → 标准化 + 写缓冲，返回 202
-
-    Args:
-        signal: 解析后的原始信号字典
-        fault_classifier/rca_engine/playbook_engine/semi_auto: lazy-imported 模块
-
-    Returns:
-        Lambda 响应字典
-    """
-    from core.event_normalizer import EventNormalizer
-    from core.alert_buffer import AlertBuffer, P0_BYPASS_BUFFER
-
-    normalizer = EventNormalizer()
-    alert_event = normalizer.normalize(signal)
-
-    if alert_event is None:
-        logger.info("Aggregation flow: signal normalized to None, skipping")
-        return {'statusCode': 200, 'body': 'skipped'}
-
-    # 快速分类以确定是否 P0
-    try:
-        pre_class = fault_classifier.classify(alert_event.service_name, signal)
-        severity = pre_class.get('severity', 'P1')
-    except Exception as e:
-        logger.warning(f"Pre-classify failed: {e}, defaulting to P1")
-        severity = 'P1'
-        pre_class = {
-            'severity': 'P1', 'strategy': 'Parallel',
-            'affected_service': alert_event.service_name,
-            'service_info': {}, 'affected_capabilities': [],
-            'affected_services': [], 'tier0_impact_count': 0,
-            'signal': signal,
-        }
-
-    # P0 bypass
-    if severity == 'P0' and P0_BYPASS_BUFFER:
-        logger.info(f"P0 alert bypass buffer: svc={alert_event.service_name}")
-        return _fast_track_rca(
-            alert_event.service_name, signal, pre_class,
-            rca_engine, playbook_engine, semi_auto,
-        )
-
-    # 非 P0：写入缓冲，返回 202
-    try:
-        buf = AlertBuffer()
-        is_new = buf.put_alert(alert_event)
-        logger.info(
-            f"Alert buffered: svc={alert_event.service_name} "
-            f"fp={alert_event.fingerprint[:8]} new={is_new}"
-        )
-    except Exception as e:
-        logger.error(f"AlertBuffer put failed: {e}. Falling back to direct RCA.")
-        # 缓冲失败时降级到直通流程
-        return _direct_rca_flow(
-            alert_event.service_name, signal,
-            fault_classifier, rca_engine, playbook_engine, semi_auto,
-        )
-
-    return {
-        'statusCode': 202,
-        'body': json.dumps({
-            'status': 'buffered',
-            'fingerprint': alert_event.fingerprint,
-            'service': alert_event.service_name,
-            'window_id': alert_event.start_time[:16],
-        }, ensure_ascii=False),
-    }
-
-
-def _fast_track_rca(affected_service: str, signal: dict,
-                    classification: dict,
-                    rca_engine, playbook_engine, semi_auto) -> dict:
-    """P0 bypass 快速通道：保持与原有完整 RCA 流程完全一致。
-
-    Args:
-        affected_service: Neptune 规范服务名
-        signal: 原始信号字典
-        classification: 故障分类结果
-        rca_engine/playbook_engine/semi_auto: lazy-imported 模块
-
-    Returns:
-        Lambda 响应字典
-    """
-    severity = classification['severity']
-
-    playbook = playbook_engine.match(classification)
-    exec_result = semi_auto.execute(classification, playbook)
-
-    rca_result = None
-    try:
-        rca_result = rca_engine.analyze(affected_service, classification)
+    # ── 告警聚合缓冲（仅 SNS 路径）────────────────────────────────────────────
+    # 设计意图：SNS 告警可能成风暴（100 条告警 → 100 次完整 RCA）。
+    # 缓冲后由 window_flush_handler 在窗口到期时统一处理：
+    #   flush_window → TopologyCorrelator 按拓扑聚合 → 每组只跑一次 RCA。
+    #
+    # 直接 invoke（无 'Records'）不走缓冲，保持同步返回 RCA 结果：
+    #   chaos/code/runner/rca.py 的 RCATrigger 依赖同步结果做准确性校验，
+    #   手动排障调用同理。
+    #
+    # ALERT_BUFFER_ENABLED=false 可关闭缓冲，退回逐条同步处理（无需改代码）。
+    if is_sns_event and os.environ.get('ALERT_BUFFER_ENABLED', 'true').lower() != 'false':
         try:
-            from core import graph_rag_reporter
-            _log_samples = rca_result.get('log_samples', {})
-            rag_report = graph_rag_reporter.generate_rca_report(
-                affected_service, classification, rca_result,
-                log_samples=_log_samples,
-            )
-            rca_result['rag_report'] = rag_report
-            _send_rag_report(rag_report, classification)
-            logger.info(f"Graph RAG report sent (fast-track): confidence={rag_report.get('confidence')}")
-        except Exception as rag_err:
-            logger.error(f"Graph RAG failed (fast-track): {rag_err}", exc_info=True)
-            _send_rca_report(rca_result, classification, playbook)
-    except Exception as e:
-        logger.error(f"RCA analysis failed (fast-track): {e}", exc_info=True)
+            from core.alert_buffer import AlertBuffer
+            from core.event_normalizer import EventNormalizer
 
-    result = {
-        'severity': severity,
-        'strategy': classification['strategy'],
-        'playbook': playbook.get('matched_playbook'),
-        'execution': exec_result,
-        'rca': rca_result,
-        'affected_capabilities': [c.get('name') for c in classification.get('affected_capabilities', [])],
-        'fast_track': True,
-    }
+            unified = EventNormalizer().normalize(signal)
+            if unified is None:
+                logger.info("AlertBuffer: normalize returned None, skipping")
+                return {'statusCode': 200, 'body': 'skipped (not normalizable)'}
 
-    incident_id = None
-    if rca_result:
-        try:
-            from actions import incident_writer
-            rag = rca_result.get('rag_report', {})
-            report_text = rag.get('reasoning', '') if rag else ''
-            incident_id = incident_writer.write_incident(
-                classification, rca_result, report_text=report_text,
+            is_first = AlertBuffer().put_alert(unified)
+            logger.info(
+                f"AlertBuffer: buffered fingerprint={unified.fingerprint[:8]}... "
+                f"svc={unified.service_name} first_in_window={is_first}"
             )
-            logger.info(f"Incident created (fast-track): {incident_id}")
+            # ── 首次进窗时发起 DevOps Agent 调查（2026-09-15 接入）──────
+            #
+            # 接在 `is_first` 而不是每条告警：同一个故障只发一次调查。
+            # 不去重的话一次告警风暴会打满 agent task 配额，
+            # 而后面那些任务查的是同一件事。
+            #
+            # 为什么不用 `aws devops-agent create-trigger`：它的 condition
+            # 是 tagged union 且**只支持 schedule**，没有告警条件
+            # （2026-09-15 实测 + CLI 文档原文）。工作坊也说生产环境
+            # 的 alarm-driven investigation 由 Lambda 调用。
+            #
+            # 默认关闭（DEVOPS_AGENT_INVESTIGATE_ENABLED），
+            # 且任何异常都在模块内吞掉 —— 发起调查是增强，不是主链路。
+            if is_first:
+                try:
+                    from actions.devops_agent_trigger import on_first_alert
+                    on_first_alert(unified)
+                except Exception as _e:             # noqa: BLE001
+                    logger.warning("DevOps Agent 调查发起跳过: %r", _e)
+            return {
+                'statusCode': 202,
+                'body': json.dumps({
+                    'buffered': True,
+                    'fingerprint': unified.fingerprint,
+                    'service': unified.service_name,
+                    'first_in_window': is_first,
+                }, ensure_ascii=False),
+            }
         except Exception as e:
-            logger.error(f"Incident write failed (fast-track): {e}")
-
-    repeat_info = None
-    try:
-        repeat_info = rca_engine.check_repeat_incidents(affected_service)
-        if repeat_info.get('needs_deep_rca'):
-            _send_repeat_alert(affected_service, repeat_info, classification)
-    except Exception as e:
-        logger.warning(f"Repeat check failed (fast-track): {e}")
-
-    result['incident_id'] = incident_id
-    result['repeat_info'] = repeat_info
-    return {'statusCode': 200, 'body': json.dumps(result, ensure_ascii=False)}
-
-
-def _direct_rca_flow(affected_service: str, signal: dict,
-                     fault_classifier, rca_engine,
-                     playbook_engine, semi_auto) -> dict:
-    """原有直通 RCA 流程（feature flag 关闭时或缓冲失败降级时使用）。
-
-    保持与改造前 lambda_handler 完全相同的处理逻辑。
-
-    Args:
-        affected_service: 受影响服务名
-        signal: 原始信号字典
-        fault_classifier/rca_engine/playbook_engine/semi_auto: lazy-imported 模块
-
-    Returns:
-        Lambda 响应字典
-    """
-    if not affected_service:
-        return {'statusCode': 400, 'body': 'missing affected_resource'}
+            # 缓冲失败不能吞掉告警：记录后继续走同步 RCA，保证不丢信号
+            logger.error(f"AlertBuffer failed, falling back to sync RCA: {e}", exc_info=True)
 
     # 故障分类
     try:
@@ -282,7 +149,7 @@ def _direct_rca_flow(affected_service: str, signal: dict,
         }
 
     severity = classification['severity']
-
+    
     # Playbook 匹配 + 执行
     playbook = playbook_engine.match(classification)
     exec_result = semi_auto.execute(classification, playbook)

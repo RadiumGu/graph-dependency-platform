@@ -1,19 +1,8 @@
 """
-config.py - 全局服务名规范映射（window-flush Lambda 副本）
+config.py - 全局服务名规范映射
 
-与 rca/config.py 保持同一派生逻辑：所有映射从 profiles/petsite.yaml 派生，
-本文件不再硬编码任何服务名。
-
-2026-08-28 重写背景（实测漂移，非假设风险）：
-  本文件原先硬编码 CANONICAL / NEPTUNE_TO_K8S_LABEL，已与唯一源头脱节：
-    - 把 pethistory-deployment 映射到 'petadoptionshistory'，但活图里
-      **不存在** 该 Microservice；profiles/petsite.yaml 声明的
-      neptune_name 是 'pethistory'，'petadoptionshistory' 只是它的 alias
-    - 含 'petfood'，活图 15 个 Microservice 里同样不存在
-  即硬编码副本把 alias 当成了规范名，且多出了不存在的服务。
-
-打包依赖：本 Lambda 的部署包内含 profiles/ 与 shared/（见 rca/deploy.sh 的
-拷贝清单），因此可以和 rca/config.py 一样走 EnvironmentProfile + ServiceRegistry。
+从 profiles/petsite.yaml 的 services 段加载，不再手工维护硬编码映射。
+所有模块统一从此处导入 CANONICAL / NEPTUNE_TO_DEPLOYMENT / NEPTUNE_TO_K8S_LABEL。
 """
 
 import os
@@ -23,10 +12,6 @@ import sys
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
-# Lambda 运行时包根就是本文件所在目录（profiles/ 与 shared/ 是同级目录）
-_HERE = os.path.dirname(os.path.abspath(__file__))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
 
 from profiles.profile_loader import EnvironmentProfile
 from shared.service_registry import ServiceRegistry
@@ -46,7 +31,7 @@ for _name, _cfg in _profile.get("services", {}).items():
     # 加入 k8s_label 作为额外别名（如 service-petsite → petsite）
     if "k8s_label" in _cfg and _cfg["k8s_label"] != k8s_dep:
         CANONICAL[_cfg["k8s_label"]] = neptune
-    # 加入 aliases（如 petadoptionshistory / pethistory-service → pethistory）
+    # 加入 aliases
     for alias in _cfg.get("aliases", []):
         CANONICAL[alias] = neptune
 
@@ -56,7 +41,7 @@ for _dep, _svc in CANONICAL.items():
     if _svc not in NEPTUNE_TO_DEPLOYMENT:
         NEPTUNE_TO_DEPLOYMENT[_svc] = _dep
 
-# Neptune 服务名  →  K8s Pod app label（用于 kubectl / K8s API 查询）
+# Neptune 服务名  →  K8s Pod app label
 NEPTUNE_TO_K8S_LABEL: dict[str, str] = {}
 for _name, _cfg in _profile.get("services", {}).items():
     neptune = _cfg.get("neptune_name", _name)
@@ -65,7 +50,13 @@ for _name, _cfg in _profile.get("services", {}).items():
 
 # ── Feature Flags ─────────────────────────────────────────────────────────────
 # 控制新功能的开关，便于逐步灰度上线或紧急回滚。
-# 取值与 rca/config.py 保持一致（两处都读，必须同步）。
+#
+# 2026-08-28 补入：本文件此前 **没有** 定义 FEATURE_FLAGS，而
+# core/decision_engine.py:127 有 `from config import FEATURE_FLAGS`，
+# 外层是 `except Exception: pass` —— ImportError 被静默吞掉，
+# 导致 auto_remediation_enabled 这个用来阻止自动修复的开关在 rca 包里
+# **从未被检查过**，action_level='auto' 不会被降级为 semi_auto。
+# 取值与 infra/lambda/rca_window_flush/config.py 保持一致。
 #
 # alert_buffer_enabled          — 告警聚合缓冲，False=直通原有 RCA 流程
 # topology_correlation_enabled  — 拓扑关联分组，False=每条告警独立成组

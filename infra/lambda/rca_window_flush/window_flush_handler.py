@@ -22,7 +22,8 @@ import os
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-REGION = os.environ.get('REGION', 'ap-northeast-1')
+from shared import get_region
+REGION = get_region()
 
 
 def window_flush_handler(event: dict, context) -> dict:
