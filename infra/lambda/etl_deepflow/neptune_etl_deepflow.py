@@ -38,6 +38,29 @@ import boto3
 
 from neptune_client_base import neptune_query, extract_value, REGION  # noqa: F401
 
+# 契约门禁。**2026-09-22 补** —— 本 ETL 此前是**唯一写图却没有门禁的写入方**：
+# 全文 assert_node_type / assert_edge_type / assert_source 调用数为 0，只
+# lazy import 了 dependency_edge_labels（drift 对账用的边类型清单，不是门禁）。
+#
+# 而它是代码量最大（2000+ 行）、写边最多的那个。契约开头写着「合法的 source
+# 取值词表，**由 graph_contract.assert_source() 在写入时强制**」，对这条路径
+# 那句话一直不成立。
+#
+# ⚠️ 两处代码注释把这件事记反了，方向还不一样：
+#   etl_agentcore 说「etl_xray 与共享层完全没接门禁」→ etl_xray 已于 2026-09-04
+#                  接上，那半是历史状态
+#   etl_xray 说「etl_deepflow（1）都接了门禁」→ 实测 assert_* 调用 0 次，
+#                  它把 dependency_edge_labels 的 import 当成了门禁
+# 所以判断覆盖面只能数 assert_* 的调用，不能读注释。
+#
+# 不加 try/except 兜底是刻意的：静默跳过的门禁等于没有门禁。上面的
+# neptune_client_base 来自同一个 Lambda 层，它能 import 就说明层挂上了。
+from graph_contract import (  # noqa: E402
+    assert_edge_type,
+    assert_node_type,
+    assert_source,
+)
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -658,6 +681,10 @@ def upsert_datastore_flows(edges: list) -> dict:
             logger.warning("L4 边探测失败 %s → %s: %s", e['src'], e['dst'], exc)
             stats['failed'] += 1
             continue
+        # 门禁：dst 标签在 lbl 里。src 是 Microservice / LambdaFunction 两种，
+        # 不确定时传 None，assert_edge_type 退回平铺白名单。
+        assert_edge_type('AccessesData', None, lbl)
+        assert_source('deepflow-l4', 'upsert_datastore_flows')
         if existing > 0:
             g = (f"{src_clause}.as('s').V().where({dst_clause})"
                  f".inE('AccessesData').where(__.outV().has('name','{s}'))"
@@ -977,6 +1004,14 @@ def run_drift_detection(service_names: list, ip_map: dict):
                 drift_status = 'observed_not_declared'
                 # source 记录是哪个源发现的，便于回溯这条影子边的来历
                 edge_source = 'deepflow-dns' if has_dns else 'xray'
+                # 门禁：edge_source 是**动态值**，最容易跑偏 —— 契约的 sources
+                # 词表当初就是为「四个写入 ETL 无一校验」而建的。
+                # 注意它可能取 'xray'：这条影子边由 xray 数据发现，所以标 xray
+                # 记录的是「哪个数据源发现的」而非「哪个 ETL 写的」。副作用是
+                # AccessesData 上 source=xray 的边并非全由 etl_xray 写入，溯源到
+                # ETL 粒度时要留意。未改语义 —— 改动面太大，另案处理。
+                assert_edge_type('AccessesData', None, infra_label)
+                assert_source(edge_source, 'run_drift_detection(shadow edge)')
                 try:
                     r2 = neptune_query(
                         f"g.V().hasLabel('Microservice','LambdaFunction').has('name','{svc_name}').as('src')"
@@ -1250,6 +1285,10 @@ def batch_upsert_nodes(services: list):
     现改为：option-map 只留身份与仅创建一次的字段，所有刷新字段一律
     尾部 `.property(single, k, v)`，az 也一并兑现。
     """
+    # 门禁：本函数两处 mergeV（批量链式 + 单条兜底）都写 Microservice，
+    # 标签与 source 在整个函数内是常量，入口校验一次即可。
+    assert_node_type('Microservice')
+    assert_source(NODE_SOURCE, 'batch_upsert_nodes')
     for i in range(0, len(services), BATCH_SIZE):
         batch = services[i:i + BATCH_SIZE]
         # 用链式 mergeV 一次请求写多个节点
@@ -1320,6 +1359,10 @@ def batch_upsert_edges(edges: list):
         errors = e['errors']
         error_rate = round(errors / calls, 4) if calls > 0 else 0.0
         p99 = float(e.get('p99_latency_ms', -1))
+        # 门禁：Calls 两端都是 Microservice，两端已知 → assert_edge_type 走 pairs
+        # 强校验（只传 label 会退化成平铺白名单的笛卡尔积）。
+        assert_edge_type('Calls', 'Microservice', 'Microservice')
+        assert_source('deepflow-etl', 'batch_upsert_edges(Calls)')
         gremlin = (
             f"g.V().has('Microservice','name','{src}').as('s')"
             f".V().has('Microservice','name','{dst}')"
@@ -1438,6 +1481,9 @@ def _emit_topology_changes(events: list) -> int:
         kind = safe_str(ev.get('kind', 'unknown'))
         subject = safe_str(ev.get('subject', ''))
         cid = safe_str(f"{kind}:{subject}:{ts}")
+        # 门禁：TopologyChange 的身份键是 change_id（契约声明），不是 name。
+        assert_node_type('TopologyChange')
+        assert_source(NODE_SOURCE, 'topology change log')
         try:
             neptune_query(
                 f"g.mergeV([(T.label):'TopologyChange','change_id':'{cid}'])"
@@ -1989,6 +2035,8 @@ ORDER BY calls DESC LIMIT 100 FORMAT TSV
                     continue
                 ecr_vid = ecr_vids[0]
                 ecr_vid = ecr_vid.get('@value', ecr_vid) if isinstance(ecr_vid, dict) else ecr_vid
+                assert_edge_type('DependsOn', 'Microservice', 'ECRRepository')
+                assert_source('deepflow-etl', 'ecr startup dependency')
                 neptune_query(
                     f"g.V('{svc_vid}').as('s').V('{ecr_vid}')"
                     f".coalesce("
