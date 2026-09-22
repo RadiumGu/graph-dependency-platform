@@ -212,11 +212,15 @@ class TestValidatorCatchesPlaceholders(unittest.TestCase):
         report = PlanValidator().validate(self._plan_with(step))
         self.assertTrue(
             any(
-                i.severity == "ERROR" and "no executable command" in i.message
+                i.severity == "ERROR" and "no executable" in i.message
                 for i in report.issues
             ),
             "纯注释步骤未被判为 ERROR",
         )
+        # 断言只匹配 "no executable"，不含后面的词：2026-09-22 判据扩展到
+        # validation / rollback_command 之后，消息里加上了字段名，
+        # 原来的 "no executable command" 就对不上了。措辞是实现细节，
+        # 这里要守的行为是「纯注释步骤被判 ERROR」。
 
     def test_explanatory_todo_in_comment_is_not_an_error(self) -> None:
         """说明性注释里提到 TODO 不构成问题——只要有可执行行。"""

@@ -324,3 +324,110 @@ class TestValidationQuality:
                          or "comment" in i.message.lower()
                          or "empty" in i.message.lower()]
         assert len(quality_issues) == 0
+
+
+class CommandQualityAcrossAllFieldsTest(unittest.TestCase):
+    """2026-09-22：判据必须对 command / validation / rollback_command 三者都生效。
+
+    此前只有 command 被完整检查：validation 只查空/echo/纯注释，
+    rollback_command 只在别处查存在性、内容完全不查。后果是一类缺陷结构性地
+    看不见 —— Lambda 回滚步骤引用未绑定的 $EVENT_SOURCE_UUID，它在
+    rollback_command 里，校验器从来没有机会报它。
+
+    回滚命令写错比正常命令写错更危险：它只在**出事之后**才被执行，
+    那时没人有余裕调试一条展开成空串的参数。
+    """
+
+    def _one_step_plan(self, **kw) -> DRPlan:
+        """只填必填字段 —— DRStep / DRPhase / DRPlan 的其余字段都有默认值。"""
+        step = DRStep(
+            step_id="s1",
+            order=1,
+            resource_type="LambdaFunction",
+            resource_name="fn",
+            action="a",
+            command=kw.get("command", "aws lambda get-function --function-name fn"),
+            validation=kw.get("validation", "aws lambda get-function --function-name fn"),
+            rollback_command=kw.get(
+                "rollback_command", "aws lambda update-function-code --function-name fn"),
+            tier="Tier1",
+        )
+        phase = DRPhase(phase_id="phase-2", name="n", layer="compute", steps=[step])
+        return DRPlan(
+            plan_id="p",
+            created_at="2026-09-22T00:00:00Z",
+            scope="az",
+            source="apne1-az1",
+            target="apne1-az2",
+            phases=[phase],
+        )
+
+    def _msgs(self, plan):
+        return [i.message for i in PlanValidator()._check_validation_quality(plan)]
+
+    def test_rollback_未绑定变量必须被检出(self):
+        """审查第 2 条：$EVENT_SOURCE_UUID 在 rollback_command 里，旧判据扫不到。"""
+        plan = self._one_step_plan(
+            rollback_command="aws lambda update-event-source-mapping "
+                             "--uuid $EVENT_SOURCE_UUID --enabled")
+        hits = [m for m in self._msgs(plan)
+                if "rollback_command" in m and "EVENT_SOURCE_UUID" in m]
+        self.assertTrue(hits, "rollback_command 里的未绑定变量没被检出")
+
+    def test_validation_未绑定变量必须被检出(self):
+        plan = self._one_step_plan(
+            validation="aws route53 get-hosted-zone --id $ZONE_ID")
+        hits = [m for m in self._msgs(plan)
+                if "validation" in m and "ZONE_ID" in m]
+        self.assertTrue(hits, "validation 里的未绑定变量没被检出")
+
+    def test_同步骤内赋值过的变量不算未绑定(self):
+        plan = self._one_step_plan(
+            command="ZONE_ID=$(aws route53 list-hosted-zones --query x --output text)\n"
+                    "aws route53 get-hosted-zone --id $ZONE_ID")
+        hits = [m for m in self._msgs(plan) if "ZONE_ID" in m]
+        self.assertEqual(hits, [], f"同步骤赋值过的变量被误报: {hits}")
+
+    def test_未替换的模板占位符必须被检出(self):
+        """审查第 1 条那类形态：命令由字符串格式化拼出，参数没填上。"""
+        plan = self._one_step_plan(
+            command="kubectl get pods --context {target}-cluster")
+        hits = [m for m in self._msgs(plan) if "placeholder" in m and "{target}" in m]
+        self.assertTrue(hits, "未替换的 {target} 占位符没被检出")
+
+    def test_shell合法的大括号不得误报(self):
+        """误判的代价比漏判高：一次误报会让人把整个校验器关掉。"""
+        plan = self._one_step_plan(
+            command="NS=default\n"
+                    "kubectl get pods -n ${NS} -o json | jq -r '.items[].metadata.name'\n"
+                    "ps aux | awk '{print $1}'")
+        hits = [m for m in self._msgs(plan) if "placeholder" in m]
+        self.assertEqual(hits, [], f"shell 合法的大括号被误报成占位符: {hits}")
+
+    def test_rollback为纯注释不得报ERROR(self):
+        """固化一个我自己踩过的误报。
+
+        第一版把 rollback_command 纯注释也判 ERROR，对真实计划一跑报出 41 条，
+        绝大多数是 preflight-connectivity / preflight-vcpu-quota 这类**只读检查**
+        步骤 —— 它们没有修改任何状态，本就不需要回滚，写一条「无需回滚」的注释
+        是正确做法。
+
+        判据的分界是「这个字段为空会不会导致演练假通过」：
+            command / validation 为空 → 会（步骤空转却报成功）
+            rollback 为空            → 不会（只在回滚时才执行）
+        """
+        plan = self._one_step_plan(
+            rollback_command="# Read-only preflight check — no rollback needed")
+        errs = [m for m in self._msgs(plan) if "rollback_command" in m]
+        self.assertEqual(errs, [], f"preflight 的「无需回滚」注释被误报: {errs}")
+
+    def test_command为纯注释仍必须报ERROR(self):
+        """这条是真缺陷：注释「执行成功」，演练全绿而那一步什么都没做。"""
+        plan = self._one_step_plan(
+            command="# TODO: Manual switchover required for NeptuneCluster\n"
+                    "# Add the appropriate AWS CLI command here.")
+        hits = [m for m in self._msgs(plan)
+                if "command" in m and "no executable line" in m]
+        self.assertTrue(hits, "command 纯注释没被报 ERROR —— 演练会假通过")
+
+
