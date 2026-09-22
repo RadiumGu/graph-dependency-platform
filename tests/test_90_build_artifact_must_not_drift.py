@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 import subprocess
 
 import pytest
@@ -104,3 +105,41 @@ def test_t90_04_CDK仍从该目录打包():
         "CDK 不再从 lambda/rca_window_flush 打包 —— 产物与权威源的关系变了，"
         "请复核本文件与 GENERATED.md 的前提"
     )
+
+
+def test_t90_05_build脚本的保留清单必须覆盖全部非产物文件():
+    """`build.sh` 开头会 `find -delete` 清空目录，只保留排除清单里的文件。
+
+    这个清单必须与「目录里哪些文件不是产物」一致，否则下一次构建会删掉它们。
+
+    2026-09-22 实测踩到：新增 GENERATED.md 时漏了同步这份清单，而
+    test_t90_03 断言该文件存在 —— 下一次 build 之后门禁就会变红，
+    且警示文件消失后这份产物又能继续误导人。靠人记住不行，所以加这条。
+    """
+    build_sh = ARTIFACT_DIR / "build.sh"
+    assert build_sh.exists(), "找不到 build.sh"
+    text = build_sh.read_text(encoding="utf-8")
+
+    # 解析 find 的排除清单：! -name 'xxx'
+    kept = set(re.findall(r"!\s*-name\s*'([^']+)'", text))
+    assert kept, (
+        "build.sh 里解析不到 `! -name '...'` 排除项 —— 清理逻辑变了，"
+        "请复核本测试的前提"
+    )
+
+    # 目录里不是从 rca/ 复制来的文件（源码与说明），必须都在保留清单里
+    for fname in sorted(_NOT_FROM_AUTHORITY | {"README.md"}):
+        f = ARTIFACT_DIR / fname
+        if not f.exists():
+            continue
+        assert fname in kept, (
+            f"{fname} 存在于产物目录但不在 build.sh 的保留清单里 —— "
+            f"下一次构建会删掉它。请在 build.sh 的 find 里加 "
+            f"`! -name '{fname}'`"
+        )
+
+    # 反向：保留清单里列的文件应当真的存在，否则是过期条目
+    for fname in sorted(kept):
+        assert (ARTIFACT_DIR / fname).exists(), (
+            f"build.sh 保留清单里的 {fname!r} 在目录里不存在 —— 过期条目，请清理"
+        )
