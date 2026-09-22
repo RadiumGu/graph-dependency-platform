@@ -20,6 +20,55 @@ def parse_duration(s: str) -> int:
     return v * {'s': 1, 'm': 60, 'h': 3600}[unit]
 
 
+# 无法确定注入时长时用的哨兵值。取 10^9 秒（约 31 年）——远超 rules.yaml 里
+# 任何合理阈值，保证时长闸门必然命中并 deny。
+_UNKNOWN_DURATION_SEC = 10 ** 9
+
+
+def duration_sec_for_policy(exp) -> int:
+    """取实验的注入时长（秒），供 PolicyGuard 的时长闸门判定。
+
+    与 `parse_duration` 分开是因为**失败语义不同**。`parse_duration` 解析不了就抛，
+    适合内部流程；而这里的调用方是安全闸门的输入：
+
+      - 抛异常 → 整个实验在 Phase 0 之前崩掉，连闸门都没跑到
+      - 返回 0 → **更糟**。`policy/rules.yaml` 的 R008（`max_duration_sec: 600`，
+        `action: deny`，`severity: high`）会判定「没超限」从而放行 ——
+        那是用「我不知道」冒充「没问题」
+
+    所以无法确定时长时返回 `_UNKNOWN_DURATION_SEC`，让 PolicyGuard 去 deny。
+    决定权留在闸门，不在这里静默放过。这与 `_run_policy_guard` 自己的 docstring
+    「Deny → abort experiment (fail-closed)」是同一个语义。
+
+    ## 修的是什么（2026-09-22）
+
+    两处调用方各自算错，且方向不同：
+
+        runner.py:233          int(exp.fault.duration.rstrip('smh').split('.')[0])
+                               rstrip 只删尾字符，不换算单位：
+                               '10m' → 10（应 600）、'1h' → 1（应 3600）
+                               低估 60 / 3600 倍
+
+        runner_strands.py:398  getattr(experiment, 'duration', 0)
+                               Experiment **没有** duration 字段（时长在
+                               fault.duration），实测 hasattr 为 False →
+                               **恒返回 0**。strands 是线上默认引擎
+                               （systemd 里 CHAOS_RUNNER_ENGINE=strands），
+                               所以那条路径上 R008 从未生效过
+
+    后果都是闸门给出「没超限」这个**错误陈述**而不是沉默：写 '30m' 的实验
+    会被放行，实际注入 1800 秒 —— 而第 401 行的 `parse_duration` 换算是对的，
+    所以「闸门看到的时长」与「真正注入的时长」长期不是同一个数。
+    """
+    raw = getattr(getattr(exp, 'fault', None), 'duration', None)
+    if not isinstance(raw, str) or not raw.strip():
+        return _UNKNOWN_DURATION_SEC
+    try:
+        return parse_duration(raw)
+    except ValueError:
+        return _UNKNOWN_DURATION_SEC
+
+
 def parse_threshold(expr: str):
     """
     '>= 99%' → (op, 99.0)

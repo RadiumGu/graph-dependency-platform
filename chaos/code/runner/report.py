@@ -84,6 +84,8 @@ class Reporter:
             "fault_duration": exp.fault.duration,
             "status": result.status,
             "abort_reason": result.abort_reason or None,
+            # 与 status 正交：PASSED 且 cleanup_failures 非空 = 结论可信但环境已污染。
+            "cleanup_failures": list(result.cleanup_failures) or None,
             "duration_seconds": round(result.duration_seconds, 1),
             "steady_state_before": {
                 "success_rate": round(ssb.success_rate, 1) if ssb else None,
@@ -173,6 +175,14 @@ class Reporter:
 
         if result.abort_reason:
             lines += [f"| 熔断原因 | ⚠️ {result.abort_reason} |"]
+
+        # 清理失败必须出现在摘要表里，紧贴「状态」。否则一次 PASSED 的实验会
+        # 看起来完全正常，而残留 CRD 已经在污染下一次实验的稳态基线。
+        if result.cleanup_failures:
+            lines += [
+                f"| 环境状态 | ❌ **已污染 —— {len(result.cleanup_failures)} 项清理失败，"
+                f"下一次实验前必须手工确认归零** |"
+            ]
 
         lines += ["", "## 稳态快照", "", "| 阶段 | success_rate | latency_p99 |", "|------|-------------|-------------|"]
         if ssb:

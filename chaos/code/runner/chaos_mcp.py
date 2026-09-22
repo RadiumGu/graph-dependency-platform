@@ -306,7 +306,26 @@ class ChaosMCPClient:
     # ── 公共工具 ─────────────────────────────────────────────────────────────
 
     def delete(self, chaos_type: str, name: str, namespace: str = "default") -> bool:
-        """kubectl delete 删除实验"""
+        """kubectl delete 删除实验。
+
+        返回 True 仅代表 **kubectl 退出码为 0**，不代表真的删掉了对象 ——
+        `--ignore-not-found` 会让「对象不存在」也退 0。对象是否真被删除看
+        stdout 里有没有 "deleted"，见下面的 warning 分支。
+
+        ## 为什么要检查 returncode（2026-09-22 修）
+
+        此前这里**无条件 `return True` 并无条件打 `✅`**，只有 subprocess 自己
+        抛异常（例如超时）才返回 False。后果是两类失败被吞成成功：
+
+          1. namespace 不符 —— 实验 YAML 里 namespace 主要是 `petadoptions`
+             （63 处），而本方法默认 `"default"`。`_emergency_cleanup` 当时
+             不传 namespace，所以紧急清理打在 default 上，对绝大多数实验
+             **一个对象也删不到**，日志却是 `✅ kubectl delete httpchaos/xxx: `
+          2. 退出码非 0 —— 权限不足、CRD 类型拼错，同样报成功
+
+        这使得上层的重试与 cleanup_failures 记录全部失效：delete 从不报失败，
+        调用方也就没有失败可记。
+        """
         if not name:
             return True
         crd_map = {
@@ -325,7 +344,23 @@ class ChaosMCPClient:
                 ["kubectl", "delete", crd, name, "-n", namespace, "--ignore-not-found"],
                 capture_output=True, text=True, timeout=15,
             )
-            logger.info(f"✅ kubectl delete {crd}/{name}: {r.stdout.strip()}")
+            if r.returncode != 0:
+                logger.error(
+                    f"❌ kubectl delete {crd}/{name} -n {namespace} "
+                    f"退出码 {r.returncode}: {(r.stderr or '').strip()[:300]}"
+                )
+                return False
+            out = (r.stdout or "").strip()
+            if "deleted" in out:
+                logger.info(f"✅ kubectl delete {crd}/{name} -n {namespace}: {out}")
+            else:
+                # 退 0 但什么都没删：对象本来就不在这个 namespace。可能是已被删过
+                # （幂等重试，正常），也可能是 namespace 传错（危险，故障还在生效）。
+                # 这两种在退出码上无法区分，所以必须把 namespace 打出来让人能判断。
+                logger.warning(
+                    f"⚠️ kubectl delete {crd}/{name} -n {namespace} 未匹配到对象 —— "
+                    f"若此处并非重复删除，则 namespace 可能不符，故障仍在生效"
+                )
             return True
         except Exception as e:
             logger.error(f"kubectl delete 失败: {e}")

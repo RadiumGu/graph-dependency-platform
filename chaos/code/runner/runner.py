@@ -20,7 +20,7 @@ import traceback
 from datetime import datetime, timezone
 from typing import Optional
 
-from .experiment import Experiment, MetricsSnapshot, parse_duration
+from .experiment import Experiment, MetricsSnapshot, duration_sec_for_policy, parse_duration
 from .result import ExperimentResult
 from .metrics import DeepFlowMetrics
 from .rca import RCATrigger
@@ -121,7 +121,10 @@ class ExperimentRunner:
                     result.log_collection = log_result
                 except Exception:
                     pass
-            self._emergency_cleanup(result.chaos_experiment_name, experiment.fault.type, experiment.backend)
+            self._emergency_cleanup(result.chaos_experiment_name,
+                                    experiment.fault.type, experiment.backend,
+                                    namespace=experiment.target_namespace,
+                                    result=result)
 
         except PrefightFailure as e:
             result.status = "ABORTED"
@@ -148,7 +151,10 @@ class ExperimentRunner:
                     result.log_collection = log_result
                 except Exception:
                     pass
-            self._emergency_cleanup(result.chaos_experiment_name, experiment.fault.type, experiment.backend)
+            self._emergency_cleanup(result.chaos_experiment_name,
+                                    experiment.fault.type, experiment.backend,
+                                    namespace=experiment.target_namespace,
+                                    result=result)
 
         finally:
             result.end_time = result.end_time or datetime.now(timezone.utc)
@@ -230,7 +236,7 @@ class ExperimentRunner:
             "fault_type": exp.fault.type if hasattr(exp, 'fault') and hasattr(exp.fault, 'type') else "unknown",
             "target_namespace": exp.target_namespace,
             "target_service": exp.target_service,
-            "duration_sec": int(exp.fault.duration.rstrip('smh').split('.')[0]) if hasattr(exp, 'fault') and hasattr(exp.fault, 'duration') else 0,
+            "duration_sec": duration_sec_for_policy(exp),
             "blast_radius": getattr(exp, "blast_radius", "service"),
         }
         context_dict = {
@@ -838,24 +844,59 @@ class ExperimentRunner:
 
         # ── 正常完成路径也必须删 CRD（2026-08-31 实测缺陷）────────────────────
         if exp.backend == "chaosmesh" and result.chaos_experiment_name:
-            try:
-                delete_type = self.injector.FAULT_TO_DELETE_TYPE.get(
-                    exp.fault.type, exp.fault.type)
-                self.injector.delete(
-                    chaos_type=delete_type,
-                    name=result.chaos_experiment_name,
-                    namespace=exp.target_namespace,
-                )
-                logger.info(f"🧹 已删除 Chaos Mesh CRD: {result.chaos_experiment_name}")
-                result.chaos_experiment_name = ""   # 避免 emergency_cleanup 重复删
-            except Exception as e:
-                # 删不掉必须显式报错：残留会污染下一次实验的稳态基线，
+            delete_type = self.injector.FAULT_TO_DELETE_TYPE.get(
+                exp.fault.type, exp.fault.type)
+            # 删除要重试：硬约束是「故障注入必须可自动恢复」，而此前删不掉就只打
+            # 一条 error 日志走了 —— Phase 4 的 except 是局部的、不向上抛，
+            # 所以 _emergency_cleanup（只挂在异常路径上）也不会被触发，
+            # 等于**删除失败之后没有任何第二次尝试**。
+            # kubectl delete 对不存在的对象返回 NotFound，重试是幂等的。
+            last_err = None
+            for attempt in range(1, 4):
+                try:
+                    self.injector.delete(
+                        chaos_type=delete_type,
+                        name=result.chaos_experiment_name,
+                        namespace=exp.target_namespace,
+                    )
+                    logger.info(
+                        f"🧹 已删除 Chaos Mesh CRD: {result.chaos_experiment_name}"
+                        + (f"（第 {attempt} 次尝试）" if attempt > 1 else "")
+                    )
+                    result.chaos_experiment_name = ""   # 避免 emergency_cleanup 重复删
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+                    if attempt < 3:
+                        logger.warning(
+                            f"删除 Chaos Mesh CRD 第 {attempt} 次失败: {e!r} —— "
+                            f"{attempt * 5}s 后重试"
+                        )
+                        time.sleep(attempt * 5)
+
+            if last_err is not None:
+                # 三次都失败：记进 result 让报告显式列出，不再只打日志。
+                # 残留会让 tproxy 继续挂在 Pod netns 上并污染后续实验，
                 # 而 Phase 5 采样在残留生效之前，看不出问题。
-                logger.error(
-                    f"❌ 删除 Chaos Mesh CRD 失败: {e!r} —— "
-                    f"残留 CRD 会让 tproxy 继续挂在 Pod netns 上并污染后续实验，"
-                    f"请手工 kubectl delete 并遍历全部 CRD 类型确认归零"
+                detail = (
+                    f"Chaos Mesh CRD 删除失败（已重试 3 次）: "
+                    f"type={delete_type} name={result.chaos_experiment_name} "
+                    f"ns={exp.target_namespace} err={last_err!r}"
                 )
+                result.cleanup_failures.append(detail)
+                logger.error(
+                    f"❌ {detail} —— 残留 CRD 会让 tproxy 继续挂在 Pod netns 上并"
+                    f"污染后续实验，请手工 kubectl delete 并遍历全部 CRD 类型确认归零"
+                )
+                # 最后兜底：显式走一次紧急清理（它会按 fault_type 再试一遍删除路径）
+                try:
+                    self._emergency_cleanup(
+                        result.chaos_experiment_name, exp.fault.type, exp.backend,
+                        namespace=exp.target_namespace, result=result)
+                except Exception as ce:
+                    result.cleanup_failures.append(f"emergency_cleanup 亦失败: {ce!r}")
+                    logger.error(f"❌ 兜底紧急清理也失败: {ce!r}")
 
         # FIS 后端：先等 FIS 实验自然完成
         if exp.backend in ("fis", "fis-scenario") and result.chaos_experiment_name:
@@ -1168,13 +1209,49 @@ class ExperimentRunner:
             pass
 
     def _emergency_cleanup(self, experiment_name: str, fault_type: str = "",
-                           backend: str = "chaosmesh"):
-        """紧急清理：删除实验，避免故障持续"""
-        if experiment_name and not self.dry_run:
-            logger.warning(f"🧹 紧急清理: {experiment_name} (backend={backend})")
+                           backend: str = "chaosmesh", namespace: str = "",
+                           result=None):
+        """紧急清理：删除实验，避免故障持续。
+
+        ## namespace 必须由调用方传（2026-09-22 修）
+
+        此前这里调 `delete(chaos_type=..., name=...)` **不传 namespace**，于是用
+        `ChaosMCPClient.delete` 的默认值 `"default"`。而实验 YAML 里 namespace
+        主要是 `petadoptions`（63 处）—— 也就是说**紧急清理打在了错误的
+        namespace 上，对绝大多数实验一个对象也删不到**，而 `--ignore-not-found`
+        让 kubectl 退 0、当时的 delete 又无条件 return True，所以它一直报成功。
+
+        这是最需要生效的那条路径（异常出口）上最彻底的失效：Phase 4 正常路径传了
+        namespace，唯独异常路径没传。
+
+        `result` 传入时，清理失败会记进 `result.cleanup_failures`，让报告能显示
+        「环境已污染」而不是安静地报 PASSED。
+        """
+        if not experiment_name or self.dry_run:
+            return
+        logger.warning(f"🧹 紧急清理: {experiment_name} "
+                       f"(backend={backend}, ns={namespace or '未指定'})")
+        try:
             if backend in ("fis", "fis-scenario"):
                 self.fis.stop(experiment_name)
-            else:
-                chaos_type = self.injector.FAULT_TO_DELETE_TYPE.get(fault_type, fault_type)
-                # 同 stop-condition 路径：必须关键字传参，见那里的注释
-                self.injector.delete(chaos_type=chaos_type, name=experiment_name)
+                return
+            chaos_type = self.injector.FAULT_TO_DELETE_TYPE.get(fault_type, fault_type)
+            # 同 stop-condition 路径：必须关键字传参，见那里的注释。
+            # 也不要改成 delete(**kw) —— test_37::o16 用源码正则断言每个实参都含
+            # '='，**kw 会让它失效，而它守的是 2026-08-31 那次 Pod CrashLoopBackOff。
+            ok = self.injector.delete(
+                chaos_type=chaos_type,
+                name=experiment_name,
+                namespace=namespace or "default",
+            )
+            if not ok:
+                detail = (f"紧急清理失败: type={chaos_type} name={experiment_name} "
+                          f"ns={namespace or 'default(未指定)'}")
+                logger.error(f"❌ {detail} —— 故障可能仍在生效，请手工确认归零")
+                if result is not None:
+                    result.cleanup_failures.append(detail)
+        except Exception as e:
+            detail = f"紧急清理抛异常: {e!r} (name={experiment_name}, ns={namespace})"
+            logger.error(f"❌ {detail}")
+            if result is not None:
+                result.cleanup_failures.append(detail)

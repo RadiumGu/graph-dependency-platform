@@ -20,6 +20,19 @@ class ExperimentResult:
     status: str = "RUNNING"          # RUNNING / PASSED / FAILED / ABORTED / ERROR
     abort_reason: str = ""
 
+    # ─── 清理失败（2026-09-22）─────────────────────────────────────────────
+    # 与 status **刻意分开的一个维度**。实验结论（假设成立/被证伪）和环境状态
+    # （干净/被污染）是正交的：把清理失败塞进 status 会让「假设被证伪」和
+    # 「CRD 删不掉」分不清，而两者要采取的行动完全不同。
+    #
+    # 此前删 Chaos Mesh CRD 失败只 logger.error，**不设标志、不改 status、
+    # 也没有第二次尝试** —— 实验照报 PASSED，而 tproxy 还挂在 Pod netns 上。
+    # 下一次实验的前置检查（runner.py 的 list_experiments 残留检测）会拦住，
+    # 但本次的报告里看不出环境已被污染。
+    #
+    # 现在：删除失败先自动重试，仍失败才记到这里，并由报告显式列出。
+    cleanup_failures: list = field(default_factory=list)
+
     # 时间
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None

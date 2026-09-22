@@ -14,6 +14,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Any
 
 from runner.base import RunnerBase  # type: ignore
+from runner.experiment import duration_sec_for_policy  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -395,7 +396,7 @@ class StrandsRunner(RunnerBase):
                 "fault_type": experiment.fault.type,
                 "target_namespace": experiment.target_namespace,
                 "target_service": experiment.target_service,
-                "duration_sec": getattr(experiment, 'duration', 0),
+                "duration_sec": duration_sec_for_policy(experiment),
                 "blast_radius": getattr(experiment, 'blast_radius', 'service'),
             }
             ctx_dict = {
