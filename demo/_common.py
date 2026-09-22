@@ -51,14 +51,32 @@ NEPTUNE_ENDPOINT = os.environ.get("NEPTUNE_ENDPOINT", "")
 #: 真实注入按钮的闸门。线上刻意不设该变量，演示页不应能打生产。
 INJECTION_ENABLED = os.environ.get("DEMO_ALLOW_INJECTION") == "1"
 
-# 依赖边类型由契约派生（见 dependency_edge_labels），此处仅作为离线兜底顺序
-_STATUS_ORDER = ["confirmed", "refuted", "inconclusive", "untested"]
+# 依赖边验证判定的状态词表 —— 必须覆盖图谱里**所有**取值。
+#
+# ⚠️ 2026-09-21 补 `modeling_artifact` 与 `bootstrap_only` 两类。
+#
+# 此前只有前四类，而 `status_chips` 的分母用的是「全部依赖边」（实测 130）。
+# 于是线上四个格子加起来只有 123、百分比合计 94.6%，**有 7 条边既不计数也不
+# 在任何格子里，而界面上没有任何说明**。首页与依赖边验证页共用这份词表，
+# 所以两处首屏都缺这 7 条。
+#
+# 这恰好违反本站自己的主张「摆出来的数字要能被核对」：读者拿四格相加去对
+# 总数，会对不上，而看不出原因。补两个格子后可见分解能与 total 对齐。
+#
+# 为什么不是从分母里剔除这两类：它们在契约里确实是 `dependency: true`，
+# 剔除会让「依赖边总数」这个口径在站内出现两个值，代价更大。摆出来更诚实。
+_STATUS_ORDER = ["confirmed", "refuted", "inconclusive", "untested",
+                 "modeling_artifact", "bootstrap_only"]
 
 STATUS_META = {
     "confirmed": ("✅", "已确认", "#2E7D32"),
     "refuted":   ("❌", "已证伪", "#C62828"),
     "inconclusive": ("⚠️", "未定", "#EF6C00"),
     "untested":  ("⬜", "未测", "#757575"),
+    # 图谱自己判定「这条边不是运行时真实依赖，是建模产物」——不可注入验证
+    "modeling_artifact": ("🧩", "建模产物", "#6A1B9A"),
+    # 仅由 bootstrap 写入、尚无任何观测源确认过
+    "bootstrap_only": ("🌱", "仅初始化", "#00838F"),
 }
 
 

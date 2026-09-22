@@ -33,7 +33,7 @@
 | `1_Edge_Verification` | **核心**：依赖边的 confirmed / refuted / inconclusive / untested、置信度、判定规则 | ✅ 真实快照 | Neptune（可选） |
 | `2_Query_Catalog` | 预置查询浏览器，选查询→填参→执行。**不经过 LLM** | ✅ 8 条查询有真实结果快照 | Neptune 才能实跑 |
 | `3_Graph_Explorer` | pyvis 拓扑图，节点类型从契约动态生成，被证伪的边画成红色虚线 | ✅ 真实快照 | Neptune（可选） |
-| `4_Smart_Query` | 自然语言 → openCypher；可**并排对比 direct 与 strands 引擎**（token / ReAct 轮数 / 工具调用链） | ⚠️ 展示契约 30 组 few-shot 问题→Cypher 对照 | Neptune + Bedrock |
+| `4_Smart_Query` | 自然语言 → openCypher；可**Strands ReAct 工具调用链可逐轮展开 引擎**（token / ReAct 轮数 / 工具调用链） | ⚠️ 展示契约 30 组 few-shot 问题→Cypher 对照 | Neptune + Bedrock |
 | `5_Agent_Dependencies` | agent 域 6 类节点、5 类边、孤岛问题与唯一桥接路径 | ✅ 真实快照 | Neptune（可选） |
 | `6_Root_Cause_Analysis` | **证据面板**（9 条图查询，不需要 AI）+ Graph RAG 报告 | ✅ 证据面板有 3 个服务的真实快照 | 证据要 Neptune；报告要 Bedrock |
 | `7_Chaos_Engineering` | 故障目录（现算）、实验规格、运行器 6 阶段说明 | ✅ 目录与规格可看 | Neptune 看历史 |

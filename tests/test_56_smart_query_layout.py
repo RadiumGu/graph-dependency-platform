@@ -78,14 +78,42 @@ def test_m01_few_shot语料必须在侧栏不能在主区():
         '主区还在逐条渲染 few-shot 语料，应该只在侧栏。')
 
 
-def test_m02_并排对比开关必须在侧栏():
-    """它是配置不是内容 —— 放主区会挤在对话和输入框之间。"""
-    side, main = _split_main_and_sidebar()
-    side, main = _strip_comments(side), _strip_comments(main)
-    assert 'compare_mode' in side and 'st.toggle' in side, (
-        '并排对比开关不在侧栏。它是配置项，不是对话内容。')
-    assert not re.search(r'^compare_mode\s*=\s*st\.toggle', main, re.M), (
-        '主区还有顶层的 compare_mode toggle，应该只在侧栏。')
+def test_m02_并排对比功能必须已删除():
+    """原名 `test_m02_并排对比开关必须在侧栏`，守的是「配置项该在侧栏不在主区」。
+
+    ## 为什么改成反向断言
+
+    2026-09-21 删掉了「⚖️ 并排对比两个引擎」这个功能本身，所以「它该放哪」
+    这个问题不再存在 —— 原断言 `'compare_mode' in side` 的前提消失了。
+
+    删除原因：它的两列是 `("direct", "strands")`，各自调 `C.build_engine(name)`，
+    而 2026-09-20 起 factory 无条件返回 StrandsNLQueryEngine、完全忽略
+    `NLQUERY_ENGINE`。于是两列构造的是**同一个引擎**，「direct」那列只是被贴错
+    标签的 strands 输出，「Cypher 是否相同 ✅ 相同」恒真。同页页头已写明
+    direct 已删除，却还提供「和它对比」的入口。
+
+    ## 这条现在守什么
+
+    守「这个功能不要被无意加回来」。如果将来真要做引擎对比，应当对比 strands
+    的两种**配置**（如 2 轮 vs 3 轮 ReAct），那需要 factory 支持按参数构造 ——
+    届时请改写本断言并说明新的对比对象是什么，而不是简单删掉它。
+
+    原始的布局原则「配置项放侧栏、不放主区」仍然有效，由 m01
+    （few-shot 语料必须在侧栏）继续守着。
+    """
+    src = PAGE.read_text(encoding='utf-8')
+    code = _strip_comments(src)
+
+    assert 'st.toggle(' not in code or 'compare_mode' not in code, (
+        '又出现了 compare_mode 开关。\n'
+        'direct 实现已于 2026-09-20 删除，factory 忽略 NLQUERY_ENGINE —— '
+        '任何 ("direct", "strands") 的并排对比都是同一个引擎跑两遍，'
+        '其中一列会被贴上错误的标签。\n'
+        '若要做引擎对比，请对比 strands 的两种配置，并同时改写本断言。')
+
+    assert not re.search(r'for\s+\w+,\s*\w+\s+in\s+zip\([^)]*\(\s*["\']direct["\']',
+                         code), (
+        '又出现了对 ("direct", ...) 的并排循环 —— 见上，那是同一个引擎。')
 
 
 def test_m03_空状态引导必须在对话之前():

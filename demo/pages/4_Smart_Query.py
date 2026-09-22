@@ -98,29 +98,26 @@ with st.sidebar:
             "那一轮是净亏 → p99 降 27.6%、token 降 33.4%，准确率仍 20/20。\n\n"
             "每个回答下方可展开完整的工具调用链。"
         )
-    elif engine_name == "direct":
-        st.caption(
-            "**Direct Bedrock（单轮 + 重试）**\n\n"
-            "1. Claude Sonnet 生成 openCypher（复杂问题升 Opus）\n"
-            "2. `query_guard.is_safe()` 拦写操作与超深遍历\n"
-            "3. Neptune 执行（自动补 LIMIT）\n"
-            "4. 空结果自动重试一次（带关系名提示；否定型问题跳过）\n"
-            "5. Claude 生成中文摘要\n\n"
-            "不产生工具调用链（`trace` 恒为空）。"
-        )
     else:
+        # 2026-09-21：原先这里有 `elif engine_name == "direct"` 的说明分支。
+        # direct 实现已于 2026-09-20 删除，engine_name 不可能再取到 "direct"，
+        # 那段说明成了描述不存在实现的死代码。
         st.caption("引擎不可用，无法展示工作原理。")
 
     st.markdown("---")
-    # 并排对比是**配置**，不是内容 —— 放在主区会把对话和输入框隔开。
-    compare_mode = st.toggle(
-        "⚖️ 并排对比两个引擎",
-        value=False,
-        disabled=not ONLINE,
-        help="同一问题分别用 direct 与 strands 跑。"
-             "Strands 走 ReAct 多轮、会产生工具调用链；direct 是单轮生成加空结果重试。"
-             "对比能直观看到两者的 token 用量与推理过程差异。",
-    )
+    # ⚠️ 2026-09-21 删掉「⚖️ 并排对比两个引擎」开关。
+    #
+    # 它的两列是 `("direct", "strands")`，各自调 `C.build_engine(name)`。而
+    # 2026-09-20 起 factory 无条件返回 StrandsNLQueryEngine、完全忽略
+    # NLQUERY_ENGINE —— 于是两列构造出的是**同一个引擎**，「direct」那列只是
+    # 被贴错标签的 strands 输出，「Cypher 是否相同 ✅ 相同」恒真、token 对比
+    # 毫无意义。
+    #
+    # 而同一页页头已经写明 direct 已删除：一边声明它不存在，一边提供「和它
+    # 对比」的入口，是本项目反复清理的那类自相矛盾。
+    #
+    # 刻意不改成「strands 两种配置对比」：那需要 factory 支持按参数构造
+    # （如 2 轮 vs 3 轮 ReAct），属功能新增而非缺陷修复，不在此处夹带。
 
     st.markdown("---")
     st.caption(
@@ -267,12 +264,14 @@ for msg in st.session_state["chat_history"]:
         if msg["role"] == "user":
             st.markdown(msg["content"])
         elif msg.get("compare"):
-            st.markdown(f"**并排对比**：`direct` vs `strands`")
-            cols = st.columns(2)
-            for col, key in zip(cols, ("direct", "strands")):
-                with col:
-                    st.markdown(f"#### `{key}`")
-                    _render_answer(msg["compare"].get(key, {}), compact=True)
+            # 兼容分支：2026-09-21 之前的会话可能在 chat_history 里留下 compare
+            # 记录。新会话不会再产生（并排对比功能已删，见上方注释），但既有
+            # session_state 里的旧记录仍要能渲染而不是抛 KeyError。
+            st.caption("⚠️ 这是双引擎并排对比的历史记录。该功能已于 2026-09-21 "
+                       "删除——它的两列实际是同一个 strands 引擎。")
+            for key, res in (msg.get("compare") or {}).items():
+                st.markdown(f"#### `{key}`")
+                _render_answer(res, compact=True)
         else:
             _render_answer(msg.get("data", {}))
 
@@ -315,44 +314,16 @@ if user_input and ONLINE:
     st.session_state["chat_history"].append({"role": "user", "content": user_input})
 
     with st.chat_message("assistant"):
-        if compare_mode:
-            st.markdown("**并排对比**：`direct` vs `strands`")
-            results: dict = {}
-            cols = st.columns(2)
-            for col, eng_name in zip(cols, ("direct", "strands")):
-                with col:
-                    st.markdown(f"#### `{eng_name}`")
-                    with st.spinner(f"{eng_name} 执行中…"):
-                        t0 = time.time()
-                        try:
-                            eng = C.build_engine(eng_name)
-                            res = eng.query(user_input)
-                        except Exception as exc:  # noqa: BLE001
-                            res = {"error": f"{type(exc).__name__}: {exc}", "cypher": ""}
-                        res.setdefault("latency_ms", int((time.time() - t0) * 1000))
-                        res.setdefault("engine", eng_name)
-                    results[eng_name] = res
-                    _render_answer(res, compact=True)
-
-            # 差异摘要：观众未必会逐个展开看
-            d, s = results.get("direct", {}), results.get("strands", {})
-            same_cypher = (d.get("cypher") or "").strip() == (s.get("cypher") or "").strip()
-            st.markdown("---")
-            st.caption(
-                f"**Cypher 是否相同**：{'✅ 相同' if same_cypher else '❌ 不同'}　·　"
-                f"**strands 工具调用**：{len(s.get('trace') or [])} 次　·　"
-                f"**token**：direct {(d.get('token_usage') or {}).get('total', '—')} / "
-                f"strands {(s.get('token_usage') or {}).get('total', '—')}"
-            )
-            st.session_state["chat_history"].append({"role": "assistant", "compare": results})
-        else:
-            with st.spinner("生成查询并执行…"):
-                try:
-                    result = C.nlquery_engine().query(user_input)
-                except Exception as exc:  # noqa: BLE001
-                    result = {"error": f"{type(exc).__name__}: {exc}", "cypher": ""}
-            _render_answer(result)
-            st.session_state["chat_history"].append({"role": "assistant", "data": result})
+        # 2026-09-21：原先这里有 `if compare_mode:` 的双引擎并排分支，
+        # 已随「并排对比两个引擎」开关一起删除（理由见上方开关处的注释：
+        # 两列构造的是同一个 strands 引擎，direct 那列是贴错标签的输出）。
+        with st.spinner("生成查询并执行…"):
+            try:
+                result = C.nlquery_engine().query(user_input)
+            except Exception as exc:  # noqa: BLE001
+                result = {"error": f"{type(exc).__name__}: {exc}", "cypher": ""}
+        _render_answer(result)
+        st.session_state["chat_history"].append({"role": "assistant", "data": result})
 
     st.rerun()
 

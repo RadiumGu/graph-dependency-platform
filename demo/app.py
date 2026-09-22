@@ -223,7 +223,9 @@ EVIDENCE = [
      "实测"),
     ("183", "条边因为一次不带标签的查询而指错源端点",
      "`find_vertex_by_name()` 不带标签，而名字在不同标签间会重复（**12 组**，例如 `gateway-service` "
-     "同时是 Deployment、K8sService、Microservice）。正确的 `Microservice-[RunsOn]->Pod` 只有 36 条，错源 173 条。",
+     "同时是 Deployment、K8sService、Microservice）。那次全图三元组普查里，`Microservice-[RunsOn]->Pod` "
+     "只有 36 条端点组合是契约声明过的，其余 **183 条**源端点指错。"
+     "（这是 2026-08 那次普查的当时数字，不是此刻的图谱规模。）",
      "实测"),
     ("40×", "count 正确，join 却放大 40 倍",
      "边属性上的 SET 累积：`LambdaFunction` 数出来是 31，正确；但加上 `WHERE last_scanned IS NOT NULL` "
