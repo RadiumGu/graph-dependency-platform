@@ -30,18 +30,45 @@
 
 ---
 
-## 1. 五段骨架
+## 1. 两个时间轴：定义不在运行时序列里
 
-不管数据源是什么，每条 ETL 都是这五段：
+**「采集」和「定义」不在同一条时间轴上**，把它们排成一列会得出错误的因果。
+
+### 构建期（定义在这里，每次改契约才发生）
+
+```
+探测数据源实际发什么      scripts/probe_agent_span_attrs.py
+  ↓                       —— 不要按 semconv 规范假设
+改 profiles/graph_contract.yaml          ← 唯一权威，人只改这个
+  ↓ scripts/gen_graph_contract.py --write
+infra/lambda/shared/python/graph_contract_data.py   ← 生成产物
+  ↓ tests/test_35（--check）守住产物与源一致
+冻结，随 Lambda 层一起部署
+```
+
+ETL 运行时**不读 YAML**：四个 ETL 独立打包，`profiles/` 不在部署包里。
+生成纯 Python 字面量后 Lambda 侧零运行时依赖（不需要 pyyaml，也不用把
+profiles 打进每个包）。
+
+### 运行期（每轮，契约已是常量）
 
 ```
 触发
  └─> 1. 采集    各子采集独立返回 (status, rows)
-     2. 定义    profiles/graph_contract.yaml  ← 唯一权威
-     3. 门禁    assert_node_type / assert_edge_type / assert_source
-     4. 写入    Gremlin upsert → Neptune
-     5. 上报    collection_status（区分「空」与「拿不到」）
+     2. 门禁    assert_node_type / assert_edge_type / assert_source
+     3. 写入    Gremlin upsert → Neptune
+     4. 上报    collection_status（区分「空」与「拿不到」）
 ```
+
+所以**定义是前置条件而不是步骤**：没有定义，`assert_node_type` 直接拒绝写入。
+而两个轴的先后**恰好相反** —— 构建期是「先探测再定义」，运行期是「定义早已就位，
+只剩采集」。先定义再去采，定出来的类型和属性名会跟数据源实际发的对不上，
+**而那个失败长得像「没数据」**。
+
+⚠️ `graph_contract_data.py` 是**生成产物却被 git 跟踪**，与
+`infra/lambda/rca_window_flush/` 同一个模式。但这里做对了两件事：docstring
+明写「自动生成，请勿手工编辑」，且 `test_35` 用 `--check` 断言产物与源一致。
+改契约务必改 YAML —— 直接改产物会在下一次 `--check` 时被打回。
 
 `etl_agentcore` 的 `lambda_handler` 就是这个顺序的直译：
 
