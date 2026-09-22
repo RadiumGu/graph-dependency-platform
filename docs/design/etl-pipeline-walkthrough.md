@@ -510,9 +510,27 @@ ETL 的静态判断和实验的实测结论各占一列，谁也不许覆盖谁�
 
 ## 12. 已知不一致（尚未修）
 
-- **契约声称"写入时强制门禁"并不完全成立。** `etl_xray` 与共享层
-  `neptune_client_base.py` **完全没接门禁**。`etl_agentcore` 与 `etl_deepflow` 接了。
-  所以"图里的数据都过了契约校验"目前是句不准确的话。
+- **契约声称"写入时强制门禁"并不完全成立**，但主角不是代码注释说的那个。
+  2026-09-22 实测 `assert_node_type` / `assert_edge_type` / `assert_source` 的调用数：
+
+  | 写入方 | 行数 | `assert_*` 调用 | 门禁 |
+  |---|---|---|---|
+  | `etl_aws`（handler + neptune_client） | 1412 | 5 | ✓ |
+  | `etl_xray` | 1044 | 5 | ✓ |
+  | `etl_agentcore` | 1422 | 4 | ✓ |
+  | `etl_appsignals` | 803 | 3 | ✓（函数内 lazy import） |
+  | `etl_cfn` | 488 | 2 | ✓ |
+  | **`etl_deepflow`** | **2047** | **0** | **✗** |
+  | `shared/neptune_client_base.py` | 112 | **0** | **✗** |
+
+  **写图最多、代码量最大的 `etl_deepflow` 是唯一没有门禁的写入方。**
+  它只 `import dependency_edge_labels`（drift 对账用的边类型清单），那不是门禁函数。
+
+  ⚠️ **两处代码注释都把这件事记错了，且方向相反**：
+  `etl_agentcore` 的注释说「`etl_xray` 与共享层完全没接门禁」—— `etl_xray` 已于
+  2026-09-04 接上，那半是历史状态；`etl_xray` 自己的注释说「`etl_deepflow` 都接了
+  门禁」—— 实测 0 次调用。所以判断覆盖面**必须数 `assert_*` 的调用，不能读注释**，
+  这两条注释各自都是当时的实情，只是没人回来更新。
 - **agent 调用边是单源的。** `Delegates` / `InvokesTool` / `Retrieves` 全部
   `source=agentcore-etl`，没有第二个独立证据源可交叉验证。对比服务层的
   `AccessesData` 有 7 个来源（`xray` 27、`deepflow-dns` 18、`aws-etl` 10、
