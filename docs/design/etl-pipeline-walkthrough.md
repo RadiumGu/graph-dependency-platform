@@ -34,6 +34,38 @@
 
 **「采集」和「定义」不在同一条时间轴上**，把它们排成一列会得出错误的因果。
 
+```mermaid
+flowchart TB
+    subgraph BUILD["① 构建期 —— 只在改契约时发生"]
+        direction TB
+        P["探测数据源实际发什么<br/>scripts/probe_agent_span_attrs.py<br/>纪律：不按 semconv 规范假设"]
+        Y["profiles/graph_contract.yaml<br/>唯一权威 · 人只改这里"]
+        G["scripts/gen_graph_contract.py --write"]
+        D["graph_contract_data.py<br/>生成产物 · 纯 Python 字面量"]
+        T["tests/test_35 --check<br/>断言产物与源一致"]
+        P --> Y --> G --> D
+        D -.被守护.-> T
+    end
+
+    subgraph RUN["② 运行期 —— 每轮 EventBridge 触发，契约已是常量"]
+        direction TB
+        C["1 采集<br/>各子采集独立返回 status 与 rows"]
+        GA["2 门禁<br/>assert_node_type<br/>assert_edge_type<br/>assert_source"]
+        W["3 写入<br/>Gremlin upsert<br/>write-once 属性只在首次写"]
+        S["4 上报<br/>collection_status"]
+        C --> GA --> W --> S
+    end
+
+    NEPT[("Amazon Neptune<br/>唯一共享状态")]
+    W --> NEPT
+    NEPT -.超过 expires_seconds.-> DEACT["失活对账 active=false<br/>硬删默认关闭"]
+    DEACT -.回写.-> NEPT
+    D ==>|"运行时只 import 常量，不读 YAML"| GA
+```
+
+图里那条**粗箭头是唯一跨轴的连接**：契约在构建期被冻结成常量，运行期的门禁只是
+读它。定义因此是前置条件，而不是流水线上的一站。
+
 ### 构建期（定义在这里，每次改契约才发生）
 
 ```
@@ -89,6 +121,43 @@ edge_stats   = write_span_edges(span_rows, round_ts)
 ---
 
 ## 2. 采集：两种数据源，两套坑
+
+两条链路的形态差异集中在这张图里 —— 注意虚线指向的**失败表现各不相同**，
+这是把它们分开实现的理由：
+
+```mermaid
+flowchart TB
+    subgraph AGENTCORE["etl_agentcore —— 每 15min · 身份键现成"]
+        direction TB
+        A1["① 控制面 API<br/>bedrock-agentcore-control / bedrock"]
+        A2["② per-runtime span 日志<br/>/aws/bedrock-agentcore/runtimes/"]
+        AN["资源节点<br/>AgentRuntime 6 · AgentTool 8<br/>AgentMemory 2 · KnowledgeBase 1"]
+        AE["调用边<br/>Delegates 3 · InvokesTool 8 · Retrieves 1"]
+        A1 --> AN
+        A2 --> AE
+        AN -.采集失败.-> ANF["节点缺失"]
+        AE -.采集失败.-> AEF["边缺失<br/>图上「有 agent 但没依赖」"]
+    end
+
+    subgraph DEEPFLOW["etl_deepflow —— 每 5min · 身份键要现场翻译"]
+        direction TB
+        D1["ClickHouse eBPF<br/>flow_log.l7_flow_log<br/>身份只有 IP"]
+        D2["EKS K8s API<br/>GET /api/v1/nodes 与 /pods"]
+        D3["build_ip_service_map<br/>IP → 服务名"]
+        DE["Calls · AccessesData<br/>deepflow-dns 18 · deepflow-l4 6"]
+        D1 --> D3
+        D2 --> D3
+        D3 --> DE
+        D2 -.拿不到 endpoint.-> DFF["空 map → 整轮空转<br/>现象与「没有流量」完全一样"]
+    end
+
+    AE --> NEPT[("Neptune")]
+    AN --> NEPT
+    DE --> NEPT
+```
+
+`etl_agentcore` 的两条链路只要有一条断，现象就落在图的一侧；而 `etl_deepflow`
+多出的那一步翻译一旦失败，**整轮都没有产出，且看不出是失败**。
 
 ### 2.1 `etl_agentcore` — 两条链路刻意分开
 
