@@ -7,7 +7,7 @@
 # 层里的依赖架构不对，函数起不来而错误信息完全不指向架构）。
 #
 # 用法：
-#   bash mcp/build_package.sh [输出路径]
+#   bash graph_mcp/build_package.sh [输出路径]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -29,16 +29,16 @@ python3 -m pip install \
   --python-version "$PY_VER" \
   --only-binary=:all: \
   --upgrade \
-  -r "$ROOT/mcp/requirements.txt"
+  -r "$ROOT/graph_mcp/requirements.txt"
 
 # ── 应用代码 ────────────────────────────────────────────────────────────────
 echo "==> 拷入应用代码"
 # 入口与 MCP 实现平铺在 zip 根（entryPoint 是 ["python","main.py"]）
-cp "$ROOT/mcp/main.py"           "$BUILD/"
-cp "$ROOT/mcp/agentcore_app.py"  "$BUILD/"
-cp "$ROOT/mcp/server.py"         "$BUILD/"
-cp "$ROOT/mcp/catalog_tools.py"  "$BUILD/"
-cp "$ROOT/mcp/provenance.py"     "$BUILD/"
+cp "$ROOT/graph_mcp/main.py"           "$BUILD/"
+cp "$ROOT/graph_mcp/agentcore_app.py"  "$BUILD/"
+cp "$ROOT/graph_mcp/server.py"         "$BUILD/"
+cp "$ROOT/graph_mcp/catalog_tools.py"  "$BUILD/"
+cp "$ROOT/graph_mcp/provenance.py"     "$BUILD/"
 
 # 查询库与契约。刻意**不**拷 chaos/ 与 dr-plan-generator 的执行侧代码——
 # 这个 server 是只读的，包里不该有能发起故障注入的东西。

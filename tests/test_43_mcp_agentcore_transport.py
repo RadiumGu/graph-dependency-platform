@@ -21,12 +21,12 @@ from http.server import ThreadingHTTPServer
 import pytest
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-for _p in (_ROOT, os.path.join(_ROOT, "rca"), os.path.join(_ROOT, "mcp")):
+for _p in (_ROOT, os.path.join(_ROOT, "rca"), os.path.join(_ROOT, "graph_mcp")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from mcp import agentcore_app  # noqa: E402
-from mcp.server import GraphMCPServer  # noqa: E402
+from graph_mcp import agentcore_app  # noqa: E402
+from graph_mcp.server import GraphMCPServer  # noqa: E402
 
 FAKE_CATALOG = {
     "q2_tier0_status": {

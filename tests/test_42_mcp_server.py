@@ -19,8 +19,8 @@ for _p in (_ROOT, os.path.join(_ROOT, "rca")):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from mcp import catalog_tools, provenance  # noqa: E402
-from mcp.server import GraphMCPServer  # noqa: E402
+from graph_mcp import catalog_tools, provenance  # noqa: E402
+from graph_mcp.server import GraphMCPServer  # noqa: E402
 
 # ── 测试用的迷你目录（覆盖三种参数形态）────────────────────────────────────
 FAKE_CATALOG = {
@@ -408,3 +408,59 @@ def test_structured_and_text_content_agree(srv):
     resp = _call(s, "q2_tier0_status")
     text = json.loads(resp["result"]["content"][0]["text"])
     assert text == resp["result"]["structuredContent"]
+
+
+# ── 2026-09-23 补：顶层目录名不得遮蔽依赖的第三方包 ────────────────────
+
+def test_顶层包名不得遮蔽第三方依赖():
+    """本仓库的顶层目录名不能与项目依赖的 PyPI 包重名。
+
+    ## 踩过的那次
+
+    原先有一个顶层包 `./mcp/`（本 MCP server 的代码）。PyPI 上也有个 `mcp`
+    包，而 `strands.tools.mcp` import 的是**后者**。于是只要项目根在
+    sys.path 上（测试、脚本、任何 `python -m` 从仓库根跑的东西），
+    `import strands.tools.mcp` 就炸在：
+
+        ModuleNotFoundError: No module named 'mcp.types'
+
+    这个报错**完全指不到真因** —— 它看起来像 strands 装坏了或版本不对，
+    而实际是我们自己的目录名把人家遮了。已重命名为 `graph_mcp`。
+
+    危险在于它是**潜伏**的：仓库里当时没有任何代码 import strands.tools.mcp，
+    所以三个月里毫无症状。等到有人要把本项目的 MCP server 接成 Strands agent
+    的工具（对这个仓库是很自然的下一步），才会在一个完全无关的地方爆。
+
+    ## 判据
+
+    直接断言那次失败不会再来 —— 在**项目根在 sys.path 最前**的条件下
+    import 真实受害者。这比「扫一遍目录名」精确：目录名清单会漂移，
+    而这条断言直接复现失败路径。
+    """
+    import subprocess
+    root = _ROOT  # noqa: F821 - 文件头已定义
+    code = (
+        "import sys; sys.path.insert(0, %r);"
+        "import strands.tools.mcp;"
+        "from strands.tools.mcp import MCPClient;"
+        "print('ok')" % root
+    )
+    r = subprocess.run([sys.executable, "-c", code],  # noqa: F821
+                       capture_output=True, text=True, cwd=root, timeout=120)
+    assert r.returncode == 0 and "ok" in r.stdout, (
+        "项目根在 sys.path 上时 strands.tools.mcp 导入失败 —— "
+        "很可能又有顶层目录遮蔽了同名 PyPI 包。\nstderr: %s" % r.stderr[-400:])
+
+
+def test_不存在名为_mcp_的顶层目录():
+    """`./mcp` 不许回来 —— 它就是上面那条失败的成因。
+
+    单独一条而不是只靠上面那条：上面那条需要装了 strands 才有意义，
+    而这条是纯文件系统检查，任何环境都跑得动，回归时给出的信息也更直接。
+    """
+    import pathlib
+    bad = pathlib.Path(_ROOT) / "mcp"  # noqa: F821
+    assert not bad.exists(), (
+        "顶层又出现了 ./mcp —— 它会遮蔽 PyPI 的 mcp 包，"
+        "让 strands.tools.mcp 报一个指不到真因的 ModuleNotFoundError。"
+        "本项目的 MCP server 代码在 ./graph_mcp。")
