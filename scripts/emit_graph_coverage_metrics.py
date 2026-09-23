@@ -59,7 +59,7 @@ for _p in (str(_ROOT), str(_ROOT / 'rca')):
         sys.path.insert(0, _p)
 
 NAMESPACE = 'GraphDependency/Coverage'
-SKILL_FILE = _ROOT / 'mcp' / 'agent_skill' / 'dependency-verification-graph.md'
+SKILL_FILE = _ROOT / 'graph_mcp' / 'agent_skill' / 'dependency-verification-graph.md'
 AGENT_SPACE = '60c2f48f-b6e3-4dce-a0a3-4144228b2051'
 SKILL_NAME = 'dependency-verification-graph'
 
@@ -172,16 +172,53 @@ def graph_coverage() -> dict:
 
 
 def skill_guard() -> dict:
-    """agent skill 资产的存在性与内容一致性。三次只读调用，零模型成本。"""
+    """agent skill 资产的存在性与内容一致性。三次只读调用，零模型成本。
+
+    ## `local_readable` 为什么是独立的一等状态（2026-09-23 补）
+
+    此前本地文件读不到时，函数把 `skill_present` / `skill_active` /
+    `skill_matches_repo` **全部置 0 就返回**。后果是一次实际发生过的误导：
+
+        ⚠️ 依赖图守卫跳闸：
+          - skill 资产不在了
+          - skill 状态不是 ACTIVE（None）
+          - skill 内容与仓库不一致（本地 e3b0c44298fc / 远端 None）
+
+    三条告警、一个原因，而且**每一条都是假的** —— 远端资产当时完好
+    （present=1 / active=1 / sha 一致）。真因是 `SKILL_FILE` 常量在
+    `b3431f4`（顶层 `./mcp` 改名 `graph_mcp`）之后过时了。
+
+    最有害的是第三条:「远端 None」让人以为**查过了远端**而它返回了空。
+    实际上那次运行里 **boto3 一次都没被调用**。
+    一个把「没测」报成「测到了坏结果」的告警，比没有告警更糟 ——
+    它会把排查引向 AWS 控制台，而问题在一行路径常量上。
+
+    `e3b0c44298fc` 也是个线索：那是**空字符串**的 sha256 前缀。
+    哈希算的是读不到时的 `''`，所以这个值本身就说明「没读到内容」，
+    而不是「内容变了」。
+
+    所以现在：本地读不到 → `local_readable=0`，三个远端标志留 `None`
+    （不是 0），调用方据此报**一条**告警并说明远端未被检查。
+    """
     import boto3                                                 # noqa: E402
 
     local = SKILL_FILE.read_text(encoding='utf-8') if SKILL_FILE.exists() else ''
     local_sha = hashlib.sha256(local.encode('utf-8')).hexdigest()[:16]
-    out = {'skill_present': 0, 'skill_active': 0,
-           'skill_matches_repo': 0, 'local_sha': local_sha}
+    out = {'local_readable': 1 if local else 0,
+           'skill_present': None, 'skill_active': None,
+           'skill_matches_repo': None, 'local_sha': local_sha}
     if not local:
-        out['note'] = f'仓库里没有 {SKILL_FILE.name}'
+        # 刻意**不**把远端标志置 0：那等于断言「远端查过了、结果是坏的」，
+        # 而这条路径上远端一次都没被查。
+        out['note'] = (
+            f'读不到本地 skill 源文件 {SKILL_FILE} —— '
+            '**远端资产未被检查**（本次运行没有发出任何 AWS 调用）。'
+            '先确认路径常量是否在某次目录改名后过时了：'
+            f'本项目的 MCP 代码在 graph_mcp/（`./mcp` 曾遮蔽 PyPI 的 mcp 包）。')
         return out
+    out['skill_present'] = 0
+    out['skill_active'] = 0
+    out['skill_matches_repo'] = 0
     try:
         c = boto3.client('devops-agent',
                          region_name=os.environ.get('REGION', 'ap-northeast-1'))
@@ -265,7 +302,12 @@ def main() -> int:
     # 退出码给 cron 用：0 正常，2 表示有值得看一眼的事。
     # 刻意不因「覆盖率低」退非零 —— 低覆盖是现状不是故障，
     # 天天报警只会让人把告警关掉。
-    bad = (guard.get('skill_present') == 0
+    #
+    # `== 0` 而不是 falsy：三个远端标志在「本地读不到」时是 **None**
+    # （远端未被检查），那与「查过了、是坏的」必须分开 —— 见 skill_guard 的
+    # docstring 里那次三条假告警。
+    bad = (guard.get('local_readable') == 0
+           or guard.get('skill_present') == 0
            or guard.get('skill_active') == 0
            or guard.get('skill_matches_repo') == 0
            or cov['refutable_edges'] == 0)

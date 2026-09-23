@@ -41,8 +41,43 @@ from paths import PROJECT_ROOT
 SCRIPT = Path(PROJECT_ROOT) / 'scripts' / 'emit_graph_coverage_metrics.py'
 RUNNER = (Path(PROJECT_ROOT) / 'chaos' / 'code' / 'runner'
           / 'edge_verification.py')
-SKILL = (Path(PROJECT_ROOT) / 'mcp' / 'agent_skill'
-         / 'dependency-verification-graph.md')
+def _skill_file():
+    """从**被测脚本自己**读出 SKILL_FILE，不在测试里另抄一份路径。
+
+    2026-09-23 的教训：这里原本写死 `PROJECT_ROOT / 'mcp' / 'agent_skill' / ...`，
+    与脚本里的常量是两份独立的字面量。`b3431f4` 把顶层 `./mcp` 改名成 `graph_mcp`
+    （它遮蔽了 PyPI 的 mcp 包）时两份都没改 —— **两边朝同一个方向错，
+    于是断言 `SKILL.exists()` 变红时报的是「缺少 skill 源文件」，
+    而真相是「路径常量过时了」。**
+
+    更糟的是线上表现：cron 守卫读不到文件 → `local=''` → 提前返回，
+    三个标志全置 0 → 一个原因发出三条告警，其中「远端 None」尤其误导
+    （根本没发生远端调用）。
+
+    从脚本导入就没有第二份字面量可漂移。用 `ast` 解析而不是 import，
+    是因为该脚本 import 期就要 boto3 且会读环境变量。
+    """
+    import ast
+    tree = ast.parse(SCRIPT.read_text(encoding='utf-8'))
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(getattr(t, 'id', None) == 'SKILL_FILE' for t in node.targets):
+            continue
+        # 形如 _ROOT / 'graph_mcp' / 'agent_skill' / 'xxx.md'
+        parts, cur = [], node.value
+        while isinstance(cur, ast.BinOp) and isinstance(cur.op, ast.Div):
+            if isinstance(cur.right, ast.Constant):
+                parts.append(cur.right.value)
+            cur = cur.left
+        assert getattr(cur, 'id', None) == '_ROOT', (
+            f'SKILL_FILE 不再是 `_ROOT / ...` 的形状，本解析要跟着更新: '
+            f'{ast.unparse(node.value)}')
+        return Path(PROJECT_ROOT).joinpath(*reversed(parts))
+    raise AssertionError('脚本里找不到 SKILL_FILE 常量')
+
+
+SKILL = _skill_file()
 
 
 def test_m01_脚本存在且可编译():
