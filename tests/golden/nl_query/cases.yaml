@@ -1,0 +1,90 @@
+# Golden cases for the NL→Cypher engine (rca/neptune/nl_query_*.py)
+#
+# ## 与本目录其他 golden 集的区别：这里断言**精确真值**
+#
+# layer2 / hypothesis 等集用的是行为边界（min_probes_returning 之类），
+# 因为它们的输出没有唯一正确答案。NL→Cypher 不一样 —— 「这个问题的答案是什么」
+# 有唯一解，所以每题配一条 `truth_q`：**测试自己写的 Cypher**，在同一次运行里
+# 现查出期望值，再与引擎的结果比。
+#
+# 为什么真值必须现查而不是写死：图谱是活的（ETL 每轮都在写），写死的期望值
+# 三天后就会变成假失败，然后被人加 `xfail` 绕过去，回归保护就没了。
+#
+# ## 为什么不能让引擎自己的 Cypher 去取真值
+#
+# 被测能力就是「把自然语言翻成 Cypher」。用它生成的 Cypher 取真值＝让它自己
+# 判自己的卷，任何翻译错误都会同时出现在答案和真值里而互相抵消。
+#
+# ## check 三种判据
+#
+#   count  真值是单个数字，比数值
+#   set    比值的集合（**不比列名** —— 列名不受控，那不是被测能力）
+#   empty  必须返回空
+#
+# `empty` 是最有判别力的一题，刻意保留：问一个不存在的服务，正确行为是返回空
+# 而不是编一个看起来合理的答案。agent 层尤其容易这样 —— 本仓库实测过网关
+# 403 达 379 次而业务探针全程判「正常」，因为模型用上下文编出了像样的回答。
+# 一个只会答对肯定题的引擎不算合格。
+#
+# ## 题干与真值必须表达同一件事（踩过）
+#
+# q2 第一版题干写「有多少条**依赖边**……」而 truth_q 查的是 `MATCH ()-[r]->()`
+# 即全部边（19 条 vs 依赖标签子集 17 条）。若引擎正确理解成子集，判据会把
+# **正确答案判错**。这种错位从结果上看不出来，只能靠逐条对读题干与真值。
+
+cases:
+  - id: q1_count_micro
+    question: "图谱里有多少个 Microservice 节点？"
+    truth_q: "MATCH (n:Microservice) RETURN count(n) AS c"
+    check: count
+
+  - id: q2_count_confirmed
+    # 刻意不写「依赖边」——见文件头那条错位记录。
+    question: "有多少条边的 verify_status 属性是 confirmed？"
+    truth_q: >-
+      MATCH ()-[r]->() WHERE r.verify_status = 'confirmed'
+      RETURN count(r) AS c
+    check: count
+
+  - id: q3_count_dup
+    # 第一版题干是「有多少条边被标记为 granularity_duplicate」，**没说这个值
+    # 存在哪个属性上**。引擎把它当属性名去查（granularity_duplicate IS NOT
+    # NULL），两次都空，还诚实报了「两次查询均返回空」—— 然后越界推断
+    # 「该属性尚未被任何 ETL 写入」。题干不指明属性名就是在考读心术。
+    question: "有多少条边的 verify_assessability 属性等于 granularity_duplicate？"
+    truth_q: >-
+      MATCH ()-[r]->() WHERE r.verify_assessability = 'granularity_duplicate'
+      RETURN count(r) AS c
+    check: count
+
+  - id: q4_set_petsite_endpoints
+    question: "petsite 访问了哪些 AWSServiceEndpoint？只要名字。"
+    truth_q: >-
+      MATCH (s)-[r]->(d:AWSServiceEndpoint) WHERE s.name = 'petsite'
+      RETURN DISTINCT d.name AS name ORDER BY name
+    check: set
+
+  - id: q5_empty_nonexistent
+    question: "服务 nonexistent-svc-xyz 依赖了哪些资源？"
+    truth_q: >-
+      MATCH (s)-[r]->(d) WHERE s.name = 'nonexistent-svc-xyz'
+      RETURN d.name AS name
+    check: empty
+
+  - id: q6_set_rds_consumers
+    # 题干改过两次，两次都是**我**写歧义了，不是引擎的错：
+    #
+    #   v1「哪些**服务**访问了 RDSCluster」
+    #      真值不限节点类型（里面既有 Microservice 也有 LambdaFunction），
+    #      引擎按「服务」收窄 -> 判错。
+    #   v2「哪些**节点**有指向 RDSCluster 类型节点的边？只要节点名」
+    #      「节点…类型节点」把它带向了**节点标签**，返回
+    #      ['Database','LambdaFunction','Microservice','RDSInstance'] -> 判错。
+    #
+    # v3 照 q3 的办法：直接点明要哪个属性的值。含糊的题干考的是读心术，
+    # 而回归集每失败一次都要有人来查，查出来是题干的问题就是纯浪费。
+    question: "哪些源节点有指向 RDSCluster 节点的边？请返回这些源节点的 name 属性值。"
+    truth_q: >-
+      MATCH (s)-[r]->(d:RDSCluster)
+      RETURN DISTINCT s.name AS name ORDER BY name
+    check: set
