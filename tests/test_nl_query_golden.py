@@ -113,17 +113,32 @@ def grade(case: dict, results, truth_rows) -> tuple[bool, str]:
         return ok, ("%d == %d" % (int(gnum[0]), int(wnum[0])) if ok else
                     "引擎 %d ≠ 真值 %d" % (int(gnum[0]), int(wnum[0])))
     if kind == "set":
-        ws = {str(v) for v in want}
+        # **列对列**比：每个真值列都要能在结果列里找到一个完全相等的。
+        #
+        # 第二版是「结果的某一列 == 真值所有列摊平后的并集」。单列答案没问题，
+        # 但真值是多列时永远匹配不上：2026-09-23 的多步实验里 M1 的真值是
+        # (prop, count) 两列，三个引擎都把名字与计数分两列正确返回，判据却报
+        # 「最接近的一列缺 ['1','11','15','20']」—— 那几个正是计数值。
+        # **三个引擎都答对了，判据把它们全判错。**
+        #
+        # 这是同一族缺陷的第四次。写判据时要问的不是「怎么比」，
+        # 而是「我到底想断言什么」——这里想断言的是「期望的每一列都在」。
+        want_cols = columns_of(truth_rows)
         got_cols = columns_of(results)
-        for gs in got_cols:
-            if gs == ws:
-                return True, "某一列 %d 项全对" % len(ws)
-        # 没有任何一列匹配：报出最接近的那一列，便于看是缺还是多
+        if not want_cols:
+            return (not got_cols), ("真值与结果都为空" if not got_cols else
+                                    "真值为空但引擎返回了 %d 列" % len(got_cols))
+        unmatched = [w for w in want_cols if not any(g == w for g in got_cols)]
+        if not unmatched:
+            return True, "%d 列全部匹配（各 %s 项）" % (
+                len(want_cols), "/".join(str(len(w)) for w in want_cols))
         if not got_cols:
-            return False, "引擎没返回任何行（真值 %d 项）" % len(ws)
-        best = max(got_cols, key=lambda s: len(s & ws))
-        return False, ("没有任何一列等于真值。最接近的一列缺 %r 多 %r"
-                       % (sorted(ws - best)[:4], sorted(best - ws)[:4]))
+            return False, "引擎没返回任何行（真值 %d 列）" % len(want_cols)
+        w0 = unmatched[0]
+        best = max(got_cols, key=lambda s: len(s & w0))
+        return False, ("%d/%d 列没匹配上。其中一列缺 %r 多 %r"
+                       % (len(unmatched), len(want_cols),
+                          sorted(w0 - best)[:4], sorted(best - w0)[:4]))
     return False, "未知判据 %r —— 金标集写错了" % kind
 
 
@@ -199,7 +214,30 @@ def test_grade_set_多返回几列蒙不中():
     # 每列都只含真值的一部分，没有任何一列等于 {a,b}
     rows = [{"c1": "a", "c2": "x"}, {"c1": "zzz", "c2": "b"}]
     ok, why = grade(c, rows, [{"n": "a"}, {"n": "b"}])
-    assert ok is False and "没有任何一列" in why
+    assert ok is False and "没匹配上" in why
+
+
+def test_grade_set_多列真值必须列对列比():
+    """真值两列时，引擎分两列正确返回必须判对。
+
+    2026-09-23 多步实验 M1：真值是 (prop, count) 两列，三个引擎都正确地把
+    名字与计数分列返回，而当时的判据拿「结果单列 vs 真值所有列并集」比，
+    把三个引擎全判错。判据的错看起来像三个引擎一起失败。
+    """
+    c = {"check": "set"}
+    truth = [{"prop": "verify_status", "count": 30}, {"prop": "verify_at", "count": 1}]
+    got = [{"name": "verify_status", "n": 30}, {"name": "verify_at", "n": 1}]
+    ok, why = grade(c, got, truth)
+    assert ok is True, why
+
+
+def test_grade_set_少一列要判错():
+    """只答对一半（只给名字不给计数）不能算过。"""
+    c = {"check": "set"}
+    truth = [{"prop": "a", "count": 1}, {"prop": "b", "count": 2}]
+    got = [{"name": "a"}, {"name": "b"}]          # 缺计数那一列
+    ok, why = grade(c, got, truth)
+    assert ok is False and "没匹配上" in why
 
 # ── 第二层：活体金标（真 Neptune + 真 Bedrock，需 RUN_GOLDEN=1）────────
 
