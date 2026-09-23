@@ -397,6 +397,49 @@ neptune:
     注意这些是**边属性**，在 Neptune/TinkerPop 里天生单基数，
     不存在顶点那种 SET 累积问题（顶点必须用 property(single,...)，见 infra/fix_property_cardinality.py）。
 
+    ### 混沌验证属性（verify_* 族，由 chaos 侧的切断实验与源码审计写入）
+
+    ⚠️ **`verify_status` 与上面的 `drift_status` 不是一回事，不可互换**。
+    两者回答不同的问题：
+
+        drift_status   「代码声明的依赖与运行时观测是否一致」——对账结果
+        verify_status  「主动切断这条依赖后，业务是否真的坏掉」——实验结果
+
+    问「有多少条边 verify_status=confirmed」时**不要**去查 drift_status。
+    2026-09-23 实测：这一族属性当时不在本 schema 里，引擎因此在两者间
+    不确定地摇摆 —— 同一个问题两次运行，一次正确查 verify_status 得 19，
+    一次替换成 drift_status 得 14。金标集
+    （tests/test_nl_query_golden.py::q2_count_confirmed）就是为此加的。
+
+    三个轴，三个字段，**刻意不合并**（合并过一次，撤回成本很高）：
+
+    - verify_status: confirmed | inconclusive | modeling_artifact | bootstrap_only | (空=未评估)
+        取到了什么证据。`modeling_artifact` = 源码证明该调用不可能发生；
+        `bootstrap_only` = 依赖是真的但只在引导/管理端点上。
+        `observation_only` **刻意不写入** —— 它表示「信号不足以判定」，
+        写进这个字段会让它看起来像一个结论。
+    - verify_dependency_class: hard | degraded | soft | unclassified
+        失效时业务坏到什么程度（承重程度）。**有下游消费者**：DR 影响面分析
+        读它判断故障传播。仓库里有两个撤回脚本就是因为 soft 曾被错写。
+    - verify_assessability: load_bearing | platform_pull | designed_to_fail |
+                            bootstrap_only | modeling_artifact |
+                            granularity_duplicate | already_failing
+        这条边为什么（不）能靠切断实验拿到 confirmed。
+        `platform_pull` = 调用由执行角色/kubelet 发起（如 ECR 拉镜像）；
+        `granularity_duplicate` = 与另一条边是同一依赖的两个粒度
+        （端点级 AWSServiceEndpoint vs 资源级资源节点）；
+        `already_failing` = 依赖当前 100% 失效，切不断已经断的东西。
+
+    配套的证据溯源属性（**每条 confirmed 都应该有，缺了说明是早期实验写入的**）：
+    - verify_severance: iam-deny | fis-network | fis-reboot | source-audit
+        切断手段。**决定结论的适用范围** —— 16 秒实例重启不支撑
+        「数据库长时间不可用」的结论，标错就是虚假陈述。
+    - verify_evidence_channel: 证据通道，如 xray-edge+business-probe、
+        stepfn-execution-history+business-probe、source-code+iac
+    - verify_experiment: 实验 id
+    - verify_assessability_reason / verify_assessability_retracted:
+        分级理由 / 撤回记录（分级可撤回，因为 already_failing 这类是可整改状态）
+
     ### X-Ray 观测证据属性（由 etl_xray 写入，与 DeepFlow 平行的第二拓扑源）
     X-Ray 与 DeepFlow 是**两个独立的拓扑观测源**，不是主备关系：
       · X-Ray  —— 需应用埋点；只看得到已插桩的服务，但**能精确到 AWS 资源名**
