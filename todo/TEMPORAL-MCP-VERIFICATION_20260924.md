@@ -62,10 +62,99 @@
 
 `encodePayload` 把 input 包成 `json/plain` 的单个 payload,格式是对的。
 
-**payload 大小上限不要猜**:`DescribeNamespace` 返回
-`NamespaceInfo.limits.blobSizeLimitError`,是运行时可查的真值。
+**payload 大小上限不要猜。** 我原先写「`DescribeNamespace` 返回
+`NamespaceInfo.limits.blobSizeLimitError`,是运行时可查的真值」——
+**这条在本套服务端上不成立,已实测推翻。**
+
+2026-09-24 对活服务端(1.29.7)实测 `GET /api/v1/namespaces/default`:
+
+```
+顶层 keys:          ['config', 'namespaceInfo', 'replicationConfig']
+namespaceInfo keys: ['capabilities', 'description', 'id', 'name',
+                     'state', 'supportsSchedules']
+有 limits 吗:        False
+```
+
+**根本没有 `limits` 字段。** 规范里有这个字段不等于实现会填它。
+所以 payload 上限**在这套服务端上拿不到**,阶段 D 必须改用别的办法
+(读服务端配置 `limit.blobSize.error`,或直接以实际计划体积做实验)。
 本仓库的 region 切换计划样例有 1219 行 markdown,必须先量一下再决定
 「整份计划进 input」还是「input 只放引用」。
+
+---
+
+## 活集群实测(2026-09-24,Temporal 1.29.7 @ ap-northeast-2)
+
+离线比对通过的东西,实测挂了两个。**两个都不是路径或字段名错,
+所以离线比对结构上不可能发现它们。**
+
+### ❌ 缺陷一:`describe_task_queue` 每次调用都失败
+
+代码发 `taskQueueType=WORKFLOW`(schema 的枚举值直接上线)。逐个实测:
+
+| 发送值 | 服务端反应 |
+|---|---|
+| `WORKFLOW` | ❌ `{"code":3,"message":"parsing field \"task_queue_type\": \"WORKFLOW\" is not a valid value"}` |
+| `TASK_QUEUE_TYPE_WORKFLOW` | ✅ 正常 |
+| `1` | ✅ 正常 |
+| `ACTIVITY` | ❌ 同样被拒 |
+| `TASK_QUEUE_TYPE_ACTIVITY` | ✅ 正常 |
+
+**线上格式要带 `TASK_QUEUE_TYPE_` 前缀。** 已修:对外入参保持
+友好的 `WORKFLOW`/`ACTIVITY`,只在发请求时翻译。
+
+### ❌ 缺陷二:没测到 poller 却报「0 个」
+
+实测到的两种形状:
+
+```
+有 worker 在听   keys: [effectiveRateLimit, pollers, versioningInfo]   pollers=[{...}]
+没有 worker      keys: [effectiveRateLimit, versioningInfo]            ← pollers 字段整个不存在
+```
+
+原代码 `(data.pollers ?? [])` 然后报 `Active Pollers: 0` ——
+**把「什么都没测到」写成「测到的值是 0」**,本项目已犯三次的那一类。
+
+更要紧的是它把三种需要不同动作的状态压成同一句话:
+
+| 真实状态 | 该做什么 |
+|---|---|
+| 队列名拼错(队列不存在) | 改名字 |
+| 队列存在、无待办、无 worker | 平时正常 |
+| **有 workflow 在 `RUNNING` 等着,但没有 worker** | **切换卡死,救火** |
+
+第三种是实测出来的,不是设想:往 `dr-plan-queue` 起一个 workflow
+(该队列无 worker),workflow 状态是 `RUNNING`,而
+`describe_task_queue` 仍然不返回 `pollers` 字段。
+
+已修:字段缺失时如实说 `not reported by server`,并列出三种不可区分
+的状态、指向 `list_workflows` 作进一步区分。
+
+### ✅ 实测通过的
+
+| 工具 | 端点 | 结果 |
+|---|---|---|
+| `get_cluster_info` | `/api/v1/cluster-info` | serverVersion 1.29.7、clusterId、建议升级到 1.32.0 |
+| — | `/api/v1/system-info` | 11 项 capabilities,含 **`supportsSchedules: true`** |
+| `list_namespaces` | `/api/v1/namespaces` | `default`、`temporal-system` |
+| `describe_namespace` | `/api/v1/namespaces/default` | `retentionTtl=86400s`;**无 `limits`** |
+| `list_workflows` | `GET .../workflows` | 空集群返回 `{}`(无 `executions` 键),代码的 `?? []` 处理得对 |
+| `start_workflow` | `POST .../workflows/{id}` | ✅ 返回 `runId` / `started:true` / `status:RUNNING` |
+
+### ⚠️ 一条给阶段 D 的硬事实
+
+**`start_workflow` 在没有任何 worker 的情况下也会成功**,返回
+`started: true`、`status: WORKFLOW_EXECUTION_STATUS_RUNNING`。
+
+那个 workflow 会一直挂在那里等一个不存在的 worker,直到保留期
+(1 天)到点被清掉。所以:
+
+> **「`start_workflow` 成功」不等于「切换正在进行」。**
+
+这与本项目的核心立场同型:零流量与健康在指标上无法区分。
+阶段 D 的切换 workflow 必须在启动后**独立确认有 worker 接单**
+(`describe_task_queue` 看 `pollers` 字段是否存在),
+而不能把 `started: true` 当作进展。
 
 ### 方法与路径比对:抽查三处都对
 
