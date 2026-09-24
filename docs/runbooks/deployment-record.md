@@ -758,6 +758,255 @@ S3 桶存 141KB 代码包,可忽略。
 
 ---
 
+
+### 4.8 DR worker(`dr-worker.service` @ Temporal 那台 EC2)
+
+**日期**:2026-09-24
+
+#### ① 目标
+
+在 Temporal 服务端同机跑起执行切换步骤的 Temporal worker,并把
+「起 workflow → 走到决策点 → 人工 signal 放行 → 收尾」这条链在 dry_run 下
+跑通。
+
+**worker 放这台而非韩国/东京 EKS 的理由**:切换时 EKS 可能正是要被操作的
+对象,放上面就出现「执行切换的东西依赖被切换的东西」;且守夜灯站点常态
+`desired=0`,worker 放上面等于平时不存在。代价是这台成了单点,**已知取舍**。
+
+#### ② 前置状态
+
+| 项 | 值 | 怎么查到的 |
+|---|---|---|
+| 宿主系统 `python3` | **3.9.25** | 实测。temporalio 要 ≥3.10,所以不能用 |
+| 谁依赖系统 python3 | `aws-cfn-bootstrap`、`ec2-utils` | `rpm -q --whatrequires`,**所以不许替换它** |
+| 仓库可装 | python3.11 / 3.12 / 3.13 / **3.14** | `dnf list available`,最新是 3.14.7,**不是 3.17**(不存在) |
+| temporalio | 1.33.0,`requires_python >=3.10` | PyPI JSON API |
+| 轮子 | `cp310-abi3` + `manylinux_2_17_aarch64` | 同上;本机是 aarch64 |
+| gRPC 端口 | **7233** 在听 | `ss -lntp`。7243 是 HTTP API、8080 是 UI |
+
+#### ③ 实际执行的命令
+
+```bash
+# 事务预演：先证明是增量而非替换（关键，系统 python3 不能动）
+sudo dnf install --assumeno python3.12 python3.12-pip
+#   → Install 6 Packages，零 Removing / Replacing
+
+sudo dnf install -y python3.12 python3.12-pip
+sudo python3.12 -m venv /opt/dr-worker/venv
+sudo /opt/dr-worker/venv/bin/pip install temporalio==1.33.0 boto3==1.40.47
+
+# 代码与 systemd 单元经 SSM base64 下发到 /opt/dr-worker/app/
+sudo systemctl enable --now dr-worker
+
+# 计划正文的只读权限（独立栈，见 ⑤ 为什么不改 02）
+aws cloudformation deploy --region ap-northeast-2 \
+  --stack-name dr-korea-worker-permissions \
+  --template-file infra/dr-korea/07-worker-permissions.yaml \
+  --capabilities CAPABILITY_NAMED_IAM
+```
+
+#### ④ 生效核实
+
+**每一层都用与部署不同的手段。**
+
+```
+并存             系统 python3 仍是 3.9.25 / 新装 3.12.14
+未被动过          rpm -q python3 aws-cfn-bootstrap ec2-utils 三个都在
+依赖可用          不看 pip 说成功，而是 import：boto3 1.40.47 可导入
+能连 Temporal     不看端口在听，而是真连：gRPC 已连上，namespace = default
+服务在跑          不看 systemctl start 的返回，看 is-active = active
+```
+
+**决定性核实:任务队列上出现了 poller。** 这同时给阶段 B 那个判据补上了
+完整的前后对照:
+
+```
+worker 存在前   keys: [effectiveRateLimit, versioningInfo]            ← 无 pollers 字段
+worker 存在后   keys: [effectiveRateLimit, pollers, versioningInfo]   pollers n=1
+                identity = 37109@ip-10-20-1-125.ap-northeast-2.compute.internal
+```
+
+**端到端(第三次,前两次的问题见 ⑤):**
+
+```
+status                     COMPLETED
+WORKFLOW_TASK_TIMED_OUT    0 个
+fetch_plan_body            verified=True   size 411, etag 3070760a…
+scale_up_nodegroup         verified=True   current_scaling desiredSize=0
+promote_database           verified=True   decision=ordered，东京 is_writer=true
+verify_step                verified=None   「dry_run：未执行提升 —— 这不是失败」
+```
+
+决策点两个方向都验过:非法裁决 `"bogus-value"` 被忽略(query 仍显示
+`decision: null`、仍在等),**没让 workflow 崩**;合法裁决 `ordered` 才推进。
+
+#### ⑤ 失败过的做法
+
+**① 用户提出「把宿主升到 3.17」—— 那个版本不存在。** 2026-09 最新正式版是
+3.14(3.15 要到当年 10 月)。而且**更要紧的是不能「升级」系统 Python**:
+`aws-cfn-bootstrap` 与 `ec2-utils` 依赖 3.9,替换掉会弄坏 CFN 的信号机制。
+正确做法是并装一个额外解释器,AL2023 正是为此把它们打成可共存的包。
+用 `dnf install --assumeno` 预演确认了零 Removing。
+
+**② `max_concurrent_workflow_tasks=1` 造成队头阻塞。** 我当时想的是
+「一次只做一个切换」,但**workflow task 并发 ≠ 并发切换数**:workflow task
+是「推进一步状态机」的短任务。实测后果:队列上有一个永久失败的 workflow
+(type 没注册,Temporal 无限重试它的 workflow task)时,唯一槽位被占住,
+真切换被拖 3 分钟并留下 `WORKFLOW_TASK_TIMED_OUT` —— 把
+`workflowTaskTimeout` 从 10s 调到 60s **照样超时**。
+改成 10 后同样的测试 TIMED_OUT 降为 **0 个**。
+「一次只做一个切换」的正确机制是 **workflow ID**(同 ID 运行中时默认重用
+策略直接拒绝第二次启动)。
+
+**③ 差点让 CFN 替换掉那台 Temporal 实例。** 给 worker 加 S3 只读权限时,
+我先改了 `02-temporal.yaml` 的角色。变更集预览报:
+
+```
+TemporalInstance  AWS::EC2::Instance  Modify  Replacement: Conditional
+  Target: UserData   RequiresRecreation: Conditionally
+```
+
+**真因:线上栈的 UserData 与模板早已不一致。** 本会话早期修过 02 的
+UserData(口令被 `set -x` 打进日志那处、编造的镜像 tag),但当时是用 SSM
+直接修活实例,**栈从未重新部署**。那台实例上跑着 Temporal 的 PostgreSQL
+容器和 worker —— 被替换等于数据和服务一起没了。
+
+**变更集没有执行。** 改用 `AWS::IAM::ManagedPolicy`(它的 `Roles` 收角色
+**名字**,所以新栈能把策略挂到一个它并不拥有的角色上),完全不触碰 02。
+⚠️ **UserData 的漂移仍在**:只要没处理,02 这个栈就不能碰。
+
+**④ 两次猜错 HTTP API 的返回格式。** 以为完成事件的结果是
+`{payloads:[{metadata,data}]}`,实际 `result` 是**已解码的对象列表**
+(HTTP API 把 `json/plain` 直接解开了)。
+
+**⑤ JMESPath 也不接受非 ASCII 键名** —— `--query '{资源:...}'` 报
+`Unknown token 资`。本会话第二次犯同一个错(第一次是 EC2 的
+`GroupDescription`)。
+
+#### ⑥ 回滚
+
+```bash
+# ⚠️ 销毁类命令 —— 按纪律只记录不自动执行
+sudo systemctl disable --now dr-worker
+sudo rm -rf /opt/dr-worker /etc/systemd/system/dr-worker.service
+aws cloudformation delete-stack --region ap-northeast-2 \
+  --stack-name dr-korea-worker-permissions
+```
+
+并装的 python3.12 可以留着,它不影响任何现有东西。
+
+#### ⑦ 真切换还缺什么
+
+**刻意没给的写权限**:`eks:UpdateNodegroupConfig`、
+`rds:FailoverGlobalCluster`、`elasticloadbalancing:*`、
+`route53:ChangeResourceRecordSets`。按步骤逐个放开;
+`FailoverGlobalCluster` 的「有序 vs `--allow-data-loss`」已做成需 signal
+放行的决策点。
+
+---
+
+
+### 4.9 消除 `dr-korea-temporal` 的 UserData 漂移
+
+**日期**:2026-09-24
+
+#### ① 目标
+
+4.8 节留下的债:线上栈与模板不一致,任何对该栈的 deploy 都会触发
+`TemporalInstance ... Replacement: Conditional`,而那台实例跑着 Temporal 的
+PostgreSQL 和 DR worker。目标是消除漂移且**不丢数据**。
+
+#### ② 前置状态 —— 漂移是两层,不是一层
+
+| 层 | 线上栈 | 模板 |
+|---|---|---|
+| 参数 `TemporalVersion` | **1.29.0**(不存在的 tag) | 1.29.7 |
+| 参数 `TemporalUiVersion` | **2.42.0**(不存在的 tag) | 2.54.1 |
+| UserData 正文 | 无 `set +x` 保护(会把口令打进日志) | 有 |
+
+而**实际跑着的容器**是 1.29.7 / 2.54.1(当初用 SSM 直接改的)。三者互不一致。
+后果:一旦实例被真正重建,既会重新泄漏口令,又会因 tag 不存在而起不来。
+
+#### ③ 关键判断:重启还是替换 —— 查官方文档而不是猜
+
+`AWS::EC2::Instance` 的 `UserData`:
+
+> If the root volume is an **EBS** volume and you update user data, CloudFormation
+> **restarts** the instance. If the root volume is an instance store volume,
+> the instance is **replaced**.
+> *Update requires*: Some interruptions
+
+实测该实例 `RootDeviceType = ebs` → **重启**。变更集里的 `Conditional`
+指的就是「取决于根卷类型」,不是「可能会替换」。
+
+这条查清之后,整个风险评估反转了:原以为必须重建主机,实际只是一次重启。
+
+#### ④ 实际执行的命令
+
+```bash
+# 先让 UserData 幂等（理由见 ⑤②）
+# 然后两次 deploy —— 第二次必须显式覆盖参数，理由见 ⑤①
+
+aws cloudformation deploy --region ap-northeast-2 --stack-name dr-korea-temporal \
+  --template-file infra/dr-korea/02-temporal.yaml \
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM --no-execute-changeset
+# 看过变更集确认只有 TemporalInstance 一项后才执行
+aws cloudformation execute-change-set --region ap-northeast-2 --change-set-name <arn>
+
+aws cloudformation deploy --region ap-northeast-2 --stack-name dr-korea-temporal \
+  --template-file infra/dr-korea/02-temporal.yaml \
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+  --parameter-overrides TemporalVersion=1.29.7 TemporalUiVersion=2.54.1 \
+  --no-execute-changeset
+aws cloudformation execute-change-set --region ap-northeast-2 --change-set-name <arn>
+```
+
+#### ⑤ 失败过的做法
+
+**① 以为模板的 `Default` 会修正已存在栈的参数值 —— 不会。**
+第一次 deploy 后参数**仍是 1.29.0 / 2.42.0**:`aws cloudformation deploy`
+不带 `--parameter-overrides` 时**沿用现有值**(UsePreviousValue),
+模板的 `Default` 只对新栈生效。所以漂移只修了一半,必须显式覆盖。
+
+**② 差点因为 UserData 重跑而换掉数据库口令。** PostgreSQL 的数据是
+bind mount 到 `/opt/temporal/pgdata`,库已用旧口令初始化过;原来的 UserData
+无条件 `openssl rand` 生成新口令写进 `.env`,一旦重跑就让 Temporal 连不上
+自己的库,而且报的是**认证失败**,看起来像配置写错而不像「口令被换了」。
+已改成 `if [ ! -f /opt/temporal/.env ]` 守卫 —— cloud-init 的 user-data 是
+「每实例一次」所以重启本不会重跑,但把安全性押在那个语义上不值得。
+
+#### ⑥ 生效核实
+
+**零数据丢失,每一层都用与部署不同的手段。**
+
+| 判据 | 改动前 | 两次重启后 |
+|---|---|---|
+| 实例 ID | `i-06f0a3e4961b8061e` | **同一个** |
+| 私有 IP | `10.20.1.125` | **同一个**(AgentCore 的 TEMPORAL_ADDRESS 不用改) |
+| `LaunchTime` | 10:28:09 | 14:27:29 → 证实重启过 |
+| **`clusterId`** | `811ac051-857b-46e8-8762-34ed81c34c74` | **完全一致 → 库没被重建** |
+| `pgdata` | — | 73M,数据在 |
+| `.env` 修改时间 | 10:38:10 | **仍是 10:38:10 → UserData 没重跑** |
+| `temporal` / `dr-worker` | active | **自己回来的**,均 active |
+| 容器 | 1.29.7 / 2.54.1 | 不变 |
+| worker | poller n=1 | **n=1,自己重新接单** |
+| 引导日志里的口令 | 0 次 | 0 次 |
+| AgentCore→Temporal | 通 | **通,Cluster ID 一致** |
+
+参数值现已是 `1.29.7` / `2.54.1`,**漂移彻底消除**。
+
+#### ⑦ 剩余的同类债
+
+`/opt/dr-worker` 仍是用 SSM 手工装的,**不在 IaC 里**。重启能保留它,
+但真正重建实例时它不会自动回来。要彻底消除这类漂移,worker 的
+provisioning 应当进 UserData 或做成独立的配置管理步骤。
+
+另外 `PrivateIpAddress` 在 `createOnlyProperties` 里 —— 想把
+`10.20.1.125` 固定进模板(免得重建后 AgentCore 的地址失效)**本身就要求替换**,
+所以那件事必须和「有计划的重建」一起做。
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)

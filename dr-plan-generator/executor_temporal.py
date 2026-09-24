@@ -137,6 +137,23 @@ class TemporalExecutor(ExecutorBase):
         的注释(那些字段的线上名都对活服务端实测过)。
         """
         return {
+            # ⚠️ workflow ID 是「一次只做一个切换」的**唯一**保障机制。
+            #
+            # 同一个 ID 在运行中时，Temporal 默认的重用策略会直接拒绝第二次
+            # 启动（WorkflowExecutionAlreadyStarted）。所以这里刻意**不传**
+            # id_reuse_policy —— 传 ALLOW_DUPLICATE 会把这层互斥拆掉。
+            #
+            # 2026-09-24 的教训：我曾以为把 worker 的
+            # max_concurrent_workflow_tasks 设成 1 就等于「一次一个切换」。
+            # 那是错的：那个数限制的是「推进状态机的短任务」，防不住两个
+            # 不同 ID 同时跑，却造成队头阻塞 —— 实测一个永久失败的 workflow
+            # 就能把真切换拖三分钟。
+            #
+            # 代价要说清楚：按 plan_ref 取 ID 意味着**两份不同的计划仍可并发**。
+            # 若要全局单例（同一时刻整个站点只允许一个切换），把 ID 改成固定
+            # 前缀 + 目标 region，例如 f"dr-failover-{region}"。
+            # 现在不改，是因为「同一份计划不许重复触发」已覆盖误重试这个
+            # 主要风险，而跨计划并发需要先定义「哪些计划互斥」。
             "workflow_id": f"dr-failover-{plan_ref}",
             "workflow_type": "DrFailoverWorkflow",
             "task_queue": self.task_queue,
