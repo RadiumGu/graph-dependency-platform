@@ -1591,6 +1591,96 @@ pytest **退出码 1**(实测,绕开管道取的)。两条防线针对不同环�
 
 ---
 
+
+### 4.16 带 Ready 核实的扩容真演练 + 缩容改看 ASG 生命周期
+
+**日期**:2026-09-24
+
+#### ① 扩容真演练(用新的 Ready 核实重跑)
+
+上一次演练时 `count_ready_nodes` 还不存在,那次的 `verified=True` 其实只证明了
+ASG 扩容成功。这次拿到了真证据:
+
+```
+step=scale_up_nodegroup
+    executed=True  verified=True
+    detail={"ready_k8s_nodes": 2, "running_nodes": 2}
+```
+
+`WORKFLOW_TASK_TIMED_OUT` 0 个、`ACTIVITY_TASK_FAILED` 0 个。
+从 scheduled 到 completed **实测 48 秒**(含 `update_nodegroup_config`、
+等 EC2 running、等节点 Ready)。
+
+**独立核实**(与 workflow 不同的手段 —— SSM 上直查 k8s API):
+
+```
+HTTP 200   节点总数: 2
+  ip-10-20-1-166.ap-northeast-2.compute.internal  Ready=True
+  ip-10-20-2-38.ap-northeast-2.compute.internal   Ready=True
+```
+
+两条路径一致。`fetch_plan_body` 因 `plan_ref` 不存在而 `verified=False` +
+「404 Not Found」—— 那是正确的:我们**测了**且确实不在,所以是 False 而非
+inconclusive。
+
+#### ② 缩容核实必须看 ASG 生命周期(活环境并排证据)
+
+缩到 `desired=0` 之后:
+
+```
+ASG 层:  {'Terminating:Wait': 1}          ← 真相
+EC2 层:  i-001ffcffddbe4b08b  running     ← 分不出来
+         i-0555836edddf0d90e  terminated
+```
+
+排空钩子 `Terminate-LC-Hook` 的 `HeartbeatTimeout=1800`(30 分钟)、
+`DefaultResult=CONTINUE`。**一台正在优雅排空的实例和一台缩容失败卡住的实例,
+在 EC2 那一层长得完全一样。** 用 EC2 State 做判据,会把「正常排空中」报成
+「缩容失败」,或者更糟:把「卡住了」报成「还在排空,再等等」。
+
+三态也在活环境验过:节点组名给错 → `None` + 原因,**不是空字典**
+(空字典会被读成「一台都没有了」)。
+
+#### ③ 新增的权限与它的 `Resource: '*'`
+
+`autoscaling:DescribeAutoScalingGroups`,**只能** `Resource: '*'`:
+
+服务授权参考(`list_autoscaling.html` 的 Actions 表)里它的「资源类型」列是
+**空的**,也没有任何 condition key —— 对比同页 `DeleteAutoScalingGroup` 是
+`autoScalingGroup*`。空列意味着不支持资源级权限。
+
+这是文档的硬约束,不是放宽标准。门禁的判据因此定成「理由在不在模板里」而不是
+「值是不是 `*`」:直接禁 `*` 会让这条权限根本写不出来,而不留理由会让下一个人
+把它当成「这里可以随便用 `*`」的先例。另有一条断言确保**别的语句仍然不许**
+用 `*`。
+
+线上核实(查 IAM 策略文档而非模板):
+
+```json
+{"Action": ["autoscaling:DescribeAutoScalingGroups"], "Resource": "*"}
+```
+
+#### ④ 本轮踩到的四个坑
+
+| 坑 | 真相 |
+|---|---|
+| `2>/dev/null` 吞掉了 AccessDenied | ASG 查询「返回空」看起来像名字错,实际是**没权限**。自己给自己制造的盲区 |
+| 用记忆里的 ASG 名 | 名字其实没变,但**该现查** —— `eks-<ng>-<uuid>` 的 uuid 随节点组重建而变 |
+| 猜 Temporal REST API 的返回形状 | 我按 gRPC 的 `{payloads:[{data:base64}]}` 写,实际 REST **已解码**,`result` 直接是 list。`AttributeError: 'list' object has no attribute 'get'` |
+| 猜文档 URL slug | `list_amazonec2autoscaling.html` 不存在,真名是 `list_autoscaling.html` |
+
+`deploy` 还因策略有固定名而需要 `CAPABILITY_NAMED_IAM`(不是 `CAPABILITY_IAM`)。
+
+#### ⑤ 回滚
+
+```bash
+# ⚠️ 销毁类命令 —— 只记录不执行
+aws cloudformation delete-stack --region ap-northeast-2 \
+  --stack-name dr-korea-worker-permissions
+```
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)

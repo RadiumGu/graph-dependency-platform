@@ -132,6 +132,31 @@ Resources:
           # 只给 UpdateNodegroupConfig，**不给** UpdateNodegroupVersion
           # （那会滚动替换节点）、不给 DeleteNodegroup、不给 CreateNodegroup。
           # 切换需要的只是改 scalingConfig。
+          # ── ASG 生命周期读取 ────────────────────────────────────────────
+          #
+          # 为什么需要:缩容核实**不能看 EC2 的 State**。2026-09-24 实测:
+          #
+          #     ASG LifecycleState:  Terminating:Wait   ← 真相
+          #     EC2 State:           running            ← 这一层分不出来
+          #
+          # 节点组的排空钩子 Terminate-LC-Hook 的 HeartbeatTimeout=1800
+          # (30 分钟)、DefaultResult=CONTINUE,所以一台正在优雅排空的实例
+          # 和一台缩容失败卡住的实例,在 EC2 那一层长得完全一样。
+          #
+          # ⚠️ 为什么 Resource 是 *:这不是放宽标准,是这个 action 的**硬约束**。
+          # 服务授权参考(list_autoscaling.html 的 Actions 表)里
+          # DescribeAutoScalingGroups 的「资源类型」列是**空的**,
+          # 也没有任何 condition key —— 对比同页的 DeleteAutoScalingGroup
+          # 是 autoScalingGroup*。空列意味着不支持资源级权限,只能写 *。
+          #
+          # 风险边界:它是 List 级、纯读,泄露的是本账号本 region 的 ASG 拓扑,
+          # 不含凭据也不能改任何东西。
+          - Sid: ReadAsgLifecycleState
+            Effect: Allow
+            Action:
+              - autoscaling:DescribeAutoScalingGroups
+            Resource: '*'
+
           - Sid: ScaleUpPilotLightNodegroup
             Effect: Allow
             Action:

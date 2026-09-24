@@ -68,6 +68,60 @@ _GLOBAL_CLUSTER = os.environ.get("DR_GLOBAL_CLUSTER", "petsite-global")
 _SECONDARY_CLUSTER_ARN = os.environ.get("DR_SECONDARY_CLUSTER_ARN", "")
 
 
+def count_asg_by_lifecycle() -> tuple[dict[str, int] | None, str | None]:
+    """按 LifecycleState 统计节点组 ASG 里的实例。返回 (计数字典, 无法判断的原因)。
+
+    ## 为什么缩容核实**不能看 EC2 的 State**
+
+    2026-09-24 实测,缩到 desired=0 之后:
+
+        ASG LifecycleState:  Terminating:Wait   ← 真相
+        EC2 State:           running            ← 这一层分不出来
+
+    节点组的排空钩子 `Terminate-LC-Hook` 的 `HeartbeatTimeout=1800`
+    (30 分钟)、`DefaultResult=CONTINUE`。所以**一台正在优雅排空的实例和
+    一台缩容失败卡住的实例,在 EC2 那一层长得完全一样** —— 都是 `running`。
+    用 EC2 State 做判据,会把「正常排空中」报成「缩容失败」,
+    或者更糟:把「卡住了」报成「还在排空,再等等」。
+
+    ## ASG 名字要现查,不能写死
+
+    名字形如 `eks-<nodegroup>-<uuid>`,那个 uuid 是节点组创建时生成的。
+    节点组一旦重建,名字就变。所以从 `describe_nodegroup` 的
+    `resources.autoScalingGroups[].name` 读 —— 本轮就因为用了记忆里的名字
+    而拿到空结果(实际是 AccessDenied 被 `2>/dev/null` 吞了)。
+    """
+    try:
+        eks = _boto3().client("eks", region_name=_REGION)
+        ng = eks.describe_nodegroup(
+            clusterName=_EKS_CLUSTER, nodegroupName=_NODEGROUP
+        )["nodegroup"]
+        groups = (ng.get("resources") or {}).get("autoScalingGroups") or []
+        if not groups:
+            return None, "describe_nodegroup 没有返回 autoScalingGroups"
+        asg_name = groups[0]["name"]
+    except Exception as e:  # noqa: BLE001
+        return None, f"查节点组的 ASG 名失败：{type(e).__name__}: {e}"
+
+    try:
+        asg = _boto3().client("autoscaling", region_name=_REGION)
+        resp = asg.describe_auto_scaling_groups(AutoScalingGroupNames=[asg_name])
+        groups = resp.get("AutoScalingGroups") or []
+        if not groups:
+            # 名字对但查不到 → 说不出实例状态，是 inconclusive 而不是「零台」。
+            return None, f"ASG {asg_name} 查不到（名字可能已变）"
+    except Exception as e:  # noqa: BLE001
+        # ⚠️ 返回 None 而不是空字典。空字典会被读成「一台都没有了」，
+        # 而实际上我们什么都没测到。本项目已四次犯这类错。
+        return None, f"查 ASG 生命周期失败：{type(e).__name__}: {e}"
+
+    counts: dict[str, int] = {}
+    for inst in groups[0].get("Instances") or []:
+        state = inst.get("LifecycleState", "Unknown")
+        counts[state] = counts.get(state, 0) + 1
+    return counts, None
+
+
 def _boto3():
     """延迟导入 boto3。
 
