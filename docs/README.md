@@ -30,7 +30,7 @@ docs/
 ├── README.md          ← 你在这里
 ├── design/     (11)   核心设计说明：为什么这样设计，新人必读
 ├── lessons/    (26)   实测教训与踩坑记录：防止重犯，长期价值最高
-├── runbooks/    (3)   可照着执行的作业手册
+├── runbooks/    (4)   可照着执行的作业手册
 ├── migration/   (3)   Strands 迁移的时间线与 ADR（历史决策记录）
 └── (根目录)     (3)   dependency-definition / prd / tdd
 ```
@@ -106,6 +106,7 @@ JSON。新人不必读，但它们**不能随意删**——`scripts/emit_resilie
 | [`coverage-push-runbook.md`](runbooks/coverage-push-runbook.md) | 依赖证据覆盖率推进手册。**含一条重要结论：IAM deny 手段的上限是 14/47，剩余边是「可观测性缺口」而非「验证做得不够」** |
 | [`crossvpc-loadgen-internal-alb.md`](runbooks/crossvpc-loadgen-internal-alb.md) | 跨 VPC 内网压测入口搭建 |
 | [`06-展示界面实验方式说明.md`](runbooks/06-展示界面实验方式说明.md) | 展示界面两种运行模式的操作说明 |
+| [`deployment-record.md`](runbooks/deployment-record.md) | **部署记录手册 —— 记「实测走通的那一条」**。规矩是「一次部署没有记录就不算完成」，每次须记七项（目标 / 前置状态 / 实际命令 / 生效核实 / 失败过的做法 / 回滚 / 日期）。已收录三次：Streamlit 展示站（`git pull` 在目标机必然失败，须单文件 checkout）、Lambda 层（botocore 静默剥字段）、Cron（command 模式在本宿主不可用，核实必须走真实触发路径） |
 
 ## migration/ — Strands 迁移记录
 

@@ -25,6 +25,18 @@ def make_dr_executor(dry_run: bool = True) -> ExecutorBase:
     if not effective_dry_run:
         logger.warning("⚠️ DR Executor dry_run=False — 将执行真实 DR 操作！")
 
+    # ── 2026-09-24：加 temporal 引擎 ──────────────────────────────────────
+    #
+    # DR_EXECUTOR_ENGINE=temporal 时把执行交给 Temporal（worker 跑在
+    # Temporal 同一台 EC2 上）。理由见 executor_temporal.py 的模块说明。
+    #
+    # ⚠️ 刻意**不做降级**：engine 指定了 temporal 却不可用时直接抛，
+    # 不回退到 strands。上面那段 direct 回退的教训就是「静默降级会让
+    # 错误路径悄悄变成实际路径长达五个月」——同一个坑不踩第二次。
+    if engine == "temporal":
+        from executor_temporal import TemporalExecutor
+        return TemporalExecutor(dry_run=effective_dry_run)
+
     # ── 2026-09-20：去掉 direct 回退，只保留 strands ──────────────────────
     #
     # 那个回退在生产上**一直是实际路径**：线上包里没装 strands
