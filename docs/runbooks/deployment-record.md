@@ -164,12 +164,101 @@ md5 变了只证明**文件**换了,不证明**页面渲染正确**。本项目�
 
 ---
 
-## 四、待记录(本轮工作会往这里追加)
+## 四、韩国灾备站点(ap-northeast-2)—— 逐步记录中
 
-下列部署完成后**必须**按上面七项补进本文件,否则不算完成:
+### 4.1 主站 Aurora 的 ACU 下限:0.5 → 1
 
-- [ ] Temporal 服务端(方案待定:自建 vs Temporal Cloud)
-- [ ] `temporal-mcp` → AgentCore(注意它是 Node,与 Python 的 `graph_mcp` 托管形态可能不同)
-- [ ] 韩国(ap-northeast-2)守夜灯灾备站点 —— 部署前须先经用户确认清单
+**日期**:2026-09-24
 
-计划与阶段依赖见 `todo/TEMPORAL-DR-PLAN_20260924.md`。
+**① 目标**:ap-northeast-1 的 Aurora 集群
+`serviceseks2-databaseb269d8bb-efjeyzicx2ak`(Aurora PostgreSQL 16.11,
+Serverless v2)。**这是动生产。**
+
+**为什么动**:要把它变成 Aurora 全局数据库的主集群。AWS 建议
+Serverless v2 用于全局数据库时**主 region 最小容量 8 ACU**,而当时是 0.5。
+用户权衡后定为 **1** —— 提一档留余量,但不按 8 那个建议值
+(8 ACU 的保底费用约 1,168 USD/月,量级超过灾备站点其余所有资源之和)。
+
+**② 前置状态**:
+
+    ServerlessV2ScalingConfiguration = { MinCapacity: 0.5, MaxCapacity: 4.0 }
+    Status = available
+    BackupRetentionPeriod = 1      ← 用户明确要求不变
+    StorageEncrypted = false       ← 未动；⚠️ 以后要加密**不能原地开启**
+    DeletionProtection = false
+
+**③ 实际执行的命令**:
+
+    aws rds modify-db-cluster --region ap-northeast-1 \
+      --db-cluster-identifier serviceseks2-databaseb269d8bb-efjeyzicx2ak \
+      --serverless-v2-scaling-configuration MinCapacity=1,MaxCapacity=4.0 \
+      --apply-immediately
+
+⚠️ Serverless v2 的容量范围调整是**在线操作**,不是实例替换,无需停机。
+
+**④ 生效核实**(用与执行**不同**的手段):
+
+    aws rds describe-db-clusters ... \
+      --query 'DBClusters[0].ServerlessV2ScalingConfiguration'
+        → { MinCapacity: 1.0, MaxCapacity: 4.0 }      ✅ 独立 describe 确认
+
+⚠️ **配置生效 ≠ 容量下限真的抬起来了。** CloudWatch 的
+`AWS/RDS ServerlessDatabaseCapacity`(维度 `DBClusterIdentifier`)改动后要
+几分钟才出新数据点;改动瞬间取到的 `Minimum 0.5` 是**改动之前**的数据点,
+不能当成失败。
+
+实测的完整证据(period=60s,`Minimum` 才是下限的证据,`Average` 不是):
+
+    09:49  Min 0.5   Avg 0.500     改动前
+    09:50  Min 0.5   Avg 0.500     改动前
+    09:51  Min 0.5   Avg 0.500     改动前
+    09:52  Min 0.5   Avg 0.500     改动前
+    09:53  Min 0.5   Avg 0.796     过渡（modify 发出）
+    09:54  Min 1.0   Avg 3.354     ✅ 下限已生效
+
+**约 1 分钟生效**,集群状态从 `modifying` 回到 `available`。
+09:54 的 `Average 3.354` 是扩容动作本身造成的瞬时抬升,不是稳态负载。
+
+**⑤ 失败过的做法**:
+
+| 做法 | 结果 |
+|---|---|
+| 以 `modify-db-cluster` 的返回值当生效证据 | 那是执行命令自己的输出,不构成独立核实 |
+| 立刻查 CloudWatch ACU 指标 | 取到改动前的数据点(0.5),会被误读成没生效 |
+| `aws pricing get-products` 取准确 ACU 单价 | `usagetype` 格式猜错,查不到。改用公开单价口径并标注需人工复核 |
+| 查 `AWS/ApplicationELB RequestCount` **不带维度** | 返回空 —— 该命名空间不带维度聚合查不出东西,不是业务真的没流量 |
+
+**⑥ 回滚**:
+
+    aws rds modify-db-cluster --region ap-northeast-1 \
+      --db-cluster-identifier serviceseks2-databaseb269d8bb-efjeyzicx2ak \
+      --serverless-v2-scaling-configuration MinCapacity=0.5,MaxCapacity=4.0 \
+      --apply-immediately
+
+同样在线。⚠️ **但若此时已建成全局数据库,降回 0.5 会让跨 region 复制更易
+出现延迟 —— 回滚 ACU 前先确认全局数据库状态。**
+
+**⑦ 判据教训:判断线上资源规格必须查活资源。**
+
+CDK 源码 `PetAdoptions/cdk/pet_stack/lib/services-eks.ts:159` 写着
+`InstanceClass.T4G / InstanceSize.MEDIUM`,我据此断定主站是 burstable、
+Aurora 全局数据库不允许 burstable、**必须替换生产实例** —— 全错。
+`describe-db-instances` 实测两个实例都是 `db.serverless`,
+而 Serverless v2 本来就支持全局数据库。
+
+后果的形状值得记:那个错误结论让我给用户报了一份**贵 3 倍**的成本
+(~529/月 vs 实际 ~170/月),还让用户以为要承担一次生产实例替换的中断。
+**IaC 源码写的是部署意图,活资源才是事实,两者会漂移。**
+
+---
+
+## 五、待记录
+
+- [ ] 韩国 VPC / 私有子网 / NAT / SSM 端点
+- [ ] Temporal EC2(`t4g.large`)+ docker compose 形态的 Temporal server
+- [ ] 韩国 EKS(控制面 private-only,节点组 `desired=0`)
+- [ ] Aurora 全局数据库(主站转为全局主集群 + 韩国 `db.serverless` 从集群)
+- [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore
+
+**韩国侧不建 DeepFlow**(用户决定),**不建 Neptune**(用户要求)。
+清单见 `todo/KOREA-DR-MANIFEST_20260924.md`。
