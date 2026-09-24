@@ -252,10 +252,145 @@ Aurora 全局数据库不允许 burstable、**必须替换生产实例** —— 
 
 ---
 
+### 4.2 韩国网络栈(`dr-korea-network`)
+
+**日期**:2026-09-24
+
+**① 目标**:ap-northeast-2,CloudFormation 栈 `dr-korea-network`
+(模板 `infra/dr-korea/01-network.yaml`)。
+
+**② 前置状态**:
+
+    VPC 数 = 1（只有默认 VPC）    NAT = 0    CFN 栈 = 0
+
+**③ 实际执行的命令**:
+
+    aws cloudformation deploy --region ap-northeast-2 \
+      --stack-name dr-korea-network \
+      --template-file infra/dr-korea/01-network.yaml \
+      --no-fail-on-empty-changeset
+
+**④ 生效核实**(不看 deploy 的返回,查路由表这个**独立**事实):
+
+    子网                          默认路由                  自动公网IP
+    dr-korea-public-nat-only     igw-09dc9744704d1309b     False
+    dr-korea-private-a           nat-0582007e8f8b419f5     False     ← NAT 不是 IGW
+    dr-korea-private-c           nat-0582007e8f8b419f5     False     ← NAT 不是 IGW
+
+    三个 SSM 端点全部 available，PrivateDnsEnabled = True
+
+**这才是「零公网入站」的证据** —— 私有子网的默认路由指向 NAT 而非 IGW,
+且不自动分配公网 IP。栈建成本身证明不了这一点。
+
+产出:`vpc-0238efd50c0bf0dac`、`subnet-0f599ec0925b9158b`(a)、
+`subnet-0ad20a5cd85143dff`(c)、NAT EIP **3.37.176.45**(本站点唯一公网 IP,仅出站)。
+
+**⑥ 回滚**:`aws cloudformation delete-stack --region ap-northeast-2 --stack-name dr-korea-network`
+(须先删依赖它的栈 —— 导出值被引用时删不掉)
+
+---
+
+### 4.3 Temporal 服务端(`dr-korea-temporal`)
+
+**日期**:2026-09-24
+
+**① 目标**:`i-06f0a3e4961b8061e`(`t4g.large`,私有子网,无公网 IP,无密钥对),
+私有 IP `10.20.1.125`。Temporal 1.29.7 + PostgreSQL 16 + UI 2.54.1,docker compose。
+
+**③ 实际执行的命令**:
+
+    aws cloudformation deploy --region ap-northeast-2 \
+      --stack-name dr-korea-temporal \
+      --template-file infra/dr-korea/02-temporal.yaml \
+      --capabilities CAPABILITY_IAM \
+      --no-fail-on-empty-changeset
+
+**④ 生效核实**(四层,**最后一层才是证据**):
+
+    ① SSM 注册        aws ssm describe-instance-information → PingStatus Online
+    ② docker 在跑      systemctl is-active docker → active
+    ③ 三个容器 Up      docker compose ps → postgresql / temporal / temporal-ui 全 Up
+    ④ HTTP API 应答    curl localhost:7243/api/v1/namespaces
+
+④ 的实际返回(这才是 temporal-mcp 能用的证据):
+
+    {"namespaces":[{"namespaceInfo":{"name":"default",
+      "state":"NAMESPACE_STATE_REGISTERED",
+      "capabilities":{"eagerWorkflowStart":true,"syncUpdate":true,"asyncUpdate":true},
+      "supportsSchedules":true},
+      "config":{"workflowExecutionRetentionTtl":"86400s",...
+
+**容器 Up 不是证据** —— 进程活着不等于 API 开着、端口对。
+CFN 报 `Successfully created` 时 Temporal 其实还没起(引导仍在装 docker)。
+
+#### 顺带得到的两个阶段 B 事实
+
+**⑴ 这套服务端的 namespace capabilities 里没有 `workflowPause`,
+也没有 `standaloneActivities`。**
+
+所以 temporal-mcp 的 `pause_workflow` / `unpause_workflow` /
+`list_activities` / `describe_activity` 在这套服务端上**根本不适用** ——
+那种失败不是 temporal-mcp 的缺陷。验证矩阵里预测的第一步
+(「先 describe_namespace 抄 capabilities」)由这次核实免费交付了。
+
+**⑵ `workflowExecutionRetentionTtl = 86400s`(1 天)。**
+
+若把 DR 计划以 workflow 形式「保存」在 Temporal 里,**1 天后历史就被清掉**。
+阶段 D 设计「保存计划」机制时必须正面处理这一点
+(提高保留期 / 用 Schedule 承载 / 计划正文另存)。
+
+**⑤ 失败过的做法 —— 两次,都是我引入的**
+
+**① 编了一个不存在的镜像 tag。** 模板里写 `temporalio/ui:2.42.0`,
+部署直接失败:
+
+    temporal-ui Error manifest for temporalio/ui:2.42.0 not found:
+      manifest unknown: manifest unknown
+
+实际可用的是 **2.54.1**(`temporalio/ui` 的版本线与 server 不同步,
+不能按 server 版本推)。查法:
+
+    curl -s 'https://hub.docker.com/v2/repositories/temporalio/ui/tags?page_size=12&ordering=last_updated'
+
+`auto-setup` 我写的 1.29.0 也不在可用列表里,改用确认存在的 **1.29.7**。
+**教训:镜像 tag 属于「不能猜的值」,和符号名、属性名、路径同一类。**
+
+**② 把 PostgreSQL 口令打进了日志文件。** UserData 开头写了
+`set -euxo pipefail` 并把输出 `tee` 到 `/var/log/temporal-bootstrap.log`,
+于是 `PGPW="$(openssl rand -hex 24)"` 这一行被 `set -x` trace 出来,
+明文口令落进日志:
+
+    + PGPW=d31103e5e8b316156e1566c4098ac0441e62d43ec26c8074
+
+处置(两步,顺序不能反):**先轮换口令,再清日志** ——
+只清日志不轮换等于假装没泄漏。
+
+    set +x; NEW=$(openssl rand -hex 24); umask 077
+    printf 'POSTGRES_PASSWORD=%s\n' "$NEW" > /opt/temporal/.env
+    chmod 600 /opt/temporal/.env; unset NEW
+    sed -i 's/^\+ PGPW=.*/+ PGPW=<REDACTED-rotated>/' /var/log/temporal-bootstrap.log
+    grep -cE '[0-9a-f]{48}' /var/log/temporal-bootstrap.log   → 0  ✅
+
+模板已修:生成秘密的代码段包在 `set +x` … `set -x` 里。
+**教训:`set -x` 与「写秘密」不能共存。开了 trace 又 tee 到文件,
+等于把每个中间值都写进磁盘。**
+
+**③ 另一处隐患顺手补了。** `Type=oneshot` 的默认 `TimeoutStartSec` 是 90s,
+而首次要经 NAT 拉三个镜像(auto-setup 数百 MB)。这次失败得太快(2 秒,
+manifest 不存在)所以没撞上,但迟早会撞。已加 `TimeoutStartSec=900`。
+
+**⑥ 回滚**:
+
+    aws cloudformation delete-stack --region ap-northeast-2 --stack-name dr-korea-temporal
+
+⚠️ **会连带删掉那块 50GiB EBS**(`DeleteOnTermination: true`),
+**workflow 历史在那块盘上**。要留就先导出。
+⚠️ 销毁类操作由用户执行。
+
+---
+
 ## 五、待记录
 
-- [ ] 韩国 VPC / 私有子网 / NAT / SSM 端点
-- [ ] Temporal EC2(`t4g.large`)+ docker compose 形态的 Temporal server
 - [ ] 韩国 EKS(控制面 private-only,节点组 `desired=0`)
 - [ ] Aurora 全局数据库(主站转为全局主集群 + 韩国 `db.serverless` 从集群)
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore

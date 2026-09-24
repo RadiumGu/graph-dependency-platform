@@ -33,12 +33,18 @@ Parameters:
 
   TemporalVersion:
     Type: String
-    Default: 1.29.0
-    Description: 固定版本，不用 latest —— latest 会让两次部署得到不同的东西。
+    Default: 1.29.7
+    Description: >
+      固定版本，不用 latest —— latest 会让两次部署得到不同的东西。
+      ⚠️ 这个值必须是 Docker Hub 上真实存在的 tag。
+      2026-09-24 我填过一个编造的 UI 版本(2.42.0)，部署直接失败在
+      `manifest unknown`。查法：
+      curl -s 'https://hub.docker.com/v2/repositories/temporalio/auto-setup/tags?page_size=12&ordering=last_updated'
 
   TemporalUiVersion:
     Type: String
-    Default: 2.42.0
+    Default: 2.54.1
+    Description: 同上，必须是真实 tag（temporalio/ui 的版本线与 server 不同步）。
 
   ComposePluginVersion:
     Type: String
@@ -158,13 +164,18 @@ Resources:
           chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
           mkdir -p /opt/temporal
-          # PostgreSQL 口令随机生成，不写进模板也不进日志。
-          # 只有本机的容器互相访问，不出实例。
+          # ⚠️ 这一段刻意关掉 set -x。
+          # 上面开了 `set -x` 且把输出 tee 到 /var/log/temporal-bootstrap.log，
+          # 所以任何在 trace 里出现的值都会落进那个日志文件。
+          # 2026-09-24 第一次部署就把 PostgreSQL 口令打进了日志 ——
+          # 生成秘密的代码段必须在 set +x 里。
+          set +x
           PGPW="$(openssl rand -hex 24)"
           umask 077
-          cat > /opt/temporal/.env <<ENVEOF
-          POSTGRES_PASSWORD=$PGPW
-          ENVEOF
+          printf 'POSTGRES_PASSWORD=%s\n' "$PGPW" > /opt/temporal/.env
+          chmod 600 /opt/temporal/.env
+          unset PGPW
+          set -x
 
           cat > /opt/temporal/docker-compose.yml <<'COMPOSEEOF'
           services:
@@ -217,6 +228,9 @@ Resources:
           [Service]
           Type=oneshot
           RemainAfterExit=yes
+          # oneshot 的默认 TimeoutStartSec 是 90s，而首次要经 NAT 拉三个镜像
+          # （auto-setup 数百 MB）——90s 远不够，会被 systemd 杀掉。
+          TimeoutStartSec=900
           WorkingDirectory=/opt/temporal
           ExecStart=/usr/bin/docker compose up -d
           ExecStop=/usr/bin/docker compose down
