@@ -83,6 +83,21 @@ Resources:
             # 的可执行代码包 —— worker 没有任何理由读它，更没理由写。
             Resource: !Sub 'arn:aws:s3:::${PlanBucket}/plans/*'
 
+          # ── 2026-09-24：worker 自己的代码也从 S3 取 ──────────────────
+          #
+          # 原来 /opt/dr-worker 是用 SSM 手工装的，不在 IaC 里。重启能保留，
+          # 但**实例真被重建时它不会自动回来** —— 而 worker 不在时，切换
+          # workflow 会一直排队并且**看起来是 RUNNING**（实测过），不报任何错。
+          # 那是最糟的失效形态，所以 provisioning 必须进 IaC。
+          #
+          # 仍然只给读。worker 没有理由写自己的代码 —— 能写代码就等于
+          # 能改变自己下一次启动后的行为。
+          - Sid: ReadWorkerCode
+            Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource: !Sub 'arn:aws:s3:::${PlanBucket}/worker/*'
+
           # ListBucket 是必需的，而且理由不是「方便」：
           #
           # 没有 ListBucket 时，HeadObject 对**不存在**的对象回 403 而不是
@@ -98,7 +113,11 @@ Resources:
             Resource: !Sub 'arn:aws:s3:::${PlanBucket}'
             Condition:
               StringLike:
-                's3:prefix': 'plans/*'
+                # 两个前缀都要列：plans/ 是计划正文，worker/ 是 worker 自己的
+                # 代码（aws s3 sync 要先列出目录才知道下载什么）。
+                's3:prefix':
+                  - 'plans/*'
+                  - 'worker/*'
 
           # ── 2026-09-24：第一条写权限 ────────────────────────────────
           #
