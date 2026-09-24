@@ -519,6 +519,107 @@ NAT 省 41/月」—— 但**拆了 NAT,EKS 节点就拉不了镜像**。
 
 ---
 
+
+### 4.6 AgentCore 前置资源(`dr-korea-agentcore-prereq`)—— 部署失败,待重建
+
+**日期**:2026-09-24
+
+#### ① 目标
+
+给 temporal-mcp 的 AgentCore Runtime 备好三样前置资源:代码包 S3 桶、
+执行角色、runtime 用的安全组。runtime 本体在 `06-agentcore-runtime.yaml`,
+**分两个栈是因为顺序是硬的** —— runtime 在**创建时**就要去 S3 读代码包,
+所以桶必须先存在、zip 必须先上传。
+
+#### ② 前置状态
+
+| 项 | 值 | 怎么查到的 |
+|---|---|---|
+| AgentCore 支持 VPC | `networkMode: VPC` + `networkModeConfig{securityGroups,subnets}` | 读 ap-northeast-1 已 READY 的 `graph_dependency_mcp` |
+| 支持 Node | `runtime` 枚举含 **`NODE_22`** | `botocore` 服务模型,不是猜的 |
+| MCP 契约 | `0.0.0.0:8000` + `POST /mcp` + stateless + 不得拒 `Mcp-Session-Id` | 官方文档 |
+| `entryPoint` 形式 | **`.js` 相对路径,无 `node` 前缀** | 官方文档例子 `["app.js"]` |
+| 架构 | **只支持 arm64** | 官方文档;本包纯 JS,`.node` 引用数 0 |
+| Temporal 安全组 | 入站 7243 放行 **10.20.0.0/16 整段** | `describe-security-groups`,所以 runtime 无需被显式放行 |
+
+#### ③ 实际执行的命令
+
+```bash
+# 打自包含 bundle（依赖必须打进去，zip 里没有 node_modules）
+cd /home/ec2-user/works/temporal-mcp
+npx tsup --config tsup.agentcore.config.ts
+printf '{\n  "type": "module"\n}\n' > dist-agentcore/package.json
+cd dist-agentcore && chmod 644 agentcore-http.js package.json
+zip -q temporal-mcp.zip agentcore-http.js package.json
+
+# 前置栈
+aws cloudformation deploy --region ap-northeast-2 \
+  --stack-name dr-korea-agentcore-prereq \
+  --template-file infra/dr-korea/05-agentcore-prereq.yaml \
+  --capabilities CAPABILITY_NAMED_IAM
+```
+
+#### ④ 生效核实
+
+**本次没有通过。** 栈进 `ROLLBACK_COMPLETE`。
+核实用的是「查资源到底存不存在」而不是看 deploy 的返回:
+
+```
+aws s3api head-bucket → 404 Not Found
+aws iam get-role      → NoSuchEntity
+```
+
+两个资源**实际都不存在**。`CodeBucket` 在 `describe-stack-resources` 里
+显示 `DELETE_SKIPPED`,那只是因为我写了 `DeletionPolicy: Retain` ——
+它根本没建成,没有任何东西被保留。**这正是「栈事件里的状态词不等于资源真实状态」
+的一个例子。**
+
+#### ⑤ 失败过的做法
+
+**把中文写进了 EC2 安全组的 `GroupDescription`。**
+
+```
+Value (temporal-mcp AgentCore runtime ? ???) for parameter GroupDescription
+is invalid. Character sets beyond ASCII are not supported.
+```
+
+**EC2 的 `GroupDescription` 与规则 `Description`、IAM 的 `Description`
+只接受纯 ASCII。** 但 CFN 自己的 `Parameters`/`Outputs` 描述接受 UTF-8 ——
+栈 01~04 通篇中文都部署成功,证明约束在服务端而不在 CFN。
+**修法:送到 API 的字符串一律 ASCII,中文解释留在 YAML 注释里。**
+
+**另两个在实测中抓住的包装缺陷**(都不是 CFN 的问题):
+
+1. **tsup 默认把 `dependencies` 当 external**,84KB 的 bundle 里没有 SDK。
+   在空目录里跑立刻报 `ERR_MODULE_NOT_FOUND: Cannot find package
+   '@modelcontextprotocol/sdk'`。修法:单独一份 `tsup.agentcore.config.ts`
+   加 `noExternal: [/.*/]`,打成 728KB 自包含单文件。
+   **不改主配置** —— 那会让 npm 包的产物也把依赖打进去,装两次。
+2. **ESM 的 `.js` 没有 `package.json` 时模块类型不确定。** 实测在隔离目录里
+   能跑(Node 22 有 ESM 语法探测),但那依赖 Node 的**次版本**,
+   而 AgentCore 跑哪个次版本未知。修法:zip 里放一个
+   `{"type":"module"}` 的 `package.json`(23 字节)。
+
+#### ⑥ 回滚
+
+栈是 `ROLLBACK_COMPLETE` 空壳,零资源。要用同名重建**必须先删掉它**
+(CFN 不允许 deploy 到 `ROLLBACK_COMPLETE` 的栈):
+
+```bash
+# ⚠️ 销毁类命令 —— 按纪律只记录不自动执行
+aws cloudformation delete-stack --region ap-northeast-2 \
+  --stack-name dr-korea-agentcore-prereq
+```
+
+删它是安全的:两个资源都没建成(已用 `head-bucket` / `get-role` 独立核实)。
+
+#### ⑦ 下一步
+
+删掉空壳栈 → 重部 05(模板已修 ASCII)→ 上传 zip → 部 06 →
+用 `get-agent-runtime` 查 `status` 核实(**不是**看 CFN 是否成功)。
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
