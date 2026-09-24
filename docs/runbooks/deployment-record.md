@@ -520,7 +520,7 @@ NAT 省 41/月」—— 但**拆了 NAT,EKS 节点就拉不了镜像**。
 ---
 
 
-### 4.6 AgentCore 前置资源(`dr-korea-agentcore-prereq`)—— 部署失败,待重建
+### 4.6 AgentCore 前置资源(`dr-korea-agentcore-prereq`)—— 首次失败,已重建成功
 
 **日期**:2026-09-24
 
@@ -613,10 +613,148 @@ aws cloudformation delete-stack --region ap-northeast-2 \
 
 删它是安全的:两个资源都没建成(已用 `head-bucket` / `get-role` 独立核实)。
 
-#### ⑦ 下一步
+#### ⑦ 重建结果
 
-删掉空壳栈 → 重部 05(模板已修 ASCII)→ 上传 zip → 部 06 →
-用 `get-agent-runtime` 查 `status` 核实(**不是**看 CFN 是否成功)。
+2026-09-24 用户放行后删栈重部,成功。核实(与部署不同的手段):
+
+```
+head-bucket                 ✅ 存在
+get-bucket-encryption       AES256
+get-public-access-block     BlockPublicAcls=True
+get-role 信任主体            bedrock-agentcore.amazonaws.com
+安全组                       sg-0be34c74ee6211412
+```
+
+代码包上传后 `head-object` 确认 141235 字节 / SSE AES256。
+
+---
+
+
+### 4.7 temporal-mcp 部到 AgentCore(`dr-korea-agentcore-runtime`)
+
+**日期**:2026-09-24
+
+#### ① 目标
+
+把 temporal-mcp 部到韩国的 AgentCore Runtime,让它能连 VPC 内的
+Temporal(`10.20.1.125:7243`),从而 dr-plan-generator 不需要进 VPC
+也能操作 Temporal —— 那台 Temporal 没有公网入口。
+
+#### ② 前置状态
+
+| 项 | 值 | 怎么查到的 |
+|---|---|---|
+| AgentCore 支持 VPC | `networkMode: VPC` | 读 ap-northeast-1 已 READY 的参照实现 |
+| 支持 Node | `NODE_22` 在枚举里 | botocore 服务模型 |
+| `entryPoint` | **`.js` 相对路径,无 `node` 前缀** | 官方文档 `["app.js"]` |
+| MCP 契约 | `0.0.0.0:8000` + `POST /mcp` + stateless | 官方文档 |
+| CFN 的 `ProtocolConfiguration` | **字符串枚举**,非 API 的对象形式 | `describe-type` schema |
+| 架构 | 只支持 arm64 | 官方文档;本包纯 JS |
+
+#### ③ 实际执行的命令
+
+```bash
+# 打包（一条命令做完四步，见下面「失败过的做法」）
+# ⚠️ 打包脚本在 temporal-mcp 仓库里，不在本仓库
+cd /home/ec2-user/works/temporal-mcp/scripts
+bash build-agentcore-package.sh
+
+aws s3 cp dist-agentcore/temporal-mcp.zip \
+  s3://dr-korea-agentcore-926093770964-ap-northeast-2/temporal-mcp/temporal-mcp.zip \
+  --region ap-northeast-2
+
+cd /home/ec2-user/works/graph-dependency-platform
+aws cloudformation deploy --region ap-northeast-2 \
+  --stack-name dr-korea-agentcore-runtime \
+  --template-file infra/dr-korea/06-agentcore-runtime.yaml
+
+# 换代码后让 runtime 生效（CFN 看不出 S3 内容变了，要显式更新）
+aws bedrock-agentcore-control update-agent-runtime --region ap-northeast-2 \
+  --agent-runtime-id temporal_mcp-PVm47eFoHk \
+  --agent-runtime-artifact '{"codeConfiguration":{"code":{"s3":{...}},"runtime":"NODE_22","entryPoint":["agentcore-http.js"]}}' \
+  --role-arn arn:aws:iam::926093770964:role/DrKoreaTemporalMcpRole-ap-northeast-2 \
+  --network-configuration '{"networkMode":"VPC","networkModeConfig":{...}}' \
+  --protocol-configuration '{"serverProtocol":"MCP"}' \
+  --environment-variables 'TEMPORAL_ADDRESS=http://10.20.1.125:7243,...'
+```
+
+#### ④ 生效核实
+
+**三层,第三层才是真证据。**
+
+1. 控制面:`get-agent-runtime` → `status: READY`、`NODE_22`、
+   `entryPoint ['agentcore-http.js']`、`networkMode VPC`
+2. 容器日志:`temporal-mcp AgentCore transport on 0.0.0.0:8000/mcp
+   (tools: standard, 23 loaded)`
+3. **端到端 `invoke-agent-runtime`,连发四次交替调用:**
+
+```
+#1 get_cluster_info  ✅ isError=False  # Temporal Cluster Info
+#2 list_namespaces   ✅ isError=False  # Namespaces (2)
+#3 get_cluster_info  ✅
+#4 list_namespaces   ✅
+```
+
+**决定性证据:返回的 Cluster ID `811ac051-857b-46e8-8762-34ed81c34c74`
+与之前在 EC2 上用 SSM 直接查到的完全一致** —— 证明韩国的 runtime 确实
+连到了 VPC 内那台 Temporal,而不是连到了别的什么东西。
+
+#### ⑤ 失败过的做法
+
+**① 复用单个 transport 实例 —— 症状极具误导性。**
+
+第一版在启动时建了**一个** `StreamableHTTPServerTransport` 并 connect 到
+一个 Server,每个 HTTP 请求都塞进去。部署后:
+
+```
+控制面 status            READY
+容器日志                 只有正常启动行，没有任何报错
+每次 invoke              -32010 / "Received error (500) from runtime"
+```
+
+**只看日志查不出来。** 本地复现才定位到,请求内容完全相同时:
+
+```
+好请求 #1 → HTTP 200
+好请求 #2 → HTTP 500
+好请求 #3 → HTTP 500
+```
+
+SDK 的 stateless 传输不为多请求复用设计,平台先前某次探测把那唯一一次
+用掉了。修法:每个 `POST /mcp` 新建一对 Server+Transport。
+这也是 stateless 模式的正确用法,顺带消掉了并发请求在 JSON-RPC id 上
+撞车的隐患。
+
+**这条记进来是因为它是本项目第六次「命令成功但没生效」,
+而且是最难查的一次** —— 前五次至少有报错或数据不对,这次三层里
+前两层全是绿的。
+
+**② 手工分步打包半途而废。** `tsup.agentcore.config.ts` 里 `clean: true`,
+重新 build 会清掉 `dist-agentcore/`,而手工流程忘了重新写 `package.json`
+和重新 zip,于是 `aws s3 cp` 报 `path does not exist`。
+已在 temporal-mcp 仓库的 scripts 目录里写成 `build-agentcore-package.sh`,
+一条命令做完四步。
+
+**③ JMESPath 也不接受非 ASCII 键名。** 写 `--query 'X.{入站:...}'` 报
+`Unknown token 入`。这是本次第二个 ASCII 约束(第一个是 EC2 的
+`GroupDescription`)。
+
+#### ⑥ 回滚
+
+```bash
+# ⚠️ 销毁类命令 —— 按纪律只记录不自动执行
+aws cloudformation delete-stack --region ap-northeast-2 \
+  --stack-name dr-korea-agentcore-runtime
+```
+
+前置栈的桶是 `DeletionPolicy: Retain`,删前置栈不会带走代码包。
+桶开了版本,代码包被覆盖后可以回到上一版 —— 那是 runtime 出问题时
+最快的回滚路径。
+
+#### ⑦ 成本
+
+AgentCore Runtime 按用量计费,常态无调用时接近零。
+S3 桶存 141KB 代码包,可忽略。
 
 ---
 
