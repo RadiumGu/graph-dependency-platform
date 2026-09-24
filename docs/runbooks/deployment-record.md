@@ -1007,6 +1007,90 @@ provisioning 应当进 UserData 或做成独立的配置管理步骤。
 
 ---
 
+
+### 4.10 放开第一条写权限(`eks:UpdateNodegroupConfig`)
+
+**日期**:2026-09-24
+
+#### ① 目标
+
+按「逐个放开」的次序给 worker 第一条写权限。选拉起节点组这一条,
+因为它是切换里**最可逆**的动作:数错了把 `desiredSize` 改回去就行,
+不像数据库提升那样一旦丢数据就没法回头。
+
+#### ② 前置状态
+
+| 项 | 值 | 怎么查到的 |
+|---|---|---|
+| 节点组 ARN | `…/dr-korea-petsite/dr-korea-workers/4ad06992-…` | `describe-nodegroup`。末段 UUID 是 EKS 生成的,**拼不出来** |
+| 当前 scaling | `min0 / desired0 / max3` | 同上 |
+| 实例类型 | `t4g.xlarge` | 同上 |
+| 集群认证模式 | `API` | `describe-cluster` |
+| 节点角色访问条目 | **存在**,`type=EC2_LINUX`、组 `system:nodes` | `describe-access-entry` |
+| 节点角色策略 | CNI / WorkerNode / ECR 只读 / SSM 四个都在 | `list-attached-role-policies` |
+
+后两项是**演练前必须查的**:`AuthenticationMode=API` 时节点靠访问条目加入
+集群。条目缺失或类型写成 `STANDARD` 的表现是「节点起来了但永远不 Ready」——
+又一个「命令成功但没生效」的形状。
+
+#### ③ 实际执行的命令
+
+```bash
+aws cloudformation deploy --region ap-northeast-2 \
+  --stack-name dr-korea-worker-permissions \
+  --template-file infra/dr-korea/07-worker-permissions.yaml \
+  --capabilities CAPABILITY_NAMED_IAM
+```
+
+#### ④ 生效核实 —— 用不改任何东西的手段
+
+`aws iam simulate-principal-policy` 能在**不调用真实 API** 的前提下证明
+权限边界。对一条写权限来说,这比「真去调一次」安全得多。
+
+| 动作 | 期望 | 实测 |
+|---|---|---|
+| `eks:UpdateNodegroupConfig`(该节点组) | 允许 | **allowed** |
+| `eks:UpdateNodegroupVersion` | 拒绝 | `implicitDeny` |
+| `eks:DeleteNodegroup` | 拒绝 | `implicitDeny` |
+| `eks:CreateNodegroup` | 拒绝 | `implicitDeny` |
+| `rds:FailoverGlobalCluster` | 拒绝(留到最后) | `implicitDeny` |
+| `s3:GetObject` on `plans/` | 允许 | `allowed` |
+| `s3:GetObject` on `temporal-mcp/` | 拒绝 | `implicitDeny` |
+| `s3:PutObject` | 拒绝 | `implicitDeny` |
+
+倒数第二条是刻意的:同一个桶里 `temporal-mcp/` 前缀放的是 MCP server 的
+**可执行代码包**,worker 没有任何理由读它。
+
+#### ⑤ 失败过的做法
+
+`--query` 的输出用 `sed 's/…/…/'` 加管道时,模式里含 `/`(如 `plans/`)会让
+`sed` 报 `unknown option to 's'`。改用 `s|…|…|`。小事,但它让两条核实结果
+静默丢失 —— 如果没注意到输出缺了两行,会以为那两项没测。
+
+#### ⑥ 回滚
+
+```bash
+# 只摘这条权限：把 07 模板里 ScaleUpPilotLightNodegroup 那段删掉再 deploy。
+# 整条策略回滚（⚠️ 销毁类，只记录不执行）：
+aws cloudformation delete-stack --region ap-northeast-2 \
+  --stack-name dr-korea-worker-permissions
+```
+
+#### ⑦ 还没做的:真演练
+
+`desiredSize 0 → 2` 会**新建两台 t4g.xlarge**,属于新增计费资源,
+按纪律要先问用户。演练脚本与核实方式已定:
+
+- 执行:`dry_run=False` 只跑 `scale_up_nodegroup` 一步
+- 核实:**`describe-instances` 数 running 节点**,不看
+  `update-nodegroup-config` 的返回(它只表示请求被受理)
+- 收尾:演练完把 `desiredSize` 缩回 0
+
+门禁 `tests/test_83_worker_permission_boundary.py`(12 个)锁住边界:
+还没放的不许提前出现、已放的不许用通配 Resource。
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
