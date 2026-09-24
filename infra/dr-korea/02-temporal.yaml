@@ -1,0 +1,243 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  韩国灾备站点 —— 第二批:Temporal 服务端(t4g.large,私有子网,无公网 IP)。
+  依赖 01-network.yaml 的导出值。
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 为什么 Temporal 放在灾备 region 而不是主站
+#
+# Temporal 要执行的正是「从 ap-northeast-1 切到 ap-northeast-2」这件事。
+# 把编排者放在主站,等于让灭火器和火在同一个房间。
+#
+# 同理 temporal-mcp 也部到 ap-northeast-2 的 AgentCore ——
+# 同 region 免去跨 region 打通,且与「灾备站点要有 AgentCore」这条要求重合。
+#
+# ⚠️ HTTP API 端口是 7243,不是 8080。8080 是 Web UI。
+#    temporal-mcp 的 TEMPORAL_ADDRESS 要指向 7243。
+#    (temporal 仓库 docs/architecture/nexus.md:HTTP API 在官方 docker
+#     配置里默认开启,不需要额外开关。)
+# ─────────────────────────────────────────────────────────────────────────────
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t4g.large
+    Description: 用户指定。t4g.medium(4GiB)跑 Temporal + PostgreSQL 会紧。
+
+  LatestAl2023AmiArm:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: >
+      用 SSM 公共参数取 AMI，不写死 AMI ID ——
+      AMI ID 是 region + 时间的函数，写死的那一刻就开始过期。
+
+  TemporalVersion:
+    Type: String
+    Default: 1.29.0
+    Description: 固定版本，不用 latest —— latest 会让两次部署得到不同的东西。
+
+  TemporalUiVersion:
+    Type: String
+    Default: 2.42.0
+
+  ComposePluginVersion:
+    Type: String
+    Default: v2.40.0
+    Description: docker compose 插件；AL2023 的 dnf 源里没有可靠的 compose。
+
+Resources:
+
+  # ── 实例角色 ─────────────────────────────────────────────────────────────
+  TemporalRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        # SSM Session Manager —— 这是无公网入站下**唯一**的管理通道。
+        # 实例刻意不配密钥对:有了 SSM 就不需要,而密钥对是一个要保管的秘密。
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        # ⚠️ 这里刻意**只给只读**。
+        #
+        # Temporal worker 最终需要「扩 EKS 节点组、提升 Aurora 从集群」这类
+        # 写权限,但那些权限的边界要等阶段 D 把 DR workflow 的步骤定下来
+        # 才知道该给哪些 —— 现在就给一个宽权限,等于在没有需求的时候先开口子。
+        #
+        # 先给只读,让 worker 能**读**两个 region 的状态(健康判断需要),
+        # 写权限在阶段 D 按实际步骤逐条追加。
+        - PolicyName: dr-orchestrator-readonly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - eks:Describe*
+                  - eks:List*
+                  - rds:Describe*
+                  - ec2:Describe*
+                  - elasticloadbalancing:Describe*
+                  - cloudwatch:GetMetric*
+                  - cloudwatch:ListMetrics
+                  - cloudwatch:DescribeAlarms
+                Resource: '*'
+      Tags:
+        - { Key: Name, Value: dr-korea-temporal-role }
+
+  TemporalInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref TemporalRole]
+
+  # ── 安全组 ───────────────────────────────────────────────────────────────
+  TemporalSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: dr-korea Temporal server (VPC-internal only, no public ingress)
+      VpcId: !ImportValue dr-korea-vpc-id
+      SecurityGroupIngress:
+        # 三个端口都**只对 VPC 内**开放。没有任何 0.0.0.0/0 入站规则。
+        - IpProtocol: tcp
+          FromPort: 7233
+          ToPort: 7233
+          CidrIp: !ImportValue dr-korea-vpc-cidr
+          Description: Temporal gRPC (SDK/worker)
+        - IpProtocol: tcp
+          FromPort: 7243
+          ToPort: 7243
+          CidrIp: !ImportValue dr-korea-vpc-cidr
+          Description: Temporal HTTP API - this is what temporal-mcp connects to
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: !ImportValue dr-korea-vpc-cidr
+          Description: Temporal Web UI (VPC-internal; reach it via SSM port forwarding)
+      Tags:
+        - { Key: Name, Value: dr-korea-sg-temporal }
+
+  # ── 实例 ─────────────────────────────────────────────────────────────────
+  TemporalInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref LatestAl2023AmiArm
+      IamInstanceProfile: !Ref TemporalInstanceProfile
+      # KeyName 刻意不设 —— 管理走 SSM Session Manager。
+      SubnetId: !ImportValue dr-korea-private-subnet-a
+      SecurityGroupIds: [!Ref TemporalSg]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 50
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      Tags:
+        - { Key: Name, Value: dr-korea-temporal }
+        - { Key: Purpose, Value: dr-orchestrator }
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          exec > >(tee /var/log/temporal-bootstrap.log) 2>&1
+
+          dnf -y update
+          dnf -y install docker
+          systemctl enable --now docker
+
+          # AL2023 的 dnf 源里没有可靠的 docker compose，从官方 release 装。
+          # 版本固定，不用 latest。
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -fsSL \
+            "https://github.com/docker/compose/releases/download/${ComposePluginVersion}/docker-compose-linux-aarch64" \
+            -o /usr/local/lib/docker/cli-plugins/docker-compose
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+          mkdir -p /opt/temporal
+          # PostgreSQL 口令随机生成，不写进模板也不进日志。
+          # 只有本机的容器互相访问，不出实例。
+          PGPW="$(openssl rand -hex 24)"
+          umask 077
+          cat > /opt/temporal/.env <<ENVEOF
+          POSTGRES_PASSWORD=$PGPW
+          ENVEOF
+
+          cat > /opt/temporal/docker-compose.yml <<'COMPOSEEOF'
+          services:
+            postgresql:
+              image: postgres:16-alpine
+              environment:
+                POSTGRES_USER: temporal
+                POSTGRES_PASSWORD: ${!POSTGRES_PASSWORD}
+              volumes:
+                - /opt/temporal/pgdata:/var/lib/postgresql/data
+              restart: unless-stopped
+
+            temporal:
+              image: temporalio/auto-setup:TEMPORAL_VER
+              depends_on: [postgresql]
+              environment:
+                DB: postgres12
+                DB_PORT: 5432
+                POSTGRES_USER: temporal
+                POSTGRES_PWD: ${!POSTGRES_PASSWORD}
+                POSTGRES_SEEDS: postgresql
+                # 绑 0.0.0.0 才能被同 VPC 的 AgentCore / worker 连到。
+                # 暴露面由安全组控制（只放 VPC CIDR），不靠绑定地址控制。
+                BIND_ON_IP: 0.0.0.0
+              ports:
+                - "7233:7233"   # gRPC
+                - "7243:7243"   # HTTP API  ← temporal-mcp 连这个
+              restart: unless-stopped
+
+            temporal-ui:
+              image: temporalio/ui:TEMPORAL_UI_VER
+              depends_on: [temporal]
+              environment:
+                TEMPORAL_ADDRESS: temporal:7233
+                TEMPORAL_CORS_ORIGINS: http://localhost:3000
+              ports:
+                - "8080:8080"
+              restart: unless-stopped
+          COMPOSEEOF
+
+          sed -i "s/TEMPORAL_VER/${TemporalVersion}/; s/TEMPORAL_UI_VER/${TemporalUiVersion}/" \
+            /opt/temporal/docker-compose.yml
+
+          cat > /etc/systemd/system/temporal.service <<'UNITEOF'
+          [Unit]
+          Description=Temporal server (docker compose)
+          Requires=docker.service
+          After=docker.service
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          WorkingDirectory=/opt/temporal
+          ExecStart=/usr/bin/docker compose up -d
+          ExecStop=/usr/bin/docker compose down
+
+          [Install]
+          WantedBy=multi-user.target
+          UNITEOF
+
+          systemctl daemon-reload
+          systemctl enable --now temporal.service
+          echo "bootstrap done"
+
+Outputs:
+  InstanceId:
+    Value: !Ref TemporalInstance
+  PrivateIp:
+    Description: Temporal 的私有 IP。TEMPORAL_ADDRESS 用 http://<这个>:7243
+    Value: !GetAtt TemporalInstance.PrivateIp
+  TemporalHttpApi:
+    Description: temporal-mcp 的 TEMPORAL_ADDRESS 应设为这个值
+    Value: !Sub 'http://${TemporalInstance.PrivateIp}:7243'
+  TemporalSgId:
+    Value: !Ref TemporalSg
+    Export: { Name: dr-korea-temporal-sg }
