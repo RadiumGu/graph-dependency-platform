@@ -51,6 +51,13 @@ Parameters:
     Default: v2.40.0
     Description: docker compose 插件；AL2023 的 dnf 源里没有可靠的 compose。
 
+  WorkerCodeBucket:
+    Type: String
+    Default: dr-korea-agentcore-926093770964-ap-northeast-2
+    Description: >
+      DR worker 的代码与 provisioning 脚本所在的桶（worker/ 前缀）。
+      与 temporal-mcp 的代码包同桶但不同前缀；实例角色只被授权读
+      plans/ 与 worker/ 两个前缀（见 07-worker-permissions.yaml）。
 Resources:
 
   # ── 实例角色 ─────────────────────────────────────────────────────────────
@@ -255,6 +262,32 @@ Resources:
 
           systemctl daemon-reload
           systemctl enable --now temporal.service
+
+          # ── 2026-09-24：把 DR worker 的 provisioning 接进来 ──────────────
+          #
+          # 为什么必须在 IaC 里：worker 最初是用 SSM 手工装的，重启能保留，
+          # 但**实例真被重建时它不会自动回来**。而 worker 不在时，切换
+          # workflow 会一直排队并且**看起来是 RUNNING**（实测过），
+          # 不报任何错 —— 那是最糟的失效形态。
+          #
+          # 顺序要紧：必须在 temporal.service 起来之后。脚本最后一步要查
+          # 「任务队列上有没有 poller」，那需要 Temporal 的 HTTP API 在应答。
+          #
+          # 脚本本身在 S3 上、**做成幂等**，所以：
+          #   - 首次启动由这里调用
+          #   - 活主机上出问题可以直接重跑同一个脚本修复
+          #   - 已实测跑两遍对健康主机零改动（服务启动时间不变）
+          #
+          # ⚠️ 这一步失败不让整个引导失败（|| true）。Temporal 本体已经起来了，
+          # 而 worker 缺失是可以事后补的；让引导整体失败反而会让 CFN 回滚掉
+          # 一台其实可用的 Temporal。失败会留在日志里。
+          echo "=== provisioning DR worker ==="
+          aws s3 cp "s3://${WorkerCodeBucket}/worker/provision-worker.sh" \
+            /opt/provision-worker.sh --region "${AWS::Region}" || true
+          chmod +x /opt/provision-worker.sh || true
+          DR_CODE_BUCKET="${WorkerCodeBucket}" DR_REGION="${AWS::Region}" \
+            bash /opt/provision-worker.sh || echo "worker provisioning 失败，见上方日志"
+
           echo "bootstrap done"
 
 Outputs:

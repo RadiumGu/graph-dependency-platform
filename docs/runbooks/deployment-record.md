@@ -1091,6 +1091,115 @@ aws cloudformation delete-stack --region ap-northeast-2 \
 
 ---
 
+
+### 4.11 worker provisioning 进 IaC
+
+**日期**:2026-09-24
+
+#### ① 目标
+
+消掉 4.9 ⑦ 留下的债:`/opt/dr-worker` 是用 SSM 手工装的,不在 IaC 里。
+重启能保留它,但**实例真被重建时它不会自动回来** —— 而 worker 不在时,
+切换 workflow 会一直排队并且**看起来是 RUNNING**(实测过),不报任何错。
+那是最糟的失效形态:你以为切换在进行,其实什么都没发生。
+
+#### ② 前置状态
+
+worker 代码只存在于两处:本仓库 `dr-plan-generator/worker/`,
+以及那台实例的 `/opt/dr-worker/app/`(经 SSM base64 下发)。
+没有任何自动化路径把前者变成后者。
+
+#### ③ 实际执行的命令
+
+```bash
+# 代码进 S3（worker/ 前缀，与 plans/ 和 temporal-mcp/ 分开）
+aws s3 cp dr-plan-generator/worker/<each> \
+  s3://dr-korea-agentcore-926093770964-ap-northeast-2/worker/ --region ap-northeast-2
+
+# 加 worker/ 前缀的只读权限
+aws cloudformation deploy --region ap-northeast-2 \
+  --stack-name dr-korea-worker-permissions \
+  --template-file infra/dr-korea/07-worker-permissions.yaml \
+  --capabilities CAPABILITY_NAMED_IAM
+
+# UserData 里接上 provisioning（触发一次重启）
+aws cloudformation deploy --region ap-northeast-2 --stack-name dr-korea-temporal \
+  --template-file infra/dr-korea/02-temporal.yaml \
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+  --parameter-overrides TemporalVersion=1.29.7 TemporalUiVersion=2.54.1
+```
+
+#### ④ 设计:脚本幂等,所以能在不重建的前提下被真正验证
+
+**一段只在实例重建时才跑的 provisioning 代码,等于一段没被验证过的代码。**
+所以 `provision-worker.sh` 刻意做成幂等,既由 UserData 调用,也能在活主机上
+直接重跑做修复。
+
+在活主机上连跑两遍的结果:
+
+```
+第一遍  已有 python3.12，跳过安装 / 同步代码 / 依赖有变，安装 / 单元未变 / ✅ 已接单
+第二遍  已有 python3.12，跳过安装 / 同步代码 / 依赖未变，跳过 / 单元未变 / ✅ 已接单
+```
+
+**幂等的决定性证据:`dr-worker` 的启动时间两遍前后都是 `14:31:00` 没变** ——
+脚本没有做任何无谓重启。无谓重启会打断正在跑的切换。
+
+脚本自己的核实步骤也守本项目的判据纪律:查的是 **`pollers` 字段是否存在**
+而不是数量(字段缺失时服务端什么都没报,报成「0 个 worker」是把未测量写成
+测量值);等不到 poller 时明说「这**不等于**没有 worker,也可能是 Temporal
+还没起来」。
+
+#### ⑤ 失败过的做法
+
+**① 我写的两条门禁断言与实现不对齐。** 断言写成匹配字面量
+`python3.12` 与 `venv/bin/python`,而脚本用的是变量 `"$PY"` 与
+`"$VENV/bin/python"`。**这是按想象中的实现写判据,本项目最高频的错法。**
+修法是照抄脚本真实文本。
+
+**② 缩进判断错了一次。** 以为 UserData 正文是 12 空格(`sed 's/^/  /'` 的
+前缀骗了我),把插入的段落又缩进了 2 格;实际是 10 空格。
+教训:**用带前缀的方式看缩进,然后又按看到的宽度去改缩进,前缀会被算进去。**
+
+#### ⑥ 生效核实
+
+重启后,每层都用与部署不同的手段:
+
+| 判据 | 结果 |
+|---|---|
+| 实例 ID / IP | `i-06f0a3e4961b8061e` / `10.20.1.125`,**未被替换** |
+| `uptime` | `up 1 minute`,证实重启过 |
+| **`clusterId`** | `811ac051-857b-46e8-8762-34ed81c34c74`,**仍一致 → 库没被重建** |
+| `temporal` / `dr-worker` | 均 active,**自己回来的** |
+| worker | `pollers: n=1` |
+| `.env` 修改时间 | 仍是 `10:38:10` → UserData 没重跑 |
+| `pgdata` | 73M |
+| 引导日志里的口令 | 0 次 |
+
+权限边界用 `simulate-principal-policy` 复核:
+
+```
+worker/worker.py            allowed
+plans/e2e-test.md           allowed
+temporal-mcp/*.zip          implicitDeny   ← 代码包，worker 无理由读
+写 worker/                  implicitDeny   ← 能写自己的代码就等于能改变
+                                             自己下次启动后的行为
+```
+
+#### ⑦ 回滚
+
+把 UserData 里 provisioning 那段删掉再 deploy(又一次重启)。
+`/opt/dr-worker` 会留着,不受影响。
+
+#### ⑧ 剩余同类债
+
+`PrivateIpAddress` 仍未固定。它在 `createOnlyProperties` 里,
+把 `10.20.1.125` 写进模板**本身就要求替换实例**,所以必须和一次
+有计划的重建一起做。在那之前,实例若被替换,AgentCore 的
+`TEMPORAL_ADDRESS` 会指向一个不存在的地址。
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
