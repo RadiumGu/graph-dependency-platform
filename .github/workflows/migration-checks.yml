@@ -63,7 +63,21 @@ jobs:
         #   moto        tests/test_12
         # 补齐之前，这三个文件在**收集阶段**就 ERROR，pytest 直接
         # Interrupted，于是实际通过数 0、下限 24 永远不满足。
-        run: pip install -q pytest pyyaml boto3 requests pydantic structlog streamlit moto
+        # ⚠️ 2026-09-24：改成装 requirements-dev.txt，不再手列。
+          #
+          # 手列的代价已经出现两次：此前有人从 CI 日志里逐个追加了
+          # pydantic / structlog / streamlit / moto 四个，而 strands-agents
+          # 仍然缺着 —— 手列必然漂移，因为它与仓库真正的依赖清单没有任何
+          # 机械联系，只能靠人记得同步。
+          #
+          # requirements-dev.txt 就是这套测试的权威清单（它自己写着
+          # 「测试与本地开发依赖」）。换成它之后实测：
+          #
+          #   手列 8 个包            1041 passed, 5 failed, 41 errors
+          #   -r requirements-dev    1069 passed, 1 failed,  0 errors
+          #
+          # 那 40 个消失的 error 全是 ModuleNotFoundError('strands')。
+        run: pip install -q -r requirements-dev.txt
       - name: Run offline subset
         env:
           # `GDP_OFFLINE=1` 只把「确认是云访问不可达」的失败转成 skip
@@ -79,7 +93,7 @@ jobs:
           #
           # 2026-09-21 实测离线通过 26 个，设 24 留一点波动余量。
           # **新增离线可跑的测试后请上调这个数**，否则它会越来越松。
-          GDP_OFFLINE_MIN_PASSED: "24"
+          GDP_OFFLINE_MIN_PASSED: "1040"
         run: python3 -m pytest tests/ -q
       - name: Remind that this is not full coverage
         if: always()

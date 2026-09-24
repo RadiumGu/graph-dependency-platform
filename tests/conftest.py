@@ -293,12 +293,36 @@ def test_experiment_id():
 
 
 @pytest.fixture(scope='session', autouse=True)
-def cleanup_test_data(neptune_rca):
-    """测试结束后清理所有 test-auto- 前缀的测试数据。"""
+def cleanup_test_data():
+    """测试结束后清理所有 test-auto- 前缀的测试数据。
+
+    ## ⚠️ 为什么参数里**不能**写 neptune_rca
+
+    这个 fixture 是 `autouse=True`,所以它是**每一个**测试的 setup 依赖。
+    原来它的签名是 `cleanup_test_data(neptune_rca)`,而 `neptune_rca` 里有
+    一句 `assert isinstance(result, list)` —— pytest 会在第一个测试 setup 时
+    急切求值它,于是**没有 Neptune 就等于整套测试全部 ERROR**,
+    连「读一个 YAML 文件、断言里面有某个字段」这种纯离线门禁也一样。
+
+    2026-09-24 实测的后果:CI 的离线子集里
+
+        main         26 passed, 1263 skipped
+        加了 12 条门禁后  26 passed, 1275 skipped   ← 通过数一个没涨
+
+    **+12 全进了 skipped。** 也就是说 test_80~86 那批门禁(约 72 条)在 CI 里
+    一条都没真正执行过 —— 它们只在有 Neptune 凭据的开发机上有效。
+    「门禁存在」和「门禁在 CI 里拦得住」是两件事,而前者很容易被误当成后者。
+
+    修法:清理逻辑本来就全套 try/except(Neptune 不可达只记 warning),
+    所以把 client 的解析挪到 `yield` **之后**延迟做即可。
+    Neptune 可达时的行为与之前完全一致。
+    """
     yield
     # Cleanup Neptune: test-auto- prefixed nodes
     try:
-        neptune_rca.results(
+        from neptune import neptune_client as nc  # noqa: PLC0415
+
+        nc.results(
             f"MATCH (n) WHERE n.id STARTS WITH '{TEST_PREFIX}' "
             f"OR n.experiment_id STARTS WITH '{TEST_PREFIX}' "
             f"DETACH DELETE n"

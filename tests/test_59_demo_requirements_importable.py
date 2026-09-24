@@ -123,20 +123,64 @@ def test_m04_其余依赖至少要有版本下限():
 
 
 def test_m05_交互探索页的关键符号必须存在():
-    """光能 import 不够 —— 页面用的四个符号得都在，且签名没变。
+    """光能 import 不够 —— 页面用的符号得都在，且签名没变。
 
-    这一页真正依赖的是 `EdgeStyle(caption=...)` 与 `NodeStyle(caption=...)`。
-    0.4.0 正在弃用 `labeled`，所以 `caption` 是必须存在的那个。
+    ## ⚠️ 2026-09-24：这条测试原来守的是一个已被删除的依赖
+
+    原文 import `st_link_analysis`，检查 `EdgeStyle`/`NodeStyle` 的 `caption`
+    参数,docstring 写着「9_Interactive_Explorer.py 直接 import 这四个符号」。
+
+    那句话早就不成立了:`demo/requirements.txt` 记着 2026-09-13 把
+    pyvis / networkx / st-link-analysis **三个都删了**,两个图谱页改用
+    `demo/components/graph_svg`(dagre 布局 + 自绘 SVG)。
+    现在 `9_Interactive_Explorer.py:41` 是 `from components import graph_svg`。
+
+    它一直没被发现,是因为两层遮蔽叠在一起:
+      ① 开发机上还残留着卸载前装的 st_link_analysis,所以本地一直绿;
+      ② CI 里所有测试都在 setup 阶段因缺 Neptune 而 ERROR(见 conftest 的
+         cleanup_test_data 说明),这条从来没真跑过。
+
+    **教训**:一条 import 一个「项目已决定不用」的包的测试,本身就是可疑的 ——
+    它守的契约已经不存在了,而它的绿色会被当成「这一页没问题」。
     """
     import inspect
 
-    mod = importlib.import_module('st_link_analysis')
-    for name in ('EdgeStyle', 'Event', 'NodeStyle', 'st_link_analysis'):
-        assert hasattr(mod, name), (
-            f'st_link_analysis 少了 `{name}` —— '
-            '9_Interactive_Explorer.py 直接 import 这四个符号。')
-    for cls_name in ('EdgeStyle', 'NodeStyle'):
-        sig = inspect.signature(getattr(mod, cls_name).__init__)
-        assert 'caption' in sig.parameters, (
-            f'{cls_name} 没有 `caption` 参数。本页用 caption 显示关系名/节点名，'
-            '不用已被弃用的 `labeled`。上游若改了参数名，这一页要跟着改。')
+    # 守真正的契约：页面调的是 graph_svg.render(nodes, edges, ..., key=...)。
+    # ⚠️ 用文件里已有的 REQ 推出 demo 目录，**不要**另造一个名字：
+    # 第一版我写了 `DEMO` 和 `sys.path`，而这个文件既没定义 DEMO 也没
+    # import sys —— 又一次「按想象中的实现写代码」（本会话第五次）。
+    import sys  # noqa: PLC0415
+
+    demo_dir = REQ.parent
+    sys.path.insert(0, str(demo_dir))
+    try:
+        mod = importlib.import_module("components.graph_svg")
+    finally:
+        sys.path.remove(str(demo_dir))
+
+    assert hasattr(mod, "render"), (
+        "components/graph_svg 少了 `render` —— "
+        "3_Graph_Explorer.py 与 9_Interactive_Explorer.py 都调它。"
+    )
+    sig = inspect.signature(mod.render)
+    # 这五个是两个页面实际传的（9_Interactive_Explorer.py:504 传了
+    # height/anchor/key，3_Graph_Explorer.py 还传 positions/bands）。
+    for param in ("nodes", "edges", "height", "anchor", "key"):
+        assert param in sig.parameters, (
+            f"graph_svg.render 少了 `{param}` 参数 —— 两个图谱页在传它。"
+        )
+
+    # 已删除的三个包不许悄悄回来：它们各自都有被删的具体理由
+    # （st-link-analysis 在缩放低于 0.625 时节点标签整体消失；
+    #   pyvis 是单向的，选中的节点拿不回 Python），
+    # 见 demo/requirements.txt 的说明。
+    reqs = REQ.read_text(encoding="utf-8")
+    for dead in ("st-link-analysis", "pyvis", "networkx"):
+        installed = [
+            ln for ln in reqs.splitlines()
+            if ln.strip().lower().startswith(dead)
+        ]
+        assert not installed, (
+            f"{dead} 又出现在 demo/requirements.txt 的依赖行里。"
+            "它是 2026-09-13 刻意删掉的，要装回来请先读那里记的理由。"
+        )
