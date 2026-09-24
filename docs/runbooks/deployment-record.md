@@ -1200,6 +1200,201 @@ temporal-mcp/*.zip          implicitDeny   ← 代码包，worker 无理由读
 
 ---
 
+
+### 4.12 AgentCore 的 IP 耦合检查 + 一个会骗过反向验证的陷阱
+
+**日期**:2026-09-24
+
+#### ① 目标
+
+AgentCore runtime 的 `TEMPORAL_ADDRESS` 里写的是 Temporal 实例的**私有 IP**。
+这个耦合有一条安静的失效路径:
+
+    实例被替换 → 新 IP → AgentCore 仍指向旧地址 → 所有 MCP 工具调用超时
+
+而超时的表现是「工具调不通」,看起来像 AgentCore 挂了、像网络不通、
+像 Temporal 挂了 —— **唯独不像「地址过期了」**。排查会绕很久。
+
+`PrivateIpAddress` 在 `createOnlyProperties` 里,把 IP 固定进模板本身就要求
+替换实例;在做那次有计划的重建之前,这个检查是唯一能及早发现耦合断裂的手段。
+
+#### ② 前置状态 —— 四处 IP 当前一致
+
+```
+实例实际 IP          10.20.1.125   （describe-instances）
+栈输出 PrivateIp     10.20.1.125
+AgentCore 的地址     http://10.20.1.125:7243
+06 模板的默认值      http://10.20.1.125:7243
+```
+
+#### ③ 实际执行
+
+新增 `scripts/check_dr_ip_coupling.py`。真跑结果:
+
+```
+✅ ok: AgentCore 指向 http://10.20.1.125:7243，与实例当前 IP 一致
+```
+
+**它走「栈 → 实例 → describe-instances」而不是读栈的 Output** ——
+Output 是栈上次更新时的值,实例的 describe 才是当下的事实。
+本项目已实测六次「命令成功但没生效」,这类差别正是那些案例的来源。
+
+#### ④ 判据:三态,而且退出码分开
+
+| 结论 | 退出码 | 含义 |
+|---|---|---|
+| `ok` | 0 | 一致 |
+| `mismatch` | 1 | **确认**不一致,需要处置 |
+| `inconclusive` | 2 | 拿不到某一侧的值,**无法判断** |
+
+第三态是重点。拿不到值就判 `mismatch` 会制造假告警,而**假告警会让人开始
+忽略这个检查 —— 那时它就等于不存在了**。本项目同类缺陷已四次,这里不再犯第五次。
+
+#### ⑤ 失败过的做法 —— 一个会骗过反向验证的陷阱
+
+做反向验证时,我先用 `sed` 把 `HTTP_API_PORT = 7243` 改成 `8080`(跑出 pyc),
+再用 `cp` 还原。结果**还原之后测试仍然挂**,而磁盘上的文件明明是 7243。
+
+真因:**Python 判断 `.pyc` 是否过期用的是「源文件 mtime + 大小」。**
+两次操作在同一秒内,而 `7243` 与 `8080` **长度完全相同** —— mtime 与 size
+都对得上,那个 8080 版本的 pyc 被当成有效,加载出来的模块常量还是 8080。
+
+后果比一条测试挂掉严重得多:
+
+> **任何「改一下 → 跑测试 → 还原」的反向验证流程都可能被它骗过**,
+> 让人以为守卫有效或无效。而本项目的纪律正是「修完要写能抓到它的测试
+> 并反向验证」——这个陷阱直接打在那条纪律上。
+
+两处处置:
+
+1. 测试的 fixture 里主动删掉同名 pyc 再加载(`test_85` 已做),
+   这样门禁不受外部状态影响。
+2. 反向验证的操作流程里,**还原后加一次 `touch`** 打破「mtime 相同」的条件。
+
+#### ⑥ 回滚
+
+脚本是只读检查,删掉即可,不影响任何运行中的东西。
+
+#### ⑦ 剩余
+
+`PrivateIpAddress` 仍未固定。彻底解法有两条:
+- 固定 IP(要求替换实例,须配合有计划的重建)
+- 或改用 Route53 私有托管区的 DNS 名(新增计费资源,须先问用户)
+
+在那之前靠本检查兜住。
+
+---
+
+
+### 4.13 节点组扩容真演练(`dry_run=False`,只放行一步)
+
+**日期**:2026-09-24 ·  **用户已放行在韩国 region 开资源做验证**
+
+#### ① 目标
+
+第一次让 worker **真调 AWS**:把守夜灯节点组从 0 拉到 2,核实整条
+「起 workflow → worker 真执行 → 独立核实」的链路。
+
+#### ② 前置:先补一个安全机制,否则这个演练本身是危险的
+
+原来只有一个全局 `dry_run` 开关。做节点组演练时把它设成 `False`,
+**同一次运行就会把 `promote_database` 也真执行** —— 那是切换生产数据库。
+一次节点组演练绝不该有能力做那件事。
+
+所以加了**按步骤放行**:只有名字出现在 `execute_steps` 里的步骤才真执行,
+其余一律 dry_run,即使 `dry_run=False`。两道闸门(全局开关 **且** 名字在
+清单里)是刻意的 —— 单独任何一个被误设都不足以让危险步骤真跑。
+漏写的后果是「那一步没真跑」(安全),而不是「意外跑了」(危险)。
+
+#### ③ 实际执行
+
+```bash
+# 只放行 scale_up_nodegroup 一步
+PAYLOAD='{"plan_ref":"e2e-test","dry_run":false,
+          "execute_steps":["scale_up_nodegroup"],
+          "decision_timeout_seconds":900}'
+# → POST /api/v1/namespaces/default/workflows/<id>
+# 决策点发 abort —— 演练不碰数据库
+```
+
+#### ④ 生效核实
+
+```
+dry_run: False | executed_steps: ['scale_up_nodegroup']
+fetch_plan_body      executed=False   ← 全局 dry_run=False，但不在放行名单里
+scale_up_nodegroup   executed=True  verified=True  detail: {"running_nodes": 2}
+decision: abort | aborted: True       ← 在数据库提升前停住
+status: COMPLETED | TIMED_OUT 事件: 0
+```
+
+**按步骤放行机制得到验证**:全局开了 `dry_run=False`,`fetch_plan_body`
+仍然没真跑,`promote_database` 连机会都没有。
+
+独立核实(与执行不同的手段)—— `describe-instances` 数真实节点:
+
+```
+running 节点数 = 2
+ap-northeast-2b  10.20.2.103  t4g.xlarge
+ap-northeast-2a  10.20.1.6    t4g.xlarge
+```
+
+跨两个可用区,与节点组的子网配置一致。
+
+#### ⑤ 收尾:缩回守夜灯状态
+
+```bash
+aws eks update-nodegroup-config --region ap-northeast-2 \
+  --cluster-name dr-korea-petsite --nodegroup-name dr-korea-workers \
+  --scaling-config minSize=0,desiredSize=0,maxSize=3
+```
+
+节点组回到 `min0/desired0/max3` 且 `ACTIVE`。
+
+#### ⑥ 演练暴露的两件事
+
+**① 缩容不是瞬时的,而且「还在 running」不等于「缩容失败」。**
+
+EKS 更新报 `Successful`、ASG `DesiredCapacity=0`,但 EC2 里仍有一台
+`running`。真相在 **ASG 的生命周期状态**里:
+
+```
+LifecycleState: Terminating:Wait
+Terminate-LC-Hook  transition=EC2_INSTANCE_TERMINATING
+                   HeartbeatTimeout=1800  DefaultResult=CONTINUE
+```
+
+托管节点组会挂一个排空钩子,上限 **30 分钟**。所以:
+
+> 缩容期间 `describe-instances` 显示 `running`,与「缩容没生效」
+> **在 EC2 这一层无法区分** —— 区分的信号在 ASG 的 `LifecycleState`,
+> 不在 EC2 的 `State`。
+
+已核实节点组 `health.issues` 为空、私有 endpoint 开启、VPC DNS 开启,
+所以不是加入失败。
+
+**② 我的核实测的是「ASG 扩了没」,不是「集群有没有可用容量」。**
+
+`scale_up_nodegroup` 的核实是数 EC2 实例数。那证明 ASG 扩容成功,
+**但不证明集群获得了可调度容量** —— 节点可能起来了却没成为 `Ready`。
+对灾备切换来说这个差别极大:你可能有两台 EC2 和零个可调度节点。
+
+为什么暂时没做到:集群 `endpointPublicAccess=false`,从 VPC 外面查不到
+k8s 节点状态。**正确的修法是让 worker 去查** —— 它就在 VPC 内,
+能访问私有 endpoint。列为后续工作,并已在活动代码里记下这个局限。
+
+#### ⑦ 回滚 / 清理
+
+```bash
+# 残留实例会在排空钩子超时（≤30 分钟）后自动终止。
+# 想立刻结束（⚠️ 销毁类，只记录不执行）：
+aws autoscaling complete-lifecycle-action --region ap-northeast-2 \
+  --auto-scaling-group-name eks-dr-korea-workers-4ad06992-7957-b47d-7adf-72656f7ffdf0 \
+  --lifecycle-hook-name Terminate-LC-Hook \
+  --lifecycle-action-result CONTINUE --instance-id <id>
+```
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)

@@ -80,11 +80,37 @@ class FailoverInput:
     #: 等人给裁决的上限。等不到就失败,**不自动选择丢数据的那条路**。
     decision_timeout_seconds: int = 1800
 
+    #: ── 按步骤放行 ────────────────────────────────────────────────────
+    #:
+    #: 只有名字出现在这里的步骤才会**真执行**,其余一律 dry_run ——
+    #: 即使 `dry_run=False`。
+    #:
+    #: 2026-09-24 加的,动机是安全而不是灵活性:做「拉起节点组」的演练时,
+    #: 若只有一个全局 `dry_run=False` 开关,同一次运行就会把
+    #: `promote_database` 也真执行 —— 那是**切换生产数据库**。
+    #: 一次节点组演练绝不该有能力做那件事。
+    #:
+    #: 所以放行是**按名字逐个给**的:要执行某一步,必须显式写出它的名字。
+    #: 漏写的后果是「那一步没真跑」(安全),而不是「意外跑了」(危险)。
+    execute_steps: list[str] = field(default_factory=list)
+
+
+def _step_is_live(args: FailoverInput, step: str) -> bool:
+    """这一步该真执行还是 dry_run。
+
+    两个条件都满足才真执行:全局 `dry_run=False`,**并且**步骤名在
+    `execute_steps` 里。两道闸门是刻意的 —— 单独任何一个被误设都不足以
+    让危险步骤真跑。
+    """
+    return (not args.dry_run) and (step in args.execute_steps)
+
 
 @dataclass
 class FailoverResult:
     plan_ref: str
     dry_run: bool
+    #: 这次放行了哪些步骤真执行。事后复盘要能看出「这是一次什么演练」。
+    executed_steps: list[str] = field(default_factory=list)
     steps: list[StepResult] = field(default_factory=list)
     #: 人给的裁决。None 表示没走到那个点。
     database_decision: str | None = None
@@ -145,13 +171,20 @@ class DrFailoverWorkflow:
 
     @workflow.run
     async def run(self, args: FailoverInput) -> FailoverResult:
-        result = FailoverResult(plan_ref=args.plan_ref, dry_run=args.dry_run)
+        result = FailoverResult(
+            plan_ref=args.plan_ref,
+            dry_run=args.dry_run,
+            executed_steps=list(args.execute_steps),
+        )
 
         # ① 取计划正文。放在 activity 里是因为它要访问 S3 ——
         #    workflow 函数本身不许做 I/O。
         plan = await workflow.execute_activity(
             fetch_plan_body,
-            ActivityInput(plan_ref=args.plan_ref, dry_run=args.dry_run),
+            ActivityInput(
+                plan_ref=args.plan_ref,
+                dry_run=not _step_is_live(args, "fetch_plan_body"),
+            ),
             start_to_close_timeout=timedelta(minutes=2),
             retry_policy=_READ_RETRY,
         )
@@ -161,7 +194,10 @@ class DrFailoverWorkflow:
         # ② 拉起 EKS 节点组。守夜灯站点常态 desired=0,切换时才拉。
         scale = await workflow.execute_activity(
             scale_up_nodegroup,
-            ActivityInput(plan_ref=args.plan_ref, dry_run=args.dry_run),
+            ActivityInput(
+                plan_ref=args.plan_ref,
+                dry_run=not _step_is_live(args, "scale_up_nodegroup"),
+            ),
             # 节点起来要几分钟,给宽一点;activity 内部发心跳。
             start_to_close_timeout=timedelta(minutes=20),
             heartbeat_timeout=timedelta(minutes=2),
@@ -206,7 +242,9 @@ class DrFailoverWorkflow:
             promote_database,
             ActivityInput(
                 plan_ref=args.plan_ref,
-                dry_run=args.dry_run,
+                # ⚠️ 这一步要真执行，必须在 execute_steps 里显式写出
+                # "promote_database"。一次节点组演练不该有能力切换生产数据库。
+                dry_run=not _step_is_live(args, "promote_database"),
                 decision=self._decision,
             ),
             start_to_close_timeout=timedelta(minutes=30),
@@ -220,7 +258,10 @@ class DrFailoverWorkflow:
         #    已实测六次「命令成功但没生效」。
         verify = await workflow.execute_activity(
             verify_step,
-            ActivityInput(plan_ref=args.plan_ref, dry_run=args.dry_run),
+            ActivityInput(
+                plan_ref=args.plan_ref,
+                dry_run=not _step_is_live(args, "verify_step"),
+            ),
             start_to_close_timeout=timedelta(minutes=10),
             retry_policy=_READ_RETRY,
         )

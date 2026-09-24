@@ -49,6 +49,12 @@ class StepResult:
     verified: bool | None = None
     #: 无法判断时写明原因 —— 空着等于让读的人自己猜。
     inconclusive_reason: str | None = None
+    #: 这一步的核实**测到的到底是什么**。
+    #:
+    #: 加这个字段是因为 2026-09-24 演练暴露的一件事:`verified=True` 很容易
+    #: 被读成「这一步达到目的了」,而实际上它只说明「我测的那个量达标了」。
+    #: 两者不同时,必须把差别写出来 —— 否则读的人会做出错误判断。
+    detail_note: str | None = None
 
 
 # ── 环境 ──────────────────────────────────────────────────────────────────
@@ -202,8 +208,24 @@ async def scale_up_nodegroup(inp: ActivityInput) -> StepResult:
         step="scale_up_nodegroup",
         executed=True,
         detail={"running_nodes": found},
+        # ⚠️ 这里的 verified 只说明「ASG 扩容成功」，**不说明集群获得了
+        # 可调度容量**。节点可能起来了却没成为 Ready —— 对灾备切换来说
+        # 这个差别极大：你可能有两台 EC2 和零个可调度节点。
+        #
+        # 2026-09-24 演练时确认了这个局限。为什么暂时没做到：集群
+        # endpointPublicAccess=false，从 VPC 外查不到 k8s 节点状态。
+        # 正确的修法是让 worker 去查 —— 它就在 VPC 内，能访问私有 endpoint。
         verified=found >= 2,
-        inconclusive_reason=None if found >= 2 else f"等待超时，只看到 {found} 个 running 节点",
+        inconclusive_reason=(
+            None
+            if found >= 2
+            else f"等待超时，只看到 {found} 个 running 节点"
+        ),
+        # 把局限如实带进结果，别让读的人把「ASG 扩了」当成「集群能跑活」。
+        detail_note=(
+            "running_nodes 数的是 EC2 实例，不是 Ready 的 k8s 节点。"
+            "两台 EC2 起来了仍可能没有可调度容量。"
+        ),
     )
 
 
