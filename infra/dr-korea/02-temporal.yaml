@@ -170,11 +170,25 @@ Resources:
           # 2026-09-24 第一次部署就把 PostgreSQL 口令打进了日志 ——
           # 生成秘密的代码段必须在 set +x 里。
           set +x
-          PGPW="$(openssl rand -hex 24)"
-          umask 077
-          printf 'POSTGRES_PASSWORD=%s\n' "$PGPW" > /opt/temporal/.env
-          chmod 600 /opt/temporal/.env
-          unset PGPW
+          # ⚠️ 幂等：只在 .env 不存在时才生成口令。
+          #
+          # 2026-09-24 加的。原来无条件生成，那有一个真实的破坏路径：
+          # PostgreSQL 的数据是 bind mount 到 /opt/temporal/pgdata 的（在 EBS
+          # 根卷上），一旦库已经用旧口令初始化过，再写一个新口令进 .env 就会
+          # 让 Temporal 连不上自己的库 —— 而且报的是认证失败，看起来像配置
+          # 写错而不像「口令被换了」。
+          #
+          # 触发条件不是假设：更新 UserData 时 CloudFormation 会**重启**这台
+          # 实例（根卷是 EBS；换成 instance store 才是替换）。cloud-init 的
+          # user-data 默认「每实例一次」所以重启不会重跑，但把安全性押在那个
+          # 语义上不值得 —— 一个 `[ -f ]` 就能让它无论跑几次都安全。
+          if [ ! -f /opt/temporal/.env ]; then
+            PGPW="$(openssl rand -hex 24)"
+            umask 077
+            printf 'POSTGRES_PASSWORD=%s\n' "$PGPW" > /opt/temporal/.env
+            chmod 600 /opt/temporal/.env
+            unset PGPW
+          fi
           set -x
 
           cat > /opt/temporal/docker-compose.yml <<'COMPOSEEOF'

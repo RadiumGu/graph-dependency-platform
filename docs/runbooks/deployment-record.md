@@ -905,6 +905,108 @@ aws cloudformation delete-stack --region ap-northeast-2 \
 
 ---
 
+
+### 4.9 消除 `dr-korea-temporal` 的 UserData 漂移
+
+**日期**:2026-09-24
+
+#### ① 目标
+
+4.8 节留下的债:线上栈与模板不一致,任何对该栈的 deploy 都会触发
+`TemporalInstance ... Replacement: Conditional`,而那台实例跑着 Temporal 的
+PostgreSQL 和 DR worker。目标是消除漂移且**不丢数据**。
+
+#### ② 前置状态 —— 漂移是两层,不是一层
+
+| 层 | 线上栈 | 模板 |
+|---|---|---|
+| 参数 `TemporalVersion` | **1.29.0**(不存在的 tag) | 1.29.7 |
+| 参数 `TemporalUiVersion` | **2.42.0**(不存在的 tag) | 2.54.1 |
+| UserData 正文 | 无 `set +x` 保护(会把口令打进日志) | 有 |
+
+而**实际跑着的容器**是 1.29.7 / 2.54.1(当初用 SSM 直接改的)。三者互不一致。
+后果:一旦实例被真正重建,既会重新泄漏口令,又会因 tag 不存在而起不来。
+
+#### ③ 关键判断:重启还是替换 —— 查官方文档而不是猜
+
+`AWS::EC2::Instance` 的 `UserData`:
+
+> If the root volume is an **EBS** volume and you update user data, CloudFormation
+> **restarts** the instance. If the root volume is an instance store volume,
+> the instance is **replaced**.
+> *Update requires*: Some interruptions
+
+实测该实例 `RootDeviceType = ebs` → **重启**。变更集里的 `Conditional`
+指的就是「取决于根卷类型」,不是「可能会替换」。
+
+这条查清之后,整个风险评估反转了:原以为必须重建主机,实际只是一次重启。
+
+#### ④ 实际执行的命令
+
+```bash
+# 先让 UserData 幂等（理由见 ⑤②）
+# 然后两次 deploy —— 第二次必须显式覆盖参数，理由见 ⑤①
+
+aws cloudformation deploy --region ap-northeast-2 --stack-name dr-korea-temporal \
+  --template-file infra/dr-korea/02-temporal.yaml \
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM --no-execute-changeset
+# 看过变更集确认只有 TemporalInstance 一项后才执行
+aws cloudformation execute-change-set --region ap-northeast-2 --change-set-name <arn>
+
+aws cloudformation deploy --region ap-northeast-2 --stack-name dr-korea-temporal \
+  --template-file infra/dr-korea/02-temporal.yaml \
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+  --parameter-overrides TemporalVersion=1.29.7 TemporalUiVersion=2.54.1 \
+  --no-execute-changeset
+aws cloudformation execute-change-set --region ap-northeast-2 --change-set-name <arn>
+```
+
+#### ⑤ 失败过的做法
+
+**① 以为模板的 `Default` 会修正已存在栈的参数值 —— 不会。**
+第一次 deploy 后参数**仍是 1.29.0 / 2.42.0**:`aws cloudformation deploy`
+不带 `--parameter-overrides` 时**沿用现有值**(UsePreviousValue),
+模板的 `Default` 只对新栈生效。所以漂移只修了一半,必须显式覆盖。
+
+**② 差点因为 UserData 重跑而换掉数据库口令。** PostgreSQL 的数据是
+bind mount 到 `/opt/temporal/pgdata`,库已用旧口令初始化过;原来的 UserData
+无条件 `openssl rand` 生成新口令写进 `.env`,一旦重跑就让 Temporal 连不上
+自己的库,而且报的是**认证失败**,看起来像配置写错而不像「口令被换了」。
+已改成 `if [ ! -f /opt/temporal/.env ]` 守卫 —— cloud-init 的 user-data 是
+「每实例一次」所以重启本不会重跑,但把安全性押在那个语义上不值得。
+
+#### ⑥ 生效核实
+
+**零数据丢失,每一层都用与部署不同的手段。**
+
+| 判据 | 改动前 | 两次重启后 |
+|---|---|---|
+| 实例 ID | `i-06f0a3e4961b8061e` | **同一个** |
+| 私有 IP | `10.20.1.125` | **同一个**(AgentCore 的 TEMPORAL_ADDRESS 不用改) |
+| `LaunchTime` | 10:28:09 | 14:27:29 → 证实重启过 |
+| **`clusterId`** | `811ac051-857b-46e8-8762-34ed81c34c74` | **完全一致 → 库没被重建** |
+| `pgdata` | — | 73M,数据在 |
+| `.env` 修改时间 | 10:38:10 | **仍是 10:38:10 → UserData 没重跑** |
+| `temporal` / `dr-worker` | active | **自己回来的**,均 active |
+| 容器 | 1.29.7 / 2.54.1 | 不变 |
+| worker | poller n=1 | **n=1,自己重新接单** |
+| 引导日志里的口令 | 0 次 | 0 次 |
+| AgentCore→Temporal | 通 | **通,Cluster ID 一致** |
+
+参数值现已是 `1.29.7` / `2.54.1`,**漂移彻底消除**。
+
+#### ⑦ 剩余的同类债
+
+`/opt/dr-worker` 仍是用 SSM 手工装的,**不在 IaC 里**。重启能保留它,
+但真正重建实例时它不会自动回来。要彻底消除这类漂移,worker 的
+provisioning 应当进 UserData 或做成独立的配置管理步骤。
+
+另外 `PrivateIpAddress` 在 `createOnlyProperties` 里 —— 想把
+`10.20.1.125` 固定进模板(免得重建后 AgentCore 的地址失效)**本身就要求替换**,
+所以那件事必须和「有计划的重建」一起做。
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
