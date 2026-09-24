@@ -389,11 +389,140 @@ manifest 不存在)所以没撞上,但迟早会撞。已加 `TimeoutStartSec=900
 
 ---
 
-## 五、待记录
+### 4.4 Aurora 全局数据库(跨 region 复制)
 
-- [ ] 韩国 EKS(控制面 private-only,节点组 `desired=0`)
-- [ ] Aurora 全局数据库(主站转为全局主集群 + 韩国 `db.serverless` 从集群)
-- [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore
+**日期**:2026-09-24
+
+**① 目标**:把主站 `serviceseks2-databaseb269d8bb-efjeyzicx2ak` 变成全局数据库的
+主集群,并在 ap-northeast-2 建 `db.serverless` 从集群。
+
+**⚠️ 分工是刻意的**:全局集群用 **CLI** 建,韩国从集群用 **CFN**。
+
+`AWS::RDS::GlobalCluster` 的 `SourceDBClusterIdentifier` 语法上能把生产主集群
+「收养」进我的栈 —— 但那样**删我的栈时 CFN 会去处置一个不属于它的生产集群**,
+语义不可控。所以边界划在:全局集群(包住生产)= 一次性 CLI 操作;
+韩国从集群(完全属于灾备侧)= CFN 管。本栈删除只影响韩国侧。
+
+**② 前置状态**:现有全局集群数 = **0**;主集群 `available`,ACU 下限 1。
+
+**③ 实际执行的命令**:
+
+    # ③a 建全局集群（参数名用 botocore 服务模型核实过，不是猜的）
+    aws rds create-global-cluster --region ap-northeast-1 \
+      --global-cluster-identifier petsite-global \
+      --source-db-cluster-identifier \
+        arn:aws:rds:ap-northeast-1:926093770964:cluster:serviceseks2-databaseb269d8bb-efjeyzicx2ak
+
+    # ③b 韩国从集群
+    aws cloudformation deploy --region ap-northeast-2 \
+      --stack-name dr-korea-aurora \
+      --template-file infra/dr-korea/04-aurora-dr.yaml \
+      --no-fail-on-empty-changeset
+
+⚠️ 指定 `--source-db-cluster-identifier` 时**不要**再传 `--engine` /
+`--engine-version` / `--storage-encrypted` —— 那些从源集群继承。
+
+**④ 生效核实**(看**成员关系**这个独立事实,不看 deploy 返回):
+
+    aws rds describe-global-clusters --global-cluster-identifier petsite-global \
+      --query 'GlobalClusters[0].GlobalClusterMembers[].{arn:DBClusterArn,writer:IsWriter}'
+
+    →  arn:...ap-northeast-1:...serviceseks2-databaseb269d8bb-efjeyzicx2ak   True
+       arn:...ap-northeast-2:...dr-korea-aurora-secondarycluster-5ctcqnmbkro4  False
+
+**两个成员、一个 writer 一个 reader,这才是跨 region 复制已建立的证据。**
+
+韩国侧的独立确认:
+
+    集群  dr-korea-aurora-secondarycluster-5ctcqnmbkro4
+          available / MinCapacity 0.5 / MaxCapacity 4.0 / global=petsite-global
+    实例  dr-korea-aurora-secondaryinstance-qudkyrrvn3ca
+          db.serverless / available / PubliclyAccessible=False
+
+用户要的「数据库同步 + 较小的实例」两条都落实了:
+韩国 **0.5 ACU** vs 主站 **1.0 ACU**。
+(AWS 建议的 8 ACU 只约束**主** region,从集群不受此约束 —— 所以从集群可以更小。)
+
+**⑥ 回滚**(逆序,**销毁类由用户执行**):
+
+    # 先删从集群（栈），再解散全局集群
+    aws cloudformation delete-stack --region ap-northeast-2 --stack-name dr-korea-aurora
+    # 等栈删完后
+    aws rds delete-global-cluster --global-cluster-identifier petsite-global
+
+⚠️ `delete-global-cluster` 只解散「全局」这层包装,**不删主集群**。
+但顺序反了会失败(有成员时不能删全局集群)。
+
+---
+
+### 4.5 韩国 EKS(守夜灯:控制面常开,零节点)
+
+**日期**:2026-09-24
+
+**① 目标**:`dr-korea-petsite`,ap-northeast-2。
+
+**② 前置状态**:该 region 0 个 EKS 集群。
+
+**③ 实际执行的命令**:
+
+    aws cloudformation deploy --region ap-northeast-2 \
+      --stack-name dr-korea-eks \
+      --template-file infra/dr-korea/03-eks.yaml \
+      --capabilities CAPABILITY_IAM \
+      --no-fail-on-empty-changeset
+
+三个值是**实测主站后对齐的,不是猜的**:
+
+    版本       1.35                        （主站 PetSite 实测）
+    AmiType    AL2023_ARM_64_STANDARD      （主站两个节点组实测；t4g 是 ARM，
+                                             填 x86_64 会让节点起不来）
+    实例类型    t4g.xlarge                  （与主站同规格）
+
+**④ 生效核实**(三层,第三层是与配置**无关**的独立事实):
+
+    ①  集群     status=ACTIVE  ver=1.35
+                endpointPublicAccess=false  endpointPrivateAccess=true
+                authenticationMode=API
+    ②  节点组   status=ACTIVE  ami=AL2023_ARM_64_STANDARD  t4g.xlarge
+                scalingConfig = { minSize 0, desiredSize 0, maxSize 3 }
+    ③  真的零节点：
+        aws ec2 describe-instances --region ap-northeast-2 \
+          --filters "Name=instance-state-name,Values=running,pending"
+        →  只有 dr-korea-temporal (t4g.large)，**没有任何 EKS 节点**
+
+**③ 才是「守夜灯真的是暗的」的证据** —— 节点组配置说 desired=0 是一种说法,
+EC2 列表里没有节点是另一回事。两者都要看。
+
+#### 两处设计决定
+
+**⑴ `AuthenticationMode: API` 而不是 aws-auth ConfigMap。**
+ConfigMap 那套要 `kubectl` 才能改,而公网 endpoint 关着的时候改 ConfigMap
+**本身就需要先能进去** —— 那是个死锁。API 模式用 IAM 授权,从外面就能加人。
+
+**⑵ 节点角色带了 `AmazonSSMManagedInstanceCore`。**
+无公网入站下 SSM 是唯一进得去节点的通道。
+
+#### ⚠️ 一个还没解决的依赖:拆掉 NAT 之后节点拉不了镜像
+
+现在节点(将来拉起时)靠 NAT 访问 ECR / S3。清单里说「装完 Temporal 后可以拆
+NAT 省 41/月」—— 但**拆了 NAT,EKS 节点就拉不了镜像**。
+
+若要拆 NAT,必须先补这些 VPC 端点:`ecr.api`、`ecr.dkr`、`s3`(网关型)、
+`sts`、`elasticloadbalancing`、`autoscaling`。那是约 5 个接口端点
+(~7-8/月 each)+ 1 个免费的网关端点 —— **算下来比 NAT 还贵**。
+
+**结论:NAT 保留。** 清单里「拆 NAT 省 41/月」这条对**只有 Temporal**的阶段
+成立,对有 EKS 的完整站点不成立。已如实更正。
+
+**⑥ 回滚**:`aws cloudformation delete-stack --region ap-northeast-2 --stack-name dr-korea-eks`
+(先删节点组再删集群由 CFN 自己排序)
+
+---
+
+## 六、待记录
+
+- [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
+- [ ] dr-plan-generator 经 temporal-mcp 生成并保存计划(阶段 D)
 
 **韩国侧不建 DeepFlow**(用户决定),**不建 Neptune**(用户要求)。
 清单见 `todo/KOREA-DR-MANIFEST_20260924.md`。
