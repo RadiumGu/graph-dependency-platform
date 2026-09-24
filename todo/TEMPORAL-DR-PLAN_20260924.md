@@ -221,6 +221,80 @@ workflow,**执行 DR 步骤需要另有 Temporal worker**。要回答:
 - 安全策略会拦这些形状:`git push` 目标带变量展开、单条命令混内联 Python 与 `aws` CLI、
   `aws configure list`、`aws lambda list-functions`、递归 grep 根目录。拆开写
 
+
+## 缺口分析:「守夜灯」离「能接管」还差多少(2026-09-24 读活集群得出)
+
+这一节不是推测,是从东京 `PetSite` 集群(1.35、公网 endpoint)读到的 18 个
+Deployment 反推出来的。**它改变了任务范围的判断**,所以单独记一节。
+
+### petsite 真正跑的东西
+
+namespace `petadoptions` 里 7 个业务 Deployment:
+
+| Deployment | 副本 | 端口 | ServiceAccount |
+|---|---|---|---|
+| `petsite-deployment` | 2 | 8080 | `petsite-sa` |
+| `list-adoptions` | 2 | 80 | `list-adoptions-sa` |
+| `pay-for-adoption` | 2 | 80 | `pay-for-adoption-sa` |
+| `search-service` | 2 | 80 | `search-service-sa` |
+| `pethistory-deployment` | 2 | 8080 | `pethistory-sa` |
+| `petfood` | 2 | 8080 | `petfood-sa` |
+| `traffic-generator` | 1 | 80 | `traffic-generator-sa` |
+
+另有 11 个平台组件:`amazon-cloudwatch`(1)、`chaos-mesh`(3)、
+`deepflow`(2:`prometheus-nfm`/`yace-nfm`)、`kube-system`(5:
+`aws-load-balancer-controller` v3.0.0、`cluster-autoscaler` v1.34.0、
+`coredns`、`ebs-csi-controller`、`metrics-server`)。
+
+### 四个此前没被计入的障碍
+
+**① 镜像仓库在要灾备的那个 region —— 这是灾备的致命点。**
+
+6 个业务服务里 5 个用的是 CDK 的 asset 仓库,tag 是内容哈希:
+
+```
+926093770964.dkr.ecr.ap-northeast-1.amazonaws.com/
+  cdk-hnb659fds-container-assets-926093770964-ap-northeast-1:<sha256>
+```
+
+只有 `pethistory` 用具名仓库(`pet-adoptions-history:latest`)。
+**东京挂了就拉不到镜像**,而韩国侧现在有 0 个 ECR 仓库。
+「依赖跨 region 拉取」在真灾难场景下等于没有方案。
+
+**② 每个服务都用 IRSA,而 IRSA 绑的是集群的 OIDC provider。**
+
+韩国集群的 OIDC issuer 与东京不同。那 7 个 `*-sa` 对应的 IAM 角色,
+信任策略里只写了东京集群的 provider → **在韩国起来的 pod 拿不到凭据**。
+这一点很容易漏,而且**只在真切换时才炸**:清单照抄过去、pod 能起来、
+然后所有 AWS 调用 403。
+
+**③ 配置在 region 内,不会随 Aurora 全局数据库过去。**
+
+- SSM Parameter Store,`/petstore` 前缀(`searchapiurl`、`petlistadoptionsurl`、
+  `paymentapiurl`、`pethistoryurl`、`rumscript`、`petfoodapiurl` …)
+- Secrets Manager:`DatabaseSecret3B817195-…`,在 `ap-northeast-1`
+- 这些都是 region 内资源。东京挂了,韩国侧读不到。
+
+**④ 依赖面远超 EKS + DB。**
+
+从环境变量里读出来的:DynamoDB 表(`ServicesEks2-ddbpetfoodfoods…`、
+`…carts…`)、EventBridge bus(`ServicesEks2petfoodeventbus…`)、
+SQS 队列、S3 桶、API Gateway(`9dw5r2dqlb.execute-api.ap-northeast-1`)、
+Bedrock AgentCore runtime ARN(`/petstore/agent/waggleairuntimearn`)。
+
+### 结论
+
+当前的守夜灯站点(EKS 空集群 + Aurora 从集群 + Temporal + AgentCore)
+**基础设施层是通的**,扩容与数据库提升都已有可核实的执行路径。
+但**应用层接管还不成立** —— 上面四条每一条都足以让切换后的 petsite 起不来。
+
+而且 petsite 的部署清单**不在本仓库**(本仓库只有
+`infra/k8s/streamlit-demo.yaml`),由另一个 CDK 项目管
+(access entry 里可见 `ServicesEks2-petsiteCreationRole…`)。
+所以「准备 petsite 的 k8s 清单」不是在这个仓库里写几个 YAML 能完成的事,
+它要么改那个 CDK 项目,要么从活集群导出再改造。
+
+**这些都需要用户决定范围**,所以到此为止,不自行扩大。
 ## 退出条件
 
 五个阶段全部完成并验证过,或卡在必须用户决定的事上
