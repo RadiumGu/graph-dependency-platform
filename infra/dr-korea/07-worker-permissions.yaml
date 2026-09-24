@@ -43,6 +43,15 @@ Parameters:
     Default: dr-korea-agentcore-926093770964-ap-northeast-2
     Description: 计划正文所在的桶（与 temporal-mcp 代码包同桶，不同前缀）
 
+  NodegroupArn:
+    Type: String
+    Default: arn:aws:eks:ap-northeast-2:926093770964:nodegroup/dr-korea-petsite/dr-korea-workers/4ad06992-7957-b47d-7adf-72656f7ffdf0
+    Description: >
+      守夜灯节点组的 ARN（实测取到的，含 EKS 自己生成的 UUID 段）。
+      ⚠️ 节点组重建后这个 UUID 会变，权限会静默失效 ——
+      那时的表现是 AccessDenied 而不是「找不到节点组」，
+      排查时容易误以为是策略写错。重建节点组后要重新取这个值。
+
 Resources:
 
   WorkerReadPlans:
@@ -90,6 +99,35 @@ Resources:
             Condition:
               StringLike:
                 's3:prefix': 'plans/*'
+
+          # ── 2026-09-24：第一条写权限 ────────────────────────────────
+          #
+          # 「按步骤逐个放开」的第一步。给的是拉起节点组这一条，
+          # 因为它是切换里**最可逆**的动作：数错了把 desiredSize 改回去
+          # 就行，不像数据库提升那样一旦丢数据就没法回头。
+          #
+          # 限定到这一个节点组的 ARN，而不是整个集群 —— 主站的节点组在
+          # 另一个 region，但把 Resource 写成 * 意味着以后任何新节点组
+          # 都自动落进这个角色的能力范围，那是在没有需求时先开口子。
+          #
+          # 只给 UpdateNodegroupConfig，**不给** UpdateNodegroupVersion
+          # （那会滚动替换节点）、不给 DeleteNodegroup、不给 CreateNodegroup。
+          # 切换需要的只是改 scalingConfig。
+          - Sid: ScaleUpPilotLightNodegroup
+            Effect: Allow
+            Action:
+              - eks:UpdateNodegroupConfig
+            Resource: !Ref NodegroupArn
+
+          # ⚠️ 仍然**没有**给的写权限，以及为什么：
+          #
+          #   rds:FailoverGlobalCluster        会丢数据的那个变体必须由人裁决，
+          #                                    workflow 已把它做成 signal 放行点。
+          #                                    权限留到那条链路演练过再给。
+          #   elasticloadbalancing:*           建入口会改变暴露面，要先问。
+          #   route53:ChangeResourceRecordSets DNS 切换影响所有流量，最后给。
+          #
+          # 这个顺序不是保守，而是「每放一条都要能单独演练并回滚」。
 
 Outputs:
   PolicyArn:
