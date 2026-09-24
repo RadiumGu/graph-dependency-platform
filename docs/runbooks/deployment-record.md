@@ -1285,6 +1285,116 @@ Output 是栈上次更新时的值,实例的 describe 才是当下的事实。
 
 ---
 
+
+### 4.13 节点组扩容真演练(`dry_run=False`,只放行一步)
+
+**日期**:2026-09-24 ·  **用户已放行在韩国 region 开资源做验证**
+
+#### ① 目标
+
+第一次让 worker **真调 AWS**:把守夜灯节点组从 0 拉到 2,核实整条
+「起 workflow → worker 真执行 → 独立核实」的链路。
+
+#### ② 前置:先补一个安全机制,否则这个演练本身是危险的
+
+原来只有一个全局 `dry_run` 开关。做节点组演练时把它设成 `False`,
+**同一次运行就会把 `promote_database` 也真执行** —— 那是切换生产数据库。
+一次节点组演练绝不该有能力做那件事。
+
+所以加了**按步骤放行**:只有名字出现在 `execute_steps` 里的步骤才真执行,
+其余一律 dry_run,即使 `dry_run=False`。两道闸门(全局开关 **且** 名字在
+清单里)是刻意的 —— 单独任何一个被误设都不足以让危险步骤真跑。
+漏写的后果是「那一步没真跑」(安全),而不是「意外跑了」(危险)。
+
+#### ③ 实际执行
+
+```bash
+# 只放行 scale_up_nodegroup 一步
+PAYLOAD='{"plan_ref":"e2e-test","dry_run":false,
+          "execute_steps":["scale_up_nodegroup"],
+          "decision_timeout_seconds":900}'
+# → POST /api/v1/namespaces/default/workflows/<id>
+# 决策点发 abort —— 演练不碰数据库
+```
+
+#### ④ 生效核实
+
+```
+dry_run: False | executed_steps: ['scale_up_nodegroup']
+fetch_plan_body      executed=False   ← 全局 dry_run=False，但不在放行名单里
+scale_up_nodegroup   executed=True  verified=True  detail: {"running_nodes": 2}
+decision: abort | aborted: True       ← 在数据库提升前停住
+status: COMPLETED | TIMED_OUT 事件: 0
+```
+
+**按步骤放行机制得到验证**:全局开了 `dry_run=False`,`fetch_plan_body`
+仍然没真跑,`promote_database` 连机会都没有。
+
+独立核实(与执行不同的手段)—— `describe-instances` 数真实节点:
+
+```
+running 节点数 = 2
+ap-northeast-2b  10.20.2.103  t4g.xlarge
+ap-northeast-2a  10.20.1.6    t4g.xlarge
+```
+
+跨两个可用区,与节点组的子网配置一致。
+
+#### ⑤ 收尾:缩回守夜灯状态
+
+```bash
+aws eks update-nodegroup-config --region ap-northeast-2 \
+  --cluster-name dr-korea-petsite --nodegroup-name dr-korea-workers \
+  --scaling-config minSize=0,desiredSize=0,maxSize=3
+```
+
+节点组回到 `min0/desired0/max3` 且 `ACTIVE`。
+
+#### ⑥ 演练暴露的两件事
+
+**① 缩容不是瞬时的,而且「还在 running」不等于「缩容失败」。**
+
+EKS 更新报 `Successful`、ASG `DesiredCapacity=0`,但 EC2 里仍有一台
+`running`。真相在 **ASG 的生命周期状态**里:
+
+```
+LifecycleState: Terminating:Wait
+Terminate-LC-Hook  transition=EC2_INSTANCE_TERMINATING
+                   HeartbeatTimeout=1800  DefaultResult=CONTINUE
+```
+
+托管节点组会挂一个排空钩子,上限 **30 分钟**。所以:
+
+> 缩容期间 `describe-instances` 显示 `running`,与「缩容没生效」
+> **在 EC2 这一层无法区分** —— 区分的信号在 ASG 的 `LifecycleState`,
+> 不在 EC2 的 `State`。
+
+已核实节点组 `health.issues` 为空、私有 endpoint 开启、VPC DNS 开启,
+所以不是加入失败。
+
+**② 我的核实测的是「ASG 扩了没」,不是「集群有没有可用容量」。**
+
+`scale_up_nodegroup` 的核实是数 EC2 实例数。那证明 ASG 扩容成功,
+**但不证明集群获得了可调度容量** —— 节点可能起来了却没成为 `Ready`。
+对灾备切换来说这个差别极大:你可能有两台 EC2 和零个可调度节点。
+
+为什么暂时没做到:集群 `endpointPublicAccess=false`,从 VPC 外面查不到
+k8s 节点状态。**正确的修法是让 worker 去查** —— 它就在 VPC 内,
+能访问私有 endpoint。列为后续工作,并已在活动代码里记下这个局限。
+
+#### ⑦ 回滚 / 清理
+
+```bash
+# 残留实例会在排空钩子超时（≤30 分钟）后自动终止。
+# 想立刻结束（⚠️ 销毁类，只记录不执行）：
+aws autoscaling complete-lifecycle-action --region ap-northeast-2 \
+  --auto-scaling-group-name eks-dr-korea-workers-4ad06992-7957-b47d-7adf-72656f7ffdf0 \
+  --lifecycle-hook-name Terminate-LC-Hook \
+  --lifecycle-action-result CONTINUE --instance-id <id>
+```
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
