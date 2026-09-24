@@ -1395,6 +1395,115 @@ aws autoscaling complete-lifecycle-action --region ap-northeast-2 \
 
 ---
 
+
+### 4.14 把扩容核实从「数 EC2」升级为「数 Ready 的 k8s 节点」
+
+**日期**:2026-09-24
+
+#### ① 目标
+
+补掉 4.13 ⑥② 记下的核实缺陷:原来数 EC2 实例,那只证明 ASG 扩容成功,
+**不证明集群获得了可调度容量**。对切换来说差别极大 —— 你可能有两台 EC2
+和零个可调度节点,而步骤会报 `verified=True` 继续往下走。
+
+#### ② 三个前置条件缺一不可(逐个实测出来的,不是设计时想到的)
+
+| 条件 | 缺了会怎样 | 怎么发现的 |
+|---|---|---|
+| 访问条目 | 调不通 k8s API | `list-access-entries` 里没有实例角色 |
+| 控制面 443 入站 | **`curl` 超时** | 集群安全组原本只放行来自自己的流量 |
+| 能读 nodes 的 RBAC | **403 forbidden** | `AmazonEKSViewPolicy` 的资源表里没有 `nodes` |
+
+第二条值得单记:表现是 `Connection timed out` 而不是 `refused` ——
+**安全组静默丢包的形状**。而 DNS 是正常的(解析到 `10.20.1.77` /
+`10.20.2.77`,VPC 内的私有 endpoint ENI),所以必须把「DNS 不通」与
+「端口不通」分开查,否则会往错的方向排查。
+
+#### ③ 为什么不用 AWS 托管的访问策略
+
+```
+AmazonEKSViewPolicy       实测 403 —— 官方文档的资源表里**没有 nodes**
+                          （全是 namespace 内的资源）
+AmazonEKSAdminViewPolicy  是 */* 的 get,list,watch，官方文档原文：
+                          「Note this includes Kubernetes Secrets」
+```
+
+给一个只需要知道「节点 Ready 了没」的 worker 读全集群 Secret 不可接受 ——
+切换后那个集群里会有 petsite 的真实凭据。
+
+所以自定义了一个**只含 `nodes` 的 ClusterRole**,绑到 `dr-node-readers` 组。
+不给 `watch`(会让只读身份长期占着 API server 连接)、不给 `pods`
+(spec 里常带环境变量名之类的信息)。
+
+**为什么绑组而不是用户名**:访问条目的 username 是
+`arn:aws:sts::…:assumed-role/<role>/{{SessionName}}`,而 SessionName 运行时
+才定(实测是实例 ID)。绑到会变的用户名上绑不住;组名稳定。
+
+#### ④ 实际执行的命令
+
+RBAC 需要 cluster-admin,而集群 endpoint 是私有的、操作方在 VPC 外。
+用一次**引导式临时提权**:
+
+```bash
+# ① 临时给 worker 角色 cluster-admin
+aws eks associate-access-policy --region ap-northeast-2 \
+  --cluster-name dr-korea-petsite \
+  --principal-arn <worker-role-arn> \
+  --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy \
+  --access-scope type=cluster
+
+# ② 从实例上 POST ClusterRole + ClusterRoleBinding（不需要 kubectl：
+#    aws eks get-token 出 bearer token，curl 直连私有 endpoint）
+#    → 两个都 HTTP 201 Created
+
+# ③ **立刻**摘掉
+aws eks disassociate-access-policy --region ap-northeast-2 \
+  --cluster-name dr-korea-petsite --principal-arn <worker-role-arn> \
+  --policy-arn arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy
+```
+
+摘完核实 `list-associated-access-policies` 返回**空数组** —— 现在权限只来自
+`dr-node-readers` 组 + 自定义 ClusterRole。
+
+#### ⑤ 生效核实 —— 最小权限的两侧都验
+
+```
+列节点     HTTP 200  kind: NodeList  节点数: 0   ← 守夜灯状态，正确答案
+读 Secret  HTTP 403  Forbidden                  ← 只给了 nodes
+```
+
+在 worker 里直接调 `count_ready_nodes()` 的三态也真验过:
+
+```
+集群存在（零节点）    Ready 节点数: 0     错误: None
+集群名不存在          Ready 节点数: None  原因: ResourceNotFoundException…
+```
+
+**第二行是关键**:查不到返回 `None` 而不是 `0`。返回 0 等于断言
+「没有 Ready 节点」,那是把「没测到」写成测量值 —— 同类缺陷本项目已四次。
+
+#### ⑥ 失败过的做法
+
+**门禁断言写成「字符串不得出现」。** 我写
+`assert "AmazonEKSSecretReaderPolicy" not in text`,但模板里提到它是在
+**说明「未给它」**的注释里 —— 按字符串出现与否判断,等于禁止文档解释自己
+为什么不用某样东西。改成只看 `PolicyArn:` 行上挂的是什么。
+**这是本会话第四次「判据与实现不对齐」。**
+
+**测试编号撞了两次。** `test_87` 与 `test_88` 都已被占用,最终用 90。
+新增门禁前应当先 `ls tests/`。
+
+#### ⑦ 回滚
+
+```bash
+# ⚠️ 销毁类命令 —— 只记录不执行
+aws cloudformation delete-stack --region ap-northeast-2 \
+  --stack-name dr-korea-worker-k8s-readonly
+# ClusterRole / ClusterRoleBinding 需另行删除（它们不由 CFN 管）
+```
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)

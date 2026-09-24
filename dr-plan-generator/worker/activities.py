@@ -79,6 +79,92 @@ def _boto3():
     return boto3
 
 
+def count_ready_nodes() -> tuple[int | None, str | None]:
+    """数集群里 Ready 的 k8s 节点。返回 (数量, 无法判断的原因)。
+
+    ## 为什么需要这个
+
+    2026-09-24 的扩容演练暴露了一个核实缺陷:原来的核实是**数 EC2 实例**。
+    那证明 ASG 扩容成功,**不证明集群获得了可调度容量** —— 节点可能起来了
+    却没成为 Ready。对灾备切换来说差别极大:你可能有两台 EC2 和零个可调度
+    节点,而切换会报「verified=True」继续往下走。
+
+    ## 怎么做到的(都是实测确认的,不是推测)
+
+    集群 `endpointPublicAccess=false`,所以只有 VPC 内的 worker 能查。
+    三个前置条件缺一不可:
+
+    1. **访问条目**:`AuthenticationMode=API` 时调 k8s API 要有条目。
+       实例角色原本不在条目里。
+    2. **控制面 443 入站**:集群安全组原本只放行来自自己的流量,
+       实测表现是 `curl` 超时(`timed out` 而非 `refused`,安全组静默丢包)。
+    3. **RBAC**:`AmazonEKSViewPolicy` 实测 **403** —— 官方文档的资源表里
+       **没有 nodes**;而 `AmazonEKSAdminViewPolicy` 是 `*/*`,文档明确写着
+       「包括 Kubernetes Secrets」。所以自定义了一个只含 nodes 的 ClusterRole,
+       绑到 `dr-node-readers` 组。实测:列节点 200、读 Secret 403。
+
+    ## 不引入 kubernetes 客户端库
+
+    `aws eks get-token` 出 bearer token + `urllib` 直连即可,少一个依赖。
+    TLS 用集群自己的 CA 校验,不跳过校验。
+    """
+    import json as _json  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+    import urllib.request  # noqa: PLC0415
+    import ssl  # noqa: PLC0415
+    import base64 as _b64  # noqa: PLC0415
+
+    try:
+        eks = _boto3().client("eks", region_name=_REGION)
+        c = eks.describe_cluster(name=_EKS_CLUSTER)["cluster"]
+        endpoint = c["endpoint"]
+        ca_pem = _b64.b64decode(c["certificateAuthority"]["data"])
+    except Exception as e:  # noqa: BLE001
+        return None, f"查集群 endpoint/CA 失败：{type(e).__name__}: {e}"
+
+    try:
+        # aws eks get-token 是它的正规用途：把 SigV4 预签名 URL 包成
+        # k8s-aws-v1.<base64url> 形式的 bearer token。自己实现容易出错。
+        out = subprocess.run(
+            ["aws", "eks", "get-token", "--region", _REGION,
+             "--cluster-name", _EKS_CLUSTER, "--output", "json"],
+            capture_output=True, text=True, timeout=30, check=True,
+        )
+        token = _json.loads(out.stdout)["status"]["token"]
+    except Exception as e:  # noqa: BLE001
+        return None, f"取 k8s token 失败：{type(e).__name__}: {e}"
+
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".crt", delete=False) as f:
+            f.write(ca_pem)
+            ca_path = f.name
+        ctx = ssl.create_default_context(cafile=ca_path)
+        req = urllib.request.Request(
+            f"{endpoint}/api/v1/nodes",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+            body = _json.loads(resp.read())
+    except Exception as e:  # noqa: BLE001
+        # ⚠️ 返回 None 而不是 0。查不到不等于「没有 Ready 节点」——
+        # 把「没测到」写成「测到 0 个」是本项目已犯四次的缺陷。
+        return None, f"查 k8s 节点失败：{type(e).__name__}: {e}"
+
+    items = body.get("items")
+    if items is None:
+        return None, f"k8s 返回体没有 items 字段（kind={body.get('kind')}）"
+
+    ready = 0
+    for node in items:
+        conds = (node.get("status") or {}).get("conditions") or []
+        # Ready 条件的 status 是字符串 "True"/"False"/"Unknown"，不是布尔。
+        # "Unknown" 表示 kubelet 失联 —— 那种节点不该算进可调度容量。
+        if any(c.get("type") == "Ready" and c.get("status") == "True" for c in conds):
+            ready += 1
+    return ready, None
+
+
 # ── ① 取计划正文 ──────────────────────────────────────────────────────────
 
 
@@ -179,6 +265,8 @@ async def scale_up_nodegroup(inp: ActivityInput) -> StepResult:
             inconclusive_reason=reason,
         )
 
+    import asyncio  # noqa: PLC0415
+
     eks = _boto3().client("eks", region_name=_REGION)
     eks.update_nodegroup_config(
         clusterName=_EKS_CLUSTER,
@@ -200,31 +288,40 @@ async def scale_up_nodegroup(inp: ActivityInput) -> StepResult:
         found = sum(len(r["Instances"]) for r in resp["Reservations"])
         if found >= 2:
             break
-        import asyncio  # noqa: PLC0415
-
         await asyncio.sleep(15)
+
+    # ── 核实升级：数 Ready 的 k8s 节点，不只数 EC2 ────────────────────
+    #
+    # 2026-09-24 演练时原来的判据是数 EC2 —— 那只证明 ASG 扩容成功，
+    # **不证明集群获得了可调度容量**。对切换来说差别极大：你可能有两台
+    # EC2 和零个可调度节点，而步骤会报 verified=True 继续往下走。
+    ready, ready_err = count_ready_nodes()
+    for _ in range(20):
+        if ready is not None and ready >= 2:
+            break
+        activity.heartbeat(f"Ready 的 k8s 节点数：{ready}")
+        await asyncio.sleep(15)
+        ready, ready_err = count_ready_nodes()
 
     return StepResult(
         step="scale_up_nodegroup",
         executed=True,
-        detail={"running_nodes": found},
-        # ⚠️ 这里的 verified 只说明「ASG 扩容成功」，**不说明集群获得了
-        # 可调度容量**。节点可能起来了却没成为 Ready —— 对灾备切换来说
-        # 这个差别极大：你可能有两台 EC2 和零个可调度节点。
-        #
-        # 2026-09-24 演练时确认了这个局限。为什么暂时没做到：集群
-        # endpointPublicAccess=false，从 VPC 外查不到 k8s 节点状态。
-        # 正确的修法是让 worker 去查 —— 它就在 VPC 内，能访问私有 endpoint。
-        verified=found >= 2,
+        detail={"running_nodes": found, "ready_k8s_nodes": ready},
+        # ⚠️ ready 为 None 表示**查不到**（不是「没有 Ready 节点」），
+        # 此时 verified 也必须是 None —— 未测量不能写成测量值。
+        verified=(None if ready is None else ready >= 2),
         inconclusive_reason=(
-            None
-            if found >= 2
-            else f"等待超时，只看到 {found} 个 running 节点"
+            ready_err
+            if ready is None
+            else (
+                None
+                if ready >= 2
+                else f"EC2 起了 {found} 台，但只有 {ready} 个 k8s 节点 Ready"
+            )
         ),
-        # 把局限如实带进结果，别让读的人把「ASG 扩了」当成「集群能跑活」。
         detail_note=(
-            "running_nodes 数的是 EC2 实例，不是 Ready 的 k8s 节点。"
-            "两台 EC2 起来了仍可能没有可调度容量。"
+            "running_nodes 数的是 EC2 实例，ready_k8s_nodes 数的是 Ready 的 "
+            "k8s 节点。前者只证明 ASG 扩了，后者才证明集群真有可调度容量。"
         ),
     )
 
