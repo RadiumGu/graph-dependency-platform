@@ -1504,6 +1504,93 @@ aws cloudformation delete-stack --region ap-northeast-2 \
 
 ---
 
+
+### 4.15 让门禁在 CI 里真的拦得住
+
+**日期**:2026-09-24 ｜ **不是部署,是对「已部署结论」的可信度修复**
+
+#### ① 发现
+
+按红线②「查通过数而不只看没报错」核对 PR #9 的 CI 时对出来的:
+
+```
+main                   26 passed, 1263 skipped
+加了 12 条纯离线门禁后   26 passed, 1275 skipped   ← 通过数一个没涨，+12 全进 skipped
+```
+
+**此前写的所有门禁在 CI 里一条都没执行过** —— test_80~86 那批约 72 条,
+加上 test_90 的 12 条。它们只在有 Neptune 凭据的开发机上有效。
+
+#### ② 根因
+
+`tests/conftest.py`:
+
+```python
+@pytest.fixture(scope='session', autouse=True)
+def cleanup_test_data(neptune_rca):   # ← 参数里要 neptune_rca
+```
+
+`autouse=True` 使它成为**每一个**测试的 setup 依赖,而 `neptune_rca` 里有
+`assert isinstance(result, list)`。pytest 在第一个测试 setup 时急切求值它 →
+没有 Neptune 就整套在 setup 阶段全灭,连「读一个 YAML、断言里面有某个字段」
+这种纯离线门禁也一样。
+
+清理逻辑本来就全套 `try/except`,所以把 client 解析挪到 `yield` 之后即可。
+Neptune 可达时行为完全一致。
+
+#### ③ 修复揭开了两层此前被吞掉的问题
+
+**缺包。** workflow 手列 8 个包,而 `strands` 缺着 —— 40 个
+`ModuleNotFoundError('strands')` 此前全被 setup 阶段的 ERROR 盖住。
+改成装 `requirements-dev.txt`(仓库自己的权威清单):
+
+```
+手列 8 个包            1041 passed, 5 failed, 41 errors
+-r requirements-dev    1069 passed, 1 failed,  0 errors
+```
+
+手列必然漂移:workflow 的注释里就记着有人从 CI 日志逐个追加了
+pydantic/structlog/streamlit/moto 四个。它与真正的依赖清单没有机械联系。
+
+**一条过期测试。** `test_59::test_m05` import `st_link_analysis`,
+而那个包 2026-09-13 就被删了(缩放低于 0.625 时节点标签整体消失),
+两个图谱页早已改用 `demo/components/graph_svg`。
+它的 docstring 还写着「9_Interactive_Explorer.py 直接 import 这四个符号」——
+而那一行现在是 `from components import graph_svg`。
+
+两层遮蔽叠在一起才让它活到今天:开发机上残留着卸载前装的副本(本地绿),
+CI 里所有测试卡在 setup(从没真跑)。已改成守 `graph_svg.render` 的真实签名,
+外加「三个被删的包不许悄悄回来」。
+
+#### ④ 下限从 24 上调到 1040
+
+`GDP_OFFLINE_MIN_PASSED` 的注释自称「是这个 job 的全部价值所在」,
+而它是 24、实际通过 26 —— 基本什么都不挡。修掉 conftest 后实测 1069,
+设 1040 留余量。
+
+#### ⑤ 一个反直觉的核实结果:门禁被它要抓的缺陷禁用了
+
+反向验证时把 conftest 退回 `cleanup_test_data(neptune_rca)`,
+`test_91` 的那一组**0 个挂靶**。不是正则写错 —— 是这一组自己的 setup
+同样依赖那个 fixture,offline 处理器把它的 ERROR 转成了 skip。
+
+**真正的机械防线是下限**:退化后通过数从 1069 掉到 26,低于 1040 →
+pytest **退出码 1**(实测,绕开管道取的)。两条防线针对不同环境:
+下限管 CI,`test_91` 那一组管有 Neptune 的开发机。
+
+#### ⑥ 本轮判据错了三次
+
+| 错法 | 真相 |
+|---|---|
+| 用 `AWS_ACCESS_KEY_ID=bogus` 模拟 CI 无凭据 | bogus 拿到 403,CI 是「凭据未解析到」,offline 处理器只认后者。测出 22 failed 全是假的 |
+| 写 `DEMO` / `sys.path` 改 test_59 | 那文件没定义 `DEMO` 也没 `import sys`,真实名字是 `REQ` |
+| 检测死包 import 用 `^\s*importlib\.…` | 实际是 `mod = importlib.import_module(…)`,调用在赋值号右边,锚到行首永不匹配 |
+
+加上「门禁把自己举的反例判成违规」(排除自身才修好),
+**判据类错误本会话已第八次,功能仍从未写错。**
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
