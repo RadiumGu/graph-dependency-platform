@@ -56,7 +56,14 @@ jobs:
         # 通过数恒为 0，而下面那行注释说「这一行是这个 job 的全部价值所在」——
         # 那个价值一直是 0。红了这么久没人处置，因为它红的原因看起来
         # 像环境问题而不是代码问题。
-        run: pip install -q pytest pyyaml boto3 requests pydantic
+        # 这四个是 2026-09-24 逐个从 CI 日志里读出来的，不是猜的：
+        #   pydantic    conftest → rca/config → profiles/schema
+        #   structlog   tests/test_39 → chaos/code/runner/observability
+        #   streamlit   tests/test_22
+        #   moto        tests/test_12
+        # 补齐之前，这三个文件在**收集阶段**就 ERROR，pytest 直接
+        # Interrupted，于是实际通过数 0、下限 24 永远不满足。
+        run: pip install -q pytest pyyaml boto3 requests pydantic structlog streamlit moto
       - name: Run offline subset
         env:
           # `GDP_OFFLINE=1` 只把「确认是云访问不可达」的失败转成 skip
