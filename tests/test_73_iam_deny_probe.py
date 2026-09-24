@@ -16,6 +16,18 @@ import ast
 import pathlib
 import re
 
+# ⚠️ 2026-09-24 补上：本文件在两处调 pytest.skip()（第 281、569 行），
+# 却从来没 import pytest。
+#
+# 为什么活了这么久:那两处只在「合成流量 cron 不在此环境」时才走到,
+# 本机有那个 cron 所以永远走不到;而 CI 里所有测试都卡在 conftest 的
+# setup 上从没真跑(见 tests/conftest.py 的 cleanup_test_data 说明)。
+# 修掉 conftest 后 CI 第一次真跑这两条,立刻 NameError。
+#
+# 这类缺陷的形状值得记:**只在少见分支上引用的名字,缺了导入也能一直绿。**
+# py_compile 不会报（语法合法），import 也不会报（模块级没引用它）。
+import pytest
+
 _ROOT = pathlib.Path(__file__).resolve().parents[1]
 _SCRIPT = _ROOT / "scripts" / "verify_via_iam_deny.py"
 

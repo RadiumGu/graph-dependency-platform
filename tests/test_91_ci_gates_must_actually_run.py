@@ -185,3 +185,57 @@ class TestStaleTestIsGone:
             f"这些测试仍在 import 已删除的包：{offenders}。"
             "守一个项目已决定不用的依赖，它的绿色是假的。"
         )
+
+
+class TestNoUndefinedNamesInTests:
+    """测试文件里不许有「只在少见分支上引用、却没导入」的名字。
+
+    2026-09-24：`test_73_iam_deny_probe.py` 在两处调 `pytest.skip()`，
+    却从来没 `import pytest`。它活了很久，因为那两处只在
+    「合成流量 cron 不在此环境」时才走到 —— 本机永远走不到，
+    而 CI 里所有测试都卡在 setup 上从没真跑。
+
+    **这类缺陷的形状**:`py_compile` 不报（语法合法）、import 也不报
+    （模块级没引用它），只有真正执行到那一行才炸。
+    """
+
+    # 这些名字必须在用到时已被导入。不做全量未定义名分析（那需要完整的
+    # 作用域推导），只盯几个最常被漏掉的模块级名字 —— 判据窄但可靠，
+    # 比一个会误报的宽判据有用。
+    _MUST_IMPORT = ("pytest", "json", "subprocess", "yaml", "inspect")
+
+    def test_module_level_names_are_imported(self):
+        import ast as _ast
+
+        offenders = []
+        for f in sorted((ROOT / "tests").glob("test_*.py")):
+            src = f.read_text(encoding="utf-8")
+            tree = _ast.parse(src)
+
+            imported: set[str] = set()
+            for node in _ast.walk(tree):
+                if isinstance(node, _ast.Import):
+                    for a in node.names:
+                        imported.add((a.asname or a.name).split(".")[0])
+                elif isinstance(node, _ast.ImportFrom):
+                    for a in node.names:
+                        imported.add(a.asname or a.name)
+
+            used: set[str] = set()
+            for node in _ast.walk(tree):
+                # 只看 `name.attr` 形式的属性访问，这是模块用法的典型形状。
+                if isinstance(node, _ast.Attribute) and isinstance(
+                    node.value, _ast.Name
+                ):
+                    used.add(node.value.id)
+
+            for name in self._MUST_IMPORT:
+                if name in used and name not in imported:
+                    offenders.append(f"{f.name} 用了 {name}.* 但没 import {name}")
+
+        assert not offenders, (
+            "这些测试文件引用了未导入的模块：\n  "
+            + "\n  ".join(offenders)
+            + "\n只在少见分支上引用的名字，缺了导入也能一直绿 —— "
+            "py_compile 与 import 都抓不到它。"
+        )
