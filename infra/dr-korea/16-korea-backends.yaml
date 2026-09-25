@@ -62,6 +62,14 @@ Parameters:
       只是它的表现不是启动失败而是请求超时，所以从「7/7 就绪」
       完全看不出来。**又一次「全绿但不能服务」。**
 
+  PetFoodRoleName:
+    Type: String
+    Default: ServicesEks2-petfoodServiceAccountRole25957383-tECVCVv0ZjpT
+    Description: >-
+      petfood 的 IRSA 角色（东京 ServicesEks2 栈建的）。
+      实测它的内联策略把资源限定在**东京**那两张表与总线上，
+      所以韩国这三个资源要各自用资源策略授权它。
+
 Resources:
 
   # ── 让 pethistory 能读韩国的 DB 密钥 ──────────────────────────────
@@ -181,7 +189,179 @@ Resources:
         - Key: Purpose
           Value: pilot-light-backend
 
+  # ── petfood 的两张表 ────────────────────────────────────────────
+  # ═══════════════════════════════════════════════════════════════
+  # 为什么需要它们
+  #
+  # 2026-09-25 实测:韩国 /Checkout 页面渲染错误页，petsite 日志给出
+  #   Error fetching cart data for user: user00911
+  #   HttpRequestException: 500 (Internal Server Error)
+  # —— **报错指向 petsite，真因在 petfood**，而 petfood 的 Deployment
+  # 还是 1/1 就绪。petfood 的环境变量指着东京的两张表与总线。
+  #
+  # 键结构照东京实测:
+  #   ddbpetfoodfoods   id(HASH)                        9 条
+  #   ddbpetfoodcarts   user_id(HASH) + item_id(RANGE)  0 条
+  # 两张都是 PAY_PER_REQUEST —— 这次与东京一致，不是刻意偏离。
+  # ═══════════════════════════════════════════════════════════════
+  PetFoodFoodsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: dr-korea-petfood-foods
+      BillingMode: PAY_PER_REQUEST
+      # ⚠️⚠️ 2026-09-25 踩过:第一版只抄了 KeySchema，**没抄二级索引**。
+      #      结果 /FoodService 从「200 Pet Food Store」变成错误页 ——
+      #      **我把一个本来好的页面弄坏了**。petfood 查的是 GSI，
+      #      而报错是 ValidationException（"provided key element does not
+      #      match the schema"），指向的是**另一张表**（carts），
+      #      所以完全看不出真因在 foods 表缺索引。
+      #
+      #      「抄了主键就算抄完了表」是这次的错。表的契约还包括:
+      #      属性定义、GSI/LSI、投影、流 —— 缺任何一个都可能只在
+      #      某一条查询路径上显形。
+      AttributeDefinitions:
+        - AttributeName: id
+          AttributeType: S
+        # 这四个只被 GSI 用到 —— 少了它们 GSI 建不出来
+        - AttributeName: food_type
+          AttributeType: S
+        - AttributeName: price
+          AttributeType: N
+        - AttributeName: pet_type
+          AttributeType: S
+        - AttributeName: name
+          AttributeType: S
+      KeySchema:
+        - AttributeName: id
+          KeyType: HASH
+      # 两个 GSI 的键与投影都照东京实测。
+      #
+      # ⚠️ **必须分两次部署。** DynamoDB 的限制（实测报错原文）:
+      #      "Cannot perform more than one GSI creation or deletion
+      #       in a single update"
+      #    所以首次建表若要两个索引，得先部一个、再部第二个。
+      #    这份模板声明的是**最终状态**;在一个已有两个索引的表上重复部署没问题。
+      GlobalSecondaryIndexes:
+        - IndexName: FoodTypeIndex
+          KeySchema:
+            - AttributeName: food_type
+              KeyType: HASH
+            - AttributeName: price
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: PetTypeIndex
+          KeySchema:
+            - AttributeName: pet_type
+              KeyType: HASH
+            - AttributeName: name
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      # 用资源策略授权，不改东京那个生产角色 —— 与 4.26 的密钥同一思路。
+      # DynamoDB 支持资源策略（developerguide/access-control-resource-based.html）。
+      # ⚠️ Resource 必须是 "*"（指这张表自己）:在表自己的资源策略里引用
+      #    它自己的 ARN 会形成 CFN 循环依赖。
+      ResourcePolicy:
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Sid: AllowPetFoodRole
+              Effect: Allow
+              Principal:
+                AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${PetFoodRoleName}'
+              # 动作集照东京那个角色的内联策略逐条抄（实测 10 个）
+              Action:
+                - dynamodb:BatchGetItem
+                - dynamodb:Query
+                - dynamodb:GetItem
+                - dynamodb:Scan
+                - dynamodb:ConditionCheckItem
+                - dynamodb:BatchWriteItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+                - dynamodb:DescribeTable
+              Resource: '*'
+      Tags:
+        - Key: Purpose
+          Value: pilot-light-backend
+
+  PetFoodCartsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: dr-korea-petfood-carts
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: user_id
+          AttributeType: S
+        - AttributeName: item_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: user_id
+          KeyType: HASH
+        - AttributeName: item_id
+          KeyType: RANGE
+      ResourcePolicy:
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+            - Sid: AllowPetFoodRole
+              Effect: Allow
+              Principal:
+                AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${PetFoodRoleName}'
+              Action:
+                - dynamodb:BatchGetItem
+                - dynamodb:Query
+                - dynamodb:GetItem
+                - dynamodb:Scan
+                - dynamodb:ConditionCheckItem
+                - dynamodb:BatchWriteItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+                - dynamodb:DescribeTable
+              Resource: '*'
+      Tags:
+        - Key: Purpose
+          Value: pilot-light-backend
+
+  # ── petfood 的事件总线 ──────────────────────────────────────────
+  # petfood 带 PETFOOD_EVENTS_ENABLED=true，所以发事件失败会让接口 500。
+  PetFoodEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: dr-korea-petfood-eventbus
+
+  PetFoodEventBusPolicy:
+    Type: AWS::Events::EventBusPolicy
+    Properties:
+      EventBusName: !Ref PetFoodEventBus
+      StatementId: AllowPetFoodRolePutEvents
+      Statement:
+        Effect: Allow
+        Principal:
+          AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:role/${PetFoodRoleName}'
+        Action: events:PutEvents
+        Resource: !GetAtt PetFoodEventBus.Arn
+
 Outputs:
+  PetFoodFoodsTableName:
+    Description: 写进 petfood 的 PETFOOD_FOODS_TABLE_NAME
+    Value: !Ref PetFoodFoodsTable
+
+  PetFoodCartsTableName:
+    Description: 写进 petfood 的 PETFOOD_CARTS_TABLE_NAME
+    Value: !Ref PetFoodCartsTable
+
+  PetFoodEventBusName:
+    Description: 写进 petfood 的 PETFOOD_EVENT_BUS_NAME
+    Value: !Ref PetFoodEventBus
+
   TableName:
     Description: 写进 /petstore/dynamodbtablename
     Value: !Ref PetAdoptionsTable

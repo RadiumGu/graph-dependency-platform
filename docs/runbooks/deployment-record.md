@@ -2997,6 +2997,123 @@ ddbpetfoodcarts   键 user_id(HASH) + item_id(RANGE) 0 条    PAY_PER_REQUEST
 
 ---
 
+
+### 4.28 补齐 petfood 后端 —— 我把一个好页面弄坏了,又修回来
+
+**日期**:2026-09-25 ｜ 栈 `dr-korea-backends` 扩充
+
+#### ① 建了什么
+
+```
+dr-korea-petfood-foods     键 id(HASH)                        + 2 个 GSI
+dr-korea-petfood-carts     键 user_id(HASH) + item_id(RANGE)
+dr-korea-petfood-eventbus  EventBridge 事件总线
+```
+
+授权沿用 4.26 的思路:**资源策略,不改生产角色**。
+DynamoDB 支持资源策略(`developerguide/access-control-resource-based.html`),
+EventBridge 总线也支持。动作集照东京那个角色的内联策略**逐条抄**(实测 10 个)。
+
+环境变量改写补齐 4 项:`PETFOOD_REGION` + 三个 `PETFOOD_*_NAME`。
+
+#### ② ⚠️ 我把 `/FoodService` 从好弄坏了 —— 抄了主键就以为抄完了表
+
+第一版只抄了 `KeySchema`,**没抄二级索引**。结果:
+
+```
+改动前   /FoodService  200  "Pet Food Store"   ✅
+改动后   /FoodService  200  "Error - …"        ❌  ← 我造成的回退
+```
+
+而报错是 `ValidationException`("The provided key element does not match the
+schema"),**指向的是另一张表(carts)** —— 完全看不出真因在 foods 表缺索引。
+
+东京那张表有两个 GSI:
+
+```
+FoodTypeIndex   food_type(HASH) + price(RANGE)   投影 ALL
+PetTypeIndex    pet_type(HASH)  + name(RANGE)    投影 ALL
+```
+
+补上之后 `/FoodService` 恢复 200 "Pet Food Store" —— 因果确认。
+
+> **「抄了主键就算抄完了表」是这次的错。** 表的契约还包括:属性定义、
+> GSI/LSI、投影、流。缺任何一个都可能**只在某一条查询路径上显形**。
+
+#### ③ 两个 DynamoDB 的硬约束(都是实测报错换来的)
+
+```
+Cannot perform more than one GSI creation or deletion in a single update
+   → 首次建两个索引必须**分两次部署**
+Number of attributes in KeySchema does not exactly match number of
+attributes defined in AttributeDefinitions
+   → AttributeDefinitions 必须**恰好**等于所有 KeySchema 用到的属性；
+     第一趟只有一个索引时，另一个索引专用的属性也要一起去掉
+```
+
+第二条我第一次没看到,**因为用 `tail -2` 把错误文本截掉了** ——
+那正是「排查命令别截断 stderr」那条规矩的代价。
+
+#### ④ `/Checkout` 的真因:应用自身的缺陷,东京也一样
+
+四个页面现在:
+
+```
+首页                200  "Home"                ✅
+/PetListAdoptions   200  "Pet Adoption List"   ✅  0.20s
+/FoodService        200  "Pet Food Store"      ✅  0.12s
+/Checkout           200  "Error - …"           ❌
+```
+
+petfood 日志:`ValidationException` on `dr-korea-petfood-carts`,
+路径 `GET /api/cart/:user_id`。
+
+读源码(`petfood-rs/src/repositories/cart_repository.rs:338`):
+
+```rust
+.get_item()
+    .key("user_id", AttributeValue::S(user_id.to_string()))   // ← 只给分区键
+```
+
+**`GetItem` 必须给全主键**,而 carts 表是复合主键(`user_id` + `item_id`)。
+两侧表结构**逐字相同**(并排比对过 KeySchema / AttributeDefinitions / GSI / LSI),
+所以**这是 demo 应用自身的缺陷,东京会以完全相同的方式失败。**
+
+##### 刻意不把韩国表改成单键
+
+改成 `user_id` 单键能让韩国的 `/Checkout` 好起来 —— 但那会让**灾备站点的行为
+与生产不一致**,违背贯穿全程的「演练的必须是同一个东西」。
+所以保持与东京一致,把这条作为 demo 的已知缺陷交给用户。
+
+##### ⚠️ 东京的活体对照**没做成**,不能当证据
+
+想用 pod proxy 打东京同一接口,结果 `401` 且 pod 名取空 —— token 在脚本中途
+失效。而「东京日志 0 命中」同样**分不出**「没有这个错」与「日志取失败」。
+
+**所以结论是建立在源码 + 两侧表结构上的,不是建立在那次失败的对照上。**
+这两者强度不同,必须分清。
+
+#### ⑤ 我自己的探测错误(又一次)
+
+上一轮用 pod proxy 的 **80 端口**打 petfood 得到 `connection refused`。
+这次查到真实值:`Service port 80 → targetPort 8080`。**那次是我测错了。**
+
+#### ⑥ 数据同步脚本已参数化
+
+`sync_korea_ddb_items.py` 现在支持多表,**键结构逐表声明不推断**
+(拿错字段的表现是 KeyError 或者「比对永远认为全都缺失」)。
+
+已同步:`petadoptions` 26 条、`petfood-foods` 9 条,写后都**重新扫两边比对**。
+`petfood-carts` **刻意不同步** —— 它是用户数据不是参考数据,
+切换后应当由用户重新加购。
+
+#### ⑦ 清理
+
+节点组 `desiredSize=0`、临时提权已摘并核实空数组。
+新增空闲成本:两张 PAY_PER_REQUEST 表 + 一个事件总线 ≈ 0。
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)

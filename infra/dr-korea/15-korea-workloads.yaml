@@ -3,7 +3,7 @@
 # ⚠️⚠️ 这个文件是**生成的，不要手改**。
 #      生成器:scripts/gen_korea_workloads.py
 #      重新生成:python3.11 scripts/gen_korea_workloads.py --out infra/dr-korea/15-korea-workloads.yaml
-#      本次生成:2026-09-25T15:11:14Z
+#      本次生成:2026-09-25T15:26:17Z
 #      来源:ap-northeast-1 集群 PetSite 的 namespace petadoptions（活集群）
 #           + infra/dr-korea/irsa-korea-mapping.json（ServiceAccount 部分）
 #
@@ -29,7 +29,10 @@
 #   - pay-for-adoption: enableServiceLinks=False 已带过来 —— 丢了它会让 service-link 环境变量污染应用配置
 #   - petfood/aws-otel-collector: ⚠️ 环境变量 AOT_CONFIG_CONTENT 的值仍含 ap-northeast-1 （receivers: otlp: protocols: grpc: endpoint: 0.0.0.）—— 需要显式决定改写还是保留
 #   - petfood/petfood: AWS_REGION ap-northeast-1 → ap-northeast-2
-#   - petfood/petfood: ⚠️ 环境变量 PETFOOD_REGION 的值仍含 ap-northeast-1 （ap-northeast-1）—— 需要显式决定改写还是保留
+#   - petfood/petfood: PETFOOD_CARTS_TABLE_NAME ServicesEks2-ddbpetfoodcarts77F2B0EA-1HSU365TM7EXJ → dr-korea-petfood-carts
+#   - petfood/petfood: PETFOOD_EVENT_BUS_NAME ServicesEks2petfoodeventbus12F76D34 → dr-korea-petfood-eventbus
+#   - petfood/petfood: PETFOOD_FOODS_TABLE_NAME ServicesEks2-ddbpetfoodfoods00C5D62B-4FH25BBOAEWX → dr-korea-petfood-foods
+#   - petfood/petfood: PETFOOD_REGION ap-northeast-1 → ap-northeast-2
 #   - petfood: enableServiceLinks=False 已带过来 —— 丢了它会让 service-link 环境变量污染应用配置
 #   - pethistory-deployment/aws-otel-collector: AWS_REGION ap-northeast-1 → ap-northeast-2
 #   - pethistory-deployment/aws-otel-collector: ⚠️ 环境变量 AOT_CONFIG_CONTENT 的值仍含 ap-northeast-1 （# aws-otel-collector sidecar 配置 —— 增加 DeepFlow OTL）—— 需要显式决定改写还是保留
@@ -449,13 +452,13 @@ spec:
         - name: AWS_REGION
           value: ap-northeast-2
         - name: PETFOOD_FOODS_TABLE_NAME
-          value: ServicesEks2-ddbpetfoodfoods00C5D62B-4FH25BBOAEWX
+          value: dr-korea-petfood-foods
         - name: PETFOOD_CARTS_TABLE_NAME
-          value: ServicesEks2-ddbpetfoodcarts77F2B0EA-1HSU365TM7EXJ
+          value: dr-korea-petfood-carts
         - name: PETFOOD_EVENT_BUS_NAME
-          value: ServicesEks2petfoodeventbus12F76D34
+          value: dr-korea-petfood-eventbus
         - name: PETFOOD_REGION
-          value: ap-northeast-1
+          value: ap-northeast-2
         - name: PETFOOD_ENABLE_JSON_LOGGING
           value: 'true'
         - name: PETFOOD_EVENTS_ENABLED
