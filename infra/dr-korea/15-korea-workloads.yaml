@@ -3,7 +3,7 @@
 # ⚠️⚠️ 这个文件是**生成的，不要手改**。
 #      生成器:scripts/gen_korea_workloads.py
 #      重新生成:python3.11 scripts/gen_korea_workloads.py --out infra/dr-korea/15-korea-workloads.yaml
-#      本次生成:2026-09-25T13:10:50Z
+#      本次生成:2026-09-25T14:11:25Z
 #      来源:ap-northeast-1 集群 PetSite 的 namespace petadoptions（活集群）
 #           + infra/dr-korea/irsa-korea-mapping.json（ServiceAccount 部分）
 #
@@ -21,11 +21,23 @@
 # 补齐 region 内后端属于手册第五节⑤，不是这个文件的范围。
 #
 # ── 生成时发现的注意事项 ────────────────────────────────────────
+#   - list-adoptions/list-adoptions: AWS_REGION ap-northeast-1 → ap-northeast-2
 #   - list-adoptions: enableServiceLinks=False 已带过来 —— 丢了它会让 service-link 环境变量污染应用配置
+#   - pay-for-adoption/pay-for-adoption: AWS_REGION ap-northeast-1 → ap-northeast-2
 #   - pay-for-adoption: enableServiceLinks=False 已带过来 —— 丢了它会让 service-link 环境变量污染应用配置
+#   - petfood/petfood: AWS_REGION ap-northeast-1 → ap-northeast-2
 #   - petfood: enableServiceLinks=False 已带过来 —— 丢了它会让 service-link 环境变量污染应用配置
+#   - pethistory-deployment/aws-otel-collector: AWS_REGION ap-northeast-1 → ap-northeast-2
+#   - pethistory-deployment/aws-otel-collector: 删掉环境变量 RDS_SECRET_ARN —— 让应用回落到韩国的参数存储（源码里本来就有这条回落路径）
+#   - pethistory-deployment/aws-otel-collector: 删掉环境变量 UPDATE_ADOPTION_URL —— 让应用回落到韩国的参数存储（源码里本来就有这条回落路径）
+#   - pethistory-deployment/pethistory: AWS_REGION ap-northeast-1 → ap-northeast-2
+#   - pethistory-deployment/pethistory: S3_REGION ap-northeast-1 → ap-northeast-2
+#   - pethistory-deployment/pethistory: 删掉环境变量 RDS_SECRET_ARN —— 让应用回落到韩国的参数存储（源码里本来就有这条回落路径）
+#   - pethistory-deployment/pethistory: 删掉环境变量 UPDATE_ADOPTION_URL —— 让应用回落到韩国的参数存储（源码里本来就有这条回落路径）
 #   - pethistory: 镜像用可变 tag `latest` —— 主备两侧可能指向不同镜像而看不出来
+#   - search-service/search-service: AWS_REGION ap-northeast-1 → ap-northeast-2
 #   - search-service: enableServiceLinks=False 已带过来 —— 丢了它会让 service-link 环境变量污染应用配置
+#   - traffic-generator/traffic-generator: AWS_REGION ap-northeast-1 → ap-northeast-2
 #   - traffic-generator: enableServiceLinks=False 已带过来 —— 丢了它会让 service-link 环境变量污染应用配置
 ---
 apiVersion: v1
@@ -164,7 +176,7 @@ spec:
           protocol: TCP
         env:
         - name: AWS_REGION
-          value: ap-northeast-1
+          value: ap-northeast-2
         resources:
           limits:
             cpu: 512m
@@ -290,7 +302,7 @@ spec:
           protocol: TCP
         env:
         - name: AWS_REGION
-          value: ap-northeast-1
+          value: ap-northeast-2
         - name: PETSTORE_PARAM_PREFIX
           value: /petstore
         - name: UPDATE_ADOPTIONS_STATUS_URL_PARAMETER_NAME
@@ -429,7 +441,7 @@ spec:
           protocol: TCP
         env:
         - name: AWS_REGION
-          value: ap-northeast-1
+          value: ap-northeast-2
         - name: PETFOOD_FOODS_TABLE_NAME
           value: ServicesEks2-ddbpetfoodfoods00C5D62B-4FH25BBOAEWX
         - name: PETFOOD_CARTS_TABLE_NAME
@@ -573,7 +585,7 @@ spec:
         - name: AWS_XRAY_DAEMON_ADDRESS
           value: xray-service.default:2000
         - name: AWS_REGION
-          value: ap-northeast-1
+          value: ap-northeast-2
         - name: OTEL_OTLP_ENDPOINT
           value: localhost:4317
         - name: OTEL_RESOURCE
@@ -581,13 +593,9 @@ spec:
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: service.namespace=AWSObservability,service.name=PetAdoptionsHistory
         - name: S3_REGION
-          value: ap-northeast-1
+          value: ap-northeast-2
         - name: OTEL_METRICS_EXPORTER
           value: otlp
-        - name: RDS_SECRET_ARN
-          value: arn:aws:secretsmanager:ap-northeast-1:926093770964:secret:DatabaseSecret3B817195-VNRjDLU0sXke-PZeYnO
-        - name: UPDATE_ADOPTION_URL
-          value: https://9dw5r2dqlb.execute-api.ap-northeast-1.amazonaws.com/prod/
         resources:
           limits:
             cpu: 500m
@@ -633,11 +641,7 @@ spec:
         - --config=/etc/otel-config/otel-config.yaml
         env:
         - name: AWS_REGION
-          value: ap-northeast-1
-        - name: RDS_SECRET_ARN
-          value: arn:aws:secretsmanager:ap-northeast-1:926093770964:secret:DatabaseSecret3B817195-VNRjDLU0sXke-PZeYnO
-        - name: UPDATE_ADOPTION_URL
-          value: http://petstatusupdater-service.petadoptions.svc.cluster.local
+          value: ap-northeast-2
         - name: AOT_CONFIG_CONTENT
           value: "# aws-otel-collector sidecar 配置 —— 增加 DeepFlow OTLP exporter\n#\n# 为什么不是「给 DeepFlow 加 X-Amzn-Trace-Id 提取头」：\n# DeepFlow 只对 traceparent / sw8·sw6 / uber-trace-id 三个头做格式感知解析，\n# 其它自定义头整串读取。而\
             \ X-Amzn-Trace-Id 的值是\n#   Root=1-xxx;Parent=yyy;Sampled=1\n# Parent 每跳都不同 → 整串每跳不同 → trace_id 非 0 但无法把同一条链归到一起。\n# DeepFlow 文档也明确：分布式追踪只支持 eBPF 采集或经 OpenTelemetry 协议传入。\n#\n# ── 端点：用 Service，不用\
@@ -738,7 +742,7 @@ spec:
           protocol: TCP
         env:
         - name: AWS_REGION
-          value: ap-northeast-1
+          value: ap-northeast-2
         resources:
           limits:
             cpu: 512m
@@ -881,7 +885,7 @@ spec:
           protocol: TCP
         env:
         - name: AWS_REGION
-          value: ap-northeast-1
+          value: ap-northeast-2
         - name: TRAFFIC_GENERATOR_HEADER
           value: X-Traffic-Generator:petsite-chaos-0c9027fb05beab77
         - name: petsiteurl

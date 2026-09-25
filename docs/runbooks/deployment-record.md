@@ -2770,6 +2770,117 @@ DR 设计决定,不是副产品。
 
 ---
 
+
+### 4.26 韩国 petsite **真的能服务了** —— 三个页面实测渲染正确
+
+**日期**:2026-09-25 ｜ 栈 `dr-korea-backends` ｜ 用户指示「尽量用 AWS 托管服务」
+
+#### ① 结果
+
+```
+Deployment           7/7 就绪
+首页                 HTTP 200  "Home - Observability PetAdoptions"          219 KB
+/PetListAdoptions    HTTP 200  "Pet Adoption List - …"        0.55s  10 KB
+/FoodService         HTTP 200  "Pet Food Store - …"                  21 KB
+/Checkout            HTTP 200  "Error - …"     ← 仍失败，需 StepFunctions + API GW
+```
+
+**判据是页面标题,不是状态码** —— 4.23 记过:错误页也返回 200。
+
+#### ② 建了什么(空闲成本合计不足每月 1 美元)
+
+栈 `dr-korea-backends`:DynamoDB(`PAY_PER_REQUEST`,刻意与东京的预置容量不同)、
+S3(加密+全阻公开)、SQS、SNS,外加密钥的资源策略。
+
+#### ③ 用户指示「尽量用 AWS 托管服务」—— 查清了哪些能用、哪些不能
+
+| 托管能力 | 能不能用 | 依据 |
+|---|---|---|
+| SSM Parameter Store | ✅ 已在用 | 参数本来就存在托管服务里 |
+| Parameter Store 跨 region 复制 | ❌ 不存在这个能力 | 只能脚本同步 |
+| Secrets Manager | ✅ 已在用 | |
+| **Secrets Manager 跨 region 复制** | ❌ **不适用** | 副本是只读同值副本;而 pethistory **从密钥里读 `host`**(源码 `config.py` 第 63 行),副本的 host 会留在东京 |
+| **RDS 托管主密码** | ❌ **官方明确不支持** | `AuroraUserGuide/rds-secrets-manager.html`:"isn't supported for … **DB clusters that are part of an Aurora global database**" |
+| **Secrets Manager 资源策略** | ✅ **采用了** | `secretsmanager/latest/userguide/auth-and-access_resource-policies.html`:"you can attach policies to secrets **or** identities" |
+
+所以韩国必须有自己的密钥,而**授权用资源策略而不是改生产角色**:
+
+- 不动东京 `Applications` 栈建的那 7 个角色
+- 授权与被授权资源同生共死,不会留下指向不存在资源的孤儿语句
+- 范围天然最小(资源策略只能作用于这一个密钥)
+
+密钥的**值**只能用脚本设(密码必须与东京一致,写进模板等于提交进仓库),
+但**资源与授权都在 CFN 里**。
+
+#### ④ 关键修法:删环境变量,而不是改写它们
+
+读 `petadoptionshistory-py/config.py` 源码(不是猜的):
+
+```python
+if cfg['update_adoption_url'] == None or cfg['rds_secret_arn'] == None:
+    return fetch_config_from_parameter_store(cfg['region'])
+```
+
+**应用本来就支持从 Parameter Store 取配置** —— 只在环境变量**缺失**时才走。
+清单里写死了东京的值,所以那条路从没被走过。
+
+所以生成器改成**删掉** `RDS_SECRET_ARN` / `UPDATE_ADOPTION_URL`,让它回落;
+而 `AWS_REGION` / `S3_REGION` 必须**改写**(它们决定去哪个 region 读参数)。
+**删 vs 改写的区别不能凭感觉定 —— 要看源码。**
+
+#### ⑤ ⚠️ 又一次「全绿但不能服务」,而且这次藏得更深
+
+资源策略第一版只授权了 pethistory 一个角色。结果:
+
+```
+7/7 Deployment 就绪          ✅
+pethistory 日志正常           ✅
+首页渲染正确                  ✅
+/PetListAdoptions            ❌ 挂满 60 秒后 ALB 返回 504
+```
+
+list-adoptions 撞的是**同一个** `AccessDenied`,但它的表现不是启动失败
+而是**请求超时** —— 所以从「7/7 就绪」和任何 pod 级检查里**完全看不出来**。
+
+把授权扩到 7 个业务角色后:`/PetListAdoptions` **0.55 秒 HTTP 200**。
+因果确认。
+
+> 这是本会话第几次「全绿但不能服务」已经数不清了。这次的新形态是:
+> **缺陷只在某一条请求路径上显形,而那条路径不在任何健康检查里。**
+
+#### ⑥ pethistory 的根因从推断变成了直接观测
+
+4.25 记的是「四个测量支持,未直接观测」。删掉环境变量之后它第一次打出了栈:
+
+```
+botocore.exceptions.ClientError: AccessDeniedException calling GetSecretValue
+  User: assumed-role/Applications-petadoptionshistoryapplicationPetSiteS-…
+  not authorized on resource: …secret:dr-korea/petadoptions/database-…
+```
+
+有意思的是:**原来的「零日志」与现在的「明确报错」是同一个依赖的两种表现** ——
+指向东京时它卡在连库上(无输出),指向韩国时它在取密钥时就快速失败(有栈)。
+**快速失败比静默挂住好得多**,而这个改善是免费附带的。
+
+#### ⑦ 数据保护密钥环已对齐
+
+把东京 4 个 SecureString 复制到韩国,**逐个用 SHA-256 指纹核对**(不打印值),
+4/4 一致。所以切换后东京签发的 cookie 与防伪令牌在韩国能验过。
+
+> 韩国现在 5 个 —— 多的那个是 4.21 演练时 petsite 自己生成的(见 4.25)。
+
+#### ⑧ 还差什么
+
+`/Checkout` 仍渲染错误页,需要:StepFunctions 状态机 + **它引用的 3 个 Lambda**
+(`ServicesEks2-StepFnlambdastep{priceGreaterThan,priceLessThan,readDDB}`)
++ API Gateway。WaggleAI 那一档(Bedrock guardrail/memory/知识库 + AgentCore)
+**留给用户决定** —— 知识库需要向量存储,是数量级更高的成本台阶。
+
+`dr-korea-pethistory-tg` 的目标状态是 `unused` —— 那是**正确**的:
+目标组没有挂到任何监听器规则上(韩国只给 petsite 建了监听器)。
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)

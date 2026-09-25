@@ -1,0 +1,199 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  韩国守夜灯站点的 region 内后端（第一批:无依赖的那些）。
+  手册第五节缺口⑤。
+
+# ═══════════════════════════════════════════════════════════════════
+# 这个栈只建「没有下游依赖」的四个资源。刻意**不含**:
+#
+#   - Secrets Manager 的 DB 密钥
+#       密钥里的密码必须与东京一致（韩国从集群是复制集，共用主密码），
+#       而把密码写进 CFN 模板就等于把它提交进仓库。
+#       改由 scripts/create_korea_db_secret.py 处理，全程不打印值。
+#
+#   - StepFunctions 状态机
+#       实测东京那份定义引用了**3 个 Lambda 函数**
+#       （ServicesEks2-StepFnlambdastep{priceGreaterThan,priceLessThan,readDDB}）。
+#       所以它不是「建一个状态机」，而是连带 3 个 Lambda。
+#       它影响的是**领养动作**，不影响 petsite 渲染 —— 排在验证之后再做。
+#
+#   - API Gateway（updateadoptionstatusurl）
+#       同样属于领养链路，排在后面。
+#
+#   - WaggleAI 相关（Bedrock guardrail / memory / 知识库、AgentCore）
+#       知识库需要向量存储，是数量级更高的成本台阶 —— **留给用户决定**。
+#
+# ── 一处刻意偏离东京 ──────────────────────────────────────────────
+# DynamoDB 用 PAY_PER_REQUEST，而东京是 PROVISIONED。
+# 守夜灯平时零流量，按请求计费的空闲成本是 0；预置容量要一直付。
+# 切换到真接管后如果流量大，可以再改回预置。
+# ═══════════════════════════════════════════════════════════════════
+
+Parameters:
+  KoreaDbSecretArn:
+    Type: String
+    Default: >-
+      arn:aws:secretsmanager:ap-northeast-2:926093770964:secret:dr-korea/petadoptions/database-C31ZSc
+    Description: >-
+      韩国 DB 密钥的 ARN。**密钥本身不由这个栈创建** ——
+      它的值必须与东京一致（全局数据库复制集共用主密码），
+      而把密码写进模板就等于提交进仓库。值由
+      scripts/create_korea_db_secret.py 设置，全程不打印。
+      这个栈只负责**授权**（见 KoreaDbSecretPolicy）。
+
+  AppRoleNames:
+    Type: CommaDelimitedList
+    Default: >-
+      Applications-PetSiteServiceAccount6A1851C9-y5J6EGm1X5bM,
+      ServicesEks2-listadoptionsServiceAccountRole9A4594D-amvOjoW5dHjk,
+      ServicesEks2-payforadoptionServiceAccountRole40AF89-oEilVHOTwr8m,
+      ServicesEks2-searchserviceServiceAccountRole588AF64-Sulrl6FvKO5F,
+      Applications-petadoptionshistoryapplicationPetSiteS-UsHWnPL90sD2,
+      ServicesEks2-petfoodServiceAccountRole25957383-tECVCVv0ZjpT,
+      ServicesEks2-trafficgeneratorServiceAccountRole1029-ZjtBnUIVOBI1
+    Description: >-
+      全部 7 个业务 IRSA 角色（出自 infra/dr-korea/irsa-korea-mapping.json
+      里 kind=business 的那些）。它们在东京都能读东京那个 DB 密钥，
+      所以在韩国都要能读韩国这个。
+
+      ⚠️ 2026-09-25 的教训:第一版只授权了 pethistory 一个角色，
+      结果 pethistory 好了，但 /PetListAdoptions 请求**挂满 60 秒后
+      ALB 返回 504** —— list-adoptions 撞的是同一个 AccessDenied，
+      只是它的表现不是启动失败而是请求超时，所以从「7/7 就绪」
+      完全看不出来。**又一次「全绿但不能服务」。**
+
+Resources:
+
+  # ── 让 pethistory 能读韩国的 DB 密钥 ──────────────────────────────
+  # ═══════════════════════════════════════════════════════════════
+  # 为什么用**密钥的资源策略**，而不是改那个角色的身份策略
+  #
+  # 官方文档（secretsmanager/latest/userguide/auth-and-access_resource-policies.html）:
+  #   "To grant permission to retrieve secret values, you can attach policies
+  #    to secrets **or** identities."
+  # 所以两条路等价，而资源策略这条明显更好:
+  #
+  #   ① **不动生产角色** —— 那个角色是东京 Applications 栈建的，
+  #      改它属于动生产资源
+  #   ② 授权与被授权的资源同生共死 —— 删掉韩国密钥，授权自然消失，
+  #      不会留下一条指向不存在资源的孤儿语句
+  #   ③ 范围天然最小 —— 资源策略只能作用于这一个密钥
+  #
+  # 实测的失效形态（2026-09-25，这条策略加上之前）:
+  #   botocore ClientError: AccessDeniedException calling GetSecretValue
+  #     User: assumed-role/Applications-petadoptionshistoryapplication…
+  #     not authorized on resource: …secret:dr-korea/petadoptions/database-…
+  # ═══════════════════════════════════════════════════════════════
+  KoreaDbSecretPolicy:
+    Type: AWS::SecretsManager::ResourcePolicy
+    Properties:
+      # SecretId 不要求密钥属于本栈 —— 这正是我们需要的
+      SecretId: !Ref KoreaDbSecretArn
+      ResourcePolicy:
+        Version: '2012-10-17'
+        Statement:
+          # ⚠️ 2026-09-25 的教训:第一版只授权了 pethistory 一个角色。
+          # 结果 pethistory 好了，但 `/PetListAdoptions` 请求**挂满 60 秒后
+          # ALB 返回 504** —— list-adoptions 撞的是同一个 AccessDenied，
+          # 只是它的表现不是启动失败而是请求超时，所以从「7/7 Deployment 就绪」
+          # 完全看不出来。**又一次「全绿但不能服务」。**
+          #
+          # 这 7 个角色出自 infra/dr-korea/irsa-korea-mapping.json 里
+          # kind=business 的那些 —— 它们在东京都能读东京那个 DB 密钥。
+          - Sid: AllowPetsiteAppRolesRead
+            Effect: Allow
+            Principal:
+              AWS:
+              - !Sub 'arn:aws:iam::${AWS::AccountId}:role/Applications-PetSiteServiceAccount6A1851C9-y5J6EGm1X5bM'   # petsite-sa
+              - !Sub 'arn:aws:iam::${AWS::AccountId}:role/ServicesEks2-listadoptionsServiceAccountRole9A4594D-amvOjoW5dHjk'   # list-adoptions-sa
+              - !Sub 'arn:aws:iam::${AWS::AccountId}:role/ServicesEks2-payforadoptionServiceAccountRole40AF89-oEilVHOTwr8m'   # pay-for-adoption-sa
+              - !Sub 'arn:aws:iam::${AWS::AccountId}:role/ServicesEks2-searchserviceServiceAccountRole588AF64-Sulrl6FvKO5F'   # search-service-sa
+              - !Sub 'arn:aws:iam::${AWS::AccountId}:role/Applications-petadoptionshistoryapplicationPetSiteS-UsHWnPL90sD2'   # pethistory-sa
+              - !Sub 'arn:aws:iam::${AWS::AccountId}:role/ServicesEks2-petfoodServiceAccountRole25957383-tECVCVv0ZjpT'   # petfood-sa
+              - !Sub 'arn:aws:iam::${AWS::AccountId}:role/ServicesEks2-trafficgeneratorServiceAccountRole1029-ZjtBnUIVOBI1'   # traffic-generator-sa
+            Action: secretsmanager:GetSecretValue
+            # 资源策略里的 Resource 只能是 "*"（指这个密钥自己）
+            Resource: '*'
+
+  # ── DynamoDB ──────────────────────────────────────────────────────
+  # 键结构照东京实测:HASH pettype(S) + RANGE petid(S)，无 GSI、无流。
+  PetAdoptionsTable:
+    Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      TableName: dr-korea-petadoptions
+      # ⚠️ 见文件头:刻意与东京不同
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pettype
+          AttributeType: S
+        - AttributeName: petid
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pettype
+          KeyType: HASH
+        - AttributeName: petid
+          KeyType: RANGE
+      Tags:
+        - Key: Purpose
+          Value: pilot-light-backend
+
+  # ── S3 ────────────────────────────────────────────────────────────
+  PetAdoptionsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      # 桶名全局唯一，带上 region 与账号避免撞名
+      BucketName: !Sub 'dr-korea-petadoptions-${AWS::AccountId}-${AWS::Region}'
+      # 灾备桶同样不该公开
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Purpose
+          Value: pilot-light-backend
+
+  # ── SQS ───────────────────────────────────────────────────────────
+  PetAdoptionsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: dr-korea-petadoptions
+      # 标准队列（东京那个不是 FIFO —— 实测 GetQueueAttributes 不认 FifoQueue
+      # 这个属性名，说明它是标准队列）
+      Tags:
+        - Key: Purpose
+          Value: pilot-light-backend
+
+  # ── SNS ───────────────────────────────────────────────────────────
+  PetAdoptionsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: dr-korea-petadoptions
+      Tags:
+        - Key: Purpose
+          Value: pilot-light-backend
+
+Outputs:
+  TableName:
+    Description: 写进 /petstore/dynamodbtablename
+    Value: !Ref PetAdoptionsTable
+
+  BucketName:
+    Description: 写进 /petstore/s3bucketname
+    Value: !Ref PetAdoptionsBucket
+
+  QueueUrl:
+    Description: 写进 /petstore/queueurl
+    Value: !Ref PetAdoptionsQueue
+
+  TopicArn:
+    Description: 写进 /petstore/snsarn
+    Value: !Ref PetAdoptionsTopic
