@@ -1,0 +1,66 @@
+# AWS Load Balancer Controller 的 Helm values —— 韩国守夜灯站点
+#
+# 用法（在 Temporal 实例上，那是唯一能到私有 endpoint 的地方）：
+#   helm upgrade --install aws-load-balancer-controller \
+#     eks/aws-load-balancer-controller --version 3.0.0 \
+#     -n kube-system -f 13-lbc-values.yaml \
+#     --kubeconfig /tmp/kubeconfig-korea
+#
+# ═══════════════════════════════════════════════════════════════════
+# 为什么**不预装**
+#
+# controller 是一个 Deployment，需要节点。而守夜灯的定义就是平时零节点。
+# 所以这份 values 存在 S3（桶 dr-korea-agentcore-926093770964-ap-northeast-2
+# 的 worker/ 前缀 —— worker 角色只能读 plans/* 与 worker/*，放别处会 403），
+# 由 Temporal workflow 在扩容之后 apply。平时仍是零节点、零成本。
+#
+# ── 每一项的来源都是读东京活集群，不是猜的 ────────────────────────
+#
+# 2026-09-25 读 PetSite 集群 kube-system/aws-load-balancer-controller：
+#     labels:  helm.sh/chart = aws-load-balancer-controller-3.0.0
+#     image:   public.ecr.aws/eks/aws-load-balancer-controller:v3.0.0
+#     args:    --cluster-name=PetSite
+#              --ingress-class=alb
+#              --aws-region=ap-northeast-1
+#              --aws-vpc-id=vpc-010ab37a3f9f74725
+#     sa:      alb-ingress-controller
+#     ports:   9443（webhook）, 8080（metrics）
+#
+# **chart 版本刻意与东京一致（3.0.0）**：灾备站点跑一个不同版本的
+# controller，就等于在演练一个和生产不一样的东西。仓库里有 3.4/3.5，
+# 刻意不用。
+# ═══════════════════════════════════════════════════════════════════
+
+# 这三个值是 region 专属的 —— 照抄东京的会让 controller 去管错的集群
+clusterName: dr-korea-petsite
+region: ap-northeast-2
+vpcId: vpc-0238efd50c0bf0dac
+
+serviceAccount:
+  # ⚠️ create: false —— SA 已经存在了，是 2026-09-25 做 IRSA 那一步
+  #    建的（带 eks.amazonaws.com/role-arn 注解指向
+  #    ServicesEks2-LoadBalancerServiceAccountB6807779-QEjXooFf4b6b）。
+  #    让 chart 再建一次会冲突；而 chart 建的那个不带角色注解，
+  #    表现是 controller 起来了但每次 AWS 调用都 403。
+  create: false
+  # 名字必须与东京一致 —— 信任策略的 :sub 限定写死了
+  # system:serviceaccount:kube-system:alb-ingress-controller
+  name: alb-ingress-controller
+
+# ⚠️ 与东京的差别（刻意的）：东京 replicaCount=2，韩国守夜灯扩容时
+#    通常只有 1 个节点，两个副本会因为反亲和挤不下去。
+#    切换到真接管时应当跟着节点数一起调上来。
+replicaCount: 1
+
+ingressClass: alb
+
+# 不建 IngressClass 资源 —— 韩国没有 Ingress，入口靠 TargetGroupBinding。
+# 建了也无害，但守夜灯的原则是只留必要的东西。
+createIngressClassResource: true
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 256Mi

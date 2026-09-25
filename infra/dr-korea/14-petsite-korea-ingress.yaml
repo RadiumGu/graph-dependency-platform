@@ -1,0 +1,58 @@
+# 韩国侧 petsite 的入口链路：Service + TargetGroupBinding
+#
+# ═══════════════════════════════════════════════════════════════════
+# ⚠️ 这不是一份能让 petsite 真正服务用户的配置
+#
+# 它只打通**入口链路**：ALB → 目标组 → pod IP。
+# petsite 本身仍然读不到配置（韩国 SSM /petstore 下 0 个参数，东京 41 个，
+# 而那些参数的值指向东京的资源）—— 见手册第五节⑤。
+#
+# 所以哪怕目标组显示 healthy，也**不等于应用能服务**：
+# /health/status 返回的是硬编码的 5 字节字符串 "Alive"，完全不碰配置。
+# ═══════════════════════════════════════════════════════════════════
+#
+# 东京对应物（2026-09-25 读活集群）：
+#   Service  service-petsite   ClusterIP  port 80 → targetPort 8080
+#   TGB      petsite-tgb       serviceRef{name: service-petsite, port: 80}
+#                              targetType: ip，**没有 networking 块**
+#                              （所以安全组要自己加，见 12-korea-alb.yaml）
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: service-petsite
+  namespace: petadoptions
+  labels:
+    app: petsite
+spec:
+  # ClusterIP —— 与东京一致。入口不靠 Service 类型，靠 TargetGroupBinding。
+  type: ClusterIP
+  selector:
+    app: petsite
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+---
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: petsite-tgb
+  namespace: petadoptions
+spec:
+  # ⚠️⚠️ 这个 ARN 是**韩国**的（dr-korea-petsite-tg）。
+  #      目标组 ARN 是 region 专属的 —— 照抄东京那个
+  #      （targetgroup/Servic-PetSi-7JEWC19HNKSR/…）不会报错，
+  #      清单能过校验、pod 能起来，**只是永远没有流量**。
+  #      这正是手册第五节② 说「静态检查发现不了」的那个缺陷。
+  #
+  #      来源：栈 dr-korea-alb 的输出 PetsiteTargetGroupArn
+  targetGroupARN: arn:aws:elasticloadbalancing:ap-northeast-2:926093770964:targetgroup/dr-korea-petsite-tg/445673ade8bf789d
+  targetType: ip
+  ipAddressType: ipv4
+  serviceRef:
+    name: service-petsite
+    # 这里写的是 **Service 的 port**（80），不是目标组的 port（8080）。
+    # controller 用它找 Endpoints，再按 targetPort 注册 pod IP:8080。
+    port: 80
