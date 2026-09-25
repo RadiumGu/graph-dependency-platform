@@ -98,22 +98,26 @@ class TestBadNewsSectionsMustSurvive:
 
 
 class TestIrsaGapMatchesTheMappingFile:
-    def test_mapping_still_lacks_the_lb_controller(self):
-        """手册说映射里漏了 LB controller —— 核实这句话此刻仍然为真。
+    def test_mapping_now_covers_the_lb_controller(self):
+        """缺口③ 已于 2026-09-25 修好，手册必须跟着改口径。
 
-        ⚠️ 这条门禁**会在缺口被修好时挂掉**，而那是设计意图：
-        补上 alb-ingress-controller 的人必须同时来改手册第五节③，
-        否则手册就在说一件已经不成立的事。
+        这条门禁上一版写的是「映射里**仍然**缺 LB controller」，并注明
+        它会在缺口被修好时故意挂掉 —— 好让修的人必须回来改手册。
+        那个机制**真的起作用了**：补完信任策略后它立刻挂靶，
+        于是手册第五节③ 和第三节能力矩阵一起改成了「已覆盖」。
+
+        现在它守的是反面：别把已经补好的覆盖又弄丢。
         """
         import json
 
         m = json.loads(MAPPING.read_text(encoding="utf-8"))
-        sas = m["service_accounts"]
-        assert len(sas) == 7, f"映射现在有 {len(sas)} 项 —— 请同步更新手册第五节③"
-        assert "alb-ingress-controller" not in sas, (
-            "LB controller 的 IRSA 已经补上了 —— 请更新手册第五节③，"
-            "把它从「缺口」改成「已覆盖」，并把第三节能力矩阵的入口一行一起改"
-        )
+        names = {f"{e['namespace']}/{e['name']}" for e in m["service_accounts"]}
+        assert "kube-system/alb-ingress-controller" in names
+
+    def test_runbook_records_the_gap_as_closed_with_evidence(self, book: str):
+        """手册不能只说「已覆盖」，要留下决定性证据是什么。"""
+        assert_contains(book, "已于 2026-09-25 补上")
+        assert_contains(book, "korea-lbc-verify")
 
 
 class TestTrapTableMustSurvive:

@@ -2,19 +2,30 @@
   "_comment": [
     "petsite 的 ServiceAccount → IAM 角色映射。",
     "",
-    "⚠️ 这不是手写的：每一项都来自 2026-09-25 读东京 PetSite 活集群",
-    "   （namespace petadoptions 下 ServiceAccount 的",
-    "   `eks.amazonaws.com/role-arn` 注解）。",
+    "⚠️ 这不是手写的:每一项都来自 2026-09-25 读东京 PetSite 活集群",
+    "   （ServiceAccount 的 `eks.amazonaws.com/role-arn` 注解）。",
     "",
-    "怎么重新生成（SA 或角色变动后必须重来）：",
-    "   读 PetSite 集群 namespace petadoptions 的 ServiceAccount，",
-    "   取每个的 metadata.annotations['eks.amazonaws.com/role-arn']，",
-    "   角色名是 ARN 最后一段。",
+    "怎么重新生成（SA 或角色变动后必须重来）:",
+    "   读 PetSite 集群的 ServiceAccount，取每个的",
+    "   metadata.annotations['eks.amazonaws.com/role-arn']，角色名是 ARN 最后一段。",
+    "   注意要读**全部命名空间**，不只是 petadoptions —— 见下面这条教训。",
     "",
-    "刻意**没有**收进来的两个：",
-    "   default              没有 role-arn 注解，不走 IRSA",
-    "   fis-service-account  指向 chaos-fis-experiment-role，是混沌实验用的，",
-    "                        不是 petsite 业务链路的一环；切换时不需要它",
+    "### ⚠️ namespace 为什么必须逐项显式写出来",
+    "",
+    "最初这份映射把命名空间写成脚本里的常量 NAMESPACE='petadoptions'，",
+    "结果**漏掉了 kube-system 下的 alb-ingress-controller**（AWS Load Balancer",
+    "Controller 自己也用 IRSA）。漏掉它的表现极坏:controller 装得上、pod 起得来，",
+    "然后一个 ALB 也不建 —— 而灾备站点没有 ALB 就等于没有入口。",
+    "",
+    "根因不是忘了某一项，而是**命名空间隐含在代码里**，让人只会去想",
+    "「petadoptions 下有哪些 SA」。所以现在每一项都必须自带 namespace，",
+    "让「这是哪个命名空间的」成为读映射时看得见的信息。",
+    "",
+    "刻意**没有**收进来的两个:",
+    "   petadoptions/default              没有 role-arn 注解，不走 IRSA",
+    "   petadoptions/fis-service-account  指向 chaos-fis-experiment-role，",
+    "                                     是混沌实验用的，不是 petsite 业务链路",
+    "                                     的一环;切换时不需要它",
     "",
     "korea_provider_arn / korea_oidc_host 来自",
     "   aws eks describe-cluster --region ap-northeast-2 --name dr-korea-petsite",
@@ -26,13 +37,66 @@
   "korea_provider_arn": "arn:aws:iam::926093770964:oidc-provider/oidc.eks.ap-northeast-2.amazonaws.com/id/978D6D13181C50CF75450B933B976ADD",
   "korea_oidc_host": "oidc.eks.ap-northeast-2.amazonaws.com/id/978D6D13181C50CF75450B933B976ADD",
 
-  "service_accounts": {
-    "petsite-sa": "Applications-PetSiteServiceAccount6A1851C9-y5J6EGm1X5bM",
-    "list-adoptions-sa": "ServicesEks2-listadoptionsServiceAccountRole9A4594D-amvOjoW5dHjk",
-    "pay-for-adoption-sa": "ServicesEks2-payforadoptionServiceAccountRole40AF89-oEilVHOTwr8m",
-    "search-service-sa": "ServicesEks2-searchserviceServiceAccountRole588AF64-Sulrl6FvKO5F",
-    "pethistory-sa": "Applications-petadoptionshistoryapplicationPetSiteS-UsHWnPL90sD2",
-    "petfood-sa": "ServicesEks2-petfoodServiceAccountRole25957383-tECVCVv0ZjpT",
-    "traffic-generator-sa": "ServicesEks2-trafficgeneratorServiceAccountRole1029-ZjtBnUIVOBI1"
-  }
+  "service_accounts": [
+    {
+      "namespace": "petadoptions",
+      "name": "petsite-sa",
+      "role": "Applications-PetSiteServiceAccount6A1851C9-y5J6EGm1X5bM",
+      "kind": "business"
+    },
+    {
+      "namespace": "petadoptions",
+      "name": "list-adoptions-sa",
+      "role": "ServicesEks2-listadoptionsServiceAccountRole9A4594D-amvOjoW5dHjk",
+      "kind": "business"
+    },
+    {
+      "namespace": "petadoptions",
+      "name": "pay-for-adoption-sa",
+      "role": "ServicesEks2-payforadoptionServiceAccountRole40AF89-oEilVHOTwr8m",
+      "kind": "business"
+    },
+    {
+      "namespace": "petadoptions",
+      "name": "search-service-sa",
+      "role": "ServicesEks2-searchserviceServiceAccountRole588AF64-Sulrl6FvKO5F",
+      "kind": "business"
+    },
+    {
+      "namespace": "petadoptions",
+      "name": "pethistory-sa",
+      "role": "Applications-petadoptionshistoryapplicationPetSiteS-UsHWnPL90sD2",
+      "kind": "business"
+    },
+    {
+      "namespace": "petadoptions",
+      "name": "petfood-sa",
+      "role": "ServicesEks2-petfoodServiceAccountRole25957383-tECVCVv0ZjpT",
+      "kind": "business"
+    },
+    {
+      "namespace": "petadoptions",
+      "name": "traffic-generator-sa",
+      "role": "ServicesEks2-trafficgeneratorServiceAccountRole1029-ZjtBnUIVOBI1",
+      "kind": "business"
+    },
+    {
+      "namespace": "kube-system",
+      "name": "alb-ingress-controller",
+      "role": "ServicesEks2-LoadBalancerServiceAccountB6807779-QEjXooFf4b6b",
+      "kind": "infra",
+      "_why": [
+        "AWS Load Balancer Controller（东京侧 kube-system/aws-load-balancer-controller",
+        "v3.0.0）用的 SA。它不是业务链路的一环，但**没有它韩国就建不出 ALB**，",
+        "而 petsite 的入口正是靠 controller 把 pod 绑进目标组。",
+        "",
+        "⚠️ 影响面（实测 2026-09-25）:这个角色挂的托管策略",
+        "ServicesEks2-LoadBalancerSAPolicy6C6E33B0-PNHgXHQuKjvt 共 15 条语句，",
+        "其中 9 条 Resource 是 *，**0 条按 region 限定**。所以加了韩国信任之后，",
+        "韩国集群的 controller 在凭据层面也能操作东京的 ALB。",
+        "接受这一点的理由:守夜灯平时零节点、controller 不运行，且这是 demo 环境。",
+        "要收紧的话应当给策略加 aws:RequestedRegion 条件，而不是不加信任。"
+      ]
+    }
+  ]
 }

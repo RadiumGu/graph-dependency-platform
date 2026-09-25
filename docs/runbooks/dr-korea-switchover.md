@@ -97,7 +97,8 @@ arn:aws:rds:ap-northeast-2:…:cluster:dr-korea-aurora-secondarycluster-…    �
 | 数据库提升权限+链路 | ⚠️ | 四种裁决各走对分支,0 失败 —— **但从未真提升** | 4.19 |
 | petsite 能否服务用户 | ❓ | **inconclusive** —— 现有探针在两 region 上没有区分力 | 4.21 |
 | 应用配置 | ❌ | 韩国 SSM `/petstore` **0 个参数**(东京 41 个) | 4.21 |
-| 外部入口 | ❌ | 韩国没有 ALB / 目标组 / LB controller | 本节下方 |
+| LB controller 的 IRSA | ✅ | 韩国 SA token 换到生产角色;bogus SA 被 `AccessDenied` | 五③ |
+| 外部入口(ALB/目标组) | ❌ | 韩国没有 ALB、没有目标组、controller 未安装 | 五② |
 | DNS 切换 | ❌ | 未配置 | — |
 
 ---
@@ -174,9 +175,9 @@ petsite-loadtest-tgb   -> targetgroup/petsite-lt-tg/…               svc=servic
 pod 能起来,只是永远没有流量。韩国侧需要:自己的 ALB + 目标组 + 用**韩国 ARN**
 重写的 TargetGroupBinding。
 
-### ③ ⚠️ 漏掉的第 8 个 IRSA 消费者
+### ③ ~~漏掉的第 8 个 IRSA 消费者~~ —— ✅ 已于 2026-09-25 补上
 
-LB controller 自己也用 IRSA,而它不在我的 7 个映射里:
+LB controller 自己也用 IRSA,而它最初不在映射里:
 
 ```
 kube-system/aws-load-balancer-controller  v3.0.0  ready=2/2
@@ -184,12 +185,38 @@ kube-system/aws-load-balancer-controller  v3.0.0  ready=2/2
     role: ServicesEks2-LoadBalancerServiceAccountB6807779-QEjXooFf4b6b
 ```
 
-实测那个角色的信任策略里**只有东京 OIDC,没有韩国** —— 所以即便把 controller
-装到韩国,它也拿不到凭据,而表现是「装上了、pod 起来了、一个 ALB 也不建」。
+漏掉它的表现极坏:**controller 装上了、pod 起来了、一个 ALB 也不建** ——
+而灾备站点没有 ALB 就等于没有入口。
 
-`infra/dr-korea/irsa-korea-mapping.json` 的 `service_accounts` 只覆盖
-`petadoptions` 下的 7 个应用 SA。**修这个缺口要把 `alb-ingress-controller`
-补进去,而不是只改数字。**
+**决定性证据**(与部署不同的手段:真做一次 token 交换,不看脚本自己的报告):
+
+```
+韩国 kube-system/alb-ingress-controller 的 token
+  → arn:aws:sts::926093770964:assumed-role/ServicesEks2-LoadBalancer…/korea-lbc-verify   ✅
+同命名空间下一个 bogus SA 的 token
+  → AccessDenied: Not authorized to perform sts:AssumeRoleWithWebIdentity                ✅
+```
+
+后者证明 `:sub` 限定真的生效 —— 不是「该集群任何 SA 都能 assume」。
+
+#### 顺带修掉了根因
+
+漏掉它的根因不是忘了某一项,而是**命名空间隐含在脚本的常量里**
+(`NAMESPACE = "petadoptions"`),让人只会去想「petadoptions 下有哪些 SA」。
+
+现在 `infra/dr-korea/irsa-korea-mapping.json` 的每一项都自带 `namespace`,
+脚本里的那个常量已删除,`korea_statement()` 把 namespace 收成**必填位置参数**
+—— 默认值会把「忘了写」变成「静默用了 petadoptions」,而那个错误的表现是永远 403。
+
+#### ⚠️ 这条信任带来的影响面
+
+那个角色挂的托管策略 `ServicesEks2-LoadBalancerSAPolicy6C6E33B0-PNHgXHQuKjvt`
+共 15 条语句,其中 9 条 `Resource` 是 `*`,**0 条按 region 限定**。
+所以韩国集群的 controller 在凭据层面**也能操作东京的 ALB**。
+
+接受的理由:守夜灯平时零节点、controller 不运行,且这是 demo 环境。
+要收紧应当给策略加 `aws:RequestedRegion` 条件,**而不是不加信任**
+(不加信任的后果是韩国建不出入口)。
 
 ### ④ 集群 addon:韩国 1 个,东京 5 个
 

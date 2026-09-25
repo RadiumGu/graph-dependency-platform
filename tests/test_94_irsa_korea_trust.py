@@ -17,6 +17,7 @@ petsite 的 7 个业务服务全走 IRSA。而 IRSA 的失效方式极其隐蔽:
 from __future__ import annotations
 
 import json
+import pathlib
 from pathlib import Path
 
 import pytest
@@ -93,15 +94,89 @@ class TestOidcProviderTemplate:
 
 class TestMappingCameFromLiveCluster:
     def test_seven_business_service_accounts(self, mapping: dict):
-        sas = mapping["service_accounts"]
-        assert len(sas) == 7, f"应当是 7 个业务 SA，实际 {len(sas)}"
+        biz = [e for e in mapping["service_accounts"] if e["kind"] == "business"]
+        assert len(biz) == 7, f"应当是 7 个业务 SA，实际 {len(biz)}"
+        assert all(e["namespace"] == "petadoptions" for e in biz)
+
+    def test_infra_service_accounts_are_marked_and_included(self, mapping: dict):
+        """基础设施 SA 也必须收进来 —— 漏掉 LB Controller 就等于没有入口。
+
+        2026-09-25 的教训：最初这份映射只有 7 个 petadoptions 下的业务 SA，
+        漏掉了 kube-system/alb-ingress-controller。失效表现是
+        「controller 装上了、pod 起来了、一个 ALB 也不建」。
+        """
+        infra = [e for e in mapping["service_accounts"] if e["kind"] == "infra"]
+        names = {f"{e['namespace']}/{e['name']}" for e in infra}
+        assert "kube-system/alb-ingress-controller" in names, (
+            "LB Controller 的 SA 不在映射里 —— 韩国建不出 ALB"
+        )
+
+    def test_every_entry_declares_its_namespace(self, mapping: dict):
+        """**根因门禁**：namespace 必须逐项显式。
+
+        最初命名空间是脚本里的常量 NAMESPACE='petadoptions'，那个常量
+        直接导致漏掉了 kube-system 下的 SA —— 因为它让人只会去想
+        「petadoptions 下有哪些」。隐含的命名空间就是那个漏项的根因。
+        """
+        for e in mapping["service_accounts"]:
+            for field in ("namespace", "name", "role", "kind"):
+                assert e.get(field), f"{e} 缺 {field}"
+
+    def test_script_has_no_namespace_constant(self):
+        """脚本里不许再出现模块级 NAMESPACE 常量。
+
+        ⚠️ 判据用 **AST** 而不是文本匹配。第一版写的是
+        `assert 'NAMESPACE = "' not in src`，结果匹配到了**解释「为什么删掉它」
+        的那段注释** —— 判据分不出「常量存在」与「注释提到常量」。
+        这类判据还有个更糟的后果：想把教训写进注释就会踩到自己的门禁。
+        """
+        import ast
+
+        src = (
+            pathlib.Path(__file__).resolve().parents[1]
+            / "scripts" / "add_korea_irsa_trust.py"
+        ).read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        assigned = {
+            t.id
+            for node in tree.body                       # 只看模块级
+            if isinstance(node, ast.Assign)
+            for t in node.targets
+            if isinstance(t, ast.Name)
+        }
+        assert "NAMESPACE" not in assigned, (
+            "模块级 NAMESPACE 常量回来了 —— 它是漏掉 kube-system SA 的根因"
+        )
+
+    def test_korea_statement_takes_namespace_as_required_arg(self):
+        """namespace 必须是必填位置参数，不能有默认值。
+
+        有默认值就会把「忘了写」变成「静默用了 petadoptions」，
+        而那个错误的表现是永远 403 —— 和「没注册 provider」无法区分。
+        """
+        import ast
+
+        src = (
+            pathlib.Path(__file__).resolve().parents[1]
+            / "scripts" / "add_korea_irsa_trust.py"
+        ).read_text(encoding="utf-8")
+        fn = next(
+            n for n in ast.walk(ast.parse(src))
+            if isinstance(n, ast.FunctionDef) and n.name == "korea_statement"
+        )
+        names = [a.arg for a in fn.args.args]
+        assert "namespace" in names, f"korea_statement 的参数是 {names}"
+        # 默认值是右对齐的：有 N 个默认值就对应最后 N 个参数
+        n_defaults = len(fn.args.defaults)
+        with_default = set(names[len(names) - n_defaults:]) if n_defaults else set()
+        assert "namespace" not in with_default, "namespace 不许有默认值"
 
     def test_excludes_non_irsa_and_chaos_accounts(self, mapping: dict):
-        sas = mapping["service_accounts"]
+        names = {e["name"] for e in mapping["service_accounts"]}
         # default 没有 role-arn 注解；fis-service-account 是混沌实验用的，
         # 不是 petsite 业务链路的一环。
-        assert "default" not in sas
-        assert "fis-service-account" not in sas
+        assert "default" not in names
+        assert "fis-service-account" not in names
 
     def test_documents_how_to_regenerate(self, mapping: dict):
         """映射是活集群读出来的快照 —— 必须写明怎么重新生成。
@@ -157,9 +232,10 @@ class TestScriptKeepsItsSafeguards:
         i = script.index("def korea_statement(")
         seg = script[i : i + 1200]
         assert ":aud" in seg and ":sub" in seg
-        assert "system:serviceaccount:{NAMESPACE}:{sa}" in seg, (
-            "sub 的格式是 system:serviceaccount:<ns>:<sa> —— "
-            "写错不会报错，只会永远拒绝"
+        # namespace 现在是逐项传入的变量（小写），不再是模块常量
+        assert "system:serviceaccount:{namespace}:{sa}" in seg, (
+            "sub 的格式是 system:serviceaccount:<ns>:<sa>，且 namespace "
+            "必须来自映射的逐项字段 —— 写错不会报错，只会永远拒绝"
         )
 
     def test_does_not_suppress_stderr(self, script: str):

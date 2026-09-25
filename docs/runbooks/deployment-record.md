@@ -2243,6 +2243,78 @@ sync 进 `/opt/dr-worker/app` 的演练文件已清。
 
 ---
 
+
+### 4.22 补上第 8 个 IRSA 消费者(LB Controller)—— 并修掉让我漏掉它的根因
+
+**日期**:2026-09-25 ｜ **手册第五节缺口③ 关闭**
+
+#### ① 为什么这一项必须最先做
+
+没有它,后面的入口工作全白做:LB Controller 拿不到凭据时的表现是
+**「装上了、pod 起来了、一个 ALB 也不建」** —— 而灾备站点没有 ALB 就没有入口。
+
+#### ② 做了什么
+
+给 `ServicesEks2-LoadBalancerServiceAccountB6807779-QEjXooFf4b6b` 的信任策略
+追加韩国 OIDC 那一条(2 → 3 条语句),`:aud` + `:sub` 双限定。
+
+#### ③ 决定性证据(与部署不同的手段)
+
+部署是脚本做的,所以**不能只看脚本自己的核对报告**。改用真做一次 token 交换:
+
+```
+韩国 kube-system/alb-ingress-controller 的 token（控制面签发，零节点也能签）
+  → arn:aws:sts::926093770964:assumed-role/ServicesEks2-LoadBalancer…/korea-lbc-verify  ✅
+同命名空间下一个 bogus SA 的 token
+  → AccessDenied: Not authorized to perform sts:AssumeRoleWithWebIdentity               ✅
+```
+
+后者证明 `:sub` 限定真的生效 —— 不是「该集群任何 SA 都能 assume」。
+反向验证用的 bogus SA 已删除(`DELETE HTTP 200`)。
+
+#### ④ 修掉根因,而不只是补上漏项
+
+漏掉它的根因不是忘了某一项,而是**命名空间隐含在脚本常量里**
+(`NAMESPACE = "petadoptions"`),让人只会去想「petadoptions 下有哪些 SA」。
+
+所以这次一并改了结构:
+
+| 改动 | 为什么 |
+|---|---|
+| 映射从 `{sa: role}` 改成 `[{namespace, name, role, kind}]` | 让「这是哪个命名空间的」成为读映射时看得见的信息 |
+| 删掉脚本里的 `NAMESPACE` 常量 | 它就是那个盲区 |
+| `korea_statement()` 把 namespace 收成**必填位置参数** | 有默认值会把「忘了写」变成「静默用了 petadoptions」,而那个错误的表现是永远 403 |
+| `kind: business\|infra` | 保留「7 个业务 SA」这个判据的语义,同时容纳基础设施 SA |
+
+#### ⑤ ⚠️ 这条信任的影响面
+
+托管策略 `ServicesEks2-LoadBalancerSAPolicy6C6E33B0-PNHgXHQuKjvt` 共 15 条语句,
+其中 9 条 `Resource` 是 `*`,**0 条按 region 限定**。所以韩国集群的 controller
+在凭据层面**也能操作东京的 ALB**。
+
+接受的理由:守夜灯平时零节点、controller 不运行,且这是 demo 环境。
+要收紧应当给策略加 `aws:RequestedRegion` 条件,**而不是不加信任**
+(不加的后果是韩国建不出入口)。
+
+#### ⑥ 一条门禁按设计挂靶了
+
+`test_99` 里那条「映射里仍然缺 LB controller」是上一轮**故意**写成
+「会在缺口修好时挂掉」的,好让修的人必须回来改手册。
+
+**那个机制真的起作用了** —— 补完信任策略后它立刻挂靶,于是手册第五节③
+与第三节能力矩阵一起改成了「已覆盖」。现在它翻面守反向:别把覆盖又弄丢。
+
+#### ⑦ 两次判据自身的错误
+
+- `test_script_has_no_namespace_constant` 第一版用文本匹配 `NAMESPACE = "`,
+  结果**匹配到了解释「为什么删掉它」的那段注释** —— 判据分不出「常量存在」
+  与「注释提到常量」。这类判据还有个更糟的后果:**想把教训写进注释就会踩到
+  自己的门禁**。改用 AST 只看模块级赋值。
+- `test_scopes_by_sub_not_only_aud` 断言的是 `{NAMESPACE}` 字面量,
+  我把它改成 `{namespace}` 后挂掉 —— 这条是真实失败,判据照实更新。
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
