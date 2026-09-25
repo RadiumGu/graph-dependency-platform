@@ -36,8 +36,24 @@ import sys
 
 TOKYO = "ap-northeast-1"
 KOREA = "ap-northeast-2"
-TOKYO_TABLE = "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM"
-KOREA_TABLE = "dr-korea-petadoptions"
+# ── 表对照与键结构 ──────────────────────────────────────────────
+# 键结构必须**逐表声明**，不能推断:主键字段名不同，
+# 而拿错字段的表现是 KeyError 或者「比对永远认为全都缺失」。
+# 三张表的键结构都来自实测 describe-table。
+TABLES = {
+    "petadoptions": {
+        "tokyo": "ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM",
+        "korea": "dr-korea-petadoptions",
+        "keys": ("pettype", "petid"),
+    },
+    "petfood-foods": {
+        "tokyo": "ServicesEks2-ddbpetfoodfoods00C5D62B-4FH25BBOAEWX",
+        "korea": "dr-korea-petfood-foods",
+        "keys": ("id",),
+    },
+    # carts 是用户购物车 —— **刻意不同步**。它是用户数据而不是参考数据，
+    # 东京 0 条，而且切换后应当由用户重新加购，复制过来只会带来陈旧状态。
+}
 
 
 def aws(*args: str) -> str:
@@ -56,20 +72,18 @@ def scan(region: str, table: str) -> list[dict]:
     return json.loads(out)
 
 
-def key_of(item: dict) -> tuple[str, str]:
-    """主键元组。键结构实测:HASH pettype + RANGE petid。"""
-    return (item["pettype"]["S"], item["petid"]["S"])
+def key_of(item: dict, keys: tuple[str, ...]) -> tuple[str, ...]:
+    """主键元组。键名由 TABLES 逐表声明，不推断。"""
+    return tuple(item[k]["S"] for k in keys)
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--apply", action="store_true", help="真写（默认只比对）")
-    args = ap.parse_args()
-
+def sync_one(label: str, cfg: dict, apply: bool) -> int:
+    TOKYO_TABLE, KOREA_TABLE, keys = cfg["tokyo"], cfg["korea"], cfg["keys"]
+    print(f"\n  ── {label} ──（键 {keys}）")
     src = scan(TOKYO, TOKYO_TABLE)
     dst = scan(KOREA, KOREA_TABLE)
-    src_keys = {key_of(i): i for i in src}
-    dst_keys = {key_of(i): i for i in dst}
+    src_keys = {key_of(i, keys): i for i in src}
+    dst_keys = {key_of(i, keys): i for i in dst}
 
     missing = sorted(src_keys.keys() - dst_keys.keys())
     extra = sorted(dst_keys.keys() - src_keys.keys())
@@ -88,10 +102,10 @@ def main() -> int:
         print(f"      多:{k}  ← 本脚本**不会删**它")
 
     if not (missing or differing):
-        print("\n  ✅ 韩国已包含东京的全部数据（内容一致）")
+        print("  ✅ 韩国已包含东京的全部数据（内容一致）")
         return 0
 
-    if not args.apply:
+    if not apply:
         print(f"\n  dry-run:会写 {len(missing) + len(differing)} 条。加 --apply 真写。")
         return 0
 
@@ -109,14 +123,33 @@ def main() -> int:
 
     # 改后重新比对 —— 这才是「写对了」的判据，不是看 put-item 的返回
     src2, dst2 = scan(TOKYO, TOKYO_TABLE), scan(KOREA, KOREA_TABLE)
-    s2 = {key_of(i): json.dumps(i, sort_keys=True) for i in src2}
-    d2 = {key_of(i): json.dumps(i, sort_keys=True) for i in dst2}
+    s2 = {key_of(i, keys): json.dumps(i, sort_keys=True) for i in src2}
+    d2 = {key_of(i, keys): json.dumps(i, sort_keys=True) for i in dst2}
     bad = [k for k, v in s2.items() if d2.get(k) != v]
     if bad:
         print(f"  ❌ 复查仍有 {len(bad)} 条不一致:{bad[:5]}")
         return 1
     print(f"  ✅ 复查:东京 {len(s2)} 条全部在韩国存在且内容一致")
     return 1 if fail else 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--apply", action="store_true", help="真写（默认只比对）")
+    ap.add_argument("--only", help="只同步这一张（键取自 TABLES）")
+    args = ap.parse_args()
+
+    todo = TABLES if not args.only else {
+        k: v for k, v in TABLES.items() if k == args.only
+    }
+    if not todo:
+        print(f"❌ TABLES 里没有 {args.only}，可选:{sorted(TABLES)}")
+        return 2
+
+    rc = 0
+    for label, cfg in todo.items():
+        rc |= sync_one(label, cfg, args.apply)
+    return rc
 
 
 if __name__ == "__main__":

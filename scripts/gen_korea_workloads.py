@@ -141,6 +141,16 @@ DROP_ENV_FOR_PARAM_STORE_FALLBACK = (
 REWRITE_ENV = {
     "AWS_REGION": KOREA_REGION,
     "S3_REGION": KOREA_REGION,
+    # ⚠️ PETFOOD_REGION 是第一版**漏掉**的那个。漏掉的表现极具误导性:
+    #    /Checkout 页面报 "Error fetching cart data … 500"，而那条日志出自
+    #    **petsite**，真因在 petfood —— petfood 的 Deployment 还是 1/1 就绪。
+    #    这就是为什么下面 fix_env 里加了兜底扫描:白名单只挡得住想到的名字。
+    "PETFOOD_REGION": KOREA_REGION,
+    # 这三个是**资源名**（不是 ARN），值来自栈 dr-korea-backends 的输出。
+    # 照抄东京的名字会让 petfood 去查东京的表 —— 那些表在真灾难时不可达。
+    "PETFOOD_FOODS_TABLE_NAME": "dr-korea-petfood-foods",
+    "PETFOOD_CARTS_TABLE_NAME": "dr-korea-petfood-carts",
+    "PETFOOD_EVENT_BUS_NAME": "dr-korea-petfood-eventbus",
 }
 
 
