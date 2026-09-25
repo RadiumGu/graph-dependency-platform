@@ -111,6 +111,60 @@ class Cluster:
         return d
 
 
+# ═══════════════════════════════════════════════════════════════════
+# 容器环境变量里的 region 绑定值
+#
+# ## 为什么删掉而不是改写
+#
+# 2026-09-25 读 petadoptionshistory-py/config.py 源码（不是猜的）:
+#
+#     if cfg['update_adoption_url'] == None or cfg['rds_secret_arn'] == None:
+#         return fetch_config_from_parameter_store(cfg['region'])
+#
+# 应用**本来就支持**从 Parameter Store 取配置 —— 只在环境变量**缺失**时才走。
+# 清单里写死了东京的值，所以那条路从没被走过。
+#
+# 所以处置是**删掉**这些环境变量，让它回落到（韩国的）参数存储 ——
+# 而不是我们去改写它们的值。改写等于把同一份配置维护两遍。
+#
+# ⚠️ AWS_REGION 必须**改写**而不是删掉:它决定 boto3 去哪个 region 读
+# 参数存储。留着东京的值，回落之后读的还是东京的参数。
+# ═══════════════════════════════════════════════════════════════════
+
+# 删掉:应用会回落到参数存储
+DROP_ENV_FOR_PARAM_STORE_FALLBACK = (
+    "RDS_SECRET_ARN",
+    "UPDATE_ADOPTION_URL",
+)
+
+# 改写:值必须是韩国的
+REWRITE_ENV = {
+    "AWS_REGION": KOREA_REGION,
+    "S3_REGION": KOREA_REGION,
+}
+
+
+def fix_env(container: dict, notes: list[str], who: str) -> None:
+    """就地修正一个容器的 region 绑定环境变量。"""
+    envs = container.get("env")
+    if not envs:
+        return
+    kept = []
+    for e in envs:
+        name = e.get("name")
+        if name in DROP_ENV_FOR_PARAM_STORE_FALLBACK:
+            notes.append(
+                f"{who}: 删掉环境变量 {name} —— 让应用回落到韩国的参数存储"
+                "（源码里本来就有这条回落路径）"
+            )
+            continue
+        if name in REWRITE_ENV and e.get("value") != REWRITE_ENV[name]:
+            notes.append(f"{who}: {name} {e.get('value')} → {REWRITE_ENV[name]}")
+            e = {**e, "value": REWRITE_ENV[name]}
+        kept.append(e)
+    container["env"] = kept
+
+
 def korea_image(img: str) -> tuple[str, bool]:
     """把镜像的 registry 换到韩国。返回 (新镜像, 是否用了可变 tag)。
 
@@ -159,6 +213,7 @@ def convert_deployment(dep: dict) -> tuple[dict, list[str]]:
                 "主备两侧可能指向不同镜像而看不出来"
             )
         c["image"] = new_img
+        fix_env(c, notes, f"{dep['metadata']['name']}/{c['name']}")
         containers.append(c)
 
     # ═══════════════════════════════════════════════════════════════
