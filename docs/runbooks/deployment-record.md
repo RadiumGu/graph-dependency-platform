@@ -1681,6 +1681,112 @@ aws cloudformation delete-stack --region ap-northeast-2 \
 
 ---
 
+
+### 4.17 ECR 跨 region 复制 + 现有镜像一次性回填
+
+**日期**:2026-09-25 ｜ **这是灾备方案里最致命的一个洞**
+
+#### ① 为什么这是致命点
+
+读东京 PetSite 活集群发现,6 个业务服务里 5 个用的镜像是
+
+```
+926093770964.dkr.ecr.ap-northeast-1.amazonaws.com/
+  cdk-hnb659fds-container-assets-926093770964-ap-northeast-1:<sha256>
+```
+
+**镜像仓库和要灾备的那个 region 是同一个 region。** 东京挂了就拉不到镜像,
+于是韩国节点扩起来了、数据库提升了,pod 却全都 ImagePullBackOff。
+
+顺带确认了一件好事:东京 PetSite 的节点也是 `t4g.xlarge` /
+`AL2023_ARM_64_STANDARD`,与韩国节点组**同架构**。若不同架构,复制过去也跑不起来。
+
+#### ② 部署的两个栈(注意 region 不同)
+
+| 栈 | region | 说明 |
+|---|---|---|
+| `09-ecr-replication.yaml` | **ap-northeast-1** | 复制配置是 **registry 级**,属于源 registry |
+| `10-ecr-korea-repos.yaml` | ap-northeast-2 | 给一次性回填用(ECR push 不会自动建仓库) |
+
+部署前核实过 `describe-registry` 返回 `rules: []` —— 这个资源是 registry 单例,
+若已有配置会被覆盖。
+
+查 CFN schema 得到的真实约束(不是从印象写的):
+`ReplicationDestination` 的 `RegistryId` 是**必填**;
+`FilterType` 的枚举**只有** `PREFIX_MATCH` 一个值。
+
+#### ③ 关键事实:复制**不带走**已有镜像
+
+官方文档(`AmazonECR/latest/userguide/replication.html`)原文:
+
+> "Only repository content pushed or restored to a repository after replication
+> is configured is replicated. **Any preexisting content in a repository isn't
+> replicated.**"
+
+**实测印证**:对一个早已存在的镜像调 `describe-image-replication-status`,
+`replicationStatuses` 返回**空数组**。
+
+所以「配完复制」和「镜像在灾备侧」是两件事。把它们当成一件做,
+是这个功能最容易踩的坑:看到「配置成功」就以为镜像已经过去了。
+
+#### ④ 一次性回填(7 个镜像)
+
+本机 `sudo` 被禁(`no new privileges`),所以在韩国那台 Temporal 实例上做 ——
+顺带好处是 push 在 region 内。工具用 `skopeo`(AL2023 仓库有 `2:1.22.2`,
+registry 到 registry 拷贝,不需要 docker daemon)。
+
+`aws ecr` 搬不了 layer(只能搬 manifest),所以必须用能搬 blob 的工具。
+
+权限走**临时内联策略**(`EcrBackfillTemporary`):挂上 → 回填 → **立刻摘掉**,
+摘完核实 `list-role-policies` 只剩 `dr-orchestrator-readonly`。
+
+结果:**7 个全部成功、0 失败**。核实**比 digest** 而不是只看「拷贝成功」:
+
+```
+e849677d52a8  digest 一致 sha256:52af83bbd2885b98dda…
+012a95fb34e6  digest 一致 sha256:2983db73c18055b27bc…
+```
+
+#### ⑤ 端到端验证:新推送真的会复制吗
+
+「配置记录下来了」≠「复制会发生」。建了一个名字匹配 `PREFIX_MATCH` 前缀的
+测试仓库 `pet-adoptions-history-repltest`,推一个镜像进去:
+
+```
+[15s] ap-northeast-2   COMPLETE
+```
+
+独立核实(与测试手段不同):
+
+- **韩国侧仓库被自动创建了** —— 我从未在韩国建过这个仓库,印证文档说的
+  「目标仓库在复制发生时自动创建」
+- 两侧 digest 一致 `sha256:36b36613e2aa47f9b6939c7…`
+
+测试完把两侧测试仓库都删了,生产用的两个仓库确认仍在。
+
+#### ⑥ 本轮踩到的两个坑
+
+**IAM 策略传播延迟。** 挂完 `put-role-policy` 立刻发 SSM 命令,skopeo 报
+`initializing source docker://…` 失败。我一开始以为是 skopeo 或权限范围写错,
+**真因是 IAM 最终一致性还没生效**。等 20 秒后同一条命令退出码 0。
+**IAM 改完立刻用,失败信息不会告诉你「是因为还没传播」。**
+
+**`2>&1 | cut -c1-160` 把错误截断了。** 第一次失败时我只留了 160 字,
+关键部分刚好被切掉,于是判断方向错了。诊断时应当单独跑一次「只验证能不能读源」
+并**完整输出 stderr** —— 这次就是这么定位到的。
+
+#### ⑦ 回滚
+
+```bash
+# ⚠️ 销毁类命令 —— 只记录不执行
+aws cloudformation delete-stack --region ap-northeast-1 --stack-name dr-ecr-replication
+# 10-ecr-korea-repos 的仓库是 DeletionPolicy: Retain —— 删栈不会删掉回填的镜像。
+# 真要删仓库需显式:
+#   aws ecr delete-repository --region ap-northeast-2 --repository-name <name> --force
+```
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
