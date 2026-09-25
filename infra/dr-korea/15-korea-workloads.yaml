@@ -1,0 +1,926 @@
+# 韩国侧的 petsite 周边工作负载（6 个 Deployment + 对应 Service）
+#
+# ⚠️⚠️ 这个文件是**生成的，不要手改**。
+#      生成器:scripts/gen_korea_workloads.py
+#      重新生成:python3.11 scripts/gen_korea_workloads.py --out infra/dr-korea/15-korea-workloads.yaml
+#      本次生成:2026-09-25T13:10:50Z
+#      来源:ap-northeast-1 集群 PetSite 的 namespace petadoptions（活集群）
+#           + infra/dr-korea/irsa-korea-mapping.json（ServiceAccount 部分）
+#
+# ⚠️ ServiceAccount 与 IRSA 信任策略**同源**（都出自那份映射）。
+#    2026-09-25 踩过:只建了 petsite-sa，另外 6 个没建，于是
+#    ReplicaSet 报 FailedCreate、**pod 根本不会被创建** ——
+#    任何遍历 pod 的健康检查对这个缺陷完全失明。
+#
+# 手改会在下次重新生成时丢掉。东京侧变更后重跑，diff 会直接告诉你变了什么。
+#
+# ── 这不是一份能让站点真正服务用户的配置 ──────────────────────────
+# 环境变量的**值**仍指向东京的资源（SSM 前缀 /petstore 等），而韩国那些参数
+# 不存在 —— 实测 petsite 会返回 HTTP 200 加一个错误页
+# （根因 /petstore/searchapiurl ParameterNotFound）。
+# 补齐 region 内后端属于手册第五节⑤，不是这个文件的范围。
+#
+# ── 生成时发现的注意事项 ────────────────────────────────────────
+#   - list-adoptions: enableServiceLinks=False 已带过来 —— 丢了它会让 service-link 环境变量污染应用配置
+#   - pay-for-adoption: enableServiceLinks=False 已带过来 —— 丢了它会让 service-link 环境变量污染应用配置
+#   - petfood: enableServiceLinks=False 已带过来 —— 丢了它会让 service-link 环境变量污染应用配置
+#   - pethistory: 镜像用可变 tag `latest` —— 主备两侧可能指向不同镜像而看不出来
+#   - search-service: enableServiceLinks=False 已带过来 —— 丢了它会让 service-link 环境变量污染应用配置
+#   - traffic-generator: enableServiceLinks=False 已带过来 —— 丢了它会让 service-link 环境变量污染应用配置
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: petsite-sa
+  namespace: petadoptions
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::926093770964:role/Applications-PetSiteServiceAccount6A1851C9-y5J6EGm1X5bM
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: list-adoptions-sa
+  namespace: petadoptions
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::926093770964:role/ServicesEks2-listadoptionsServiceAccountRole9A4594D-amvOjoW5dHjk
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pay-for-adoption-sa
+  namespace: petadoptions
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::926093770964:role/ServicesEks2-payforadoptionServiceAccountRole40AF89-oEilVHOTwr8m
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: search-service-sa
+  namespace: petadoptions
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::926093770964:role/ServicesEks2-searchserviceServiceAccountRole588AF64-Sulrl6FvKO5F
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pethistory-sa
+  namespace: petadoptions
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::926093770964:role/Applications-petadoptionshistoryapplicationPetSiteS-UsHWnPL90sD2
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: petfood-sa
+  namespace: petadoptions
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::926093770964:role/ServicesEks2-petfoodServiceAccountRole25957383-tECVCVv0ZjpT
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: traffic-generator-sa
+  namespace: petadoptions
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::926093770964:role/ServicesEks2-trafficgeneratorServiceAccountRole1029-ZjtBnUIVOBI1
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alb-ingress-controller
+  namespace: kube-system
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::926093770964:role/ServicesEks2-LoadBalancerServiceAccountB6807779-QEjXooFf4b6b
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-config
+  namespace: petadoptions
+  labels:
+    aws.cdk.eks/prune-c82dcb5cfb5800e1210fdafe45f96cbdf23d59792f: ''
+data:
+  otel-config.yaml: "extensions:\n  health_check:\n  sigv4auth:\n    service: \"aps\"\n    region: \"ap-northeast-1\"\n\nreceivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n\
+    \      http:\n        endpoint: 0.0.0.0:4318\n  prometheus:\n    config:\n      global:\n        scrape_interval: 20s\n        scrape_timeout: 10s\n      scrape_configs:\n        - job_name: \"otel-collector\"\
+    \n          kubernetes_sd_configs:\n            - role: pod\n          relabel_configs:\n            - source_labels: [__meta_kubernetes_pod_container_port_number]\n              action: keep\n    \
+    \          regex: '^8080$'\n            - source_labels: [ __meta_kubernetes_pod_container_name ]\n              action: keep\n              regex: '^pethistory$'\n            - source_labels: [ __meta_kubernetes_pod_name\
+    \ ]\n              action: replace\n              target_label: pod_name\n            - source_labels: [ __meta_kubernetes_pod_container_name ]\n              action: replace\n              target_label:\
+    \ container_name\n\nprocessors:\n  batch/metrics:\n    timeout: 60s\n\nexporters:\n  debug:\n    verbosity: detailed\n  awsxray:\n  awsemf:\n    namespace: \"PetAdoptionsHistory\"\n    resource_to_telemetry_conversion:\n\
+    \      enabled: true\n    dimension_rollup_option: NoDimensionRollup\n    metric_declarations:\n      - dimensions: [ [ pod_name, container_name ] ]\n        metric_name_selectors:\n          - \"^transactions_get_count_total$\"\
+    \n          - \"^transactions_history_count$\"\n          - \"^process_.*\"\n        label_matchers:\n          - label_names:\n              - container_name\n            regex: ^pethistory$\n    \
+    \  - dimensions: [ [ pod_name, container_name, generation ] ]\n        metric_name_selectors:\n          - \"^python_gc_objects_.*\"\n        label_matchers:\n          - label_names:\n            \
+    \  - container_name\n            regex: ^pethistory$\n      - dimensions: [ [ pod_name, container_name, endpoint, method, status ] ]\n        metric_name_selectors:\n          - \"^flask_http_request_duration_seconds_created$\"\
+    \n        label_matchers:\n          - label_names:\n              - container_name\n            regex: ^pethistory$\n      - dimensions: [ [ pod_name, container_name, method, status ] ]\n        metric_name_selectors:\n\
+    \          - \"^flask_http_request_total$\"\n          - \"^flask_http_request_created$\"\n        label_matchers:\n          - label_names:\n              - container_name\n            regex: ^pethistory$\n\
+    \      - dimensions: [ [ pod_name, container_name, implementation, major, minor, patchlegel, version ] ]\n        metric_name_selectors:\n          - \"^python_info$\"\n        label_matchers:\n   \
+    \       - label_names:\n              - container_name\n            regex: ^pethistory$\n      - dimensions: [ [ pod_name, container_name, version ] ]\n        metric_name_selectors:\n          - \"\
+    ^flask_exporter_info$\"\n        label_matchers:\n          - label_names:\n              - container_name\n            regex: ^pethistory$\n  # prometheusremotewrite:\n  #   endpoint: \"{{AMP_WORKSPACE_URL}}\"\
+    \n  #   auth:\n  #     authenticator: sigv4auth\n\nservice:\n  extensions: [sigv4auth, health_check]\n  pipelines:\n    traces:\n      receivers: [otlp]\n      exporters: [awsxray]\n    metrics:\n \
+    \     receivers: [prometheus]\n      processors: [batch/metrics]\n      exporters: [awsemf]\n"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: list-adoptions
+  namespace: petadoptions
+  labels:
+    app: list-adoptions
+    aws.cdk.eks/prune-c87562bde4b3471556913c7ee5fd362508066fd739: ''
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: list-adoptions
+  template:
+    metadata:
+      name: list-adoptions
+      namespace: petadoptions
+      labels:
+        app: list-adoptions
+      annotations:
+        cloudwatch.aws.amazon.com/auto-annotate-dotnet: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-java: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-nodejs: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-python: 'true'
+        instrumentation.opentelemetry.io/inject-dotnet: 'true'
+        instrumentation.opentelemetry.io/inject-java: 'true'
+        instrumentation.opentelemetry.io/inject-nodejs: 'true'
+        instrumentation.opentelemetry.io/inject-python: 'true'
+    spec:
+      containers:
+      - name: list-adoptions
+        image: 926093770964.dkr.ecr.ap-northeast-2.amazonaws.com/cdk-hnb659fds-container-assets-926093770964-ap-northeast-1:198a0b7e84d04de30668462f7c61f6f35797b6d874b048eaefe20c9bb410d47c
+        ports:
+        - containerPort: 80
+          protocol: TCP
+        env:
+        - name: AWS_REGION
+          value: ap-northeast-1
+        resources:
+          limits:
+            cpu: 512m
+            memory: 1Gi
+          requests:
+            cpu: 48m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /health/status
+            port: 80
+            scheme: HTTP
+          initialDelaySeconds: 30
+          timeoutSeconds: 1
+          periodSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health/status
+            port: 80
+            scheme: HTTP
+          initialDelaySeconds: 5
+          timeoutSeconds: 1
+          periodSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: Always
+      - name: aws-otel-collector
+        image: public.ecr.aws/aws-observability/aws-otel-collector:v0.47.0
+        env:
+        - name: AOT_CONFIG_CONTENT
+          value: "receivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n      http:\n        endpoint: 0.0.0.0:4318\nprocessors:\n  batch/traces:\n    timeout: 1s\n    send_batch_size:\
+            \ 50\nexporters:\n  awsxray:\n    region: ap-northeast-1\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [batch/traces]\n      exporters: [awsxray]"
+        resources:
+          limits:
+            cpu: 256m
+            memory: 256Mi
+          requests:
+            cpu: 32m
+            memory: 256Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      serviceAccountName: list-adoptions-sa
+      securityContext: {}
+      schedulerName: default-scheduler
+      enableServiceLinks: false
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: list-adoptions
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: list-adoptions
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: list-adoptions
+  namespace: petadoptions
+  labels:
+    aws.cdk.eks/prune-c8c548db9315f9ff7a8f8c347f5919d340d965d041: ''
+  annotations:
+    service.kubernetes.io/topology-mode: auto
+spec:
+  type: ClusterIP
+  selector:
+    app: list-adoptions
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 80
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pay-for-adoption
+  namespace: petadoptions
+  labels:
+    app: pay-for-adoption
+    aws.cdk.eks/prune-c84f906ff0b8344bcc26296e190e04bd5629b20a72: ''
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pay-for-adoption
+  template:
+    metadata:
+      name: pay-for-adoption
+      namespace: petadoptions
+      labels:
+        app: pay-for-adoption
+      annotations:
+        cloudwatch.aws.amazon.com/auto-annotate-dotnet: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-java: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-nodejs: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-python: 'true'
+        instrumentation.opentelemetry.io/inject-dotnet: 'true'
+        instrumentation.opentelemetry.io/inject-java: 'true'
+        instrumentation.opentelemetry.io/inject-nodejs: 'true'
+        instrumentation.opentelemetry.io/inject-python: 'true'
+        kubectl.kubernetes.io/restartedAt: '2026-09-13T22:05:27Z'
+    spec:
+      containers:
+      - name: pay-for-adoption
+        image: 926093770964.dkr.ecr.ap-northeast-2.amazonaws.com/cdk-hnb659fds-container-assets-926093770964-ap-northeast-1:a8ac82bfb06e3cce9e668419facbab19b81193f63042a515e0f40bc73f4119f1
+        ports:
+        - containerPort: 80
+          protocol: TCP
+        env:
+        - name: AWS_REGION
+          value: ap-northeast-1
+        - name: PETSTORE_PARAM_PREFIX
+          value: /petstore
+        - name: UPDATE_ADOPTIONS_STATUS_URL_PARAMETER_NAME
+          value: updateadoptionstatusurl
+        - name: RDS_SECRET_ARN_NAME
+          value: rdssecretarn
+        - name: S3_BUCKET_PARAMETER_NAME
+          value: s3bucketname
+        - name: DYNAMODB_TABLE_PARAMETER_NAME
+          value: dynamodbtablename
+        - name: SQS_QUEUE_URL_PARAMETER_NAME
+          value: queueurl
+        - name: PETSEARCH_URL_PARAMETER_NAME
+          value: searchapiurl
+        resources:
+          limits:
+            cpu: 512m
+            memory: 1Gi
+          requests:
+            cpu: 32m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /health/status
+            port: 80
+            scheme: HTTP
+          initialDelaySeconds: 30
+          timeoutSeconds: 1
+          periodSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health/status
+            port: 80
+            scheme: HTTP
+          initialDelaySeconds: 5
+          timeoutSeconds: 1
+          periodSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: Always
+      - name: aws-otel-collector
+        image: public.ecr.aws/aws-observability/aws-otel-collector:v0.47.0
+        env:
+        - name: AOT_CONFIG_CONTENT
+          value: "receivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n      http:\n        endpoint: 0.0.0.0:4318\nprocessors:\n  batch/traces:\n    timeout: 1s\n    send_batch_size:\
+            \ 50\nexporters:\n  awsxray:\n    region: ap-northeast-1\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [batch/traces]\n      exporters: [awsxray]"
+        resources:
+          limits:
+            cpu: 256m
+            memory: 256Mi
+          requests:
+            cpu: 32m
+            memory: 256Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      serviceAccountName: pay-for-adoption-sa
+      securityContext: {}
+      schedulerName: default-scheduler
+      enableServiceLinks: false
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: pay-for-adoption
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: pay-for-adoption
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pay-for-adoption
+  namespace: petadoptions
+  labels:
+    aws.cdk.eks/prune-c818bdb2d9a860da9f05b752b371ace215e02e00fd: ''
+  annotations:
+    service.kubernetes.io/topology-mode: auto
+spec:
+  type: ClusterIP
+  selector:
+    app: pay-for-adoption
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 80
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: petfood
+  namespace: petadoptions
+  labels:
+    app: petfood
+    aws.cdk.eks/prune-c8d5548b506dbebe496de120325dd05fb2c061acae: ''
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: petfood
+  template:
+    metadata:
+      name: petfood
+      namespace: petadoptions
+      labels:
+        app: petfood
+      annotations:
+        cloudwatch.aws.amazon.com/auto-annotate-dotnet: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-java: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-nodejs: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-python: 'true'
+        instrumentation.opentelemetry.io/inject-dotnet: 'true'
+        instrumentation.opentelemetry.io/inject-java: 'true'
+        instrumentation.opentelemetry.io/inject-nodejs: 'true'
+        instrumentation.opentelemetry.io/inject-python: 'true'
+    spec:
+      containers:
+      - name: petfood
+        image: 926093770964.dkr.ecr.ap-northeast-2.amazonaws.com/cdk-hnb659fds-container-assets-926093770964-ap-northeast-1:8a7bac33f6f09df995b3cbe27d8f7e164188fcd5a842c17eaa98e0b83b23f506
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+        env:
+        - name: AWS_REGION
+          value: ap-northeast-1
+        - name: PETFOOD_FOODS_TABLE_NAME
+          value: ServicesEks2-ddbpetfoodfoods00C5D62B-4FH25BBOAEWX
+        - name: PETFOOD_CARTS_TABLE_NAME
+          value: ServicesEks2-ddbpetfoodcarts77F2B0EA-1HSU365TM7EXJ
+        - name: PETFOOD_EVENT_BUS_NAME
+          value: ServicesEks2petfoodeventbus12F76D34
+        - name: PETFOOD_REGION
+          value: ap-northeast-1
+        - name: PETFOOD_ENABLE_JSON_LOGGING
+          value: 'true'
+        - name: PETFOOD_EVENTS_ENABLED
+          value: 'true'
+        resources:
+          limits:
+            cpu: 512m
+            memory: 1Gi
+          requests:
+            cpu: 64m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health/status
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 30
+          timeoutSeconds: 1
+          periodSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health/status
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 5
+          timeoutSeconds: 1
+          periodSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: IfNotPresent
+      - name: aws-otel-collector
+        image: public.ecr.aws/aws-observability/aws-otel-collector:v0.47.0
+        env:
+        - name: AOT_CONFIG_CONTENT
+          value: "receivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n      http:\n        endpoint: 0.0.0.0:4318\nprocessors:\n  batch/traces:\n    timeout: 1s\n    send_batch_size:\
+            \ 50\nexporters:\n  awsxray:\n    region: ap-northeast-1\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [batch/traces]\n      exporters: [awsxray]"
+        resources:
+          limits:
+            cpu: 256m
+            memory: 256Mi
+          requests:
+            cpu: 32m
+            memory: 256Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      serviceAccountName: petfood-sa
+      securityContext: {}
+      schedulerName: default-scheduler
+      enableServiceLinks: false
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: petfood
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: petfood
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: petfood
+  namespace: petadoptions
+  labels:
+    aws.cdk.eks/prune-c8978a5f59b2d2fd66e21a426735873eb9a444a69c: ''
+  annotations:
+    service.kubernetes.io/topology-mode: auto
+spec:
+  type: ClusterIP
+  selector:
+    app: petfood
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 8080
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pethistory-deployment
+  namespace: petadoptions
+  labels:
+    aws.cdk.eks/prune-c83272d5df5b8246f49e8f35d6039967bf4431d63f: ''
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pethistory
+  template:
+    metadata:
+      name: pethistory-deployment
+      namespace: petadoptions
+      labels:
+        app: pethistory
+      annotations:
+        cloudwatch.aws.amazon.com/auto-annotate-dotnet: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-java: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-nodejs: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-python: 'true'
+        instrumentation.opentelemetry.io/inject-dotnet: 'true'
+        instrumentation.opentelemetry.io/inject-java: 'true'
+        instrumentation.opentelemetry.io/inject-nodejs: 'true'
+        instrumentation.opentelemetry.io/inject-python: 'true'
+        kubectl.kubernetes.io/restartedAt: '2026-09-05T03:36:20Z'
+    spec:
+      volumes:
+      - name: otel-config
+        configMap:
+          name: otel-config
+          defaultMode: 420
+      containers:
+      - name: pethistory
+        image: 926093770964.dkr.ecr.ap-northeast-2.amazonaws.com/pet-adoptions-history:latest
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+        env:
+        - name: AWS_XRAY_DAEMON_ADDRESS
+          value: xray-service.default:2000
+        - name: AWS_REGION
+          value: ap-northeast-1
+        - name: OTEL_OTLP_ENDPOINT
+          value: localhost:4317
+        - name: OTEL_RESOURCE
+          value: ClusterName=PetSite
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: service.namespace=AWSObservability,service.name=PetAdoptionsHistory
+        - name: S3_REGION
+          value: ap-northeast-1
+        - name: OTEL_METRICS_EXPORTER
+          value: otlp
+        - name: RDS_SECRET_ARN
+          value: arn:aws:secretsmanager:ap-northeast-1:926093770964:secret:DatabaseSecret3B817195-VNRjDLU0sXke-PZeYnO
+        - name: UPDATE_ADOPTION_URL
+          value: https://9dw5r2dqlb.execute-api.ap-northeast-1.amazonaws.com/prod/
+        resources:
+          limits:
+            cpu: 500m
+            memory: 1Gi
+          requests:
+            cpu: 32m
+            memory: 128Mi
+        livenessProbe:
+          httpGet:
+            path: /health/status
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 30
+          timeoutSeconds: 1
+          periodSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health/status
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 5
+          timeoutSeconds: 3
+          periodSeconds: 5
+          successThreshold: 1
+          failureThreshold: 2
+        startupProbe:
+          httpGet:
+            path: /health/status
+            port: 8080
+            scheme: HTTP
+          timeoutSeconds: 3
+          periodSeconds: 5
+          successThreshold: 1
+          failureThreshold: 30
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: Always
+      - name: aws-otel-collector
+        image: public.ecr.aws/aws-observability/aws-otel-collector:v0.47.0
+        args:
+        - --config=/etc/otel-config/otel-config.yaml
+        env:
+        - name: AWS_REGION
+          value: ap-northeast-1
+        - name: RDS_SECRET_ARN
+          value: arn:aws:secretsmanager:ap-northeast-1:926093770964:secret:DatabaseSecret3B817195-VNRjDLU0sXke-PZeYnO
+        - name: UPDATE_ADOPTION_URL
+          value: http://petstatusupdater-service.petadoptions.svc.cluster.local
+        - name: AOT_CONFIG_CONTENT
+          value: "# aws-otel-collector sidecar 配置 —— 增加 DeepFlow OTLP exporter\n#\n# 为什么不是「给 DeepFlow 加 X-Amzn-Trace-Id 提取头」：\n# DeepFlow 只对 traceparent / sw8·sw6 / uber-trace-id 三个头做格式感知解析，\n# 其它自定义头整串读取。而\
+            \ X-Amzn-Trace-Id 的值是\n#   Root=1-xxx;Parent=yyy;Sampled=1\n# Parent 每跳都不同 → 整串每跳不同 → trace_id 非 0 但无法把同一条链归到一起。\n# DeepFlow 文档也明确：分布式追踪只支持 eBPF 采集或经 OpenTelemetry 协议传入。\n#\n# ── 端点：用 Service，不用\
+            \ hostIP ────────────────────────────────────────\n# 飞行前实测（2026-08-29）：deepflow-agent DaemonSet 的 hostNetwork=false，\n# 且 38086 **没有 hostPort** —— 所以 `${env:K8S_NODE_IP}:38086` 到不了 agent，\n\
+            # 它只监听 Pod IP。正确端点是 Service：\n#   kubectl -n deepflow get svc deepflow-agent\n#     port=80  targetPort=receive(=38086)\n# 实测 POST http://deepflow-agent.deepflow:80/api/v1/otel/trace → HTTP\
+            \ 200\n# 用 Service DNS 的额外好处：不需要注入 K8S_NODE_IP 环境变量，\n# 改动面只剩 AOT_CONFIG_CONTENT 一个字段。\n#\n# Service 会在 4 个 agent 间负载均衡，span 可能落到任意一个 —— 对 OTLP 摄入\n# 无影响（DeepFlow 对外部推送的 span 不要求节点亲和）。\n#\n\
+            # ── 安全性质 ────────────────────────────────────────────────────────────\n# 两个 exporter 相互独立。即使 DeepFlow 端完全不可达，awsxray 仍照常导出，\n# retry_on_failure + sending_queue 会让失败批次重试后丢弃，不会反压。\n# 现有 X-Ray\
+            \ 链路不承担风险。\nreceivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n      http:\n        endpoint: 0.0.0.0:4318\nprocessors:\n  batch/traces:\n    timeout: 1s\n   \
+            \ send_batch_size: 50\nexporters:\n  awsxray:\n    region: ap-northeast-1\n  otlphttp/deepflow:\n    traces_endpoint: \"http://deepflow-agent.deepflow:80/api/v1/otel/trace\"\n    tls:\n    \
+            \  insecure: true\n    retry_on_failure:\n      enabled: true\n      max_elapsed_time: 30s\n    sending_queue:\n      enabled: true\n      queue_size: 500\nservice:\n  pipelines:\n    traces:\n\
+            \      receivers: [otlp]\n      processors: [batch/traces]\n      exporters: [awsxray, otlphttp/deepflow]\n"
+        resources:
+          limits:
+            cpu: 256m
+            memory: 512Mi
+          requests:
+            cpu: 32m
+            memory: 24Mi
+        volumeMounts:
+        - name: otel-config
+          mountPath: /etc/otel-config
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      serviceAccountName: pethistory-sa
+      securityContext: {}
+      schedulerName: default-scheduler
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: pethistory
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: pethistory
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pethistory-service
+  namespace: petadoptions
+  labels:
+    aws.cdk.eks/prune-c83272d5df5b8246f49e8f35d6039967bf4431d63f: ''
+spec:
+  type: ClusterIP
+  selector:
+    app: pethistory
+  ports:
+  - port: 8080
+    protocol: TCP
+    targetPort: 8080
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: search-service
+  namespace: petadoptions
+  labels:
+    app: search-service
+    aws.cdk.eks/prune-c82a73239e22ac84bbae35433843e3e99570bbeb39: ''
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: search-service
+  template:
+    metadata:
+      name: search-service
+      namespace: petadoptions
+      labels:
+        app: search-service
+      annotations:
+        cloudwatch.aws.amazon.com/auto-annotate-dotnet: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-java: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-nodejs: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-python: 'true'
+        instrumentation.opentelemetry.io/inject-dotnet: 'true'
+        instrumentation.opentelemetry.io/inject-java: 'true'
+        instrumentation.opentelemetry.io/inject-nodejs: 'true'
+        instrumentation.opentelemetry.io/inject-python: 'true'
+        kubectl.kubernetes.io/restartedAt: '2026-09-17T07:18:33Z'
+    spec:
+      containers:
+      - name: search-service
+        image: 926093770964.dkr.ecr.ap-northeast-2.amazonaws.com/cdk-hnb659fds-container-assets-926093770964-ap-northeast-1:012a95fb34e6e00ddd23958c8fb6ae4170e6a34648979a5a52812a6a52915fb2
+        ports:
+        - containerPort: 80
+          protocol: TCP
+        env:
+        - name: AWS_REGION
+          value: ap-northeast-1
+        resources:
+          limits:
+            cpu: 512m
+            memory: 1Gi
+          requests:
+            cpu: 256m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /health/status
+            port: 80
+            scheme: HTTP
+          timeoutSeconds: 5
+          periodSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health/status
+            port: 80
+            scheme: HTTP
+          initialDelaySeconds: 5
+          timeoutSeconds: 5
+          periodSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health/status
+            port: 80
+            scheme: HTTP
+          timeoutSeconds: 5
+          periodSeconds: 5
+          successThreshold: 1
+          failureThreshold: 30
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - sh
+              - -c
+              - sleep 45
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: Always
+      - name: aws-otel-collector
+        image: public.ecr.aws/aws-observability/aws-otel-collector:v0.47.0
+        env:
+        - name: AOT_CONFIG_CONTENT
+          value: "receivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n      http:\n        endpoint: 0.0.0.0:4318\nprocessors:\n  batch/traces:\n    timeout: 1s\n    send_batch_size:\
+            \ 50\nexporters:\n  awsxray:\n    region: ap-northeast-1\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [batch/traces]\n      exporters: [awsxray]"
+        resources:
+          limits:
+            cpu: 256m
+            memory: 256Mi
+          requests:
+            cpu: 32m
+            memory: 256Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 90
+      dnsPolicy: ClusterFirst
+      serviceAccountName: search-service-sa
+      securityContext: {}
+      schedulerName: default-scheduler
+      enableServiceLinks: false
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: search-service
+        nodeAffinityPolicy: Honor
+        nodeTaintsPolicy: Honor
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: search-service
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: search-service
+  namespace: petadoptions
+  labels:
+    aws.cdk.eks/prune-c8cec422671b4cc0ce78c73acb6f70d3087e587437: ''
+  annotations:
+    service.kubernetes.io/topology-mode: auto
+spec:
+  type: ClusterIP
+  selector:
+    app: search-service
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 80
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: traffic-generator
+  namespace: petadoptions
+  labels:
+    app: traffic-generator
+    aws.cdk.eks/prune-c8f1a1f14fa123487fc25238ead109ffafa41e3daf: ''
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: traffic-generator
+  template:
+    metadata:
+      name: traffic-generator
+      namespace: petadoptions
+      labels:
+        app: traffic-generator
+      annotations:
+        cloudwatch.aws.amazon.com/auto-annotate-dotnet: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-java: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-nodejs: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-python: 'true'
+        instrumentation.opentelemetry.io/inject-dotnet: 'true'
+        instrumentation.opentelemetry.io/inject-java: 'true'
+        instrumentation.opentelemetry.io/inject-nodejs: 'true'
+        instrumentation.opentelemetry.io/inject-python: 'true'
+        kubectl.kubernetes.io/restartedAt: '2026-08-29T14:43:17Z'
+    spec:
+      containers:
+      - name: traffic-generator
+        image: 926093770964.dkr.ecr.ap-northeast-2.amazonaws.com/cdk-hnb659fds-container-assets-926093770964-ap-northeast-1:28111322a93d1fbacfdf11a76a1b8579f400c9d701351b6470404e567ae0bf89
+        ports:
+        - containerPort: 80
+          protocol: TCP
+        env:
+        - name: AWS_REGION
+          value: ap-northeast-1
+        - name: TRAFFIC_GENERATOR_HEADER
+          value: X-Traffic-Generator:petsite-chaos-0c9027fb05beab77
+        - name: petsiteurl
+          value: http://service-petsite.petadoptions.svc.cluster.local
+        - name: searchapiurl
+          value: http://search-service.petadoptions.svc.cluster.local/api/search?
+        resources:
+          limits:
+            cpu: 64m
+            memory: 512Mi
+          requests:
+            cpu: 64m
+            memory: 512Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      serviceAccountName: traffic-generator-sa
+      securityContext: {}
+      schedulerName: default-scheduler
+      enableServiceLinks: false
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: traffic-generator
+  namespace: petadoptions
+  labels:
+    aws.cdk.eks/prune-c82718d2549ef81bf356ab12aef7ef76abb10803a3: ''
+  annotations:
+    service.kubernetes.io/topology-mode: auto
+spec:
+  type: ClusterIP
+  selector:
+    app: traffic-generator
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 80

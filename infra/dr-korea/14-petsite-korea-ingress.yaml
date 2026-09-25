@@ -1,4 +1,13 @@
-# 韩国侧 petsite 的入口链路：Service + TargetGroupBinding
+# 韩国侧的入口绑定：petsite 的 Service + TargetGroupBinding，
+# 外加 pethistory 的 TargetGroupBinding。
+#
+# ⚠️ 为什么只有这两个需要 TargetGroupBinding：
+#    实测东京的 7 个 Service 全是 ClusterIP，而对外的公网 ALB 只把
+#    **petsite** 与 **pethistory** 绑进了业务目标组
+#    （Servic-PetSi-… 与 Servic-PetAd-…）。其余 4 个
+#    （list-adoptions / pay-for-adoption / petfood / search-service）
+#    只有 petsite-lt-* 压测目标组，正常服务时由 petsite 在集群内
+#    直接按 ClusterIP 调用 —— 所以韩国不需要给它们建绑定。
 #
 # ═══════════════════════════════════════════════════════════════════
 # ⚠️ 这不是一份能让 petsite 真正服务用户的配置
@@ -56,3 +65,20 @@ spec:
     # 这里写的是 **Service 的 port**（80），不是目标组的 port（8080）。
     # controller 用它找 Endpoints，再按 targetPort 注册 pod IP:8080。
     port: 80
+---
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: pethistory-tgb
+  namespace: petadoptions
+spec:
+  # 韩国的 pethistory 目标组（栈 dr-korea-alb 的输出 PethistoryTargetGroupArn）
+  targetGroupARN: arn:aws:elasticloadbalancing:ap-northeast-2:926093770964:targetgroup/dr-korea-pethistory-tg/e285f27dc5c2c34c
+  targetType: ip
+  ipAddressType: ipv4
+  serviceRef:
+    # ⚠️ Service 名是 pethistory-**service**，Deployment 名是
+    #    pethistory-**deployment** —— 两个名字不一样。
+    #    生成器是按 selector 匹配的，不是按名字猜的。
+    name: pethistory-service
+    port: 8080
