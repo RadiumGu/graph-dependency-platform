@@ -3087,8 +3087,15 @@ petfood 日志:`ValidationException` on `dr-korea-petfood-carts`,
 
 ##### ⚠️ 东京的活体对照**没做成**,不能当证据
 
-想用 pod proxy 打东京同一接口,结果 `401` 且 pod 名取空 —— token 在脚本中途
-失效。而「东京日志 0 命中」同样**分不出**「没有这个错」与「日志取失败」。
+想用 pod proxy 打东京同一接口,结果 `401` 且 pod 名取空。
+
+> **⚠️ 归因订正(2026-09-25,写在 4.29 那次演练之后)**
+> 当时我把原因记成「token 在脚本中途失效」,**那是错的**。
+> 真因是**结构性的**:`list-access-entries` 实测东京 `PetSite` 集群共 20 个
+> 访问条目,**没有一个是 Temporal 角色**;而韩国集群里有。
+> 所以 DR worker **从设计上就打不到东京集群** —— 重试多少次都是 401。
+>
+> 记错归因的代价是把一个「本来就不可能成功」的测法记成了「偶发失败、可重试」。而「东京日志 0 命中」同样**分不出**「没有这个错」与「日志取失败」。
 
 **所以结论是建立在源码 + 两侧表结构上的,不是建立在那次失败的对照上。**
 这两者强度不同,必须分清。
@@ -3111,6 +3118,124 @@ petfood 日志:`ValidationException` on `dr-korea-petfood-carts`,
 
 节点组 `desiredSize=0`、临时提权已摘并核实空数组。
 新增空闲成本:两张 PAY_PER_REQUEST 表 + 一个事件总线 ≈ 0。
+
+---
+
+
+### 4.29 真跑了一次完整的数据库切换演练(含回切)
+
+**日期**:2026-09-25 16:38–16:53 UTC ｜ 第⑥项 ｜ 用户已逐字放行
+
+#### ① 事前(红线要求的「事前」)
+
+回切命令**在动手之前**写进了 ledger。事前状态:
+
+```
+petsite-global   available   aurora-postgresql 16.11
+  东京 serviceseks2-databaseb269d8bb-efjeyzicx2ak        IsWriter=true
+  韩国 dr-korea-aurora-secondarycluster-5ctcqnmbkro4     IsWriter=false
+复制延迟           平均 ~80 ms，峰值 ~1 s（15 分钟窗口）
+```
+
+#### ② 三个从文档核实到的 CLI 细节(不是猜的)
+
+出处 `AmazonRDS/latest/AuroraUserGuide/aurora-global-database-disaster-recovery.html`:
+
+| 细节 | 我本来会怎么弄错 |
+|---|---|
+| 有专用命令 `switchover-global-cluster` | 会用 `failover-global-cluster --switchover` |
+| `--region` 是**主库所在的 region** | 会填目标 region |
+| `--target-db-cluster-identifier` 必须是 **ARN** | 会填裸标识符 |
+
+**回切时 `--region` 要跟着主库走** —— 那时主库已经在韩国,所以回切用
+`--region ap-northeast-2`。这一点顺序反了就会用错。
+
+#### ③ 提升前基线(这是让结论成为因果的关键)
+
+```
+pg_is_in_recovery                        t
+CREATE TABLE  →  ERROR: cannot execute CREATE TABLE in a read-only transaction
+库                                       adoptions / postgres / rdsadmin
+```
+
+**没有这个基线,「提升后能写」就只是一个孤立观察。**
+
+#### ④ 提升与验证
+
+```
+16:38:34  提交 switchover
+16:39:23  韩国实例 failover 完成
+16:39:29  韩国成为新主
+16:39:31  switchover 完成                     ≈ 57 秒
+```
+
+提升后同一套探测:
+
+| | 提升前 | 提升后 |
+|---|---|---|
+| `pg_is_in_recovery` | `t` | **`f`** |
+| `CREATE TABLE` | 只读事务被拒 | **`CREATE TABLE`** |
+| `INSERT` | — | **返回 id 1,读回成功** |
+
+业务库 `adoptions` 同样可写,里面是真实的 `transactions` /
+`transactions_history` 两张表 —— **复制的是真数据,不是空壳**。
+演练表建完即 `DROP`,不给将来要回切的库留垃圾。
+
+#### ⑤ 回切(红线要求「事后必须回切」)
+
+```
+16:52:12  提交回切
+16:52:34  等待数据同步（事件原文 "Waiting for data synchronization"）
+16:52:35  韩国旧主成功降级
+16:52:56  东京实例 failover 完成
+16:53:02  东京成为新主
+16:53:04  完成                               ≈ 52 秒
+```
+
+核实(用与操作不同的手段 —— 查 RDS 事件与集群成员,不看切换命令的回显):
+
+```
+petsite-global   available
+  东京   IsWriter=true    writer 实例 serviceseks2-databasewriter2462cc03-fwgfu4gossqe
+  韩国   IsWriter=false
+```
+
+#### ⑥ ⚠️ 东京侧的**行为**验证做不到 —— 这是结构性的,不是偶发
+
+想查东京在演练窗口内是否真的写失败过(既是行为证据,也是演练的真实影响面),
+结果是 `401`。查清了真因:
+
+```
+list-access-entries  东京 PetSite    20 个条目，无 Temporal 角色
+list-access-entries  韩国 dr-korea   有 dr-korea-temporal-TemporalRole-…
+```
+
+**DR worker 从设计上就打不到东京集群。** 所以:
+
+- 「东京恢复为 writer」有证据:RDS 事件 + 集群成员 + 实例角色三处一致
+- 「东京**真的可写**」**没有行为证据** —— 没有从韩国 VPC 到东京库的网络通路,
+  也没有东京集群的访问权。**这一条记 inconclusive,不记通过。**
+
+这正是本会话反复出现的纪律:**「没测到」不等于「好了」,也不等于「坏了」。**
+
+#### ⑦ 为演练加的那条授权
+
+Temporal 角色原先读不到韩国 DB 密钥(`AccessDeniedException`),
+因为 4.26 的资源策略只覆盖 7 个业务角色。补了第 8 条 `AllowDrWorkerReadForDrill`。
+
+**它不是为了绕过检查**:切换手册要求提升后核实可写,没有这条权限那一步
+只能记 inconclusive。范围仍最小 —— 只读、只这一个韩国密钥、东京密钥不受影响。
+
+#### ⑧ 我这轮的三次测量失误
+
+| 失误 | 后果 | 教训 |
+|---|---|---|
+| 轮询用的 JMESPath 写错,一直打印 `None None` | 以为切换花了 11 分钟,实际 57 秒 | **读不出值要先怀疑查询,而不是先下结论** |
+| 按 `sed 's/^/  /'` 的**显示缩进**数 YAML 层级 | 插入的语句缩进差 2,YAML 解析失败 | 数缩进要看 `repr`,不看加过前缀的显示 |
+| 手抄带全角括号的中文注释当锚点 | 连续两次 `count == 0` | 又一次撞上**手抄标点** —— 改成按行号定位并先核对该行内容 |
+
+前两次都被 `assert` 拦住了,没有静默写坏 —— 这是「扰动必须先确认原串存在」
+那条纪律的直接收益。
 
 ---
 

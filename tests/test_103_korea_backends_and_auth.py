@@ -89,15 +89,50 @@ class TestSecretPolicyCoversEveryBusinessRole:
         )
 
     def test_count_matches_mapping(self, stack: dict, business_roles: set[str]):
-        """数量对不上就说明映射变了而这里没跟着改。"""
+        """数量对不上就说明映射变了而这里没跟着改。
+
+        ⚠️ 2026-09-25 修正:这里原先把**所有**语句的 principal 加在一起跟 7 比。
+        那个算法把「业务角色齐不齐」和「一共有几个消费者」混成了一条断言，
+        于是切换演练加第 8 个消费者（Temporal worker，非业务角色）时它就挂了 ——
+        而真正的不变量并没有被破坏。
+
+        现在分成两条:业务语句必须恰好是那 7 个；额外语句必须在**白名单**里。
+        白名单的作用是让「刻意新增」与「顺手加进来」区分开 ——
+        不写进白名单的新消费者仍然会挂。
+        """
+        biz = self._business_statement(stack)
+        principals = biz["Principal"]["AWS"]
+        principals = [principals] if isinstance(principals, str) else principals
+        assert len(principals) == len(business_roles) == 7, (
+            f"业务语句里有 {len(principals)} 个 principal，映射里有 "
+            f"{len(business_roles)} 个 —— 对不上说明映射变了而这里没跟着改"
+        )
+
+    #: 刻意新增的**非业务**消费者。新增一个就要在这里登记，并说明理由。
+    DELIBERATE_EXTRA_SIDS = {
+        # 切换演练要求提升数据库后核实韩国真的可写；没有这条权限那一步
+        # 只能记 inconclusive，而「没测到」与「坏了」表现完全一样。
+        "AllowDrWorkerReadForDrill",
+    }
+
+    def test_extra_consumers_are_declared(self, stack: dict):
+        """非业务消费者必须登记，顺手加进来的会被挂住。"""
         sts = stack["Resources"]["KoreaDbSecretPolicy"]["Properties"]["ResourcePolicy"][
             "Statement"
         ]
-        total = sum(
-            1 if isinstance(st["Principal"]["AWS"], str) else len(st["Principal"]["AWS"])
-            for st in sts
+        extra = {st["Sid"] for st in sts} - {"AllowPetsiteAppRolesRead"}
+        undeclared = extra - self.DELIBERATE_EXTRA_SIDS
+        assert not undeclared, (
+            f"密钥资源策略里出现了未登记的消费者 {undeclared} —— "
+            "新增消费者要写进 DELIBERATE_EXTRA_SIDS 并说明理由"
         )
-        assert total == len(business_roles) == 7
+
+    @staticmethod
+    def _business_statement(stack: dict) -> dict:
+        sts = stack["Resources"]["KoreaDbSecretPolicy"]["Properties"]["ResourcePolicy"][
+            "Statement"
+        ]
+        return next(st for st in sts if st["Sid"] == "AllowPetsiteAppRolesRead")
 
     def test_action_is_only_get_secret_value(self, stack: dict):
         """最小权限:只给读，不给改。"""
