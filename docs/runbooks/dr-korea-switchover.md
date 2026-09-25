@@ -95,10 +95,11 @@ arn:aws:rds:ap-northeast-2:…:cluster:dr-korea-aurora-secondarycluster-…    �
 | IRSA(7 个应用 SA) | ✅ | SA token 换到生产角色凭据;错 SA 被 `AccessDenied` | 4.18 |
 | **IRSA 在 pod 里真工作** | ✅ | 启动日志 `Found credentials using the AWS SDK's default credential search` | 4.21 |
 | 数据库提升权限+链路 | ⚠️ | 四种裁决各走对分支,0 失败 —— **但从未真提升** | 4.19 |
-| petsite 能否服务用户 | ❓ | **inconclusive** —— 现有探针在两 region 上没有区分力 | 4.21 |
+
 | 应用配置 | ❌ | 韩国 SSM `/petstore` **0 个参数**(东京 41 个) | 4.21 |
 | LB controller 的 IRSA | ✅ | 韩国 SA token 换到生产角色;bogus SA 被 `AccessDenied` | 五③ |
-| 外部入口(ALB/目标组) | ❌ | 韩国没有 ALB、没有目标组、controller 未安装 | 五② |
+| 外部入口(ALB/目标组) | ✅ | 真流量走通:ALB→目标组→pod,`GET /health/status` 200 | 4.23 |
+| **petsite 能否服务用户** | ❌ | **不能** —— HTTP 200 但页面是 `Error - …`;`/petstore/searchapiurl` ParameterNotFound | 4.23 |
 | DNS 切换 | ❌ | 未配置 | — |
 
 ---
@@ -117,6 +118,25 @@ readiness 探针    通过           ✅
 因为 `/health/status` 返回的是**硬编码的 5 字节字符串**,完全不碰配置。
 
 **所以任何基于「pod 健康」的灾备就绪检查,在一个什么都没配好的站点上是全绿的。**
+
+#### 2026-09-25 更新:比这更坏一层 —— **状态码也会骗人**
+
+入口打通之后拿到了真流量的答案。在一个**零配置**的 petsite 上:
+
+| 信号 | 结果 |
+|---|---|
+| pod `Running` / restarts 0 | ✅ 绿 |
+| readiness 探针 | ✅ 绿 |
+| `/health/status` | ✅ 200 "Alive" |
+| **ALB 目标健康** | ✅ **healthy** |
+| **`GET /` 的 HTTP 状态码** | ✅ **200** |
+| 页面 `<title>` | ❌ `Error - Observability PetAdoptions` |
+
+根因:`PetSite.Configuration.ParameterRefreshManager` 去取
+`/petstore/searchapiurl` → `ParameterNotFound` → 渲染错误页 → **以 200 返回**。
+
+**从 pod 到 ALB 到 HTTP 状态码,整条链路全绿,而用户看到的是错误页。**
+唯一能区分的判据是**页面内容**。
 崩溃会告警,这个不会 —— 它会让你以为切换成功了。
 
 对我们自己的自动化也是同一条边界:`count_ready_nodes()` 只回答
@@ -156,24 +176,42 @@ traffic-generator       1/1   sa=traffic-generator-sa
 
 韩国侧目前 **0 个**(演练用的那个已删)。7 个 SA 的 IRSA 信任都已补好。
 
-### ② 入口:静态看清单永远发现不了的缺口
+### ② ~~入口~~ —— ✅ 已于 2026-09-25 打通(4.23)
 
-`petadoptions` 下**没有 Ingress 资源**,7 个 Service 全是 `ClusterIP`。
-真正的入口是 **7 个 `TargetGroupBinding`**,由 AWS Load Balancer Controller
-把 pod 直接绑进 CDK 建好的 ALB 目标组:
+原来的缺口是:`petadoptions` 下**没有 Ingress**,7 个 Service 全是 `ClusterIP`,
+真正的入口是 `TargetGroupBinding` 把 pod 绑进 CDK 建的 ALB 目标组,
+而**那些目标组 ARN 是 region 专属的,照搬到韩国无效** —— 清单能过校验、
+pod 能起来,只是永远没有流量。静态检查发现不了。
+
+现在韩国有自己的一份:
 
 ```
-petsite-tgb            -> targetgroup/Servic-PetSi-7JEWC19HNKSR/…   svc=service-petsite
-pethistory-tgb         -> targetgroup/Servic-PetAd-RPOCBTKKJYGI/…   svc=pethistory-service
-petsite-loadtest-tgb   -> targetgroup/petsite-lt-tg/…               svc=service-petsite
-（另有 list-adoptions / pay-for-adoption / petfood / search 的压测目标组）
+ALB        dr-korea-petsite-alb    internal / active / 2a+2b
+目标组      dr-korea-petsite-tg     8080  健康检查 /health/status
+           dr-korea-pethistory-tg  80    健康检查 /health/status
+controller Helm chart 3.0.0（与东京同版本）
 ```
 
-对外的公网 ALB 是 `Servic-PetSi-by0kpyBtxswj`(internet-facing)。
+**决定性证据**(与部署不同的手段:查 `elbv2 describe-target-health`,
+不看 controller 日志):
 
-**那些目标组 ARN 是 region 专属的,照搬到韩国无效** —— 而清单能通过 YAML 校验、
-pod 能起来,只是永远没有流量。韩国侧需要:自己的 ALB + 目标组 + 用**韩国 ARN**
-重写的 TargetGroupBinding。
+```
+10.20.1.88:8080  healthy   ← 连续 6 次稳定
+真流量 GET /health/status → HTTP 200 "Alive"（从 Temporal 实例打 internal ALB）
+```
+
+#### ⚠️ 健康检查刻意偏离东京
+
+东京 petsite 目标组的健康检查是 `GET /` 期望 200,而**实测 0/2 healthy**
+(`Target.ResponseCodeMismatch`)—— 因为 petsite 在 `/` 上做会话分配重定向
+(`Location: /?userId=…`),永远不是 200。**韩国不能照抄那份配置。**
+
+#### ⚠️ 缩容到零会死锁 30 分钟
+
+coredns 的 PDB(`maxUnavailable=1`,2 副本)在只剩一个节点时永远无法满足,
+节点卡在 `Terminating:Wait` 直到 `HeartbeatTimeout=1800` 超时。
+因果验证过:降到 1 副本后 2 分钟内就终止。
+**扩容路径要把 coredns 恢复成 2 副本,缩容路径要先降到 1。**
 
 ### ③ ~~漏掉的第 8 个 IRSA 消费者~~ —— ✅ 已于 2026-09-25 补上
 

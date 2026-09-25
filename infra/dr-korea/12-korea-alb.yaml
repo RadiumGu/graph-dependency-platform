@@ -1,0 +1,239 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  韩国守夜灯站点的入口:internal ALB + 两个目标组 + 监听器。
+  手册（docs/runbooks/dr-korea-switchover.md）第五节缺口② 的第一部分。
+
+# ═══════════════════════════════════════════════════════════════════
+# 为什么需要这个栈
+#
+# 东京的 petadoptions 命名空间**没有 Ingress 资源**，7 个 Service 全是
+# ClusterIP。真正的入口是 TargetGroupBinding 把 pod 直接绑进 CDK 建好的
+# ALB 目标组。那些目标组 ARN 是 **region 专属**的，照搬到韩国无效 ——
+# 而清单能通过 YAML 校验、pod 能起来，只是永远没有流量。
+#
+# 所以韩国必须有自己的 ALB 与目标组，本栈就是那一份。
+#
+# ── 两个已拍板的设计决定 ────────────────────────────────────────────
+#
+# ① Scheme = internal，不是 internet-facing
+#    用户早先明确「韩国先不暴露公网」。internal 一样能证明
+#    LB controller + TargetGroupBinding + 目标注册这整条链路。
+#    改成公网只需要改 Scheme 这一个参数（外加给子网打
+#    kubernetes.io/role/elb 标签）。
+#    ⚠️ 实测韩国两个子网当前**只有** kubernetes.io/role/internal-elb: 1，
+#       没有 kubernetes.io/role/elb —— 与这个决定一致。
+#
+# ② 健康检查路径用 /health/status，**不照抄东京的 `/`**
+#    这是本栈唯一一处刻意偏离东京配置的地方，理由是东京那份是错的：
+#
+#      东京 Servic-PetSi-7JEWC19HNKSR 的健康检查 = GET / 期望 200
+#      实测该目标组 **0/2 healthy**，原因 Target.ResponseCodeMismatch
+#
+#    两个独立测量互相印证 petsite 的 `/` 不返回 200：
+#      - ALB 自己的健康检查器（直连 pod:8080）报 ResponseCodeMismatch
+#      - 走 k8s pod proxy 手工 GET / 得到 302
+#    所以照抄那份配置只会让韩国的目标也永远 unhealthy。
+#
+#    ⚠️⚠️ 但必须记住 /health/status 返回的是**硬编码的 5 字节字符串
+#    "Alive"，完全不碰配置**。所以「目标 healthy」只证明
+#    「pod 在 8080 上接受连接并回了 200」，**不证明应用能服务用户**。
+#    详见手册第四节。
+# ═══════════════════════════════════════════════════════════════════
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-0238efd50c0bf0dac
+    Description: 韩国 DR VPC
+
+  VpcCidr:
+    Type: String
+    Default: 10.20.0.0/16
+    Description: >-
+      内网放行范围。实测值，不是猜的:
+      aws ec2 describe-vpcs --vpc-ids vpc-0238efd50c0bf0dac
+        --query 'Vpcs[0].CidrBlock'
+
+  SubnetA:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-0f599ec0925b9158b
+    Description: ap-northeast-2a（已带 kubernetes.io/role/internal-elb=1）
+
+  SubnetC:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-0ad20a5cd85143dff
+    Description: ap-northeast-2b（已带 kubernetes.io/role/internal-elb=1）
+
+  ClusterSecurityGroup:
+    Type: AWS::EC2::SecurityGroup::Id
+    Default: sg-0a97fe1c88704924f
+    Description: >-
+      dr-korea-petsite 的集群安全组。VPC CNI 下 pod 的 ENI 挂的就是它，
+      所以 ALB 要能到 pod，必须在这个组上放行来自 ALB 组的入站。
+      实测来源:aws eks describe-cluster --name dr-korea-petsite
+        --query cluster.resourcesVpcConfig.clusterSecurityGroupId
+
+  PetsiteTargetPort:
+    Type: Number
+    Default: 8080
+    Description: petsite 容器端口（与东京目标组一致:8080）
+
+  PethistoryTargetPort:
+    Type: Number
+    Default: 80
+    Description: pethistory 目标组端口（与东京一致:80）
+
+Resources:
+
+  # ── ALB 自己的安全组 ──────────────────────────────────────────────
+  AlbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      # ⚠️ EC2 安全组的 GroupDescription **只接受 ASCII**
+      #    （实测报错:Character sets beyond ASCII are not supported）。
+      #    中文只能写在注释里，不能写进这个字段。同理下面每条规则的 Description。
+      GroupDescription: dr-korea pilot light internal ALB
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        # 只放行 VPC 内网。**刻意不是 0.0.0.0/0** —— 这个 ALB 是 internal，
+        # 放行公网既无意义也会在日后改成 internet-facing 时变成隐患。
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: !Ref VpcCidr
+          Description: VPC-internal HTTP only (not 0.0.0.0/0)
+      Tags:
+        - Key: Name
+          Value: dr-korea-alb
+        - Key: Purpose
+          Value: pilot-light-ingress
+
+  # ── 让 ALB 能到 pod ───────────────────────────────────────────────
+  # ⚠️ 东京的 TargetGroupBinding 里**没有** networking 块（实测读活集群），
+  #    所以 controller 不会替我们加这条规则 —— 必须自己加。
+  #    少了它的表现是「目标注册上了，但健康检查全部超时」。
+  AllowAlbToPetsitePods:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ClusterSecurityGroup
+      IpProtocol: tcp
+      FromPort: !Ref PetsiteTargetPort
+      ToPort: !Ref PetsiteTargetPort
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+      # ⚠️ 安全组规则的 Description 允许集是
+      #    a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*  —— **不含 `>`**
+      #    （实测报错:Invalid rule description）。所以不能写 "->"。
+      Description: dr-korea ALB to petsite pod 8080
+
+  AllowAlbToPethistoryPods:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ClusterSecurityGroup
+      IpProtocol: tcp
+      FromPort: !Ref PethistoryTargetPort
+      ToPort: !Ref PethistoryTargetPort
+      SourceSecurityGroupId: !Ref AlbSecurityGroup
+      Description: dr-korea ALB to pethistory pod 80
+
+  # ── ALB ───────────────────────────────────────────────────────────
+  Alb:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: dr-korea-petsite-alb
+      # ⚠️ internal —— 见文件头的设计决定①
+      Scheme: internal
+      Type: application
+      IpAddressType: ipv4
+      Subnets:
+        - !Ref SubnetA
+        - !Ref SubnetC
+      SecurityGroups:
+        - !Ref AlbSecurityGroup
+      Tags:
+        - Key: Purpose
+          Value: pilot-light-ingress
+
+  # ── 目标组 ────────────────────────────────────────────────────────
+  # TargetType: ip —— 与东京一致。TargetGroupBinding 用 ip 模式把
+  # pod IP 直接注册进来（不经过 NodePort）。
+  PetsiteTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: dr-korea-petsite-tg
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: !Ref PetsiteTargetPort
+      TargetType: ip
+      HealthCheckProtocol: HTTP
+      # ⚠️ 见文件头设计决定②:东京用 `/` 期望 200，实测 0/2 healthy。
+      HealthCheckPath: /health/status
+      HealthCheckPort: traffic-port
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        # 守夜灯扩容后 pod 要尽快进池，不需要等默认的 300 秒。
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+      Tags:
+        - Key: Purpose
+          Value: pilot-light-ingress
+
+  PethistoryTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: dr-korea-pethistory-tg
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: !Ref PethistoryTargetPort
+      TargetType: ip
+      HealthCheckProtocol: HTTP
+      # 这一条与东京一致 —— 东京 pethistory 用的就是 /health/status。
+      HealthCheckPath: /health/status
+      HealthCheckPort: traffic-port
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+      Tags:
+        - Key: Purpose
+          Value: pilot-light-ingress
+
+  # ── 监听器 ────────────────────────────────────────────────────────
+  # ⚠️ 与东京的差别（刻意的，不是遗漏）:
+  #    东京 443 监听器带 authenticate-cognito 动作。韩国**没有**对应的
+  #    Cognito 用户池，而那是 region 内资源 —— 属于手册第五节缺口⑤
+  #    （region 内后端）的一部分，不在本栈范围。
+  #    所以这里先只做 HTTP:80 转发，把入口链路打通。
+  HttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref Alb
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref PetsiteTargetGroup
+
+Outputs:
+  AlbDnsName:
+    Description: internal ALB 的 DNS 名（只在 VPC 内可解析）
+    Value: !GetAtt Alb.DNSName
+
+  AlbSecurityGroupId:
+    Value: !Ref AlbSecurityGroup
+
+  PetsiteTargetGroupArn:
+    Description: >-
+      韩国侧 petsite 目标组 ARN。TargetGroupBinding 要用这个值 ——
+      **不能用东京那个**，目标组 ARN 是 region 专属的。
+    Value: !Ref PetsiteTargetGroup
+
+  PethistoryTargetGroupArn:
+    Value: !Ref PethistoryTargetGroup

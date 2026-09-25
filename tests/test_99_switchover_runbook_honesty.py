@@ -68,13 +68,42 @@ class TestBadNewsSectionsMustSurvive:
         ):
             assert_contains(book, dep, "工作负载清单不完整就估不出工作量")
 
-    def test_ingress_gap_and_why_static_checks_miss_it(self, book: str):
-        """入口缺口 + 为什么静态检查发现不了。"""
-        assert_contains(book, "静态看清单永远发现不了的缺口")
+    def test_ingress_lesson_survives_even_after_the_gap_is_closed(self, book: str):
+        """入口缺口已于 2026-09-25 关闭（4.23），但**教训必须留着**。
+
+        第一版这条断言的是那一节的**标题**（「静态看清单永远发现不了的缺口」）。
+        缺口修好、标题改写之后它挂了 —— 而它本该守的不是标题，是那条教训:
+        目标组 ARN 是 region 专属的，照搬不会报错、只会永远没有流量。
+
+        这是「判据照抄了表象而不是要守的性质」的又一例。现在改成守内容。
+        """
+        # 机制本身
         assert_contains(book, "TargetGroupBinding")
-        assert_contains(book, "那些目标组 ARN 是 region 专属的，照搬到韩国无效")
-        # 真实的 ALB 名字，实测读出来的
-        assert_contains(book, "Servic-PetSi-by0kpyBtxswj")
+        # 那条真正值钱的教训 —— 与标题无关
+        assert_contains(book, "目标组 ARN 是 region 专属的")
+        assert_contains(book, "只是永远没有流量")
+        assert_contains(book, "静态检查发现不了")
+
+    def test_ingress_gap_recorded_as_closed_with_evidence(self, book: str):
+        """关闭要带决定性证据，而且要说明证据是怎么取的。"""
+        assert_contains(book, "已于 2026-09-25 打通")
+        assert_contains(book, "describe-target-health")
+        assert_contains(book, "不看 controller 日志")
+
+    def test_health_check_deviation_from_tokyo_is_explained(self, book: str):
+        """韩国刻意不照抄东京的健康检查 —— 理由必须留着。
+
+        少了这段，下一个人会把它「修正」成与东京一致，
+        然后韩国的目标永远 unhealthy。
+        """
+        assert_contains(book, "刻意偏离东京")
+        assert_contains(book, "0/2 healthy")
+        assert_contains(book, "会话分配重定向")
+
+    def test_scaledown_deadlock_is_documented(self, book: str):
+        assert_contains(book, "缩容到零会死锁 30 分钟")
+        assert_contains(book, "coredns")
+        assert_contains(book, "HeartbeatTimeout=1800")
 
     def test_eighth_irsa_consumer(self, book: str):
         """漏掉的第 8 个 IRSA 消费者 —— 这是写手册时才发现的。"""

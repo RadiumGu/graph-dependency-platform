@@ -2315,6 +2315,179 @@ sync 进 `/opt/dr-worker/app` 的演练文件已清。
 
 ---
 
+
+### 4.23 韩国入口链路打通 —— 并终于回答了「petsite 能不能服务」
+
+**日期**:2026-09-25 ｜ **手册第五节缺口② 关闭** ｜ 栈 `dr-korea-alb`
+
+#### ① 建了什么
+
+```
+ALB        dr-korea-petsite-alb    internal / active / 2a+2b
+DNS        internal-dr-korea-petsite-alb-263460690.ap-northeast-2.elb.amazonaws.com
+目标组      dr-korea-petsite-tg     port 8080  type=ip  健康检查 /health/status
+           dr-korea-pethistory-tg  port 80    type=ip  健康检查 /health/status
+安全组      集群 SG 放行来自 ALB SG 的 80/8080
+controller Helm chart 3.0.0（**与东京同版本**）+ SA alb-ingress-controller
+```
+
+#### ② 决定性证据(与部署不同的手段)
+
+controller 日志说它注册了目标,**但日志不是判据**。查 `elbv2 describe-target-health`:
+
+```
+10.20.1.88:8080  healthy   ← 连续 6 次稳定
+```
+
+再走一遍真流量(从 Temporal 实例打 internal ALB):
+
+```
+GET /              → HTTP 302，4–37ms
+GET /health/status → HTTP 200 "Alive"
+对照：pod proxy      → HTTP 200（绕过 ALB，同一结果）
+```
+
+#### ③ 终于解释清了那个 302
+
+前两轮一直没解释清 `GET /` 为什么返回 302。这次拿到了 `Location` 头:
+
+```
+Location: /?userId=user88001
+```
+
+**那是 petsite 自己的会话分配行为** —— 把 `/` 重定向到带 `userId` 的自己。
+完全正常。
+
+**所以东京那个目标组的健康检查从一开始就配错了**:
+
+```
+东京 Servic-PetSi-7JEWC19HNKSR   健康检查 = GET / 期望 200
+实测                             0/2 healthy，Target.ResponseCodeMismatch
+```
+
+两个独立测量互相印证(ALB 自己的健康检查器直连 pod 报 mismatch;pod proxy 手工
+GET 得到 302),所以那个 302 是应用真实行为,不是 pod proxy 的路径重写。
+韩国因此**刻意不照抄**,改用 `/health/status`。
+
+> 我没有动东京的配置 —— 那是生产变更,不在授权范围。
+
+#### ④ ⚠️ 「petsite 能不能服务」不再是 inconclusive:**不能**
+
+4.21 时这一项记的是 inconclusive,因为当时的探针在两个 region 上没有区分力。
+现在有了真的 ALB 通路,跟随重定向走完:
+
+```
+GET / (跟随重定向)  → HTTP 200，10527 字节
+页面 <title>        → "Error - Observability PetAdoptions"
+```
+
+**它返回 HTTP 200,内容却是应用自己的错误页。**
+
+根因链条完整:
+
+```
+PetSite.Configuration.ParameterRefreshManager
+  → Fetching parameter from SSM: /petstore/searchapiurl
+  → ssm.ap-northeast-2.amazonaws.com → ParameterNotFound
+  → HomeController 渲染错误页
+  → 以 HTTP 200 返回
+```
+
+IRSA 正常、region 解析正确(`ap-northeast-2`)、SDK 拿到凭据 —— **参数就是不存在**。
+
+##### 这比 4.21 记的那个陷阱更坏一层
+
+4.21 记的是「健康探针会骗人」。现在知道**状态码也会骗人**:
+
+| 信号 | 零配置的 petsite 上 |
+|---|---|
+| pod `Running` / restarts 0 | ✅ 绿 |
+| readiness 探针 | ✅ 绿 |
+| `/health/status` | ✅ 200 "Alive" |
+| ALB 目标健康 | ✅ healthy |
+| **`GET /` 的 HTTP 状态码** | ✅ **200** |
+| 页面 `<title>` | ❌ `Error - …` |
+
+**从 pod 到 ALB 到 HTTP 状态码,整条链路全绿,而用户看到的是错误页。**
+唯一能区分的判据是**页面内容**。
+
+#### ⑤ 一个真实的守夜灯缺陷:缩容到零会死锁 30 分钟
+
+缩回 `desiredSize=0` 后节点卡在 `Terminating:Wait` 超过 6 分钟。查出真因:
+
+```
+PDB     kube-system/coredns   maxUnavailable=1   allowed=0   expected=2
+coredns 2 副本 → 1 个 Running 在唯一的节点上，1 个 Pending（无处可调度）
+节点     unschedulable=True，污点 node.kubernetes.io/unschedulable=NoSchedule
+事件     FailedScheduling: 0/1 nodes are available
+```
+
+**coredns 的 PDB 永远无法满足**:2 副本要求至少 1 个可用,而唯一的节点正在排空、
+第二个副本无处可去 → 驱逐被拒 → 排空永不完成。
+
+PDB 算术:
+
+```
+副本=2 可用=1 maxUnavailable=1 → 允许驱逐 0 个   ← 死锁
+副本=1 可用=1 maxUnavailable=1 → 允许驱逐 1 个   ← 可驱逐
+```
+
+钩子 `Terminate-LC-Hook` 的 `HeartbeatTimeout=1800`、`DefaultResult=CONTINUE`,
+所以**不干预的话节点会卡满 30 分钟才被强制终止** —— 每次缩容白付半小时 EC2。
+
+##### 因果验证(不是相关性)
+
+把 coredns 降到 1 副本:
+
+```
+干预前   allowed=0  expected=2
+干预后   allowed=1  expected=1
+随后     Terminating:Wait → Terminating:Proceed → 实例消失（约 2 分钟）
+```
+
+卡了 6 分钟的节点在干预后 2 分钟内就终止了 —— **根因确认**。
+
+**待办**:扩容路径应当把 coredns 恢复成 2 副本,缩容路径应当先降到 1。
+目前 coredns 留在 1 副本(零节点时不需要 DNS 高可用)。
+
+#### ⑥ ⚠️ 静息状态有个陈旧目标
+
+零节点后目标组里**仍留着** `10.20.1.88 unhealthy`:
+
+摘除目标是 controller 干的,而 **controller 自己也在那个被排空的节点上** ——
+它先死了,没人来摘。
+
+所以「ALB 目标 unhealthy」在静息状态是**常态**,它**分不出**
+「守夜灯正常休眠」与「切换失败了」。又是同一类缺陷:一个信号覆盖了两种
+截然不同的状态。
+
+预期扩容时 controller 回来会 reconcile 掉陈旧目标并注册新的,
+**但这一点尚未验证** —— 下一次演练时核实。
+
+#### ⑦ 两个 CFN 字符集坑
+
+- 安全组的 `GroupDescription` **只接受 ASCII**
+  (`Character sets beyond ASCII are not supported`)。
+- 规则的 `Description` 允许集是 `a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*`,
+  **不含 `>`** —— 连 `->` 都不能写。
+
+中文只能待在注释里。第一次失败时 ALB 报了个没有细节的 `Internal Failure`,
+修完描述后自己就成了 —— 那是并行失败的连带效应。
+
+#### ⑧ 改了一个设计决定
+
+原计划是「controller 清单存 S3,由 workflow 在扩容后 apply」。
+实际做完发现更简单的做法:**k8s 对象(含 Deployment)预置在集群里,节点缩到 0**。
+零节点时 pod 只是 `Pending`,不占任何成本,而扩容时自动起来,
+切换时**不需要 apply 任何东西**。S3 里的清单保留作为集群对象丢失时的兜底。
+
+#### ⑨ 清理
+
+节点组 `desiredSize=0`、存活 EC2 **0**、临时 cluster-admin 已摘并核实空数组。
+ALB 与目标组**刻意保留**(那是预置的入口,ALB 约 \$16/月)。
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
