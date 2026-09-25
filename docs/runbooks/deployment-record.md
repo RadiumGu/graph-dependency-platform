@@ -1899,6 +1899,125 @@ sts assume-role-with-web-identity  ✅
 
 ---
 
+
+### 4.19 放开 rds:FailoverGlobalCluster + 演练 signal 链路
+
+**日期**:2026-09-25 ｜ **这是最后一条写权限**
+
+#### ① 权限:三个 ARN,不是两个
+
+查官方样例策略(`r53recovery/latest/dg/security_iam_region_switch_aurora.html`
+的 Aurora Global Database execution block sample policy)得知,
+`rds:FailoverGlobalCluster` **支持资源级权限**,且要带**三个** ARN:
+
+```
+arn:aws:rds::926093770964:global-cluster:petsite-global                    ← 全局集群
+arn:aws:rds:ap-northeast-1:…:cluster:serviceseks2-databaseb269d8bb-…       ← 当前主集群
+arn:aws:rds:ap-northeast-2:…:cluster:dr-korea-aurora-secondarycluster-…    ← 目标从集群
+```
+
+我原本只打算写全局集群 + 从集群。**漏掉主集群会让调用被拒,而报错只说没权限,
+不会说少了哪个 ARN。**
+
+另注:全局集群的 ARN **没有 region 段**(`arn:aws:rds::<acct>:…`,两个冒号连着)
+—— 那不是笔误,全局集群不属于任何 region。
+
+#### ② 一个 API 事实改了实现
+
+查 botocore 模型:`FailoverGlobalCluster` 的 members 是
+`['GlobalClusterIdentifier', 'TargetDbClusterIdentifier', 'AllowDataLoss', 'Switchover']`,
+后两个**互斥**。文档写着「If you don't specify `AllowDataLoss`, the global
+database cluster operation defaults to a **switchover**」。
+
+原实现是「有序分支不传任何参数,靠 API 默认」。改成**两个分支都显式传**:
+
+```python
+if ordered:
+    kwargs["Switchover"] = True
+else:
+    kwargs["AllowDataLoss"] = True
+```
+
+理由:这一步的整个设计前提是「有序 vs 丢数据」必须是一个**明确的裁决**,
+而依赖一个 API 默认值恰好违背这一点。显式传参还让 CloudTrail 里能直接看出
+当时是哪种语义,而不是「什么都没传,所以大概是 switchover」。
+
+`would_run` 的命令串也跟着改成带 `--switchover` —— 否则 dry_run 打印的命令
+和真执行路径**不是同一条命令**,而 `would_run` 的全部价值就在于「照着它跑能复现」。
+
+#### ③ signal 链路演练(四种裁决)
+
+全部在 `dry_run=True` 下跑,不真动数据库拓扑:
+
+| 裁决 | 结果 |
+|---|---|
+| `ordered` | `verified=True`,`would_run` 带 `--switchover`,`aborted=False` |
+| `allow_data_loss` | `verified=True`,`would_run` 带 `--allow-data-loss` |
+| `abort` | `aborted=True`,0 个失败事件 |
+| `bogus-value` | **被忽略**,workflow 不崩,继续等合法裁决 |
+
+四种都是 0 个失败事件。`detail` 里带了全局集群成员的实时 `IsWriter`
+(东京 `true` / 韩国 `false`),这是「提升前的基线」。
+
+#### ④ 本轮抓到一个真缺陷:改了代码却没生效
+
+演练第一遍打印出:
+
+```
+activities.py md5: 0ae29ad154c2      ← 与本地不一致
+含显式 Switchover: 0
+```
+
+第一层原因是我**改了本地文件却没上传 S3**。上传后再跑:
+
+```
+activities.py md5: aa1f4bb158ee      ← 与本地一致 ✅
+含显式 Switchover: 1                 ← 新代码在磁盘上 ✅
+would_run: … 没有 --switchover       ← 行为还是旧的 ❌
+```
+
+**第二层原因才是真缺陷**:`provision-worker.sh` 原来**只在 systemd 单元变化时
+重启**。应用代码变了不重启,而 **Python 进程还拿着内存里的旧模块**。
+
+最坏的部分是它的核实判据:
+
+```
+磁盘 md5 与本地一致           ✅ 看起来部署成功
+worker 在队列上接单           ✅ 核实判据也通过
+实际跑的还是旧代码             ❌
+```
+
+那个判据(「worker 已在 dr-plan-queue 上接单」)在两种情况下都通过 ——
+**又一个「分不出来」的判据,本项目同类问题第五次。**
+
+修法:记录所有 `*.py` 的内容哈希(排序后拼接再哈希,与文件顺序无关;
+**不用 mtime**,因为 `s3 sync` 会重写 mtime 而内容可能没变,那会导致无谓重启),
+重启条件改成**单元变化 OR 代码变化**。
+
+核实(三态都验了):
+
+```
+第一遍  应用代码未变 → 不重启，启动时间 07:17:54
+第二遍  应用代码未变 → 不重启，启动时间 07:17:54   ← 幂等
+人为改代码 → 「代码有变（… → 45f93c80…）」→ 重启 → 启动时间变了  ← 反向验证
+```
+
+#### ⑤ 刻意**没有**做的事
+
+**没有真的提升韩国从集群。** 那会让它脱离全局数据库、把东京主库从 writer 变成
+reader —— 属于「影响东京生产可用性」,须先问用户。
+本轮只验到「worker 具备提升能力 + signal 链路正确」。
+
+#### ⑥ 回滚
+
+```bash
+# ⚠️ 销毁类命令 —— 只记录不执行
+# 收回这条写权限：把 07-worker-permissions.yaml 里 PromoteSecondaryCluster
+# 那段删掉再 deploy（--capabilities CAPABILITY_NAMED_IAM）
+```
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
