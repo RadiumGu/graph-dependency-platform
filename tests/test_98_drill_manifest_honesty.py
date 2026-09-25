@@ -30,6 +30,7 @@ from pathlib import Path
 import pytest
 
 from cfn_yaml import load_cfn
+from zh_text import assert_contains
 
 ROOT = Path(__file__).resolve().parents[1]
 DRILL = ROOT / "infra" / "dr-korea" / "petsite-korea-drill.yaml"
@@ -59,31 +60,33 @@ class TestDrillManifestSaysItIsNotProduction:
         少了这句话，下一个人会把它当成「韩国侧的 petsite 部署清单」直接用 ——
         而它起来之后 k8s 层面全绿，没有任何东西会提示他配置是空的。
         """
-        assert "不是**一份能让 petsite 真正服务的清单" in drill_text, (
-            "要在清单里明写它不能服务 —— 判据照抄清单里的真实文字"
+        assert_contains(
+            drill_text,
+            "不是**一份能让 petsite 真正服务的清单",
+            "要在清单里明写它不能服务",
         )
 
     def test_lists_the_region_local_config_gap(self, drill_text: str):
         """要列出那些 region 内的依赖，而不只是说「需要配置」。"""
         # 这些是实测清点出来的参数名，不是举例。
         for name in ("rdssecretarn", "queueurl", "dynamodbtablename", "dataprotection"):
-            assert name in drill_text, f"缺了 {name} —— 依赖清单不完整就估不出工作量"
+            assert_contains(drill_text, name, "依赖清单不完整就估不出工作量")
         assert "41" in drill_text or "0 个参数" in drill_text, (
             "要写明东京有多少、韩国有多少"
         )
 
     def test_says_copying_values_does_not_help(self, drill_text: str):
         """最关键的一句：照搬参数值没用，因为值指向东京的资源。"""
-        assert "等于让韩国去连一堆不存在的后端" in drill_text
+        assert_contains(drill_text, "等于让韩国去连一堆不存在的后端")
 
     def test_deviations_from_production_are_enumerated(self, drill_text: str):
         """与生产清单的每处差异都要写清为什么。
 
         否则下一个人会以为这份就是生产清单的等价物。
         """
-        assert "都是刻意的" in drill_text
+        assert_contains(drill_text, "都是刻意的")
         for why in ("prune", "topologySpreadConstraints", "startupProbe"):
-            assert why in drill_text, f"没说明为什么改了 {why}"
+            assert_contains(drill_text, why, "要说明为什么改了它")
 
 
 class TestDrillUsesKoreaImage:
@@ -115,8 +118,8 @@ class TestRecordKeepsTheControlGroupLesson:
         在没有对照之前不能当成差异。
         """
         text = RECORD.read_text(encoding="utf-8")
-        assert "对照组救了我" in text
-        assert "东京一模一样" in text
+        assert_contains(text, "对照组救了我")
+        assert_contains(text, "东京一模一样")
 
     def test_record_says_result_is_inconclusive(self):
         """结论必须是 inconclusive，不能写成「通过」或「失败」。
@@ -125,12 +128,12 @@ class TestRecordKeepsTheControlGroupLesson:
         「没有区分力的测量」只能是 inconclusive。
         """
         text = RECORD.read_text(encoding="utf-8")
-        # ⚠️ 照抄记录里的**真实**标点。第一版我按习惯写了全角逗号「，」，
-        # 而记录里用的是半角「,」—— 断言在文档完全正确时挂掉。
-        # 这是本会话第九次「判据没照抄实现」，而这一次连标点都算。
-        assert "没有证明 petsite 在韩国能服务用户,也没有证明它不能" in text
-        assert "**inconclusive**,不是「通过」也不是「失败」" in text
+        # ⚠️ 这里曾经因为全角/半角逗号挂过一次（文档正确、门禁误报）。
+        # 第二次在 test_99 又踩同一个坑之后改成了根治:zh_text.assert_contains
+        # 会先归一化标点再比对，所以这一类假失败不会再有。
+        assert_contains(text, "没有证明 petsite 在韩国能服务用户,也没有证明它不能")
+        assert_contains(text, "**inconclusive**,不是「通过」也不是「失败」")
 
     def test_record_warns_that_k8s_green_is_not_dr_ready(self):
         text = RECORD.read_text(encoding="utf-8")
-        assert "在一个什么都没配好的 petsite 上是全绿的" in text
+        assert_contains(text, "在一个什么都没配好的 petsite 上是全绿的")
