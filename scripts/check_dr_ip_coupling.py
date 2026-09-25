@@ -5,7 +5,7 @@ check_dr_ip_coupling.py —— 检查 AgentCore 指向的 Temporal 地址是否�
 ## 为什么需要这个检查
 
 AgentCore runtime 的 `TEMPORAL_ADDRESS` 里写的是 Temporal 实例的**私有 IP**
-(`http://10.20.1.125:7243`)。这个耦合有一个安静的失效路径:
+(`http://10.20.1.10:7243`)。这个耦合有一个安静的失效路径:
 
     实例被替换 → 新 IP → AgentCore 仍指向旧地址 → 所有 MCP 工具调用超时
 
