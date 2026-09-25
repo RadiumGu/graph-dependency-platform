@@ -2127,6 +2127,122 @@ get_cluster_info → Cluster ID: 682cc7c5-…  Server Version: 1.29.7
 
 ---
 
+
+### 4.21 在韩国真起一次 petsite —— 以及一个差点写错的结论
+
+**日期**:2026-09-25 ｜ **这一节最重要的部分是「对照组救了我」**
+
+#### ① 先清点:region 内配置到底是什么
+
+实测东京 `/petstore` 前缀下有 **41 个参数**,韩国 **0 个**。
+但真正的问题不是「参数没复制」—— 看参数名就知道那些**值**指向东京的资源:
+
+```
+rdsendpoint / rds-reader-endpoint / rdssecretarn   东京 Aurora 与 Secrets
+queueurl / snsarn / petadoptionsstepfnarn          东京 SQS / SNS / StepFunctions
+dynamodbtablename / s3bucketname                   东京的表和桶
+dataprotection/key-*  ×4（SecureString）            ASP.NET Data Protection 密钥
+agent/waggleairuntimearn                           东京的 AgentCore runtime
+```
+
+**在「东京挂了」的场景下,把这些值复制到韩国等于让韩国去连一堆不存在的后端。**
+真正的灾备需要韩国侧自己的 DynamoDB / SQS / SNS / StepFunctions / S3 / API GW,
+或者用全局版本的服务 —— 那是一个独立的工作项,不是配置复制。
+
+这把缺口分析第 ④ 条从「依赖面很大」变成了可估的清单。
+
+#### ② 演练做了什么
+
+扩一个节点(`t4g.xlarge`),用从东京读来的 `last-applied-configuration` 改造出
+`infra/dr-korea/petsite-korea-drill.yaml`(镜像换成 ap-northeast-2、
+replicas 1、去掉 CDK 的 prune 标签、`startupProbe.failureThreshold` 60→6),
+经 k8s API 应用到 `petadoptions`。
+
+#### ③ 证实了的事
+
+```
+pod 状态            Running，restarts=0，持续 140s
+镜像                从 ap-northeast-2 的 ECR 拉起来的 ← 回填 + 复制的最终验证
+启动日志            "Found credentials using the AWS SDK's default credential search"
+                    ← IRSA 在 pod 里真的工作
+SDK 解析的 region   ap-northeast-2  ← 清单里没有 AWS_REGION，SDK 走 IMDS 拿到韩国
+SSM provider        "Systems Manager configuration added with prefix: /petstore"
+                    ← 指向韩国，而韩国有 0 个参数
+```
+
+这是 ECR 复制与回填那条链路的**最后一环**:此前只证明了两侧 digest 一致,
+现在证明了**韩国的 kubelet 能真的把它拉起来**。
+
+#### ④ ⚠️ 我差点写错的结论 —— 对照组救了我
+
+pod proxy 打出来:
+
+```
+/health/status   200  "Alive"
+GET /            302
+/adoptionlist    404
+```
+
+我本来要写「韩国的 petsite 返回 302/404,应用起不来」。
+**做了东京对照组之后发现:东京一模一样。**
+
+```
+             /health/status   GET /   /adoptionlist
+韩国            200 (5B)        302        404
+东京（对照）     200 (5B)        302        404
+```
+
+所以那三个响应**什么问题都没证明**。`/adoptionlist` 那个 404 更是我自己猜的路径,
+它说明的只是「我猜错了路由名」。
+
+**没有对照组,我就会把一个错误结论写进灾备手册。**
+
+#### ⑤ 真正的 DR 发现:失效形态不是崩溃
+
+`/health/status` 返回的是硬编码的 `"Alive"`(5 字节),**完全不碰配置**。
+
+所以在一个**零配置**的 petsite 上:
+
+```
+pod 状态        Running          ✅
+restarts        0                ✅
+readiness 探针   通过             ✅
+k8s 层面的一切    全绿             ✅
+```
+
+**k8s 层面的灾备就绪检查在一个什么都没配好的 petsite 上是全绿的。**
+这比崩溃坏得多 —— 崩溃会告警,而这个不会。
+
+对我们自己的核实链路也是个提醒:`count_ready_nodes()` 只回答「集群有可调度容量」,
+它**不回答**「应用能服务」。这两件事之间还隔着配置与后端依赖,
+而中间没有任何一个自动判据能替我们跨过去。
+
+#### ⑥ 不能下的结论
+
+**没有证明 petsite 在韩国能服务用户,也没有证明它不能。** 现有探针在两个 region
+上没有区分力 —— 要区分需要一个真正渲染后端数据的页面,而那需要应用的路由表。
+按判据纪律,这一项是 **inconclusive**,不是「通过」也不是「失败」。
+
+#### ⑦ 过程中的两个小坑
+
+- 演练清单先放到 S3 的 `drill/` 前缀 → **403 Forbidden**。worker 角色只允许
+  `plans/*` 与 `worker/*`。**处置是把文件挪进 `worker/`,不是为演练放宽权限边界。**
+- 从 Temporal 实例直连 pod IP 全是 `HTTP 000` —— pod 的 ENI 挂的是集群安全组,
+  只放行来自自己的流量。**那是「没测到」,不是「应用坏了」。**
+  改走 k8s API 的 pod proxy(`/api/v1/namespaces/<ns>/pods/<pod>:<port>/proxy/`),
+  用已验证过的控制面通路,不用改任何安全组。
+
+#### ⑧ 清理
+
+Deployment 已删(剩余 pod 0)、临时 cluster-admin 已摘(关联列表空)、
+节点组缩回 `desired=0`、S3 上的演练文件已删、
+sync 进 `/opt/dr-worker/app` 的演练文件已清。
+
+顺带验证了一个早先的设计决定:代码指纹只哈希 `*.py`,所以那个 `.yaml` 被 sync
+进 app 目录**没有**触发无谓重启(`.code.sha256` 未变、worker 未重启)。
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
