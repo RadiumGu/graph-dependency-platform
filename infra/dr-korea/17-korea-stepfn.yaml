@@ -1,0 +1,279 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  韩国守夜灯的领养工作流:StepFunctions 状态机 + 它引用的 3 个 Lambda。
+  手册第五节缺口⑤ 的最后一块（WaggleAI 档除外）。
+
+# ═══════════════════════════════════════════════════════════════════
+# 为什么这一项不是「建一个状态机」
+#
+# 实测东京那份定义引用了 **3 个 Lambda 函数**:
+#   ServicesEks2-StepFnlambdastepreadDDB…
+#   ServicesEks2-StepFnlambdasteppriceGreaterThan55…
+#   ServicesEks2-StepFnlambdasteppriceLessThan55…
+# 所以搬状态机必须连带搬这 3 个函数。
+#
+# ── 代码来源（不是猜的）────────────────────────────────────────────
+# one-observability-demo 仓库:
+#   PetAdoptions/cdk/pet_stack/resources/stepfn_lambdas/lambda_step_*.py
+# 三份都极小（东京部署包各 1128 字节），所以这里内联，
+# 不引入打包步骤 —— 内联代码在模板里看得见，也不会与仓库悄悄漂移。
+#
+# ── ⚠️ 一处必须成对处理的东西 ─────────────────────────────────────
+# 东京那 3 个函数带环境变量 AWS_LAMBDA_EXEC_WRAPPER=/opt/otel-instrument，
+# 而那个 wrapper 来自 **ADOT Lambda 层**:
+#   arn:aws:lambda:ap-northeast-1:901920570463:layer:aws-otel-python-arm64-ver-1-32-0:1
+#   arn:aws:lambda:ap-northeast-1:580247275435:layer:LambdaInsightsExtension-Arm64:42
+#
+# **只带环境变量不带层，函数会起不来**（wrapper 脚本不存在）。
+# 层 ARN 是 region 专属的，照抄东京的在韩国无效。
+#
+# 处置:**两个都不带**。理由是用户早先明确过灾备 region 不需要
+# DeepFlow / 可观测性那一套，而这两个层纯粹是观测用的，
+# 不影响领养工作流本身的行为。
+# 这是「只拷契约一半」那类缺陷的又一个实例 —— 这次是主动避开。
+# ═══════════════════════════════════════════════════════════════════
+
+Resources:
+
+  # ── Lambda 执行角色 ───────────────────────────────────────────────
+  # 照东京那个角色的权限，去掉观测相关的（X-Ray / Insights / Prometheus）。
+  # 保留的两项是功能必需:读 SSM 取表名、读 DynamoDB。
+  StepFnLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ReadPetstoreParamAndTable
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # readDDB 里写死了这个参数名:
+              #   ssm.get_parameter(Name='/petstore/dynamodbtablename')
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/petstore/*'
+              - Effect: Allow
+                Action:
+                  - dynamodb:Query
+                  - dynamodb:GetItem
+                Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/dr-korea-petadoptions'
+
+  # ── 3 个 Lambda ───────────────────────────────────────────────────
+  ReadDdbFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: dr-korea-stepfn-readddb
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: index.lambda_handler
+      MemorySize: 128
+      Timeout: 15
+      Role: !GetAtt StepFnLambdaRole.Arn
+      Code:
+        # 逐字来自仓库 resources/stepfn_lambdas/lambda_step_readDDB.py
+        # 唯一差别:CFN 内联代码的模块名固定是 index
+        ZipFile: |
+          import json
+          import boto3
+          from boto3.dynamodb.conditions import Key
+
+          ssm = boto3.client('ssm')
+          dynamodb = boto3.resource('dynamodb')
+
+          def lambda_handler(event, context):
+
+              dynamodb_tablename = ssm.get_parameter(Name='/petstore/dynamodbtablename', WithDecryption=False)
+
+              table = dynamodb.Table(dynamodb_tablename['Parameter']['Value'])
+
+              response = table.query(
+                  KeyConditionExpression=Key('petid').eq(event['petid']) & Key('pettype').eq(event['pettype'])
+              )
+
+              response['Items'][0]['price'] = int(response['Items'][0]['price'])
+
+              return {
+                  'statusCode': 200,
+                  'body': response['Items'][0]
+              }
+
+  PriceGreaterThanFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: dr-korea-stepfn-price-gt-55
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: index.lambda_handler
+      MemorySize: 128
+      Timeout: 15
+      Role: !GetAtt StepFnLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import json
+
+          def lambda_handler(event, context):
+              print(event)
+              print('ProcessGreaterThan55 - Execution complete')
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps('ProcessGreaterThan55 - Execution complete')
+              }
+
+  PriceLessThanFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: dr-korea-stepfn-price-lt-55
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: index.lambda_handler
+      MemorySize: 128
+      Timeout: 15
+      Role: !GetAtt StepFnLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import json
+
+          def lambda_handler(event, context):
+              print(event)
+              print('ProcessLessthan55 - Execution complete')
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps('ProcessLessthan55 - Execution complete')
+              }
+
+  # ── 状态机 ────────────────────────────────────────────────────────
+  StateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeStepFunctions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                # 只放行这三个函数 —— 不用 *
+                Resource:
+                  - !GetAtt ReadDdbFunction.Arn
+                  - !GetAtt PriceGreaterThanFunction.Arn
+                  - !GetAtt PriceLessThanFunction.Arn
+
+  AdoptionStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: dr-korea-petadoptions
+      # STANDARD —— 与东京一致（实测 describe-state-machine 的 type）
+      StateMachineType: STANDARD
+      RoleArn: !GetAtt StateMachineRole.Arn
+      # 定义逐字照东京，只把三个 FunctionName 换成韩国的
+      DefinitionString: !Sub |
+        {
+          "StartAt": "ReadDynamoDB",
+          "States": {
+            "ReadDynamoDB": {
+              "Next": "IsPriceGreaterThan55?",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ClientExecutionTimeoutException",
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 6,
+                  "BackoffRate": 2
+                }
+              ],
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${ReadDdbFunction.Arn}",
+                "Payload.$": "$"
+              }
+            },
+            "IsPriceGreaterThan55?": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.Payload.body.price",
+                  "NumericGreaterThan": 55,
+                  "Next": "PriceGreaterThan55"
+                },
+                {
+                  "Variable": "$.Payload.body.price",
+                  "NumericLessThan": 55,
+                  "Next": "PriceLessThan55"
+                }
+              ],
+              "Default": "PriceIs55"
+            },
+            "PriceIs55": {
+              "Type": "Succeed"
+            },
+            "PriceGreaterThan55": {
+              "End": true,
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ClientExecutionTimeoutException",
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 6,
+                  "BackoffRate": 2
+                }
+              ],
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${PriceGreaterThanFunction.Arn}",
+                "Payload.$": "$"
+              }
+            },
+            "PriceLessThan55": {
+              "End": true,
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ClientExecutionTimeoutException",
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 6,
+                  "BackoffRate": 2
+                }
+              ],
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${PriceLessThanFunction.Arn}",
+                "Payload.$": "$"
+              }
+            }
+          }
+        }
+
+Outputs:
+  StateMachineArn:
+    Description: 写进 /petstore/petadoptionsstepfnarn
+    Value: !Ref AdoptionStateMachine

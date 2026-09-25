@@ -2881,6 +2881,122 @@ botocore.exceptions.ClientError: AccessDeniedException calling GetSecretValue
 
 ---
 
+
+### 4.27 领养工作流搬到韩国 —— 以及 `/Checkout` 的真因原来不在这里
+
+**日期**:2026-09-25 ｜ 栈 `dr-korea-stepfn`
+
+#### ① 建了什么
+
+StepFunctions 状态机 `dr-korea-petadoptions` + 它引用的 **3 个 Lambda**。
+
+搬状态机不是「建一个状态机」:实测东京那份定义引用了 3 个函数,
+所以必须连带搬。三份代码都极小(东京部署包各 1128 字节),
+来源是 `one-observability-demo` 仓库
+`PetAdoptions/cdk/pet_stack/resources/stepfn_lambdas/lambda_step_*.py`,
+所以**内联在模板里** —— 看得见,也不会与仓库悄悄漂移。
+
+#### ② ⚠️ 一处必须成对处理的东西(主动避开的坑)
+
+东京那 3 个函数带 `AWS_LAMBDA_EXEC_WRAPPER=/opt/otel-instrument`,
+而那个 wrapper 来自 **ADOT Lambda 层**:
+
+```
+arn:aws:lambda:ap-northeast-1:901920570463:layer:aws-otel-python-arm64-ver-1-32-0:1
+arn:aws:lambda:ap-northeast-1:580247275435:layer:LambdaInsightsExtension-Arm64:42
+```
+
+**只带环境变量不带层,函数会起不来**(wrapper 脚本不存在),而层 ARN 是
+region 专属的、照抄东京的在韩国无效。
+
+处置是**两个都不带** —— 它们纯粹是观测用的,而用户早先明确灾备 region
+不需要那一套。**这是「只拷契约一半」那类缺陷的又一个实例,这次是主动避开。**
+
+#### ③ 决定性证据:真跑一次状态机
+
+不看 CFN 报告,直接 `start-execution`:
+
+```
+输入   {"petid":"001","pettype":"puppy"}
+状态   SUCCEEDED
+输出   ProcessGreaterThan55 - Execution complete   ← 与 price=89 一致，Choice 分支走对了
+```
+
+#### ④ 数据:26 条复制过去了,但**这是权宜之计**
+
+`readDDB` 要查表,而韩国表是空的。复制了东京 26 条(宠物目录,属于参考数据),
+复制后**重新扫两边比对**,26/26 内容一致。
+
+> **正确答案是 DynamoDB 全局表**(托管的跨 region 复制)。
+> 但转全局表需要**两处改动东京生产表**:
+> ① 开启 Streams(实测东京那张表 `StreamSpecification` 是 `null`)
+> ② 添加韩国副本
+>
+> 两者都是对生产资源的变更,**必须先问用户**。
+>
+> 一次性复制的局限必须写清:**不是持续同步**。东京改了数据韩国不会跟着变,
+> 而且**看不出来** —— 表里有数据、查询能返回,只是返回的是旧的。
+
+#### ⑤ `/Checkout` 的真因原来不在 StepFunctions
+
+建完状态机、写好 `/petstore/petadoptionsstepfnarn`、重启 petsite 之后:
+
+```
+首页                200  "Home"                ✅
+/PetListAdoptions   200  "Pet Adoption List"   ✅  0.18s
+/FoodService        200  "Pet Food Store"      ✅  0.23s
+/Checkout           200  "Error - …"           ❌  仍然错
+```
+
+petsite 日志给出了真因:
+
+```
+Error fetching cart data for user: user00911
+System.Net.Http.HttpRequestException: Response status code does not indicate success:
+  500 (Internal Server Error)
+```
+
+**不是 StepFunctions,是 petfood 的购物车 API 返回 500。**
+
+查 petfood 的环境变量:
+
+```
+AWS_REGION               ap-northeast-2                              ← 我改对了
+PETFOOD_REGION           ap-northeast-1                              ← **漏了**
+PETFOOD_FOODS_TABLE_NAME ServicesEks2-ddbpetfoodfoods…（东京表）
+PETFOOD_CARTS_TABLE_NAME ServicesEks2-ddbpetfoodcarts…（东京表）
+PETFOOD_EVENT_BUS_NAME   ServicesEks2petfoodeventbus…（东京总线）
+```
+
+所以 petfood 还需要**韩国自己的两张表 + 一个 EventBridge 总线**。
+实测东京那两张表的规格:
+
+```
+ddbpetfoodfoods   键 id(HASH)                      9 条    PAY_PER_REQUEST
+ddbpetfoodcarts   键 user_id(HASH) + item_id(RANGE) 0 条    PAY_PER_REQUEST
+总线              ServicesEks2petfoodeventbus12F76D34
+```
+
+> ⚠️ 我的 `REWRITE_ENV` 只列了 `AWS_REGION` 与 `S3_REGION`,**漏了
+> `PETFOOD_REGION`**。这说明「按名字列白名单」同样会漏 ——
+> 更稳的做法是**凡是值等于 `ap-northeast-1` 的环境变量都要报出来**,
+> 让人显式决定,而不是只改我想到的那几个。
+
+#### ⑥ 我自己的探测又错了一次
+
+想绕过 petsite 直接打 petfood 的 `/api/cart`,用了 pod proxy 的 **80 端口**,
+得到 `connection refused`。那是**我测错了** —— petfood 的容器不监听 80
+(Service 是 80 → targetPort)。`connection refused` 在这里是「没测到」,
+不是「应用坏了」。**又一次。**
+
+#### ⑦ 清理
+
+节点组 `desiredSize=0`、临时提权已摘并核实空数组。
+新增资源空闲成本:3 个 Lambda(不调用不计费)+ 1 个 STANDARD 状态机
+(按状态转换计费,空闲 0)。
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)

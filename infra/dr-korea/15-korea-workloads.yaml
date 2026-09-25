@@ -3,7 +3,7 @@
 # ⚠️⚠️ 这个文件是**生成的，不要手改**。
 #      生成器:scripts/gen_korea_workloads.py
 #      重新生成:python3.11 scripts/gen_korea_workloads.py --out infra/dr-korea/15-korea-workloads.yaml
-#      本次生成:2026-09-25T14:11:25Z
+#      本次生成:2026-09-25T15:11:14Z
 #      来源:ap-northeast-1 集群 PetSite 的 namespace petadoptions（活集群）
 #           + infra/dr-korea/irsa-korea-mapping.json（ServiceAccount 部分）
 #
@@ -21,13 +21,18 @@
 # 补齐 region 内后端属于手册第五节⑤，不是这个文件的范围。
 #
 # ── 生成时发现的注意事项 ────────────────────────────────────────
+#   - list-adoptions/aws-otel-collector: ⚠️ 环境变量 AOT_CONFIG_CONTENT 的值仍含 ap-northeast-1 （receivers: otlp: protocols: grpc: endpoint: 0.0.0.）—— 需要显式决定改写还是保留
 #   - list-adoptions/list-adoptions: AWS_REGION ap-northeast-1 → ap-northeast-2
 #   - list-adoptions: enableServiceLinks=False 已带过来 —— 丢了它会让 service-link 环境变量污染应用配置
+#   - pay-for-adoption/aws-otel-collector: ⚠️ 环境变量 AOT_CONFIG_CONTENT 的值仍含 ap-northeast-1 （receivers: otlp: protocols: grpc: endpoint: 0.0.0.）—— 需要显式决定改写还是保留
 #   - pay-for-adoption/pay-for-adoption: AWS_REGION ap-northeast-1 → ap-northeast-2
 #   - pay-for-adoption: enableServiceLinks=False 已带过来 —— 丢了它会让 service-link 环境变量污染应用配置
+#   - petfood/aws-otel-collector: ⚠️ 环境变量 AOT_CONFIG_CONTENT 的值仍含 ap-northeast-1 （receivers: otlp: protocols: grpc: endpoint: 0.0.0.）—— 需要显式决定改写还是保留
 #   - petfood/petfood: AWS_REGION ap-northeast-1 → ap-northeast-2
+#   - petfood/petfood: ⚠️ 环境变量 PETFOOD_REGION 的值仍含 ap-northeast-1 （ap-northeast-1）—— 需要显式决定改写还是保留
 #   - petfood: enableServiceLinks=False 已带过来 —— 丢了它会让 service-link 环境变量污染应用配置
 #   - pethistory-deployment/aws-otel-collector: AWS_REGION ap-northeast-1 → ap-northeast-2
+#   - pethistory-deployment/aws-otel-collector: ⚠️ 环境变量 AOT_CONFIG_CONTENT 的值仍含 ap-northeast-1 （# aws-otel-collector sidecar 配置 —— 增加 DeepFlow OTL）—— 需要显式决定改写还是保留
 #   - pethistory-deployment/aws-otel-collector: 删掉环境变量 RDS_SECRET_ARN —— 让应用回落到韩国的参数存储（源码里本来就有这条回落路径）
 #   - pethistory-deployment/aws-otel-collector: 删掉环境变量 UPDATE_ADOPTION_URL —— 让应用回落到韩国的参数存储（源码里本来就有这条回落路径）
 #   - pethistory-deployment/pethistory: AWS_REGION ap-northeast-1 → ap-northeast-2
@@ -35,6 +40,7 @@
 #   - pethistory-deployment/pethistory: 删掉环境变量 RDS_SECRET_ARN —— 让应用回落到韩国的参数存储（源码里本来就有这条回落路径）
 #   - pethistory-deployment/pethistory: 删掉环境变量 UPDATE_ADOPTION_URL —— 让应用回落到韩国的参数存储（源码里本来就有这条回落路径）
 #   - pethistory: 镜像用可变 tag `latest` —— 主备两侧可能指向不同镜像而看不出来
+#   - search-service/aws-otel-collector: ⚠️ 环境变量 AOT_CONFIG_CONTENT 的值仍含 ap-northeast-1 （receivers: otlp: protocols: grpc: endpoint: 0.0.0.）—— 需要显式决定改写还是保留
 #   - search-service/search-service: AWS_REGION ap-northeast-1 → ap-northeast-2
 #   - search-service: enableServiceLinks=False 已带过来 —— 丢了它会让 service-link 环境变量污染应用配置
 #   - traffic-generator/traffic-generator: AWS_REGION ap-northeast-1 → ap-northeast-2
