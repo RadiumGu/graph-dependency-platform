@@ -65,11 +65,20 @@ class TestNotYetGranted:
     """还没到那一步的写权限，不许提前出现在策略里。"""
 
     # 每一条都写清「为什么留到后面」，否则下一个人只看到一串禁令。
+    #
+    # ── 已毕业的一条 ──────────────────────────────────────────────────
+    # `rds:FailoverGlobalCluster` 2026-09-25 从这个清单里移出。
+    #
+    # 当时留下的理由是「权限要等那条链路演练过再给」。链路已经演练过了
+    # （4.19 节）：四种裁决各跑一遍 —— ordered 走 --switchover、
+    # allow_data_loss 走 --allow-data-loss、abort 中止、非法裁决被忽略且
+    # workflow 不崩，四种都是 0 个失败事件。
+    #
+    # 现在它由 test_95 接管，守的判据变成「只有那一个 action」+
+    # 「Resource 是三个具体 ARN 而不是 *」。
+    # **把它留在这个清单里会让 test_83 恒红** —— 而恒红项的危害不是它本身，
+    # 是它训练所有人忽略红色。
     FORBIDDEN = {
-        "rds:FailoverGlobalCluster": (
-            "会丢数据的 --allow-data-loss 变体必须由人裁决，"
-            "workflow 已做成 signal 放行点；权限要等那条链路演练过再给"
-        ),
         "eks:UpdateNodegroupVersion": "会滚动替换节点，不是切换需要的动作",
         "eks:DeleteNodegroup": "不可逆",
         "eks:CreateNodegroup": "切换不需要建新节点组",
