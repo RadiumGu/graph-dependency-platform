@@ -2632,6 +2632,144 @@ pod 永远停在 `ContainerCreating`,而**原因只出现在 pod 事件里** —
 
 ---
 
+
+### 4.25 缺口⑤ 调研 + 写入 19 个可移植参数(零新增计费资源)
+
+**日期**:2026-09-25 ｜ 手册第五节缺口⑤ **调研完成,只做了免费的那一档**
+
+#### ① 41 个参数的分档
+
+按**值的形状 + 已知资源类型**分,不按名字:
+
+| 档 | 数量 | 处置 | 新增计费资源 |
+|---|---|---|---|
+| A 集群内 DNS(`*.svc.cluster.local`) | 10 | 逐字复制 | 无 |
+| B 字面值/开关 | 6 | 逐字复制 | 无 |
+| C 韩国已有资源 | 3 | 写韩国的值 | 无 |
+| D region 级但值里看不出来 | 6 | **需要韩国资源** | 有 |
+| E 值里含 `ap-northeast-1` | 12 | **需要韩国资源** | 有 |
+| F SecureString | 4 | 另行决定 | 无 |
+
+**A+B+C = 19 个已写入,零新增计费资源。**
+
+#### ② 最有价值的发现:10 个是集群内 DNS,完全可移植
+
+`search-service.petadoptions.svc.cluster.local` 这类名字由**所在集群**的
+CoreDNS 解析,与 region 无关。韩国集群里同名 Service 已建好(4.24),
+所以逐字复制就是对的。
+
+**而 petsite 报错缺的正是其中之一** —— 4.23 查到的根因是
+`/petstore/searchapiurl` → `ParameterNotFound` → 渲染错误页。
+
+> ⚠️ 但**尚未验证**写入这 19 个之后 petsite 是否就能正常渲染 ——
+> 那需要再扩一次容实测。这一节不声称已修好。
+
+#### ③ ⚠️ 一个纯按值形状分类会漏掉的陷阱
+
+这 6 个的**值里不含 region 字样**(就是个裸名字或裸 ID):
+
+```
+dynamodbtablename              ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM
+s3bucketname                   serviceseks2-s3bucketpetadoptioncb20dce5-69ffxu9epttb
+agent/waggleai/guardrailid     u4jw0mo0r7pq
+agent/waggleai/memoryid        WaggleAIMemory-HuA0HS92Yd
+agent/waggleai/nutritionkbid   QOWP8XIMMU
+searchimage                    petsearch-java:latest
+```
+
+按形状分类会把它们判成「可移植」,**但它们指向的资源全是 region 级的**。
+照抄过去的表现是运行时 `ResourceNotFound`。
+
+所以 D 档是**手工列出来的**,不靠形状推断 —— 脚本里写明了这一点。
+
+> 附带发现:`searchimage` 指向 `petsearch-java:latest`,而**两个 region 的
+> ECR 都没有这个仓库**。那是东京本身就有的悬空引用,不是韩国的缺口。
+
+#### ④ pethistory 开放项的根因(四个测量支持,未直接观测)
+
+pethistory 的环境变量里写死了:
+
+```
+AWS_REGION      ap-northeast-1              ← 写死东京
+RDS_SECRET_ARN  arn:aws:secretsmanager:ap-northeast-1:…:secret:DatabaseSecret…
+UPDATE_ADOPTION_URL  https://9dw5r2dqlb.execute-api.ap-northeast-1.amazonaws.com/prod/
+```
+
+从韩国 VPC 实测:
+
+```
+东京 Aurora 端点解析     → 11.0.3.64（东京 VPC 私网地址）  ✅ DNS 能解析
+连 5432                 → ❌ 连不上（无 VPC 对等）
+东京 Secrets Manager     → 可达（HTTP 404 = 到达了端点）   ✅ 取密钥这步能过
+对照：韩国自己的库        → ✅ 连得上（证明测法有效）
+```
+
+所以它取到东京密钥后**卡在连东京的库上** —— 与「started、零日志、从不监听 8080」
+的表现一致。
+
+**根因未直接观测到**(没看到栈),但四个测量互相支持。
+
+> 修法**不是**让韩国连上东京 —— 真灾难时东京就是没了。
+> 而是给韩国自己的 Secrets Manager 密钥(含韩国的库端点)。
+
+#### ⑤ ⚠️ 演练本身制造了一个数据保护密钥环分叉
+
+核实韩国 SSM 时发现多出一个我没写的参数:
+
+```
+/petstore/dataprotection/key-846044d6-da20-441f-bdcc-84492ffcfd0c
+  类型     SecureString
+  改于     2026-09-25T08:24:56
+  改动者   assumed-role/Applications-PetSiteServiceAccount…
+```
+
+那正是 4.21 第一次韩国演练里 petsite 启动的时刻 ——
+**petsite 自己生成了一个新的 ASP.NET Data Protection 密钥并写进了韩国 SSM。**
+
+```
+东京 dataprotection 密钥  4 个
+韩国                     1 个（petsite 自己建的）
+```
+
+**密钥环不一致的后果**:切换后东京签发的 cookie 与防伪令牌在韩国**验不过** ——
+用户被登出,表单 POST 返回 400。而这不会有任何告警。
+
+要让会话跨切换存活,韩国必须持有**东京那 4 个密钥**。那是一个明确的
+DR 设计决定,不是副产品。
+
+> 顺带:petsite 的角色挂着 `AmazonSSMFullAccess`(还有 SNS/SQS 的 FullAccess)——
+> 这解释了它为什么能写 SSM,也是一处过宽的权限。demo 环境,记录备考。
+
+#### ⑥ 我自己的核实又错了两次
+
+- `get-parameters-by-path` **是分页的**,`--query 'length(Parameters)'`
+  会**按页各算一次**(打印了两次「10」)。正确做法是取 `Parameters[].Name`
+  再数行。差点据此以为只写进去 10 个。
+- 检查参数「不存在」时用输出文本判断,而错误信息在 **stderr**,
+  `head -1` 拿到空行 → `case` 落进了「存在」分支,把 3 个正确未写的参数
+  报成了「被误写」。**存在性检查要用退出码,不要用输出文本。**
+
+#### ⑦ 剩下的需要建什么(未执行,待决定)
+
+| 资源 | 用途 | 空闲成本 |
+|---|---|---|
+| DynamoDB 表 | `dynamodbtablename` | 按请求计费,空闲≈0 |
+| SQS 队列 | `queueurl` | ≈0 |
+| SNS 主题 | `snsarn` | ≈0 |
+| StepFunctions 状态机 | `petadoptionsstepfnarn` | ≈0 |
+| S3 桶 | `s3bucketname` | ≈0 |
+| Secrets Manager 密钥 | `rdssecretarn`(pethistory 要用) | ≈\$0.40/月 |
+| API Gateway | `updateadoptionstatusurl` | ≈0 |
+| 内网压测 ALB | 5 个 `agent/*url` | ≈\$16/月 |
+| Bedrock guardrail | `guardrailid` | ≈0 |
+| AgentCore memory + gateway + runtime | `memoryid` / `gatewayurl` / `runtimearn` | 待查 |
+| **Bedrock 知识库** | `nutritionkbid` | **需向量库,最贵的一项** |
+
+前 7 项加起来空闲成本不足每月 1 美元;后 4 项(WaggleAI 相关)里
+**知识库需要向量存储,是数量级更高的一项**。
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
