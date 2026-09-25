@@ -30,6 +30,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from cfn_yaml import load_cfn
+
 ROOT = Path(__file__).resolve().parents[1]
 ACT = ROOT / "dr-plan-generator" / "worker" / "activities.py"
 PROV = ROOT / "dr-plan-generator" / "worker" / "provision-worker.sh"
@@ -46,22 +48,9 @@ def prov() -> str:
     return PROV.read_text(encoding="utf-8")
 
 
-def _load_cfn(path: Path) -> dict:
-    class _L(yaml.SafeLoader):
-        pass
-
-    def _any_node(loader, node):
-        # 按节点类型分发 —— 短标签的参数可能是序列或映射。
-        # 只处理标量的版本会在 !Select [1, !Split […]] 上 ConstructorError。
-        if isinstance(node, yaml.SequenceNode):
-            return loader.construct_sequence(node, deep=True)
-        if isinstance(node, yaml.MappingNode):
-            return loader.construct_mapping(node, deep=True)
-        return loader.construct_scalar(node)
-
-    for tag in ("!Sub", "!Ref", "!GetAtt", "!Join", "!Select", "!Split"):
-        _L.add_constructor(tag, _any_node)
-    return yaml.load(path.read_text(encoding="utf-8"), Loader=_L)
+# 解析走 tests/cfn_yaml.py 的单一来源（原来每个文件各有一份，
+# 其中三份只处理标量节点，读不了带序列参数的短标签）。
+_load_cfn = load_cfn
 
 
 class TestPromotionSemanticsAreExplicit:

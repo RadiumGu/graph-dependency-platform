@@ -22,6 +22,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from cfn_yaml import load_cfn
+
 ROOT = Path(__file__).resolve().parents[1]
 OIDC = ROOT / "infra" / "dr-korea" / "11-irsa-korea-oidc.yaml"
 MAPPING = ROOT / "infra" / "dr-korea" / "irsa-korea-mapping.json"
@@ -30,29 +32,12 @@ SCRIPT = ROOT / "scripts" / "add_korea_irsa_trust.py"
 
 @pytest.fixture(scope="module")
 def oidc() -> dict:
-    class _L(yaml.SafeLoader):
-        pass
-
-    def _any_node(loader, node):
-        """CFN 短标签可能是标量、序列或映射 —— 要按节点类型分发。
-
-        ⚠️ 第一版只写了 `loader.construct_scalar(node)`,于是
-        `!Select [1, !Split ['https://', …]]` 直接 ConstructorError:
-        「expected a scalar node, but found sequence」。
-
-        本项目其他门禁(test_83 / test_92 / test_93)用的是只处理标量的版本,
-        它们能过只是因为那几个模板刚好没用带序列参数的短标签 ——
-        **那不是「写对了」,是「还没踩到」。**
-        """
-        if isinstance(node, yaml.SequenceNode):
-            return loader.construct_sequence(node, deep=True)
-        if isinstance(node, yaml.MappingNode):
-            return loader.construct_mapping(node, deep=True)
-        return loader.construct_scalar(node)
-
-    for tag in ("!Sub", "!Ref", "!GetAtt", "!Join", "!Select", "!Split"):
-        _L.add_constructor(tag, _any_node)
-    return yaml.load(OIDC.read_text(encoding="utf-8"), Loader=_L)
+    # 解析走 tests/cfn_yaml.py 的单一来源。
+    # 这个文件当初是第一个踩到「只处理标量」缺陷的地方
+    # （OIDC 模板的 Outputs 用了 !Select [1, !Split […]]），
+    # 当时在本地修了一份；现在那份逻辑挪到共享辅助里，
+    # 顺带把另外几个还没踩到的文件一起治好。
+    return load_cfn(OIDC)
 
 
 @pytest.fixture(scope="module")
