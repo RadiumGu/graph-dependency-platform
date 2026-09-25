@@ -2018,6 +2018,115 @@ reader —— 属于「影响东京生产可用性」,须先问用户。
 
 ---
 
+
+### 4.20 固定 Temporal 实例的私有 IP（含一次有计划的实例重建）
+
+**日期**:2026-09-25 ｜ **这是 provisioning 进 IaC 之后第一次真正被考验**
+
+#### ① 消除的是什么耦合
+
+AgentCore runtime 的 `TEMPORAL_ADDRESS` 里写着 Temporal 实例的私有 IP。
+实例一旦被替换,IP 就变,而 AgentCore 那边不会自动跟着改 —— 表现是
+temporal-mcp 的每次调用都超时,**而控制面显示 READY、日志里也没有明显报错**。
+
+在此之前靠 `scripts/check_dr_ip_coupling.py` 兜住,但那只是**检测**,不是消除。
+
+#### ② 一个必须先想清楚的陷阱:不能沿用当前 IP
+
+`PrivateIpAddress` 在 `createOnlyProperties` 里,写进模板**本身就要求替换实例**。
+
+而 CFN 替换资源是**先建新再删旧**。所以如果把模板里的 IP 写成**旧实例正占着的
+`10.20.1.125`**,新实例创建时会因地址被占用而失败 —— 而那个失败发生在栈更新
+中途,回滚起来比一次干净的替换麻烦得多。
+
+所以选了 `10.20.1.10`:子网是 `10.20.1.0/24`(当时 245 个可用),
+`.0`~`.3` 与 `.255` 是 AWS 保留,`.10` 当时空闲(逐个核对过子网内所有 ENI:
+`.38`/`.77`/`.123`/`.125`/`.139`/`.170`)。
+
+#### ③ 部署前用变更集确认动作,不靠推测
+
+```
+logical: TemporalInstance   action: Modify   replace: True
+```
+
+只影响这一个资源。
+
+⚠️ `create-change-set` **没有** `--use-previous-parameters` 这个选项(我先写了它,
+被 ValidationError 顶回来)。正确写法是逐个参数
+`ParameterKey=<k>,UsePreviousValue=true`;新加的参数不写,让它用模板默认。
+
+#### ④ 重建结果
+
+| | 替换前 | 替换后 |
+|---|---|---|
+| 实例 ID | `i-06f0a3e4961b8061e` | `i-09380e417a0177ed4`(旧的已 terminated) |
+| 私有 IP | `10.20.1.125` | **`10.20.1.10`**(固定) |
+| Temporal cluster ID | `811ac051-…` | **`682cc7c5-fce2-47af-ac15-dd0e0902f7b6`** |
+
+cluster ID 变了正是预期:库是重建的。Temporal 的 `retentionTtl` 本就 86400s,
+丢掉的 workflow 历史是一天内的。
+
+#### ⑤ 自动恢复核实 —— 零手工介入
+
+```
+temporal / dr-worker / docker        全部 active
+3 个容器                             1.29.7 / 2.54.1 / postgres:16-alpine（无 tag 漂移）
+Temporal HTTP API                    200，default namespace REGISTERED
+venv                                 Python 3.12.14，temporalio 1.33.0
+pollers                              n=1
+端到端 dry_run workflow              COMPLETED，0 失败、0 WORKFLOW_TASK_TIMED_OUT
+口令是否泄进日志                      0 命中（set +x 的保护在重建后仍生效）
+```
+
+`.code.sha256` 在新机器上算出来与旧机器一致 —— 顺带证明那个指纹是**内容哈希**、
+跨机器可复现(而不是掺了 mtime)。
+
+#### ⑥ 又一次踩到「`deploy` 不看模板 Default」
+
+改完 `06-agentcore-runtime.yaml` 的默认值后 `deploy` 报
+**No changes to deploy**。原因是 `deploy` 沿用现有参数值(`UsePreviousValue`),
+模板的 `Default` **只对新建栈生效**。必须显式
+`--parameter-overrides TemporalAddress=http://10.20.1.10:7243`。
+
+**这是同一个坑第二次**(第一次是 4.x 的镜像 tag 漂移)。
+
+#### ⑦ 耦合检查在这次替换里起了作用
+
+替换后立刻跑 `check_dr_ip_coupling.py`:
+
+```
+❌ mismatch: AgentCore 指向 http://10.20.1.125:7243，但实例当前 IP 对应的
+   应是 http://10.20.1.10:7243。所有 MCP 工具调用会超时，而超时看起来像
+   网络或服务故障，唯独不像「地址过期」。
+```
+
+改完再跑:`✅ ok`。
+
+#### ⑧ 决定性端到端核实
+
+真调一次 AgentCore(它在 VPC 内),看它能不能连上新 IP 的 Temporal:
+
+```
+get_cluster_info → Cluster ID: 682cc7c5-…  Server Version: 1.29.7
+```
+
+⚠️ 调用时踩了两个坑:
+- `invoke_agent_runtime` 缺 `accept` header 会返回 **406**。
+  MCP 的 streamable HTTP 要求 `accept: application/json, text/event-stream`。
+- 我猜工具名叫 `describe_cluster`,真名是 **`get_cluster_info`**
+  (`tools/list` 列出来的 23 个工具里)。
+
+#### ⑨ 回滚
+
+```bash
+# ⚠️ 销毁类命令 —— 只记录不执行
+# 取消固定 IP：把 02-temporal.yaml 里 PrivateIpAddress 那行删掉再 deploy
+#   —— 注意那**又是一次实例替换**，并且新 IP 是随机的，
+#      06 的 TemporalAddress 要跟着改（--parameter-overrides，别指望 Default）
+```
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
