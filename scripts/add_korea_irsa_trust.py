@@ -51,7 +51,14 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 MAPPING = HERE.parent / "infra" / "dr-korea" / "irsa-korea-mapping.json"
-NAMESPACE = "petadoptions"
+
+# ⚠️ 这里**刻意没有** NAMESPACE 常量。
+#
+# 最初的版本有一个 NAMESPACE = "petadoptions"，而那个常量直接导致漏掉了
+# kube-system 下的 alb-ingress-controller（LB Controller 自己也用 IRSA）。
+# 命名空间一旦隐含在代码里，人就只会去想「petadoptions 下有哪些 SA」。
+#
+# 现在 namespace 由映射逐项提供，缺了就报错 —— 让漏项在读映射时就看得见。
 
 
 def _aws(*args: str) -> str:
@@ -64,8 +71,14 @@ def _aws(*args: str) -> str:
     return r.stdout
 
 
-def korea_statement(provider_arn: str, oidc_host: str, sa: str) -> dict:
-    """构造要追加的那一条语句。"""
+def korea_statement(
+    provider_arn: str, oidc_host: str, namespace: str, sa: str
+) -> dict:
+    """构造要追加的那一条语句。
+
+    namespace 是必填的位置参数，没有默认值 —— 默认值会把「忘了写」
+    变成「静默用了 petadoptions」，而那个错误的表现是永远 403。
+    """
     return {
         "Effect": "Allow",
         "Principal": {"Federated": provider_arn},
@@ -75,7 +88,7 @@ def korea_statement(provider_arn: str, oidc_host: str, sa: str) -> dict:
                 f"{oidc_host}:aud": "sts.amazonaws.com",
                 # ⚠️ sub 的格式是 system:serviceaccount:<ns>:<sa>
                 # 写错不会报错，只会永远拒绝 —— 和「没注册 provider」同一种表现。
-                f"{oidc_host}:sub": f"system:serviceaccount:{NAMESPACE}:{sa}",
+                f"{oidc_host}:sub": f"system:serviceaccount:{namespace}:{sa}",
             }
         },
     }
@@ -107,11 +120,21 @@ def main() -> int:
     data = json.loads(MAPPING.read_text(encoding="utf-8"))
     provider_arn = data["korea_provider_arn"]
     oidc_host = data["korea_oidc_host"]
-    pairs = data["service_accounts"]
+    entries = data["service_accounts"]
+
+    # 每一项都必须自带 namespace / name / role —— 缺了就停，不猜。
+    for e in entries:
+        missing = [k for k in ("namespace", "name", "role") if not e.get(k)]
+        if missing:
+            print(f"❌ 映射里有一项缺字段 {missing}：{e}")
+            return 2
 
     if args.only:
-        pairs = {k: v for k, v in pairs.items() if k == args.only}
-        if not pairs:
+        entries = [
+            e for e in entries
+            if args.only in (e["name"], f"{e['namespace']}/{e['name']}")
+        ]
+        if not entries:
             print(f"❌ 映射里没有 {args.only}")
             return 2
 
@@ -121,23 +144,27 @@ def main() -> int:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
     changed, skipped, failed = 0, 0, 0
-    for sa, role in sorted(pairs.items()):
+    for entry in sorted(entries, key=lambda e: (e["namespace"], e["name"])):
+        namespace, sa, role = entry["namespace"], entry["name"], entry["role"]
+        label = f"{namespace}/{sa}"
         doc = json.loads(
             _aws("iam", "get-role", "--role-name", role,
                  "--query", "Role.AssumeRolePolicyDocument", "--output", "json")
         )
         if has_korea(doc, provider_arn):
-            print(f"  ⏭  {sa:24s} 已有韩国那条，跳过")
+            print(f"  ⏭  {label:42s} 已有韩国那条，跳过")
             skipped += 1
             continue
 
         before = json.dumps(doc, sort_keys=True)
         n_before = len(doc.get("Statement", []))
         new_doc = json.loads(before)  # 深拷贝，绝不原地改
-        new_doc["Statement"].append(korea_statement(provider_arn, oidc_host, sa))
+        new_doc["Statement"].append(
+            korea_statement(provider_arn, oidc_host, namespace, sa)
+        )
 
         if not args.apply:
-            print(f"  [dry-run] {sa:24s} 会从 {n_before} 条语句变成 "
+            print(f"  [dry-run] {label:42s} 会从 {n_before} 条语句变成 "
                   f"{len(new_doc['Statement'])} 条（role={role[:44]}…）")
             continue
 
@@ -154,7 +181,7 @@ def main() -> int:
         )
         ok = True
         if len(after.get("Statement", [])) != n_before + 1:
-            print(f"  ❌ {sa}: 语句数不对（{n_before} → "
+            print(f"  ❌ {label}: 语句数不对（{n_before} → "
                   f"{len(after.get('Statement', []))}，应为 {n_before + 1}）")
             ok = False
         # 原有每一条都必须逐字还在。
@@ -162,15 +189,15 @@ def main() -> int:
         after_norm = [json.dumps(s, sort_keys=True) for s in after["Statement"]]
         for st in orig:
             if json.dumps(st, sort_keys=True) not in after_norm:
-                print(f"  ❌ {sa}: 原有语句被改动了！备份在 "
+                print(f"  ❌ {label}: 原有语句被改动了！备份在 "
                       f"{backup / f'{role}.{stamp}.json'}")
                 ok = False
         if not has_korea(after, provider_arn):
-            print(f"  ❌ {sa}: 韩国那条没写进去")
+            print(f"  ❌ {label}: 韩国那条没写进去")
             ok = False
 
         if ok:
-            print(f"  ✅ {sa:24s} 已追加（{n_before} → {n_before + 1} 条）")
+            print(f"  ✅ {label:42s} 已追加（{n_before} → {n_before + 1} 条）")
             changed += 1
         else:
             failed += 1
