@@ -152,6 +152,24 @@ def fix_env(container: dict, notes: list[str], who: str) -> None:
     kept = []
     for e in envs:
         name = e.get("name")
+        # ⚠️ 兜底检查:**凡是值里含东京 region 的环境变量都要报出来**。
+        #    2026-09-25 踩过:REWRITE_ENV 只列了 AWS_REGION / S3_REGION，
+        #    **漏了 PETFOOD_REGION**，于是 petfood 仍去查东京的表，
+        #    表现是 /Checkout 页面 500 —— 而那个报错指向 petsite，不是 petfood。
+        #    「按名字列白名单」会漏掉没想到的名字；这条兜底让漏项至少**可见**。
+        if (
+            name not in REWRITE_ENV
+            and name not in DROP_ENV_FOR_PARAM_STORE_FALLBACK
+            and TOKYO_REGION in str(e.get("value") or "")
+        ):
+            # ⚠️ 值可能是**多行**的（例如 otel sidecar 的 AOT_CONFIG_CONTENT
+            #    整份 YAML 配置）。原始换行写进文件头的注释块会让产出的 YAML
+            #    解析不了 —— 续行没有 `#` 前缀。所以这里压成单行。
+            preview = " ".join(str(e.get("value") or "").split())[:50]
+            notes.append(
+                f"{who}: ⚠️ 环境变量 {name} 的值仍含 {TOKYO_REGION} "
+                f"（{preview}）—— 需要显式决定改写还是保留"
+            )
         if name in DROP_ENV_FOR_PARAM_STORE_FALLBACK:
             notes.append(
                 f"{who}: 删掉环境变量 {name} —— 让应用回落到韩国的参数存储"
@@ -553,7 +571,9 @@ def main() -> int:
     if all_notes:
         header += "#\n# ── 生成时发现的注意事项 ────────────────────────────────────────\n"
         for n in sorted(set(all_notes)):
-            header += f"#   - {n}\n"
+            # 兜底:再压一次单行 —— 注释块里出现裸换行会让 YAML 解析失败，
+            # 而失败点会指在一个看起来毫无关系的行上。
+            header += "#   - " + " ".join(str(n).split()) + "\n"
 
     body = "\n---\n".join(
         yaml.safe_dump(o, sort_keys=False, allow_unicode=True, width=200)
