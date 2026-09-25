@@ -1,0 +1,91 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+# ═══════════════════════════════════════════════════════════════════════
+# 18-korea-addons.yaml — 第⑤项（缺口④ addon 按需）
+#
+# 东京 5 个 addon，韩国原先 1 个。**「按需」的意思是先测再补，不是照抄 5 个。**
+# 逐个实测结论（2026-09-25）:
+#
+#   amazon-cloudwatch-observability    ✅ 补   这个 demo 的主题就是可观测性；
+#                                             零节点时 DaemonSet 不起 pod，不花钱
+#   aws-ebs-csi-driver                 ❌ 不补 实测清单里只有 configMap 卷、
+#                                             **无 PVC** → 没有 EBS 卷要挂
+#   eks-pod-identity-agent             ❌ 不补 实测 list-pod-identity-associations
+#                                             只有 1 个关联，且属于
+#                                             amazon-network-flow-monitor
+#                                             （用户已明确不管）。petsite 的
+#                                             7 个工作负载全走 IRSA
+#   aws-network-flow-monitoring-agent  ❌ 不补 用户明确「DeepFlow 与流量监控不管」
+#   aws-guardduty-agent                —      韩国**已经有**（账户级策略装的）
+#
+# ⚠️ 三个「不补」都是**测出来的，不是估的**:
+#      PVC          → 扫 15-korea-workloads.yaml 的 volumes
+#      Pod Identity → aws eks list-pod-identity-associations
+#    这两条在 test_107 里守着 —— 哪天有人给 petsite 加了 PVC 或改用
+#    Pod Identity，门禁会提醒这里的结论已经过期。
+#
+# 授权走**节点角色**:这个 addon 的 serviceAccountRoleArn 实测是 null。
+# 03-eks.yaml 里给节点角色补了 CloudWatchAgentServerPolicy（东京也正好是这条）。
+# ═══════════════════════════════════════════════════════════════════════
+
+Description: 韩国守夜灯的 EKS addon（按实测需要补，不照抄东京全部 5 个）
+
+Parameters:
+  ClusterName:
+    Type: String
+    Default: dr-korea-petsite
+
+  # 刻意与东京同版本，而不是用韩国的默认版本（v6.7.0）。
+  # 灾备站点跑的应该是与生产**同一个**东西 —— 版本漂移会让演练验证的
+  # 不再是将来真要接管的那套。
+  ObservabilityVersion:
+    Type: String
+    Default: v6.5.0-eksbuild.1
+    Description: 与东京 PetSite 实测版本一致
+
+Resources:
+  CloudWatchObservability:
+    Type: AWS::EKS::Addon
+    Properties:
+      ClusterName: !Ref ClusterName
+      AddonName: amazon-cloudwatch-observability
+      AddonVersion: !Ref ObservabilityVersion
+      # 冲突时保留我们写的配置（region/cluster_name 必须是韩国的）
+      ResolveConflicts: OVERWRITE
+      # 配置照东京实测的 configurationValues 逐项搬，只改两处 region 级的值:
+      #   agent.config.agent.region                        → ap-northeast-2
+      #   ...kubernetes.cluster_name / application_signals.hosted_in
+      #                                                    → dr-korea-petsite
+      # metrics_collection_interval 保持 300（东京就是 300，不是默认 60）——
+      # 改小会让韩国的指标量与东京不可比，也会多花钱。
+      ConfigurationValues: !Sub |
+        {
+          "agent": {
+            "config": {
+              "agent": {
+                "region": "${AWS::Region}",
+                "metrics_collection_interval": 300
+              },
+              "logs": {
+                "metrics_collected": {
+                  "application_signals": { "hosted_in": "${ClusterName}" },
+                  "kubernetes": {
+                    "cluster_name": "${ClusterName}",
+                    "enhanced_container_insights": true,
+                    "metrics_collection_interval": 300
+                  }
+                }
+              },
+              "traces": {
+                "traces_collected": { "application_signals": {} }
+              }
+            }
+          },
+          "dcgmExporter": { "enabled": false },
+          "neuronMonitor": { "enabled": false }
+        }
+
+Outputs:
+  ObservabilityAddonVersion:
+    Description: 装上的版本（应与东京一致）
+    Value: !Ref ObservabilityVersion

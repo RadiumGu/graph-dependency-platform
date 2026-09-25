@@ -78,6 +78,11 @@ Resources:
         - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
         # 节点也走 SSM 管理 —— 无公网入站下这是唯一进得去的通道。
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        # 2026-09-25 第⑤项（缺口④ addon 按需）:amazon-cloudwatch-observability
+        # 这个 addon 的 serviceAccountRoleArn 是 null —— 它走**节点角色**授权。
+        # 东京节点角色实测挂 5 条托管策略，韩国原先只有 4 条，正好少这一条。
+        # **刻意不多加**:东京也只有这 5 条，加更多就是灾备侧单方面偏离生产。
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
       Tags:
         - { Key: Name, Value: dr-korea-eks-node-role }
 
