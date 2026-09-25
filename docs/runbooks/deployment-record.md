@@ -2488,6 +2488,150 @@ ALB 与目标组**刻意保留**(那是预置的入口,ALB 约 \$16/月)。
 
 ---
 
+
+### 4.24 搬齐 6 个周边工作负载 —— 三个缺陷全在我自己的生成器里
+
+**日期**:2026-09-25 ｜ **手册第五节缺口① 基本关闭(6/7 就绪,1 个开放项)**
+
+#### ① 做法:生成而不是手写
+
+手写清单是**会悄悄过期的快照**。所以写了 `scripts/gen_korea_workloads.py`,
+从东京活集群读、生成 `infra/dr-korea/15-korea-workloads.yaml`,
+文件头记生成时间与来源。东京变更后重跑,diff 直接告诉你变了什么。
+
+产出:8 个 ServiceAccount + 1 个 ConfigMap + 6 个 Deployment + 6 个 Service。
+
+#### ② 结果
+
+```
+list-adoptions      1/1 ✅      pay-for-adoption  1/1 ✅
+petfood             1/1 ✅      search-service    1/1 ✅
+traffic-generator   1/1 ✅      petsite           1/1 ✅
+pethistory          0/1 ❌  ← 开放项，见 ⑥
+```
+
+#### ③ 缺陷一:ServiceAccount 对象根本没建 —— 我只验了 IRSA 的一半
+
+```
+ReplicaFailure | FailedCreate |
+  pods "list-adoptions-…" is forbidden:
+  serviceaccount "list-adoptions-sa" not found
+```
+
+4.18 那次我验过全部 7 个角色的**信任策略**(IAM 侧),却只在集群里建了
+`petsite-sa` 一个。IRSA 是**两侧契约**:
+
+| 侧 | 4.18 的状态 |
+|---|---|
+| IAM 角色信任韩国 OIDC + `:sub` 对上 | ✅ 7 个都做了 |
+| k8s 里存在带 `role-arn` 注解的 SA | ❌ 只有 1 个 |
+
+**失效形态极刁:pod 根本不会被创建。** `kubectl get pod` 里一个异常 pod
+都看不到 —— 我那个遍历 pod 的诊断步骤打印了空白,看着像「一切正常」。
+**任何遍历 pod 的健康检查对这个缺陷完全失明**,证据只在
+Deployment / ReplicaSet 的 conditions 上。
+
+**结构性修法**:SA 对象改由 `irsa-korea-mapping.json` 生成 —— 与信任策略**同源**,
+两半永远不会再走散。并且 SA 排在 Deployment 之前(apply 按文件顺序)。
+
+##### 附带:补上 SA 之后 pod 仍然不出来
+
+旧 ReplicaSet 处在指数退避里(事件 `count=17`),条件文本是**陈旧的**,
+还在说 SA 不存在。`rollout restart` 建新 ReplicaSet 绕开退避后 pod 立刻出来
+—— 因果验证。
+
+**这在真切换时会表现成「6 个服务起不来,错误信息指着你已经修好的东西」。**
+
+#### ④ 缺陷二:白名单拷贝悄悄丢了 `enableServiceLinks`
+
+petfood `CrashLoopBackOff`,退出码 1:
+
+```
+Error: LoadError { message: "Failed to deserialize server config:
+  invalid type: string \"tcp://172.20.21.75:80\",
+  expected an integer for key `port` in the environment" }
+```
+
+namespace 里有名为 `petfood` 的 Service → k8s 注入 service-link 环境变量
+`PETFOOD_PORT=tcp://172.20.21.75:80`,而 petfood 的配置前缀正好是 `PETFOOD_`,
+于是 `port` 读到一个字符串。
+
+##### 对照组推翻了我的第一个假设
+
+我先猜是「pod 比 Service 先建」(service-link 变量是 pod 创建时的快照)。
+查东京:
+
+```
+enableServiceLinks: False    ← 东京**显式关掉了**
+pod 建于 18:31 > svc 建于 18:13   ← 所以不是创建顺序
+```
+
+**真因是我的生成器用白名单拷 pod spec**,只拷了
+`serviceAccountName / volumes / nodeSelector / tolerations / securityContext`,
+把 `enableServiceLinks: False` 丢了。
+
+而那条报错**指不到「你丢了 enableServiceLinks」**。
+
+**结构性修法**:改成**黑名单** —— 深拷整个 pod spec,只去掉明确有害的
+(`nodeName` 会把 pod 钉在东京的节点上;`serviceAccount` 是废弃别名)。
+白名单的问题是「忘了的字段静默消失」;黑名单反过来,新字段默认被带上。
+
+> ⚠️ 这个丢失影响了 **5 个** Deployment,但只有 petfood 崩 ——
+> 另外 4 个也被注入了污染的环境变量,只是它们不在意。
+> **「其它几个起来了」完全不能说明这一个也会起来。**
+
+> ⚠️ 顺带发现东京的潜在脆弱点:东京靠显式 `enableServiceLinks: False` 避开这个坑,
+> 如果哪天有人漏了这个字段重建 petfood,**东京也会崩成一样的形状**。
+
+#### ⑤ 缺陷三:拷了卷,没拷卷引用的 ConfigMap
+
+```
+FailedMount: configmap "otel-config" not found
+```
+
+pod 永远停在 `ContainerCreating`,而**原因只出现在 pod 事件里** ——
+容器状态里是空的 `ContainerCreating`,Deployment conditions 也不提。
+
+**结构性修法**:生成器扫描 `volumes` / `envFrom` / `env.valueFrom`,
+把引用到的 ConfigMap 从东京搬过来。
+**Secret 只列名字不拷内容** —— 不把密钥写进 git 跟踪的文件。
+
+> 只有 pethistory 挂 `otel-config`,另外 5 个的 otel sidecar 用默认配置。
+> 又一次「其它几个没事」说明不了这一个。
+
+#### ⑥ 开放项:pethistory 起不来,根因**未确定**
+
+已知的:
+
+```
+镜像            从韩国 ECR 拉取成功（104ms，83.7MB）—— ECR 链路没问题
+容器            started，restarts=1
+监听            **从不监听 8080**，startup probe connection refused
+容器日志         **一行都没有**
+对照：东京        同一个容器有 200 行访问日志 —— 所以它是会打日志的
+```
+
+所以进程起来了、在监听之前就卡住或退出了,且没有任何输出。
+**这与缺口⑤(region 内后端)一致,但我不声称已确定根因** —— 没有日志就没有证据。
+留到做缺口⑤ 时一并查。
+
+#### ⑦ 我自己的判据又错了两次
+
+- **镜像预检**假设所有镜像都在私有 ECR,于是把
+  `public.ecr.aws/aws-observability/aws-otel-collector:v0.47.0` 报成「韩国缺失」。
+  **那是判据的错,不是真缺口** —— 公共镜像每个 region 都能拉。
+  已修:按 registry 主机名区分私有/公共。
+- **pod 状态检查**用 `phase != Running` 过滤,漏掉了「Running 但未就绪」。
+  pethistory 就是那个形状,于是「有问题的 pod」打印了空白。
+  **判据必须按就绪数,不按 phase。**
+
+#### ⑧ 清理
+
+按 4.23 查出的顺序:先把 coredns 降到 1 副本(`PDB allowed` 0→1),
+再 `desiredSize=0`。临时提权已摘。
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
