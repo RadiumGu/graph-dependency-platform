@@ -58,6 +58,30 @@
 
 ---
 
+## 二之二、⚠️ 静息状态下有两个信号**长得像故障**
+
+守夜灯零节点时,这两个读数是**常态**,不要去追:
+
+| 读数 | 静息时的值 | 为什么 |
+|---|---|---|
+| `describe-addon` 的 `status` | **`DEGRADED`** | `InsufficientNumberOfReplicas` / "no nodes available to schedule pods" —— 零节点时 agent pod 无处调度 |
+| ALB 目标组健康 | **`unhealthy`**(留着旧 pod IP) | 摘除目标是 LB controller 干的,而它自己也在被排空的那个节点上 |
+
+**关键推论:这两个读数都无法区分「正常休眠」与「切换失败」。**
+判断守夜灯是否健康**不能看它们**,要看:
+
+```bash
+# 栈还在、资源还在（这才是守夜灯该有的状态）
+aws cloudformation describe-stacks --region ap-northeast-2   --query 'Stacks[?starts_with(StackName,`dr-korea`)].[StackName,StackStatus]' --output text
+# 数据库复制还活着
+aws rds describe-global-clusters --region ap-northeast-1   --global-cluster-identifier petsite-global --query 'GlobalClusters[0].Status'
+```
+
+扩容后 addon 会自己回到 `ACTIVE`、ALB 目标会被 reconcile 成新 pod IP
+(实测:旧 `10.20.1.88` 消失,新 `10.20.2.84 healthy`)。
+
+---
+
 ## 三、接管操作:顺序不能错
 
 ### 3.1 扩容(必须按这个顺序)

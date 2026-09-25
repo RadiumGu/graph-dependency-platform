@@ -179,6 +179,20 @@ class TestHandoverKeepsTheThingsThatBite:
     def test_generated_file_warning(self, handover: str):
         assert_contains(handover, "是生成的,不要手改")
 
+    def test_resting_signals_that_look_like_failures(self, handover: str):
+        """静息时 addon 是 DEGRADED、ALB 目标是 unhealthy —— 都是常态。
+
+        不写下来的后果是接手人去追一个不存在的故障；
+        更要紧的是**这两个读数都无法区分「正常休眠」与「切换失败」**，
+        所以它们不能当健康判据。
+        """
+        assert_contains(handover, "静息状态下有两个信号**长得像故障**")
+        assert_contains(handover, "InsufficientNumberOfReplicas")
+        assert_contains(
+            handover, "这两个读数都无法区分「正常休眠」与「切换失败」"
+        )
+        assert_contains(handover, "判断守夜灯是否健康**不能看它们**")
+
 
 class TestRecordAdmitsTheSkippedItem:
     def test_the_missed_item_is_admitted(self):
