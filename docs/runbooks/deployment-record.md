@@ -3239,6 +3239,112 @@ Temporal 角色原先读不到韩国 DB 密钥(`AccessDeniedException`),
 
 ---
 
+
+### 4.30 第⑤项 addon 按需 —— 并撞上一个我自己造的守夜灯缺陷
+
+**日期**:2026-09-25 ｜ 栈 `dr-korea-addons` ｜ `03-eks.yaml` 加一条托管策略
+
+#### ① 先纠正一件事:这一项我漏了
+
+七项里第⑤项(缺口④ addon 按需)**从没做过** —— 我从第④项直接跳到了第⑥项,
+而上一轮的 ledger 还写着「只剩第⑦项」。**顺序清单存在的意义就是防这个,
+而我没照它核对。**
+
+#### ② 「按需」是先测再补,不是照抄东京 5 个
+
+| addon | 处置 | 依据(实测) |
+|---|---|---|
+| `amazon-cloudwatch-observability` | ✅ 补 | demo 的主题就是可观测性;零节点不起 pod |
+| `aws-ebs-csi-driver` | ❌ 不补 | 扫清单 `volumes`:只有 `configMap`,**无 PVC** |
+| `eks-pod-identity-agent` | ❌ 不补 | `list-pod-identity-associations` 只 1 个,属于 `amazon-network-flow-monitor`;petsite 全走 IRSA |
+| `aws-network-flow-monitoring-agent` | ❌ 不补 | 用户明确不管 |
+| `aws-guardduty-agent` | — | 韩国已有(账户级策略装的) |
+
+两个「不补」都是**测出来的**:PVC 扫清单的 volumes,Pod Identity 查 API。
+门禁 `test_107` 守着这两条 —— 哪天有人给 petsite 加了 PVC 或改用 Pod Identity,
+这里的结论就过期了,门禁会提醒。
+
+授权走**节点角色**(`serviceAccountRoleArn` 实测 `null`)。韩国节点角色原先比东京
+正好少 `CloudWatchAgentServerPolicy`,补了这一条。**刻意不多加** —— 东京也只有 5 条。
+版本刻意用**东京同版本** `v6.5.0-eksbuild.1` 而非韩国默认的 `v6.7.0`:
+灾备站点该跑与生产**同一个**东西,版本漂移会让演练验证的不再是将来要接管的那套。
+
+#### ③ ⚠️ 装 addon 撞出一个真实的守夜灯缺陷(我自己造的)
+
+第一次部署直接失败:
+
+```
+AdmissionRequestDenied: Internal error occurred: failed calling webhook
+  "mservice.elbv2.k8s.aws": no endpoints available for service
+  "aws-load-balancer-webhook-service"
+```
+
+取证(`get mutatingwebhookconfigurations`):
+
+```
+mservice.elbv2.k8s.aws            failurePolicy=Fail  services            namespaceSelector={}
+mtargetgroupbinding.elbv2.k8s.aws failurePolicy=Fail  targetgroupbindings namespaceSelector={}
+```
+
+`namespaceSelector={}` = **所有命名空间**。而 webhook 指向的 Service 由 controller
+自己提供 endpoint,**controller 需要节点**。于是:
+
+> **零节点时,这个集群拒绝创建任何 Service。**
+
+**直接实验证明(不是推断)** —— 同一个探针 Service,两次:
+
+```
+零节点            Error from server (InternalError): failed calling webhook …
+controller 就绪   service/zz-probe-svc created
+```
+
+这是「LB controller 改成预置在集群里」那个决定的代价。它本身仍然是对的
+(切换时不需要 apply 任何东西),但**多出一条接管顺序约束**:
+扩容 → 等 webhook endpoint → 才能动 Service/TGB。
+
+报错完全指不到「节点为零」这个原因 —— 又一个「报错指不到真因」的例子。
+
+#### ④ 解决方式:扩一个节点装上,addon 是集群级配置会留下
+
+缩回零节点后 `describe-addon` 仍是 `ACTIVE`,所以将来接管时**不必再记这一步**。
+
+#### ⑤ 核实(查 EKS 而不是看 CFN 输出)
+
+```
+版本      韩国 v6.5.0-eksbuild.1  ｜ 东京 v6.5.0-eksbuild.1   ✅ 一致
+配置      agent.region        = ap-northeast-2
+          kubernetes.cluster  = dr-korea-petsite
+          application_signals = dr-korea-petsite
+          采集间隔            = 300（东京也是 300，不是默认 60）
+节点角色  5 条托管策略，与东京逐条相同
+```
+
+#### ⑥ 清理
+
+节点组 `desiredSize=0`,临时提权已摘并核实空数组。
+
+---
+
+### 4.31 第⑦项 交接文档
+
+`docs/runbooks/dr-korea-handover.md` —— 目标读者是**没参与这段、要接手的人**。
+
+结构上刻意**先写「现在能做什么/不能做什么」,再写怎么来的**:
+接手人第一个问题是「我现在能指望它干什么」,而不是「你们当初怎么做的」。
+
+放在最前面的是**四种「全绿但不能服务」的形态与唯一能区分的判据** ——
+这是整段工作最贵的产出,也是唯一一条「不知道就一定会栽」的东西。
+
+还收了三份别处没有的东西:
+
+- **接管/缩容的顺序约束**,以及每条约束背后的因果(PDB 算术、webhook endpoint)
+- **判据纪律表**:判据错过 15 次,功能实现从未错 ——
+  **难的不是把事情做对,是判断自己有没有做对**
+- **关停命令**(只列不跑)与三个坑:全局集群成员要先移除、`Retain` 的资源栈删了还在、
+  东京那个复制配置是 registry 级的
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
