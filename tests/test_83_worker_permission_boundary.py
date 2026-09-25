@@ -20,6 +20,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from cfn_yaml import load_cfn
+
 TPL = (
     Path(__file__).resolve().parents[1]
     / "infra"
@@ -31,20 +33,11 @@ TPL = (
 @pytest.fixture(scope="module")
 def doc() -> dict:
     assert TPL.exists(), f"{TPL} 不存在"
-    # CFN 的短标签（!Ref / !Sub）不是标准 YAML，用最宽松的方式读：
-    # 只关心 Action / Resource 的文本，所以把短标签当普通标量。
-    class Loose(yaml.SafeLoader):
-        pass
-
-    def _any_tag(loader, tag_suffix, node):
-        if isinstance(node, yaml.ScalarNode):
-            return loader.construct_scalar(node)
-        if isinstance(node, yaml.SequenceNode):
-            return loader.construct_sequence(node)
-        return loader.construct_mapping(node)
-
-    Loose.add_multi_constructor("!", _any_tag)
-    return yaml.load(TPL.read_text(encoding="utf-8"), Loose)
+    # 解析走 tests/cfn_yaml.py 的单一来源。
+    # 这个文件原来的本地实现**是对的**（按节点类型分发），
+    # 但它仍然是 6 份重复里的一份 —— 而另外三份是错的。
+    # 重复本身就是那三份错误能长期存在的原因。
+    return load_cfn(TPL)
 
 
 def _statements(doc: dict) -> list[dict]:

@@ -22,6 +22,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from cfn_yaml import load_cfn
+
 ROOT = Path(__file__).resolve().parents[1]
 ACT = ROOT / "dr-plan-generator" / "worker" / "activities.py"
 PERM = ROOT / "infra" / "dr-korea" / "07-worker-permissions.yaml"
@@ -76,15 +78,12 @@ class TestLifecycleCounting:
 class TestAsgReadPermissionIsJustified:
     @pytest.fixture(scope="class")
     def perm(self) -> dict:
-        class _L(yaml.SafeLoader):
-            pass
-
-        # CFN 短标签（!Sub / !Ref）在纯 YAML 里不合法，当普通标量处理。
-        for tag in ("!Sub", "!Ref", "!GetAtt", "!Join", "!Select", "!Split"):
-            _L.add_constructor(
-                tag, lambda loader, node: loader.construct_scalar(node)
-            )
-        return yaml.load(PERM.read_text(encoding="utf-8"), Loader=_L)
+        # 解析走 tests/cfn_yaml.py 的单一来源。
+        # 这里原来是一份只处理标量节点的本地实现 —— 它读不了
+        # `!Select [1, !Split […]]` 那样带序列参数的短标签，
+        # 而失败方式是 pytest **ERROR**（fixture 就挂了），
+        # 整组测试被跳过，门禁变成什么都没守。
+        return load_cfn(PERM)
 
     def _stmt(self, perm: dict, sid: str) -> dict:
         for r in perm["Resources"].values():

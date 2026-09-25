@@ -27,18 +27,16 @@ from pathlib import Path
 import pytest
 import yaml
 
+from cfn_yaml import load_cfn
+
 ROOT = Path(__file__).resolve().parents[1]
 REPL = ROOT / "infra" / "dr-korea" / "09-ecr-replication.yaml"
 REPOS = ROOT / "infra" / "dr-korea" / "10-ecr-korea-repos.yaml"
 
 
 def _load(path: Path) -> dict:
-    class _L(yaml.SafeLoader):
-        pass
-
-    for tag in ("!Sub", "!Ref", "!GetAtt", "!Join", "!Select", "!Split"):
-        _L.add_constructor(tag, lambda loader, node: loader.construct_scalar(node))
-    return yaml.load(path.read_text(encoding="utf-8"), Loader=_L)
+    # 解析走 tests/cfn_yaml.py 的单一来源（原来是本地只处理标量的实现）。
+    return load_cfn(path)
 
 
 @pytest.fixture(scope="module")
