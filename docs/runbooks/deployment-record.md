@@ -1787,6 +1787,118 @@ aws cloudformation delete-stack --region ap-northeast-1 --stack-name dr-ecr-repl
 
 ---
 
+
+### 4.18 给 7 个 IRSA 角色补上韩国集群的 OIDC provider
+
+**日期**:2026-09-25 ｜ **这是「只在真切换时才炸」的那一类缺陷**
+
+#### ① 缺陷的形状
+
+petsite 的 7 个业务服务全走 IRSA。信任链是:
+
+```
+pod → SA token（由**集群自己的** OIDC issuer 签发）
+    → sts:AssumeRoleWithWebIdentity
+    → IAM 校验签发者是不是一个**已注册的 OIDC provider**
+```
+
+实测 `list-open-id-connect-providers`:2 个 `ap-northeast-1` + 2 个 `us-west-2`,
+**一个 `ap-northeast-2` 都没有**。
+
+后果的形状很坏:把清单照抄到韩国,pod **能起来**、能过健康检查的前半段,
+然后每一次 AWS 调用都 403。**切换前做静态检查完全看不见这个缺陷。**
+
+#### ② 两个集群的 issuer
+
+| | issuer |
+|---|---|
+| 东京 PetSite | `…ap-northeast-1…/id/D355BAF17E25A2395709BCD682D10AFD` |
+| 韩国 | `…ap-northeast-2…/id/978D6D13181C50CF75450B933B976ADD` |
+
+#### ③ 建 provider(`11-irsa-korea-oidc.yaml`)
+
+从 API 模型查到 `CreateOpenIDConnectProvider` 的 required **只有 `['Url']`** ——
+`ThumbprintList` 不必填,AWS 自己取。所以刻意**不写死指纹**:写死的值会随 CA
+轮换而过期,而过期的表现也是 403,和「没注册」长得一样。
+
+部完核实 AWS 取到的是 `06b25927c42a721631c1efd9431e648fa62e1e39` ——
+与东京那个 provider 一致(同一个 Amazon 根 CA),算是个额外的 sanity check。
+
+`Url` 在 `createOnlyProperties` 里,改它等于重建资源。
+
+#### ④ 信任策略为什么不能用 CFN
+
+那 7 个角色是 `ServicesEks2` / `Applications` 栈建的,**CFN 改不了自己不拥有的
+资源**。所以走 `scripts/add_korea_irsa_trust.py`。
+
+`iam:UpdateAssumeRolePolicy` **替换整个文档**,写错就是把东京生产站点的 IRSA
+拆了。三条自保:
+
+1. **只追加** —— 读出现有文档 → 判断有没有韩国那条 → 没有才 append。
+   从不「按模板重新生成」一份
+2. **改前备份** —— 每个角色的原始文档存成带时间戳的 JSON
+3. **改后逐字核对** —— 读回来断言原有每一条都还在、只多了一条、
+   韩国那条确实写进去了。任何一条不满足就报错退出
+
+默认 dry-run,要 `--apply` 才真改,且 `--apply` 必须同时给 `--backup-dir`。
+
+#### ⑤ 刻意与东京那条不同:加了 `:sub`
+
+东京那条(CDK 生成的)**只限定 `:aud`** —— 也就是说该集群里**任何**
+ServiceAccount 都能 assume 那个角色。我给韩国加的那条额外限定:
+
+```
+<issuer>:sub = system:serviceaccount:petadoptions:<sa-name>
+```
+
+没顺手把东京那条也收紧:那是别的栈管的资源,改它会和那个栈的下一次部署打架。
+
+#### ⑥ 核实 —— 零节点就能验通
+
+IRSA 的本质是「集群签发的 SA token 换 STS 凭据」,而 token 由**控制面**签发。
+所以不需要起 pod、不需要节点、不需要找一个装了 AWS CLI 的镜像:
+
+```
+建 ns petadoptions                 HTTP 201
+建 SA petsite-sa（带 role-arn）     HTTP 201
+TokenRequest audience=sts…         HTTP 201，token 长度 977
+sts assume-role-with-web-identity  ✅
+  assumed: arn:aws:sts::…:assumed-role/Applications-PetSiteServiceAccount…/irsa-korea-verify
+```
+
+最后一步就是之前会 403 的那一步。
+
+**双向验证**(只证明「能用」不够,还要证明 `:sub` 真的限制住了):
+
+```
+用 not-petsite-sa 的 token 换 petsite 的角色 → AccessDenied ✅（应当被拒）
+用 petsite-sa   的 token 换 petsite 的角色 → 成功        ✅
+```
+
+**幂等验证**:脚本连跑两遍,第二遍「0 改动 / 7 跳过」。
+
+**全量抽查**:7 个角色逐个确认「东京 1 条 + 韩国 1 条 + sub 与 SA 名一致」。
+
+#### ⑦ 临时提权
+
+建 ns/SA 需要 cluster-admin,而 endpoint 是私有的。沿用 4.14 的引导式提权:
+临时关联 `AmazonEKSClusterAdminPolicy` → 操作 → **立刻摘掉**,
+核实 `list-associated-access-policies` 返回空数组。
+
+⚠️ 这次**主动等了 25 秒**再用 —— 上一轮(4.17)就是没等 IAM 传播而误判。
+
+#### ⑧ 回滚
+
+```bash
+# ⚠️ 销毁类命令 —— 只记录不执行
+# 信任策略:备份在 $KIROCREW_SCRATCH/irsa-backup/<role>.<stamp>.json
+#   aws iam update-assume-role-policy --role-name <role> \
+#     --policy-document file://<那个备份文件>
+# provider 是 DeletionPolicy: Retain，删栈不会删它
+```
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
