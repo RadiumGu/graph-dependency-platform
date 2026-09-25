@@ -3323,6 +3323,21 @@ controller 就绪   service/zz-probe-svc created
 
 节点组 `desiredSize=0`,临时提权已摘并核实空数组。
 
+#### ⑦ 缩容后 addon 变成 `DEGRADED` —— 静息常态,不是缺陷
+
+```
+status  DEGRADED
+health  InsufficientNumberOfReplicas
+        "one or more pods is not scheduled: 0/1 pods available.
+         Pods are unscheduled because: no nodes available to schedule pods"
+```
+
+**这与「ALB 目标在静息是 unhealthy」是同一类陷阱**:一个长得像故障的常态读数。
+两者的共同要害是**都无法区分「正常休眠」与「切换失败」** ——
+所以判断守夜灯健康不能看它们,要看栈还在、数据库复制还活着。
+
+已写进交接文档的「二之二」节。
+
 ---
 
 ### 4.31 第⑦项 交接文档
