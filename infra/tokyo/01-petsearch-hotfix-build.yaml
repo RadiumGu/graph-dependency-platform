@@ -1,0 +1,164 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  petsearch-java 的热修镜像构建（东京 ap-northeast-1）。
+
+  用途：把 2026-09-26 合并的「残缺记录容错」修复真正构建成可部署的镜像。
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 为什么需要这个栈
+#
+# 线上 search-service 跑的是 **CDK asset 镜像**：
+#   cdk-hnb659fds-container-assets-926093770964-ap-northeast-1:012a95fb34e6…
+#   digest sha256:2983db73c18055b27bc9aefb7c7f937778ba59b8c58dd0a5b54a21aba73e69bd
+# tag 是内容哈希，由 `cdk deploy` 生成。所以让修复上线只有两条路：
+#
+#   ① cdk deploy ServicesEks2 —— **已被证明不安全**：线上 443 监听器上的
+#      Cognito 认证规则与 X-Demo-Bypass 旁路全是手工加的（CDK 里零命中），
+#      整栈部署会把它们收敛掉（见 deployment-record 4.32 / 4.35 ⑧）
+#   ② 自己构建镜像 + 直接 patch Deployment 的 image —— 本栈走这条
+#
+# ⚠️ ② 是**停一步的权宜之计**，不是终局：下一次 cdk deploy 会把 image 覆盖回
+#    asset 镜像。但那时 asset 会从**已含修复的源码**重新构建，所以覆盖不是退步。
+#    这一点必须写下来，否则后人会把「image 被改回去了」当成回归。
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# 三个刻意的选择
+#
+# 1. **原生 arm64 构建环境**（ARM_CONTAINER + aarch64 标准镜像），
+#    不是 x86 上跑 buildx 模拟。Dockerfile 里 `--platform=linux/arm64` 是钉死的，
+#    本项目所有容器必须是 arm64；模拟构建能成但更慢，而且产物与原生构建
+#    不保证逐字节一致 —— 灾备/热修场景下少一个变量更好。
+#
+# 2. **新命名的 ECR 仓库 petsearch-java-hotfix**，刻意不叫 petsearch-java。
+#    SSM 里有个悬空参数 /petstore/searchimage = petsearch-java:latest，
+#    指向一个两个 region 都不存在的仓库。用那个名字会让它突然解析成功 ——
+#    而谁在读它、读到之后做什么，我没有查清。**不制造未知副作用。**
+#
+# 3. **源是公开的 GitHub 仓库，不配任何凭据**。RadiumGu/one-observability-demo
+#    是 public，CodeBuild 直接拉即可，所以这个栈不需要 GitHub token、
+#    也不需要建 OIDC 提供者（账号里现有的 5 个 OIDC 提供者全是 EKS 的）。
+# ══════════════════════════════════════════════════════════════════════════════
+
+Parameters:
+  RepoUrl:
+    Type: String
+    Default: https://github.com/RadiumGu/one-observability-demo.git
+  SourceBranch:
+    Type: String
+    Default: main
+    Description: 修复已于 2026-09-26 合并到 main（f15f7194 + 851d352a）
+  EcrRepoName:
+    Type: String
+    Default: petsearch-java-hotfix
+  BuildContext:
+    Type: String
+    Default: PetAdoptions/petsearch-java
+
+Resources:
+
+  HotfixRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref EcrRepoName
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      # 只保留最近 5 个 —— 热修仓库不该无限长胖。
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"keep last 5",
+          "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":5},
+          "action":{"type":"expire"}}]}
+
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: petsearch-hotfix-build
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: codebuild.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BuildAndPush
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*
+              # ECR 推送：范围限定到这一个仓库，不给 repository/*。
+              # ⚠️ DescribeImages 是 2026-09-26 首次构建后补的：第一次漏了它，
+              #    结果镜像**已经构建并推送成功**，却在最后那条核实命令上
+              #    AccessDenied，整个 build 被判 FAILED。
+              #    教训：构建脚本里的「核实步骤」本身也需要权限，
+              #    而它失败的表现是「构建失败」—— 会让人以为产物没出来。
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:CompleteLayerUpload
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:DescribeImages
+                Resource: !GetAtt HotfixRepo.Arn
+              # GetAuthorizationToken 只支持 Resource: *（服务限制，不是偷懒）。
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: petsearch-java-hotfix-build
+      Description: 构建含残缺记录容错的 petsearch-java 镜像（arm64）
+      ServiceRole: !GetAtt BuildRole.Arn
+      Artifacts: {Type: NO_ARTIFACTS}
+      Source:
+        Type: GITHUB
+        Location: !Ref RepoUrl
+        BuildSpec: !Sub |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+                # 用提交短 SHA 作 tag —— :latest 说不出「跑的是哪一版」，
+                # 而回滚时需要能指名一个具体版本。
+                - export TAG=$(git rev-parse --short HEAD)
+                - echo "building from commit $TAG"
+                # 构建前先证明修复真的在源码里。少了这一步，一次搞错分支的
+                # 构建会产出一个「看起来是热修」而实际没有修复的镜像。
+                - grep -q 'REQUIRED_PET_ATTRIBUTES' ${BuildContext}/src/main/java/ca/petsearch/controllers/SearchController.java
+                - grep -q 'petsSkippedMalformed' ${BuildContext}/src/main/java/ca/petsearch/MetricEmitter.java
+                - echo "fix confirmed present in source"
+            build:
+              commands:
+                - cd ${BuildContext}
+                - docker build -t ${EcrRepoName}:$TAG .
+            post_build:
+              commands:
+                - export URI=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrRepoName}
+                - docker tag ${EcrRepoName}:$TAG $URI:$TAG
+                - docker push $URI:$TAG
+                - aws ecr describe-images --region ${AWS::Region} --repository-name ${EcrRepoName} --image-ids imageTag=$TAG --query 'imageDetails[0].{digest:imageDigest,arch:imageManifestMediaType}' --output json
+      SourceVersion: !Ref SourceBranch
+      Environment:
+        # 原生 arm64。ARM_CONTAINER + aarch64 标准镜像，不做跨架构模拟。
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_LARGE
+        Image: aws/codebuild/amazonlinux2-aarch64-standard:3.0
+        PrivilegedMode: true      # docker build 需要
+      TimeoutInMinutes: 30
+
+Outputs:
+  ProjectName:
+    Value: !Ref BuildProject
+  EcrRepoUri:
+    Value: !GetAtt HotfixRepo.RepositoryUri
+  RollbackAnchor:
+    Description: 回滚用 —— 当前线上镜像（patch 前）
+    Value: 926093770964.dkr.ecr.ap-northeast-1.amazonaws.com/cdk-hnb659fds-container-assets-926093770964-ap-northeast-1@sha256:2983db73c18055b27bc9aefb7c7f937778ba59b8c58dd0a5b54a21aba73e69bd
