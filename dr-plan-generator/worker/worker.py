@@ -51,9 +51,11 @@ from temporalio.worker import Worker
 from activities import (
     fetch_plan_body,
     promote_database,
+    put_plan_version,
     scale_up_nodegroup,
     verify_step,
 )
+from plan_workflow import DrPlanWorkflow
 from workflows import (
     DrFailoverWorkflow,
     FetchPlanWorkflow,
@@ -89,6 +91,13 @@ def _search_attribute_types() -> dict[str, int]:
         "DRDryRun": T.INDEXED_VALUE_TYPE_BOOL,
         "DRStepName": T.INDEXED_VALUE_TYPE_KEYWORD,
         "DRDecision": T.INDEXED_VALUE_TYPE_KEYWORD,
+        # ── 计划评审生命周期（DrPlanWorkflow）────────────────────────────
+        # 加这三个是为了让「哪些计划正等着审批 / 演练过了没有」成为一条
+        # 查询，而不是一次翻历史：
+        #     temporal workflow list --query 'DRPlanState = "draft"'
+        "DRPlanId": T.INDEXED_VALUE_TYPE_KEYWORD,
+        "DRPlanVersion": T.INDEXED_VALUE_TYPE_INT,
+        "DRPlanState": T.INDEXED_VALUE_TYPE_KEYWORD,
     }
 
 
@@ -168,6 +177,9 @@ async def main() -> None:
         # 否则父起子时会一直等一个不存在的 handler —— 而那正是
         # 「启动成功不等于在执行」那类静默卡死。
         workflows=[
+            # 计划评审生命周期。它会以子 workflow 的形式起 DrFailoverWorkflow，
+            # 所以两者必须注册在**同一个**队列上。
+            DrPlanWorkflow,
             DrFailoverWorkflow,
             FetchPlanWorkflow,
             ScaleNodegroupWorkflow,
@@ -176,6 +188,7 @@ async def main() -> None:
         ],
         activities=[
             fetch_plan_body,
+            put_plan_version,
             scale_up_nodegroup,
             promote_database,
             verify_step,

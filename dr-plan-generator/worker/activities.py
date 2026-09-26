@@ -274,6 +274,100 @@ async def fetch_plan_body(inp: ActivityInput) -> StepResult:
     )
 
 
+# ── ①b 写入一版计划正文（计划评审生命周期用） ──────────────────────────────
+
+
+@dataclass
+class PlanVersionInput:
+    plan_id: str
+    version: int
+    body: str
+    #: 由 workflow 侧算好传进来 —— 让写入方与审计链用**同一个**摘要，
+    #: 而不是各算一次（各算一次时两边不一致就无从判断谁对）。
+    sha256: str
+
+
+@activity.defn
+async def put_plan_version(inp: PlanVersionInput) -> StepResult:
+    """把一版计划正文写成**不可覆盖**的 S3 对象。
+
+    ## 为什么必须拒绝覆盖
+
+    键是 `plans/<plan_id>/v<N>.md`，与 `fetch_plan_body` 的 `plans/<ref>.md`
+    规则一致（`plan_ref = "<plan_id>/v<N>"`），所以执行路径不用改。
+
+    但**允许覆盖会直接毁掉审计**：审计链里记的是「v2 的 sha256 是 X」，
+    如果 v2 这个键能被改写，那么"被批准并演练过的 v2"和"实际被执行的 v2"
+    可以是两份不同的文件，而 history 里看不出任何异样。所以这里用
+    `IfNoneMatch="*"` 让服务端做条件写，冲突时**响亮失败**。
+
+    幂等性靠摘要而不是靠"写了就算"：键已存在且 sha256 相同 -> 视为同一次
+    写入已完成（activity 重试是正常的）；相同键但内容不同 -> 拒绝。
+    """
+    key = f"plans/{inp.plan_id}/v{inp.version}.md"
+    cmd = (
+        f"aws s3api put-object --bucket {_PLAN_BUCKET or '<DR_PLAN_BUCKET 未设>'} "
+        f"--key {key} --if-none-match '*'"
+    )
+
+    if not _PLAN_BUCKET:
+        # 没有桶时**不能**静默成功：计划评审链会以为正文已落盘，
+        # 而真执行时 fetch_plan_body 会取不到。
+        raise RuntimeError(
+            "DR_PLAN_BUCKET 未设置，无法写入计划正文。"
+            "这一步静默跳过的后果是：评审链显示计划已存在，而真切换时取不到正文。"
+        )
+
+    s3 = _boto3().client("s3", region_name=_REGION)
+    data = inp.body.encode("utf-8")
+
+    try:
+        s3.put_object(
+            Bucket=_PLAN_BUCKET,
+            Key=key,
+            Body=data,
+            ContentType="text/markdown; charset=utf-8",
+            # 条件写：键已存在即失败。S3 在 2024-11 起支持这个头。
+            IfNoneMatch="*",
+            Metadata={"sha256": inp.sha256, "plan-id": inp.plan_id,
+                      "version": str(inp.version)},
+        )
+        return StepResult(
+            step="put_plan_version",
+            executed=True,
+            would_run=[cmd],
+            detail={"s3_key": key, "bytes": len(data), "sha256": inp.sha256},
+            verified=True,
+            detail_note="条件写成功，说明这个版本号此前不存在（不是覆盖）。",
+        )
+    except Exception as e:  # noqa: BLE001
+        name = type(e).__name__
+        code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
+        if code not in ("PreconditionFailed", "ConditionalRequestConflict"):
+            raise
+
+        # 键已存在。区分两件事：activity 重试（同内容）与真冲突（不同内容）。
+        head = s3.head_object(Bucket=_PLAN_BUCKET, Key=key)
+        existing = (head.get("Metadata") or {}).get("sha256", "")
+        if existing == inp.sha256:
+            return StepResult(
+                step="put_plan_version",
+                executed=False,
+                would_run=[cmd],
+                detail={"s3_key": key, "bytes": len(data), "sha256": inp.sha256},
+                verified=True,
+                detail_note=(
+                    "该版本已存在且摘要一致 —— 判为本次写入的重试，不是冲突。"
+                ),
+            )
+        raise RuntimeError(
+            f"{key} 已存在且内容不同（已有 sha256={existing[:12]}…，"
+            f"本次 {inp.sha256[:12]}…）。计划版本是不可覆盖的："
+            "允许覆盖意味着「被批准并演练过的那一版」与「真执行时取到的那一版」"
+            f"可以是两份不同的文件，而审计链看不出异样。原始错误：{name}"
+        )
+
+
 # ── ② 拉起 EKS 节点组 ─────────────────────────────────────────────────────
 
 
