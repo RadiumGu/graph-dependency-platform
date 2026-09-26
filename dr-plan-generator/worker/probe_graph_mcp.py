@@ -99,8 +99,11 @@ def main() -> int:
         print(f"  ✗ {e}")
         return 1
     print(f"  ✓ {len(tools)} 个工具")
-    tools = {t["name"]: t for t in tools}
     print(f"  首个工具的形状：{shape(tools[0])}")
+    # 转成 name -> tool 便于下面按名字读 inputSchema。
+    # 注意顺序：上一行还要用 tools[0]，转换必须在它之后 ——
+    # 这里我先转后用过一次，python 报 KeyError: 0。
+    tools = {t["name"]: t for t in tools}
     names = list(tools)
     print(f"\n  快照要用的那 {len(g.SNAPSHOT_QUERIES)} 条是否都在：")
     missing = []
