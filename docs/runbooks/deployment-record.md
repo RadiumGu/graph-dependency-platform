@@ -3803,7 +3803,7 @@ VPC 内 PUT            HTTP 200 success
 ```
 temporal.rainmeadows.com
   → 东京公网 ALB Servic-PetSi-by0kpyBtxswj（复用）
-  → 443 监听器优先级 15 规则（新增）
+  → 443 监听器优先级 4 规则（新增，最初建为 15，见 ⑪）
       动作 1  authenticate-cognito（复用 openclaw-users 池）
       动作 2  forward → dr-temporal-ui-tg（新增）
   → 跨 region VPC 对等 pcx-09fc849e6ac38e7e1
@@ -3907,13 +3907,89 @@ temporal.rainmeadows.com   CNAME   Servic-PetSi-by0kpyBtxswj-1910028459.ap-north
 ```
 对等         pcx-09fc849e6ac38e7e1   (11.0.0.0/16 ↔ 10.20.0.0/16, active)
 目标组       dr-temporal-ui-tg       target-type ip, AvailabilityZone=all
-监听器规则   优先级 15，host-header temporal.rainmeadows.com
+监听器规则   优先级 4，host-header temporal.rainmeadows.com（最初 15，见 ⑪）
 SG 规则      sgr-021fef09a3175df20 / sgr-0fa4fbd3a83ed9c0b
 Cognito      回调追加 https://temporal.rainmeadows.com/oauth2/idpresponse
 ```
 
 ---
 
+
+---
+
+#### ⑩ DNS 已加,端到端验证通过(2026-09-26 07:05 UTC)
+
+用户在 Cloudflare 上加好了记录。**那个域名的 DNS 不在 AWS** ——
+权威 NS 是 `sergi.ns.cloudflare.com` / `cloe.ns.cloudflare.com`,
+本账号唯一的托管区 `demo.com.` 是**私有区**(只绑 us-east-1 的一个 VPC),
+而公网真正的 `demo.com` NS 也不是我们的 —— 所以「换个我们能控的域名」这条路不存在。
+
+```
+dig temporal.rainmeadows.com
+  temporal.rainmeadows.com.  300  CNAME  servic-petsi-by0kpybtxswj-…elb.amazonaws.com.
+                                    A    13.112.19.234 / 3.114.235.208
+未登录访问     302 → openclaw-auth-1739343674.auth.…amazoncognito.com/oauth2/authorize
+               redirect_uri=https%3A%2F%2Ftemporal.rainmeadows.com%2Foauth2%2Fidpresponse
+               set-cookie: AWSALBAuthNonce=…
+TLS            ssl_verify=0（通配符证书覆盖子域）
+跟随重定向     200  <title>Signin</title>   9552 字节
+**对照（四个入口都在）**
+  temporal.rainmeadows.com/  302 ｜ rainmeadows.com/  302
+  /streamlit/  302 ｜ /graph/  302
+```
+
+**解析出的是 AWS 地址而不是 Cloudflare 地址**,所以是灰云(DNS-only)
+而不是橙云代理 —— 与其余三个入口同构,TLS 仍由 ALB 用它已有的通配符证书终止。
+
+##### 为什么坚持 CNAME 而不是 A 记录
+
+现有 apex 是 A 记录直指 IP,而它解析出的**正好是 ALB 当前的两个地址** ——
+那是 Cloudflare 在 apex 上做 **CNAME 展平**(apex 不能写 CNAME)。
+`temporal` 是子域,不需要展平。
+
+而手写 A 记录会**静默失效**,有现成证据:EIP `3.114.52.64` 挂在这个 ALB 的
+一个 ENI 上,但 ALB 现在**根本不解析到它**(解析到 `13.112.19.234` 与
+`3.114.235.208`)。**这个 ALB 的地址集已经轮换过。** 轮换原因没查,
+但「IP 会变」是观测到的事实,不是推断。
+
+#### ⑪ ⚠️ 主机规则被路径规则抢走:优先级 15 → 4
+
+DNS 通了之后复核规则顺序才发现的:
+
+```
+优先级 10   AUTH   path=/graph*    无主机条件   → neptune-ui-tg
+优先级 15   AUTH   host=temporal   无路径条件   → dr-temporal-ui-tg   ← 建规则时的位置
+```
+
+ALB 按优先级顺序取**首个匹配**,所以 `temporal.rainmeadows.com/graph`
+会被**规则 10 抢走**转给 Neptune UI,而不是 Temporal UI。
+
+**我建规则时只核对了「15 在 20 和 default 之前」,没看 10 在它之前。**
+判断一条新规则的位置,要看的是**它与所有更小优先级规则的条件交集**,
+而不是只看它排在哪些规则前面。
+
+改成优先级 4 后的完整顺序:
+
+```
+  1  NO-AUTH  path=/streamlit*  hdr=X-Demo-Bypass  → streamlit-demo-tg
+  2  NO-AUTH  path=/graph*      hdr=X-Demo-Bypass  → neptune-ui-tg
+  3  NO-AUTH  （任意路径）       hdr=X-Demo-Bypass  → petsite
+  4  AUTH     host=temporal.rainmeadows.com        → dr-temporal-ui-tg   ← 现在
+ 10  AUTH     path=/graph*                        → neptune-ui-tg
+ 20  AUTH     path=/streamlit*                    → streamlit-demo-tg
+default AUTH                                      → petsite
+```
+
+**刻意放在旁路规则 1/2/3 之后,不是疏漏。** 带 `X-Demo-Bypass` 头的请求
+会先命中规则 3 转给 petsite —— 也就是说**那个旁路到不了 Temporal UI**。
+把 Temporal 规则提到 1 之前会让旁路头直达一个无认证、写操作开启的 UI。
+
+> ⚠️ **这条修复的效果外部不可验证**:规则 10 与规则 4 都带
+> `authenticate-cognito`,未登录访问两者都返回 302,从外面分不出命中了哪条。
+> 结论来自 ALB 规则优先级语义(首个匹配),**不是测量**。
+> 能测的部分已测:改完四个入口仍全部 302,没弄坏任何现有入口。
+
+---
 
 ### 4.36 ⚠️ 我造成的一次东京生产故障(约 22 分钟领养全停)+ 一次静默部分失败
 
@@ -4019,6 +4095,139 @@ Count 24    4XX 8      ← 每 24 次请求有 8 次被拒，稳定的 1/3
 线上优先级 1/2/3 三条规则带这个请求头就**完全跳过 Cognito**,令牌值由
 `describe-rules` 明文返回。它不是我建的,而且删掉可能打断别人的演示流程 ——
 **这是一次「影响共享系统」的改动,需要用户拍板,我不自行删除。**
+
+---
+
+---
+
+### 4.37 另一个 agent 的事故报告:交叉核实与三处订正
+
+**日期**:2026-09-26 07:0x UTC ｜ 来源:非本会话的一个 agent,转来一份处置说明,
+另留两份文档在 `/home/ec2-user/.kiro/crew/scratch/runtime-e92d0210/`
+(`incident-20260926-search-npe.md`、`petsite-data-write-paths-for-dr.md`)。
+
+#### ① 它把 NPE 机制读到了源码级,比我当时的判断精确一层
+
+我当时写的是「search-service 扫表时对缺失字段 NPE」。它读到的是:
+
+```
+mapToPet 对七个属性无条件 .getS()
+  → 异常穿出 stream 被 throw e 重抛
+    → 整个 /api/search 返回 500
+      → 26 条正常记录一起丢掉
+```
+
+**关键差别:不是那一条坏,是那一条让整批一起坏。** 一条脏数据打挂整站,
+而写入门槛是一次匿名 HTTP 请求。我的版本没有说清「为什么影响面是全站
+而不是一条」,这一条订正到它的口径。
+
+#### ② 故障窗口两个口径都保留,不强行统一
+
+```
+它的读数   04:00:46 → 04:20:39   约 20 分钟   4 条告警     ← 按告警窗口
+我的读数   03:55（最后一次成功领养）→ 04:27   约 22 分钟   ← 按业务中断
+```
+
+两者量的不是同一件事,**谁都不是错的** —— 告警窗口起于探测器发现,
+业务中断起于最后一次成功。混成一个数字会让下次复盘对不上账。
+
+#### ③ 它实证了我方一条原本是推断的断言
+
+`test_110_korea_statusupdater.py` 里那条:
+
+```python
+assert_contains(record, "**「同名全局表」意味着灾备侧不是隔离副本**")
+```
+
+它在 `ap-northeast-2` 查同一主键,**内容一模一样,当时首尔首页也是挂的**。
+这条断言原本是从全局表语义推出来的,现在有了实测。
+**全局表把「一条脏数据」同步成了「两个 region 同时挂」** —— 灾备侧不提供隔离。
+
+#### ④ 探针命名不一致:不是残留,是两次不同的探针
+
+它指出我测试里写的是 `NONEXISTENT-probe-do-not-use`,而打挂站点的是
+`NONEXISTENT-verify-closed`,怀疑还有遗留。查清了,**两条都是我写的,
+分属两次不同动作,各自已有记录**:
+
+```
+NONEXISTENT-probe-do-not-use   韩国网关 VPC 内探针   记录 4.35 节   门禁 test_110
+NONEXISTENT-verify-closed      东京公网探针（事故）   记录 4.36 节   门禁 test_112
+```
+
+按它的建议把三张表两侧全扫了一遍(用**属性数分布**找残缺行,而不是按名字找 ——
+名字判据只能找到我记得的那几个):
+
+```
+                              东京                    首尔
+petadoption    26 条  属性数分布 {7: 26}      26 条  {7: 26}     残缺 0  可疑命名 0
+petfoodfoods    9 条  属性数分布 {14: 9}       9 条  {14: 9}     残缺 0  可疑命名 0
+petfoodcarts    0 条                          0 条              残缺 0  可疑命名 0
+```
+
+**属性数分布单一值 = 全表形状一致**,这比「扫不到我知道的那几个名字」强得多。
+
+#### ⑤ 共用工作树:它的 `git checkout --` 没有丢掉我方任何东西
+
+它在 `/home/ec2-user/works/one-observability-demo`(分支
+`fix/waggle-session-id-validation`)上编辑过 3 个 `petsearch-java` 文件后
+`git checkout --` 还原,并主动问我方是否有未提交改动被丢。三条独立事实闭合:
+
+```
+① 我方提交 e9a0dd1a 只碰 petsite/Controllers/WaggleController.cs
+② git diff main...HEAD -- PetAdoptions/petsearch-java/  → 空（本分支从未改过该目录）
+③ 那 3 个文件最后提交为 74817acc(09-04) 与 495ede0e(03-28)，都早于我方工作
+④ 我方 4 处未提交改动仍在：doc/topology-ap-northeast-1.md（M）+ 三个未跟踪文件
+```
+
+> ⚠️ **我无法直接观测它编辑之前的工作区**。结论靠的是上面四条的合力 ——
+> 尤其「5 处未提交改动 = 1 处已提交(WaggleController.cs) + 4 处仍在」
+> 这笔账是平的,没有第五处落在 `petsearch-java` 里。
+
+#### ⑥ 它的代码修复:方向对,但**不许当作已验证**
+
+分支 `fix/petsearch-skip-malformed-items`(`fa263fbc`,3 文件 / 145 增 / 2 删):
+`mapToPet` 对残缺条目返回 `null`,调用方 `filter(Objects::nonNull)` 滤掉。
+
+**跳过而不补默认值是对的** —— 补默认值会把脏数据渲染成一只 0 元无图的宠物,
+让上游问题**永久隐身**。这与本仓库反复出现的「全绿但不能服务」是同一个道理:
+让故障可见比让页面好看重要。
+
+它新加的 `petsSkippedMalformed`(LongCounter,`> 0` 即可告警)
+**可以直接进 DR 验证清单** —— 那是目前唯一能在「页面 200、Pod 健康、
+目标组 healthy」的情况下把脏数据暴露出来的信号。
+
+两个必须写明的边界:
+
+```
+基点        基于 fix/waggle-session-id-validation，不是 origin/main
+            因为 SearchQuery.java 只存在于那条分支（74817acc 是 WIP，5 个冲突文件未合）
+            → 合并它之前必须先落地那条分支
+未验证      本机无 JDK、无 docker → 没编译、没跑 IT、没重建镜像
+            只做了结构性静态检查 → 上线前必须实际编译并跑一遍 IT
+```
+
+它还自报第一次推的分支基点选错(`691033c0`:文件取新版、基点取旧版,
+diff 膨胀成 35 文件 / 390 增 / 667 删,等于回退掉全部 petsearch-java 工作,
+还删掉了自己代码引用的 `SearchQuery.java`,那个版本根本编译不过),
+已用正确基点重建覆盖。**自报这一类错误值得记** —— 它的表现形态
+(diff 规模异常膨胀)恰好是判据:改 3 个文件的分支不该有 35 文件的 diff。
+
+#### ⑦ 盲区结构第三次重复
+
+```
+信号                     故障期间读数
+search-service Pod       2/2 Running   RESTARTS=0
+ALB 目标组               healthy（健康检查不读业务数据）
+ALB Target_5XX           无数据（petsite 把 500 包成 200 错误页）
+业务探针                 失败  ← 唯一发现它的
+```
+
+它指出同一盲区结构 2026-09-15 出现过(两轮 `alarm=empty_home`,`html=10561`),
+09-25 的 Aurora 只读窗口也是同一形状,本次是**第三次**。
+
+**结论写进 DR 验证点:Pod 状态与目标组健康都不构成「能服务」的判据,
+唯一判据是逐个业务页面打一遍看 `<title>`。** 这与 4.30 记的第五种
+「全绿但不能服务」是同一条,但那时我只写了 ALB 指标,没写 Pod 与目标组。
 
 ---
 

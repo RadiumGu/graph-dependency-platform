@@ -123,3 +123,41 @@ class TestRemainingExposureNotMarkedFixed:
     def test_other_projects_not_touched(self, section: str):
         """别的项目的资源只报不动。"""
         assert_contains(section, "不是我建的 —— 只报不动")
+
+
+class TestCrossAgentIncidentReport:
+    """4.37 —— 另一个 agent 的事故报告与我方交叉核实，守住三处订正与两条边界。"""
+
+    def test_blast_radius_mechanism_is_corrected(self, section: str):
+        """订正:不是那一条坏，是那一条让整批一起坏 —— 否则解释不了全站影响。"""
+        assert_contains(section, "不是那一条坏,是那一条让整批一起坏")
+
+    def test_both_outage_windows_are_kept(self, section: str):
+        """两个口径量的不是同一件事，混成一个数字会让下次复盘对不上账。"""
+        assert_contains(section, "两者量的不是同一件事")
+
+    def test_global_table_not_isolated_is_now_measured(self, section: str):
+        """原本是推断的断言现在有实测 —— 这条升级不许被改回推断。"""
+        assert_contains(section, "内容一模一样,当时首尔首页也是挂的")
+
+    def test_residue_scan_used_shape_not_names(self, section: str):
+        """按名字扫只能找到我记得的那几个 —— 判据必须是属性数分布。"""
+        assert_contains(section, "**属性数分布单一值 = 全表形状一致**")
+
+    def test_pre_edit_worktree_is_unobservable(self, section: str):
+        """不许把「四条事实的合力」写成「我看过它编辑前的工作区」。"""
+        assert_contains(section, "**我无法直接观测它编辑之前的工作区**")
+
+    def test_external_fix_is_not_marked_verified(self, section: str):
+        """本机无 JDK/docker —— 没编译没跑 IT，不许当作已验证。"""
+        assert_contains(section, "不许当作已验证")
+        assert_contains(section, "没编译、没跑 IT、没重建镜像")
+
+    def test_skip_beats_default_values(self, section: str):
+        """补默认值会让上游问题永久隐身 —— 这是采纳它方向的理由。"""
+        assert_contains(section, "**跳过而不补默认值是对的**")
+
+    def test_pod_and_target_group_are_not_service_criteria(self, section: str):
+        """盲区第三次重复 —— 判据只能是逐个业务页面看标题。"""
+        assert_contains(section, "本次是**第三次**")
+        assert_contains(section, "Pod 状态与目标组健康都不构成「能服务」的判据")

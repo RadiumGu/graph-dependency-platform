@@ -163,3 +163,32 @@ class TestRemainingGapsNotHidden:
     def test_verification_bypassed_dns(self, section: str):
         """用 curl --resolve 绕开 DNS 完整验证 —— 这个手法值得留着。"""
         assert_contains(section, "**绕开 DNS**")
+
+
+class TestDnsLandedAndPriorityConflict:
+    """DNS 加好之后的验证，以及复核规则顺序才发现的优先级抢占。"""
+
+    def test_grey_cloud_not_proxied_is_recorded(self, section: str):
+        """解析出 AWS 地址而非 Cloudflare 地址 —— 灰云是可核验的判据，不是习惯。"""
+        assert_contains(section, "所以是灰云(DNS-only)")
+
+    def test_a_record_would_go_stale_with_evidence(self, section: str):
+        """不用 A 记录的理由是观测到的地址轮换，不是「一般来说 ALB IP 会变」。"""
+        assert_contains(section, "这个 ALB 的地址集已经轮换过")
+
+    def test_the_priority_lesson_is_about_condition_overlap(self, section: str):
+        """教训不是「我填错了数字」，而是判据本身错了：只看排在谁前面不够。"""
+        assert_contains(section, "它与所有更小优先级规则的条件交集")
+
+    def test_bypass_cannot_reach_temporal_ui(self, section: str):
+        """放在旁路规则之后是刻意的 —— 提到 1 之前会让旁路头直达无认证 UI。"""
+        assert_contains(section, "那个旁路到不了 Temporal UI")
+
+    def test_the_fix_effect_is_marked_unverifiable(self, section: str):
+        """两条规则都 302，从外面分不出命中哪条 —— 不许写成已测量。"""
+        assert_contains(section, "结论来自 ALB 规则优先级语义(首个匹配)")
+
+    def test_recorded_priority_is_four_not_fifteen(self, section: str):
+        """资源清单里的优先级必须与线上一致，否则重建会重新引入抢占。"""
+        assert_contains(section, "优先级 4，host-header temporal.rainmeadows.com")
+        assert_contains(section, "主机规则被路径规则抢走:优先级 15 → 4")
