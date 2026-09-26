@@ -146,10 +146,25 @@ REWRITE_ENV = {
     #    **petsite**，真因在 petfood —— petfood 的 Deployment 还是 1/1 就绪。
     #    这就是为什么下面 fix_env 里加了兜底扫描:白名单只挡得住想到的名字。
     "PETFOOD_REGION": KOREA_REGION,
-    # 这三个是**资源名**（不是 ARN），值来自栈 dr-korea-backends 的输出。
-    # 照抄东京的名字会让 petfood 去查东京的表 —— 那些表在真灾难时不可达。
-    "PETFOOD_FOODS_TABLE_NAME": "dr-korea-petfood-foods",
-    "PETFOOD_CARTS_TABLE_NAME": "dr-korea-petfood-carts",
+    # ⚠️⚠️ 2026-09-26: 这里原先还改写两个 DynamoDB 表名 ——
+    #        "PETFOOD_FOODS_TABLE_NAME": "dr-korea-petfood-foods"
+    #        "PETFOOD_CARTS_TABLE_NAME": "dr-korea-petfood-carts"
+    #      **两条都删掉了**，因为那两张表已经转成 DynamoDB 全局表。
+    #
+    #      全局表的副本**必须与源表同名**（文档 V2globaltables_HowItWorks:
+    #      "All replicas in a global table share the same table name"）。
+    #      所以韩国侧那张表现在就叫 ServicesEks2-ddbpetfoodfoods… ——
+    #      与东京**逐字相同**。照抄东京的名字**正好就是对的**，
+    #      改写反而会指向一张已经退役的表。
+    #
+    #      这是全局表带来的真实简化:不再需要「按 region 改名字」这一层，
+    #      也不再需要 sync_korea_ddb_items.py 做单次数据复制 ——
+    #      实测东京写入约 2 秒后在韩国可读，双向。
+    #
+    #      ⚠️ 判据陷阱:如果哪天有人把这两行加回来，**症状不是报错**，
+    #      而是 petfood 静默去读一张不存在的表（ResourceNotFound），
+    #      或者更糟 —— 读到一张已退役但还没删的旧表里的陈旧数据。
+    #      test_109 守着这两行不许回来。
     "PETFOOD_EVENT_BUS_NAME": "dr-korea-petfood-eventbus",
 }
 
