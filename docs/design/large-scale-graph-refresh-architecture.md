@@ -356,9 +356,11 @@ Neptune（写主库）
 | `xray` + `appsignals-etl` | 都源自 AWS 的 trace／span 数据 |
 | `aws-etl` + `aws-etl-static` + `cfn-etl` + `eks-etl` | 都源自 AWS 控制面 API |
 
-**所以 `confirm_count` 必须按独立性分组计算**，不能简单数源的个数 —— 否则 `deepflow-dns` 与 `deepflow-l4` 同时确认会被当成两条独立证据，而它们实际只是一条。真正强的印证是**跨组**的，例如 eBPF 组 + trace 组同时看见。
+**所以 `confirm_count` 必须按独立性分组计算**,不能简单数源的个数 —— 否则 `deepflow-dns` 与 `deepflow-l4` 同时确认会被当成两条独立证据,而它们实际只是一条。真正强的印证是**跨组**的,例如 eBPF 组 + trace 组同时看见。
 
-契约的 `sources` 目前是**平铺列表，没有分组信息**。这是 §8.1 第 1 项要补的另一半：`confirmed_by` 记录确认源，而独立性分组要落进契约，判据从契约读而不在代码里硬编码 —— 与 `sparse_observation_sources` 已经确立的做法一致。
+⚠️ **本项目已经这么做了,这一段是在描述已有设计而非提出改进。** `edge_verification.py` 的 `_OBSERVER_MARKERS` 按源分组,三个 deepflow 源共享同一组 marker 因而只计一次；`_STATIC_SOURCES` 也有 `min(static, 2)` 上限（注释:「同一条边最多算两个静态源(aws + cfn)」）。详见 §8.1 第 1 项。
+
+契约的 `sources` 是平铺列表没有分组,但**分组事实上落在 `_OBSERVER_MARKERS` 里** —— 这与 `sparse_observation_sources` 那种「判据从契约读」的做法不一致,是个可以商量的一致性问题,但不是功能缺口。
 
 ### 4.1 问题：零流量不等于依赖不存在
 
@@ -557,13 +559,34 @@ Neptune（写主库）
 | 边总数 | > 50,000(现 9,293) | 失活对账与索引扫描开始有实际代价 |
 | `Pod` 节点占比 | 持续 > 80%(现 71%) | 低价值节点挤占图,该重审建模粒度 |
 
-### 8.1 第一阶段:先修「正在错」,不是「以后会错」
+### 8.1 第一阶段：这一节在更正后基本被清空了
 
-实测后的优先级与本文第一版完全不同 —— 第一版四项里三项前提不成立(§9)。真正紧迫的是图谱**当前**陈述的正确性。
+⚠️ **实测证明我列的三项里，两项「已实现」、一项「已查清且行为正确」。** 保留本节不是因为它有待做事项，而是为了记录**这些机制在哪、为什么那样设计** —— 以免下一个人重造它们（我自己就差点重造了两个）。
 
-1. **补多源交叉印证 —— 这是实测后唯一确认真正缺失的机制。** 契约 `sources` 列了 **13 个源**且全部在用,但 `source` 是刻意的 write-once,**只记首个发现者** —— 这个 provenance 语义是对的,`upsert_edge` 为它修过两次 bug,不该动。代价是图里看不出「有几个源确认了这条边」。
-   做法是新增 `confirmed_by`(所有确认源的集合,用 SET 基数天然幂等去重)与按独立性分组的 `confirm_count`,不碰 `source`。**这是零语义风险的纯增量改动,而且不需要等时间累积 —— 13 个源已经在跑,立刻就能产出置信度**,并给未验证的边排出验证优先级:单源支持的先验,跨组印证的可降级。
-   ⚠️ 独立性分组必须落进**契约**而非代码硬编码 —— 与 `sparse_observation_sources` 已确立的做法一致(见 §4.0.2)。
+第一版列的四项「纯代码改动」里三项前提不成立（§9.2）；第二版列的三项「先修正在错」里又有两项是已实现的（§9.3）。**结论：这个项目在依赖数据的正确性机制上比它的文档记录得更完整。**
+
+1. **~~补多源交叉印证~~ —— 已实现,且设计比我提的方案更优。不要动。**
+   实测 `chaos/code/runner/edge_verification.py` 的 `evidence_from_props()` **已经在做多源印证**,而且用的是比新增 `confirmed_by` 字段更巧妙的办法 —— **靠属性前缀反推哪些源观测过这条边**:
+
+   ```python
+   _OBSERVER_MARKERS = {
+       'xray':           ('xray_call_count', 'xray_last_seen'),
+       'nfm':            ('nfm_flow_count', 'nfm_last_seen'),
+       'deepflow':       ('calls', 'error_rate'),
+       'k8s-image-spec': ('image_ref',),
+   }
+   observing = sum(1 for markers in _OBSERVER_MARKERS.values()
+                   if any(m in props for m in markers))
+   ```
+
+   这个设计解决了三件事,而我提的 `confirmed_by` 方案只解决第一件：
+   - **不需要改 17 个写入点** —— 源写自己的度量属性时天然留下痕迹。
+   - **天然按独立性分组** —— `_OBSERVER_MARKERS` 的 key 就是分组。`deepflow-dns` / `deepflow-l4` / `deepflow-etl` 共享同一组 marker(`calls` / `error_rate`),`any()` 只算一次,**我在 §4.0.2 里担心的同源双报根本不会发生**。
+   - **有证据上限且有论文依据** —— `graph_confidence.py` 的证据模型是 log-odds 累加后 sigmoid,观测证据「每源 +0.5、**总量封顶 +1.5**」,封顶依据是 arXiv:2607.09449「样本越多越容易被虚假相关性诱导出假边」的临界阈值。注释写明:「不封顶的话,一条边只要 ETL 跑得够久就会变得"高置信"」。
+
+   而且「独立观测源数」已经是**两道门禁的输入**:存在性侧「有独立证据的边不得判 refuted」、强度侧「soft 需要独立证据」。
+   `k8s-image-spec` 单列一档的理由值得记住:「deepflow 的 `('calls','error_rate')` 语义是 eBPF 观测到的流量计数,而这类边来自镜像引用、不存在流量计数。**写假的 `calls` 等于伪造观测证据**」。
+   ⚠️ 唯一可能的小缺口:`appsignals-etl` 不在 `_OBSERVER_MARKERS` 里(仅 2 条边)。若它写的属性前缀与 `xray` 不同,其观测不被计数。值得核实但优先级低。
 2. **~~查清 inconclusive 率~~ —— 已查清,结论是「当前行为基本正确,但有 4 条可疑」。** 实测 16 条 inconclusive 的构成:
    - **9 条(56%)是结构性正确的 inconclusive**:6 条 `DependsOn` 的实验注记写着「cutting ECR affects only new Pod image pulls, not already-running Pods; **no runtime degradation observable**」—— 依赖真实存在但运行时观测不到降级,既不能判 confirmed 也不能判 refuted;3 条 `Calls` 是 trace 推断出的自环(「same-function edge; **no distinct downstream to partition**」),结构上无法验证。
    - **4 条可疑,值得单独查**:degradation 分别为 **24.66% / 66.67% / 100.0% / 0.37%** 却仍判 inconclusive。24% 与 66% 是相当明显的降级,判据为何不升为 confirmed 需要看验证器逻辑。
@@ -641,6 +664,7 @@ Neptune（写主库）
 | 「95% 的 `Pod` 顶点是幽灵」 | **1,466 个陈旧 Pod 全部被正确标记 `active=false`，一个不漏。** `expire_stale_nodes`（2026-09-04 为此专门新增）在生效，`GRAPH_NODE_EXPIRY_ENABLED` 线上为 `true` |
 | 「63% 的基础设施边是幽灵边」 | 结构边的 `expires_seconds: None` 注解写着「生命周期跟随两端节点」—— **不独立判活是设计而非缺口**，且节点侧机制已闭环 |
 | 「32 条 `manual-fix` 边不受任何机制管」 | 28 条是 `Incident -AffectedService-> Microservice`，**故障影响的历史记录天然不该有生命周期**。只有 4 条是依赖边 |
+| 「多源交叉印证是唯一确认真正缺失的机制」 | **也已实现，且设计更优。** `evidence_from_props()` 靠**属性前缀**反推观测源（`_OBSERVER_MARKERS`），天然按独立性分组 —— 三个 deepflow 源共享同一组 marker 只计一次，我担心的同源双报根本不会发生。且证据有上限（观测封顶 +1.5，依据 arXiv:2607.09449），比我提的 `confirmed_by` 方案多解决两个问题 |
 
 更严重的是文档本身：**本文第二版的 §4.0.1 把项目已实现并正在生效的机制写成了「待引入的新设计」。** `sparse_observation_sources` 段不仅存在，其注释里直接记录了 `nutrition-kb` 那次事故并给出 `drift_status=observed_then_silent` 的处置；`verify_blocked_reason`（四类取值）也已经在区分「不可验」与「没结论」。
 
@@ -656,10 +680,19 @@ Neptune（写主库）
 
 方向二（第三批）：
 - 看到一个数字异常（95% 陈旧）就断言机制缺失，而没去查那个机制是否存在、是否刻意如此
+- **连续四次**：Pod 幽灵、结构边幽灵、`manual-fix` 无生命周期、多源印证缺失 —— 四个都已实现或刻意如此
 
-**方向二的代价更高：它会导致重造已有的轮子，甚至可能删掉被刻意保留的数据。** 如果按「止血」去实现 Pod GC 并执行删除，会删掉 1,466 个被有意保留、且已正确标记的历史节点 —— 而那个"保留而非删除"正是 2026-09-04 那次设计的明确选择。
+**方向二的代价更高：它会导致重造已有的轮子，甚至可能删掉被刻意保留的数据。** 如果按「止血」去实现 Pod GC 并执行删除，会删掉 1,466 个被有意保留、且已正确标记的历史节点 —— 而那个"保留而非删除"正是 2026-09-04 那次设计的明确选择。多源印证那次更典型：我准备改 17 个写入点加 `confirmed_by`，而现有实现用属性前缀反推观测源，**不需要改任何写入点，还天然解决了同源双报**。
 
-`profiles/graph_contract.yaml` 是这类问题的权威来源：它的注释里写着事故记录、处置决定与实测代价。**断言某个机制缺失之前，先读契约。**
+三个应该先读的地方，按优先级：
+
+| 读什么 | 它回答什么 |
+|---|---|
+| `profiles/graph_contract.yaml` | 判据、事故记录、处置决定、实测代价。注释比代码更有信息量 |
+| `chaos/code/runner/edge_verification.py` + `infra/lambda/shared/python/graph_confidence.py` | 证据模型、置信度、多源印证、验证状态的全部逻辑 |
+| `infra/lambda/shared/python/graph_cleanup.py` | 节点／边的过期收敛 |
+
+**断言某个机制缺失之前，先读这三处。**
 
 修正三批错误用的实测总计不到两小时：`openCypher` 十余次、CloudWatch 一次、`explain` 两次、`git blame` 一次、读契约四段。代价不对称到这个程度，说明「先验后写」不是纪律问题而是效率问题。
 
