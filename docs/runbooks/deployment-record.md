@@ -4568,6 +4568,128 @@ testcontainers 依赖，CodeBuild 特权模式支持 docker-in-docker）——
 
 ---
 
+---
+
+### 4.40 根因：状态更新接口可以凭空造出一只宠物
+
+**日期**：2026-09-26 12:50–13:10 UTC ｜ 用户指令：「先查网关能不能挂请求校验，
+能就直接加上（但加上了要同步到 cdk 然后和韩国这边也同步）」
+
+#### ① 先订正我自己上一轮给出的建议
+
+上一轮我建议「在网关上加请求校验，它消灭的是整类残缺数据」。**那条建议是错的。**
+
+读了 Lambda 源码之后才知道真因：
+
+```js
+UpdateCommand({ Key: {pettype, petid}, UpdateExpression: 'set availability = :r' })
+```
+
+**DynamoDB 的 UpdateItem 是 upsert** —— 键不存在时它不报错，而是**创建**一条
+只含 `pettype` + `petid` + `availability` 的行。那正好就是事故里那条
+「只有 3 个属性的残缺行」。
+
+所以我那个探测请求的 body 是**完全合法的**（带 petid/pettype/petavailability），
+任何要求这几个字段的 JSON Schema 都会放它过去。**请求校验挡不住这次故障** ——
+伤害来自 upsert 语义，不来自畸形载荷。
+
+> 教训：「加一层校验」听起来总是对的，所以它很容易在没读被调用方代码时就被提出来。
+> 判断一个防护有没有用的唯一方法是问「那次真实请求会被它拦下吗」。
+> 这次的答案是不会。
+
+#### ② 网关校验还有一个致命障碍（即使它有用也不该那样加）
+
+`LambdaRestApi` 在 `proxy: true` 时会**把 `root.addMethod` 换成抛异常的函数**：
+
+```js
+props.proxy!==!1 && (this.root.addProxy(),
+  this.root.addMethod = addMethodThrows, ...)
+//  → "Cannot call 'addMethod' on a proxying LambdaRestApi; set 'proxy' to false"
+```
+
+改 `proxy:false` 再 `addProxy()` 可以绕过（已读源码确认能保持现有形态：
+root 会同时有显式 PUT 与 ANY，`{proxy+}` 仍是 ANY）。但**第二个障碍是致命的**：
+
+**用 CLI 在线上新建一个 `PUT /` 方法，CFN 无法接管已存在的资源 ——
+下一次 `cdk deploy` 会在创建 `AWS::ApiGateway::Method` 时失败。**
+那比漂移更糟：它把一个未来的部署变成定时炸弹。
+
+对比之下 Lambda 侧的修复**没有这个问题**：`update-function-code` 之后再
+`cdk deploy`，只是从已修好的源码重建同一份资产。
+
+#### ③ 真正的修复
+
+东京 `PetAdoptions/petstatusupdater/index.js` 与首尔本模板的内联代码，两侧同改：
+
+```
+ConditionExpression: 'attribute_exists(petid)'   → 键不存在时拒绝写入
+ConditionalCheckFailedException → 404 'pet not found'
+非 JSON body                    → 400（以前未捕获 → 502）
+缺 pettype/petid                → 400（以前 ValidationException → 502）
+```
+
+后两条把「调用方发错了东西」从 502 里摘出来 —— 502 会让人去查 Lambda，
+而真因在调用方。只有条件失败映射成 404，其它异常继续抛出，
+否则真正的故障会被伪装成「宠物不存在」。
+
+#### ④ 这次的回归保护是真的（与 4.39 相反）
+
+`petstatusupdater` 有 jest 测试，而且 **CI 真的跑它** ——
+`build-test.yml` 的 `paths` 与 `working-directory` 都覆盖 `petstatusupdater/`。
+用例从 3 个加到 8 个。
+
+反向验证：删掉那一行 `ConditionExpression`，`must send ConditionExpression`
+用例立刻挂。**判据是传给 UpdateCommand 的参数，不是返回码** ——
+因为缺了条件时接口返回码仍然是 200，那正是它两次都没被当场发现的原因。
+
+#### ⑤ 先首尔后东京，四种行为都实测过
+
+首尔那个 Lambda 的网关有 `AllowedSourceIp: 3.37.176.45/32` 资源策略，
+我这台机器打不进去，所以直接 `lambda invoke` —— 而修复恰恰就在 Lambda 里。
+
+```
+                  首尔（先）                东京（后）
+不存在的宠物       404 + get-item 无结果     404 + get-item 为 None
+真实宠物           200，availability 写对    200
+非 JSON            400，DynamoDB 未被调用    —
+缺主键             400，同上                 —
+表条数             26 / 26 全程未变          26 / 26
+/api/search        —                        26 条
+```
+
+⚠️ **首尔那个 Lambda 指向的就是全局表**（`TableName` 与东京同名），
+所以「在首尔验证」并不意味着与东京隔离。让这次验证安全的是两件事：
+修复本身就是「什么都不写」，以及东京 search-service 的热修（4.39）已经在线上 ——
+即使条件失效产生幽灵行，`/api/search` 也会跳过它而不是 500。
+**这就是纵深防御的实际回报：它把一次验证从「有风险」变成「可做」。**
+
+#### ⑥ 顺带发现的漂移，未处理
+
+线上那个函数有两处不在 CDK 里：`aws-fis-extension-arm64` 层，
+以及 `AWS_FIS_CONFIGURATION_LOCATION` 环境变量（指向 chaos-fis-config 桶）。
+`update-function-code` 不碰层与环境变量，所以本次上线没有动它们。
+
+#### ⑦ 还没核实完的一件
+
+部署完成在 13:01，而网关流量是**周期性突发**的（最后一批在 13:00:37 结束，
+25 分钟内 144 条、三个 IP 各 48 条）。所以「真实调用方没有被 404 误伤」
+目前只有间接证据：表里恰好 26 条且无幽灵行，说明调用方用的都是真实 petid。
+**下一批流量到来后要查一次网关状态码分布。**
+
+---
+
+### 4.41 释放闲置 EIP 57.182.30.147
+
+七项排查全空之后才释放：无关联 / 无 ENI / 无 NAT 引用 / 两个仓库无硬编码 /
+两个 region 的 SSM 无引用 / 无安全组 `/32` 放行 / 无 Route53 记录指向。
+
+释放后核实 `InvalidAddress.NotFound`，账号剩 11 个 EIP、**未关联 0 个**。
+
+> 前六项是「它现在没被用」，第四到第七项才是「没有人**准备**用它」。
+> 只查前者就释放，会打断一个正在写配置的人。
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
