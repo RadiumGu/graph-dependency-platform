@@ -28,7 +28,7 @@
 ```
 docs/
 ├── README.md          ← 你在这里
-├── design/     (11)   核心设计说明：为什么这样设计，新人必读
+├── design/     (12)   核心设计说明：为什么这样设计，新人必读
 ├── lessons/    (26)   实测教训与踩坑记录：防止重犯，长期价值最高
 ├── runbooks/    (6)   可照着执行的作业手册
 ├── migration/   (3)   Strands 迁移的时间线与 ADR（历史决策记录）
@@ -50,6 +50,7 @@ JSON。新人不必读，但它们**不能随意删**——`scripts/emit_resilie
 | [`design-goals-assessment.md`](design/design-goals-assessment.md) | 四大目标（唯一真源／动静态／退化变化／agent 可调）逐项打分 |
 | [`architecture-graph-io-map.md`](design/architecture-graph-io-map.md) | 四大模块与 Neptune 的读写关系图（据真实代码绘制） |
 | [`etl-pipeline-walkthrough.md`](design/etl-pipeline-walkthrough.md) | ETL 从触发到写图的完整机制：采集／点边定义／契约门禁／upsert 两种写法／失活。以 `etl_agentcore`（API+span）与 `etl_deepflow`（eBPF）对照 |
+| [`large-scale-graph-refresh-architecture.md`](design/large-scale-graph-refresh-architecture.md) | 几十万节点／上百万边下「变更后依赖如何刷新」：Neptune 硬约束、边的生命周期（双时态+确认次数+分级 TTL）、派生结论三分类。含被否决方案与三条自我更正 |
 | [`project-intro-outline.md`](design/project-intro-outline.md) | 对外讲稿提纲：四范式 → 缺口 → 故障注入证伪。权威叙事 |
 | [`dependency-graph-improvement-roadmap.md`](design/dependency-graph-improvement-roadmap.md) | 综合三份调研得出的改进路线与答辩要点 |
 | [`agent-layer-taxonomy-design.md`](design/agent-layer-taxonomy-design.md) | Agent 层分类学：Gateway／Runtime／Tool 建模与 `RoutesTo` 拆分的推理 |
