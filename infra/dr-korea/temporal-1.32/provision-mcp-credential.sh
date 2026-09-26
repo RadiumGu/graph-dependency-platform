@@ -31,11 +31,22 @@
 # 本脚本让它只经过一个 umask 077 的临时文件，用完 shred 掉。
 # 全程不 echo，不进 argv，不进历史。
 #
-# ## 为什么 secret 放韩国而不是东京
+# ## 为什么 secret 放东京而不是韩国（2026-09-26 修正）
 #
-# worker 在韩国。凭证放同区域意味着读它不依赖东京。
-# Cognito 与 MCP runtime 本身在东京，但快照只在东京健康时跑 ——
-# 那层依赖是固有的；把凭证也放东京是白添一层。
+# 最初放的是韩国，理由是「worker 在韩国，读它不依赖东京」。
+# **那个理由站不住**：worker 拿到 secret 之后紧接着的两步都打东京 ——
+# Cognito token 端点在东京，MCP runtime 在东京。快照本身就要求东京健康，
+# 所以「读 secret 不依赖东京」换不来任何东西。
+#
+# 改放东京的三个理由：
+#   1. 韩国本地性买不到东西（上面那条）
+#   2. 整条认证链在东京 —— Cognito 池发的凭证、它授权的 runtime 都在东京。
+#      轮换时只有一个明显的地方要改
+#   3. 这是一个能读**生产**依赖图的凭证。放在被积极监控的主区域，
+#      比放在更冷、更少人看的灾备区域更合适
+#
+# 韩国的实例角色跨区域读它没问题：Secrets Manager 是区域 API，韩国有 NAT
+# 出网；同账号用默认 aws/secretsmanager 密钥可解密。
 
 set -euo pipefail
 
@@ -43,7 +54,7 @@ set -euo pipefail
 POOL_REGION=ap-northeast-1
 POOL_ID=ap-northeast-1_Dwd1wVX7j          # graphdp-mcp-pool
 CLIENT_ID=2u5s7r3gprc8mo86890sdi1h7t      # graphdp-mcp-m2m，flows=[client_credentials]
-SECRET_REGION=ap-northeast-2              # 韩国，与 worker 同区
+SECRET_REGION=ap-northeast-1              # 东京 —— 与 Cognito 池、MCP runtime 同区
 SECRET_NAME="${DR_GRAPH_MCP_SECRET_NAME:-dr-graph-mcp-m2m}"
 SCOPE=graphdp-mcp/invoke
 COGNITO_DOMAIN=graphdp-mcp-1788589178

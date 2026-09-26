@@ -59,10 +59,12 @@ P_NEPTUNE=dr-neptune-read
 P_ASSUME=dr-assume-invocation-role
 P_MCPSEC=dr-graph-mcp-secret-read
 
-# 图谱 MCP 凭证的 secret 名（放韩国，与 worker 同区域）。
+# 图谱 MCP 凭证的 secret 名。放**东京** —— 与发出该凭证的 Cognito 池、
+# 以及它授权的 MCP runtime 同区域，轮换时只有一处要改；
+# 且生产图谱的凭证该放在被积极监控的主区域，不放更冷的灾备区域。
 # 名字可改，但要与 dr-worker.service 里的 DR_GRAPH_MCP_SECRET_ID 一致。
 MCP_SECRET_NAME="${DR_GRAPH_MCP_SECRET_NAME:-dr-graph-mcp-m2m}"
-SECRET_REGION=ap-northeast-2
+SECRET_REGION=ap-northeast-1
 
 doc_mcp_secret() {
   # Secrets Manager 的 ARN 尾部有 6 位随机后缀，所以必须用 NAME-* 收尾。

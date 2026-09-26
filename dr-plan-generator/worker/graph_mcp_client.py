@@ -67,7 +67,7 @@ COGNITO_DOMAIN = os.environ.get("DR_GRAPH_MCP_COGNITO_DOMAIN", "")
 COGNITO_REGION = os.environ.get("DR_GRAPH_MCP_COGNITO_REGION", "ap-northeast-1")
 OAUTH_SCOPE = os.environ.get("DR_GRAPH_MCP_SCOPE", "graphdp-mcp/invoke")
 SECRET_ID = os.environ.get("DR_GRAPH_MCP_SECRET_ID", "")
-SECRET_REGION = os.environ.get("DR_GRAPH_MCP_SECRET_REGION", "ap-northeast-2")
+SECRET_REGION = os.environ.get("DR_GRAPH_MCP_SECRET_REGION", "ap-northeast-1")
 
 # 本 workflow 期望的图谱契约版本。
 # ⚠️ 这不是装饰。那个 runtime 已经到版本 3，它在演进。
@@ -100,9 +100,13 @@ def _require(name: str, value: str) -> str:
 def _client_credentials() -> tuple[str, str]:
     """从 Secrets Manager 取 Cognito app client 的 id 与 secret。
 
-    secret 放在**韩国**（worker 所在区域），不在东京：这样读它不依赖东京。
-    Cognito 与 MCP runtime 本身在东京，但快照只在东京健康时跑，
-    那层依赖是固有的；而把凭证也放东京是白添一层。
+    secret 放在**东京**，与发出它的 Cognito 池、它授权的 MCP runtime 同区域。
+
+    最初放的是韩国，理由是「worker 在韩国，读它不依赖东京」——
+    **那个理由站不住**：紧接着的两步（换 token、调 MCP）都打东京，
+    快照本身就要求东京健康，所以韩国本地性换不来任何东西。
+    改放东京是因为：整条认证链在一个区域，轮换时只有一处要改；
+    且这是能读生产依赖图的凭证，该放在被积极监控的主区域。
     """
     import boto3  # 延迟导入：单测塞假 fetcher 时不需要
 
