@@ -54,7 +54,84 @@ from activities import (
     scale_up_nodegroup,
     verify_step,
 )
-from workflows import DrFailoverWorkflow
+from workflows import (
+    DrFailoverWorkflow,
+    FetchPlanWorkflow,
+    PromoteDatabaseWorkflow,
+    ScaleNodegroupWorkflow,
+    VerifyWorkflow,
+)
+
+#: workflow 会 upsert 的自定义 Search Attributes → Temporal 的索引类型枚举。
+#:
+#: 刻意**直接引用枚举成员**而不是用 `f"INDEXED_VALUE_TYPE_{名字.upper()}"`
+#: 拼出来:实测那样拼会在 KeywordList 上炸（真实名字是
+#: `INDEXED_VALUE_TYPE_KEYWORD_LIST`，带下划线），而且是启动时才炸。
+#: 字符串拼枚举名省不了几行，却把一个编译期错误推迟成了运行期错误。
+#:
+#: ⚠️ **必须在 worker 启动时确保它们存在,否则 workflow 会静默卡死。**
+#:
+#: 2026-09-26 实测（temporalio 1.33.0）:属性未注册时
+#: `upsert_search_attributes` 让服务端返回
+#:     'Client specified an invalid argument': search attribute DRDryRun is not defined
+#: 该错误发生在 **workflow activation 提交阶段**,不在调用点抛出 ——
+#: 所以在 workflow 里 try/except 是**接不住**的,执行会无限重试那次 activation,
+#: 表现为「RUNNING 但永不前进」。
+#:
+#: 这正是本项目最警惕的那类失败:**审计功能把被审计的东西搞挂了**。
+#: 所以不把它当成"运行时优雅降级",而是当成**部署前置条件**,在这里保证。
+def _search_attribute_types() -> dict[str, int]:
+    from temporalio.api.enums.v1 import IndexedValueType as T
+
+    return {
+        "DRStepsExecuted": T.INDEXED_VALUE_TYPE_KEYWORD_LIST,
+        "DRPlanRef": T.INDEXED_VALUE_TYPE_KEYWORD,
+        "DRDryRun": T.INDEXED_VALUE_TYPE_BOOL,
+        "DRStepName": T.INDEXED_VALUE_TYPE_KEYWORD,
+        "DRDecision": T.INDEXED_VALUE_TYPE_KEYWORD,
+    }
+
+
+async def ensure_search_attributes(client: Client, namespace: str) -> None:
+    """确保自定义 Search Attributes 存在。幂等:已存在即跳过。
+
+    失败时**抛出而不是继续** —— 带着缺失属性启动 worker,等于让第一次真实
+    切换在中途卡死。宁可 worker 起不来（响亮、立刻可见），
+    也不要 workflow 卡死（安静、要翻 history 才看得出来）。
+    """
+    from temporalio.api.operatorservice.v1 import (
+        AddSearchAttributesRequest,
+        ListSearchAttributesRequest,
+    )
+    from temporalio.service import RPCError, RPCStatusCode
+
+    wanted = _search_attribute_types()
+    try:
+        existing = await client.operator_service.list_search_attributes(
+            ListSearchAttributesRequest(namespace=namespace)
+        )
+    except RPCError as e:
+        if e.status == RPCStatusCode.UNIMPLEMENTED:
+            # 精简版测试服务（`WorkflowEnvironment.start_time_skipping()`）不实现
+            # OperatorService。**这不是"属性缺失"**，两者必须分开处理：
+            # 真实服务端不支持这个 API 是不可能的，所以只在测试场景出现。
+            logging.warning(
+                "服务端未实现 OperatorService.ListSearchAttributes —— "
+                "跳过属性检查。仅精简测试服务会这样；真实部署不该走到这里。"
+            )
+            return
+        raise
+
+    missing = {k: v for k, v in wanted.items() if k not in existing.custom_attributes}
+    if not missing:
+        logging.info("Search attributes 齐备（%d 个）。", len(wanted))
+        return
+
+    logging.info("注册缺失的 search attributes: %s", sorted(missing))
+    await client.operator_service.add_search_attributes(
+        AddSearchAttributesRequest(namespace=namespace, search_attributes=missing)
+    )
+    logging.info("已注册 %d 个 search attribute。", len(missing))
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -79,10 +156,24 @@ async def main() -> None:
         TASK_QUEUE,
     )
 
+    # 部署前置条件:workflow 会 upsert 的 search attributes 必须存在。
+    # 放在 Worker 创建**之前**，缺了就在这里响亮失败 ——
+    # 而不是等第一次切换跑到一半静默卡死。
+    await ensure_search_attributes(client, NAMESPACE)
+
     worker = Worker(
         client,
         task_queue=TASK_QUEUE,
-        workflows=[DrFailoverWorkflow],
+        # 父 + 四个原子步骤子 workflow。**子 workflow 类型必须在这里注册**，
+        # 否则父起子时会一直等一个不存在的 handler —— 而那正是
+        # 「启动成功不等于在执行」那类静默卡死。
+        workflows=[
+            DrFailoverWorkflow,
+            FetchPlanWorkflow,
+            ScaleNodegroupWorkflow,
+            PromoteDatabaseWorkflow,
+            VerifyWorkflow,
+        ],
         activities=[
             fetch_plan_body,
             scale_up_nodegroup,
