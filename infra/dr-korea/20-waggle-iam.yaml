@@ -1,0 +1,348 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  韩国灾备站点 — WaggleAI 的 IAM 角色（5 个 runtime 执行角色 + gateway / memory / KB 角色）。
+
+  部到 ap-northeast-2。主站点仍是东京，这里只加首尔侧资源，东京一处不动。
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 为什么必须新建角色，不能复用东京那 8 个
+#
+# IAM 角色是账号级（全局）资源，所以「复用」听起来成立。**在效果上不成立。**
+# 2026-09-26 逐条读东京 WaggleAIOrchestrator 角色，发现两层都钉死在东京：
+#
+#   ① 权限策略里 9 条语句写死 ap-northeast-1：
+#        ssm:GetParameter        parameter/petstore/agent/*
+#        bedrock:Retrieve        knowledge-base/*
+#        InvokeAgentRuntime / InvokeGateway / memory 事件
+#        GetWorkloadAccessToken  workload-identity-directory/default
+#        logs / ecr
+#   ② **信任策略**里 aws:SourceArn 也是 ArnLike arn:aws:bedrock-agentcore:
+#      ap-northeast-1:...:*  —— 首尔的 AgentCore 服务主体连 AssumeRole 都过不去
+#
+# ②比①更要紧：只看权限策略的人会以为「加几条 Resource 就能复用」，
+# 但信任策略先拒，表现是 runtime 根本起不来。
+#
+# 失效形态：agent 读不到配置 / 取不到工作负载令牌 —— 页面上什么都不报。
+# 这与本项目反复记录的「全绿但不能服务」是同一类。
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# 一处刻意偏离东京：5 份内联策略 → 1 份托管策略挂 5 个角色
+#
+# 东京是 5 个角色各带一份内联策略。2026-09-26 实测这 5 份策略
+# **md5 完全相同**（6c7d7c7d28ba，未做任何归一化就相同）——
+# 所谓「按 agent 分的最小权限」在东京并不存在，是 5 份复制。
+#
+# 首尔用一份托管策略表达这个**实测事实**，而不是把同一份内容再复制 5 遍：
+#   - 复制 5 遍的代价是它们会各自漂移，而漂移无人察觉
+#   - 仍保留 5 个独立角色，所以「单独吊销某一个 agent」这个运维能力没丢
+#     （detach 单个角色即可），这是不合并成一个角色的理由
+#
+# 策略本体 2745 字符，远低于托管策略 6144 上限（先量了再用）。
+# ══════════════════════════════════════════════════════════════════════════════
+
+Parameters:
+  VectorBucketName:
+    Type: String
+    Default: dr-korea-waggle-nutrition-vectors-926093770964
+    Description: >
+      S3 Vectors 向量桶名。KB 角色要在桶存在之前就授权它，
+      所以名字用**确定值参数**而不是从 21 栈 ImportValue ——
+      否则 20 依赖 21、21 的 KB 又依赖 20 的角色，成环。
+
+  KbSourceBucketName:
+    Type: String
+    Default: dr-korea-waggle-nutrition-kb-source-926093770964
+    Description: 知识文档源桶名。同上，用确定值避免环依赖。
+
+  EmbeddingModelId:
+    Type: String
+    Default: amazon.titan-embed-text-v2:0
+    Description: >
+      向量化模型。2026-09-26 在首尔实测可调、输出 1024 维 ——
+      与东京同 ID（这个模型不需要跨区推理 profile，所以没有 jp./global. 前缀问题）。
+
+Resources:
+
+  # ── 5 个 runtime 共用的权限（内容 = 东京那份，Resource 全部换 ap-northeast-2）──
+  RuntimePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: dr-korea-waggle-runtime-policy
+      Description: WaggleAI runtime 执行权限（首尔）。内容对齐东京，Resource 换区。
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: [ssm:GetParameter, ssm:GetParameters, ssm:GetParametersByPath]
+            Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/petstore/agent/*
+
+          # 这两条是东京原文照抄 —— 通配符，与 region 和模型前缀无关。
+          # 2026-09-26 用 simulate-principal-policy 实测：对首尔的
+          # global.* inference-profile 及其背后 region-less 与 ap-northeast-2
+          # 两种形态的 foundation-model ARN 全部 allowed。
+          # 所以「东京用 jp.、首尔用 global. 会因 Resource 不匹配被拒」
+          # 这个担心**实测不成立**，不需要为换模型改权限。
+          - Effect: Allow
+            Action:
+              - bedrock:InvokeModel
+              - bedrock:InvokeModelWithResponseStream
+              - bedrock:CountTokens
+              - bedrock:ApplyGuardrail
+            Resource:
+              - arn:aws:bedrock:*::foundation-model/*
+              - !Sub arn:aws:bedrock:*:${AWS::AccountId}:*
+
+          - Effect: Allow
+            Action: [bedrock:Retrieve, bedrock:RetrieveAndGenerate]
+            Resource: !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:knowledge-base/*
+
+          - Effect: Allow
+            Action: bedrock-agentcore:InvokeAgentRuntime
+            Resource: !Sub arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:*
+
+          - Effect: Allow
+            Action: bedrock-agentcore:InvokeGateway
+            Resource: !Sub arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:gateway/*
+
+          - Effect: Allow
+            Action:
+              - bedrock-agentcore:CreateEvent
+              - bedrock-agentcore:ListEvents
+              - bedrock-agentcore:GetEvent
+              - bedrock-agentcore:RetrieveMemoryRecords
+              - bedrock-agentcore:ListMemoryRecords
+              - bedrock-agentcore:GetMemoryRecord
+            Resource: !Sub arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:memory/*
+
+          # concierge 用的模型可能来自 Marketplace 订阅（东京原文有这条）。
+          - Effect: Allow
+            Action: [aws-marketplace:ViewSubscriptions, aws-marketplace:Subscribe]
+            Resource: '*'
+
+          - Effect: Allow
+            Action: [logs:CreateLogGroup, logs:DescribeLogStreams]
+            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*
+          - Effect: Allow
+            Action: logs:DescribeLogGroups
+            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*
+          - Effect: Allow
+            Action: logs:PutResourcePolicy
+            Resource: '*'
+          - Effect: Allow
+            Action: [logs:CreateLogStream, logs:PutLogEvents]
+            Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/bedrock-agentcore/runtimes/*:log-stream:*
+
+          # ⚠️ ECR 必须是首尔仓库 —— 镜像已于 2026-09-26 跨区复制过去，
+          # digest 与东京逐一相同。指着东京仓库的后果正是灾难时拉不到镜像。
+          - Effect: Allow
+            Action: [ecr:BatchGetImage, ecr:GetDownloadUrlForLayer]
+            Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/*
+          - Effect: Allow
+            Action: ecr:GetAuthorizationToken
+            Resource: '*'
+
+          - Effect: Allow
+            Action: [xray:PutTraceSegments, xray:PutTelemetryRecords, xray:GetSamplingRules, xray:GetSamplingTargets]
+            Resource: '*'
+          - Effect: Allow
+            Action: cloudwatch:PutMetricData
+            Resource: '*'
+            Condition:
+              StringEquals:
+                cloudwatch:namespace: bedrock-agentcore
+
+          # workload identity 目录是 **per-region** 的，所以这条也必须换区。
+          # 缺它的表现是 runtime 起不来而日志里看不到原因。
+          - Effect: Allow
+            Action:
+              - bedrock-agentcore:GetWorkloadAccessToken
+              - bedrock-agentcore:GetWorkloadAccessTokenForJWT
+              - bedrock-agentcore:GetWorkloadAccessTokenForUserId
+            Resource:
+              - !Sub arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:workload-identity-directory/default
+              - !Sub arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:workload-identity-directory/default/workload-identity/agentName-*
+
+  # ── 5 个执行角色。信任的 SourceArn 必须是**首尔** —— 这是东京角色不可复用的真因 ──
+  OrchestratorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dr-korea-waggle-orchestrator
+      ManagedPolicyArns: [!Ref RuntimePolicy]
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: bedrock-agentcore.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}
+              ArnLike:
+                aws:SourceArn: !Sub arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:*
+
+  ConciergeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dr-korea-waggle-concierge
+      ManagedPolicyArns: [!Ref RuntimePolicy]
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: bedrock-agentcore.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}
+              ArnLike:
+                aws:SourceArn: !Sub arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:*
+
+  NutritionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dr-korea-waggle-nutrition
+      ManagedPolicyArns: [!Ref RuntimePolicy]
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: bedrock-agentcore.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}
+              ArnLike:
+                aws:SourceArn: !Sub arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:*
+
+  OrderingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dr-korea-waggle-ordering
+      ManagedPolicyArns: [!Ref RuntimePolicy]
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: bedrock-agentcore.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}
+              ArnLike:
+                aws:SourceArn: !Sub arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:*
+
+  AdoptionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dr-korea-waggle-adoption
+      ManagedPolicyArns: [!Ref RuntimePolicy]
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: bedrock-agentcore.amazonaws.com}
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals: {aws:SourceAccount: !Ref AWS::AccountId}
+              ArnLike:
+                aws:SourceArn: !Sub arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:*
+
+  # ── Gateway 角色：用自己的身份调下游 runtime（东京的 target 是
+  #    credentialProviderType=GATEWAY_IAM_ROLE，无 OAuth/API-key provider）──
+  GatewayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dr-korea-waggle-gateway
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: bedrock-agentcore.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeRuntimes
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: bedrock-agentcore:InvokeAgentRuntime
+                Resource: !Sub arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:runtime/*
+
+  # ── Memory 角色：摘要与偏好抽取策略要自己调模型 ──
+  MemoryRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dr-korea-waggle-memory
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: bedrock-agentcore.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeModel
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: arn:aws:bedrock:*::foundation-model/*
+
+  # ── KB 角色：向量化 + 读 S3 Vectors + 读文档源桶 ──
+  KbRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: dr-korea-waggle-kb
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: bedrock.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: KbAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}
+              - Effect: Allow
+                Action: s3vectors:*
+                Resource:
+                  - !Sub arn:aws:s3vectors:${AWS::Region}:${AWS::AccountId}:bucket/${VectorBucketName}
+                  - !Sub arn:aws:s3vectors:${AWS::Region}:${AWS::AccountId}:bucket/${VectorBucketName}/*
+              - Effect: Allow
+                Action: [s3:GetObject, s3:ListBucket]
+                Resource:
+                  - !Sub arn:aws:s3:::${KbSourceBucketName}
+                  - !Sub arn:aws:s3:::${KbSourceBucketName}/*
+
+Outputs:
+  OrchestratorRoleArn:
+    Value: !GetAtt OrchestratorRole.Arn
+    Export: {Name: dr-korea-waggle-orchestrator-role}
+  ConciergeRoleArn:
+    Value: !GetAtt ConciergeRole.Arn
+    Export: {Name: dr-korea-waggle-concierge-role}
+  NutritionRoleArn:
+    Value: !GetAtt NutritionRole.Arn
+    Export: {Name: dr-korea-waggle-nutrition-role}
+  OrderingRoleArn:
+    Value: !GetAtt OrderingRole.Arn
+    Export: {Name: dr-korea-waggle-ordering-role}
+  AdoptionRoleArn:
+    Value: !GetAtt AdoptionRole.Arn
+    Export: {Name: dr-korea-waggle-adoption-role}
+  GatewayRoleArn:
+    Value: !GetAtt GatewayRole.Arn
+    Export: {Name: dr-korea-waggle-gateway-role}
+  MemoryRoleArn:
+    Value: !GetAtt MemoryRole.Arn
+    Export: {Name: dr-korea-waggle-memory-role}
+  KbRoleArn:
+    Value: !GetAtt KbRole.Arn
+    Export: {Name: dr-korea-waggle-kb-role}
+  VectorBucketName:
+    Value: !Ref VectorBucketName
+    Export: {Name: dr-korea-waggle-vector-bucket}
+  KbSourceBucketName:
+    Value: !Ref KbSourceBucketName
+    Export: {Name: dr-korea-waggle-kb-source-bucket}
