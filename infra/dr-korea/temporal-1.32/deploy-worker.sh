@@ -81,7 +81,11 @@ tcli operator cluster health >/dev/null 2>&1 \
 say "1. 从 GitHub 取 worker 代码"
 STAGE=$(mktemp -d /tmp/dr-worker-stage.XXXXXX)
 trap 'rm -rf "$STAGE"' EXIT
-FILES="worker.py workflows.py plan_workflow.py activities.py snapshot_workflow.py requirements.txt"
+# provision-worker.sh 必须**随包下发**。
+# 它不在这个清单里会造成一个恰好最难看出来的故障：代码同步到了 S3，
+# 但没人把它从 S3 拉到 /opt/dr-worker/app，于是 worker 用旧代码重启 ——
+# 而「服务 active」「队列上有 poller」两个判据照样通过。
+FILES="worker.py workflows.py plan_workflow.py activities.py snapshot_workflow.py requirements.txt provision-worker.sh"
 for f in $FILES; do
   curl -fsSL -o "$STAGE/$f" "$RAW_BASE/$f"
   printf '  %-24s %6s 字节\n' "$f" "$(stat -c%s "$STAGE/$f")"
@@ -100,20 +104,26 @@ aws s3 sync "$STAGE/" "s3://$BUCKET/worker/" --only-show-errors \
 ok "已同步到 s3://$BUCKET/worker/"
 
 say "3. 跑 provision-worker.sh（它按内容指纹决定是否重启）"
-FP_BEFORE=$(cat /opt/dr-worker/.code.sha256 2>/dev/null || echo "<无>")
+# 从暂存目录跑，而不是从 /opt/dr-worker/app ——
+# 主机上那份可能还是旧的，甚至可能不存在（它最初是手工装的，不在 IaC 里）。
+FP_BEFORE=$(cat /opt/dr-worker/.code.sha256 2>/dev/null || echo "none")
 PID_BEFORE=$(systemctl show -p MainPID --value dr-worker.service || echo 0)
-DR_CODE_BUCKET="$BUCKET" bash /opt/dr-worker/app/provision-worker.sh 2>&1 | tail -20 \
-  || bash "$STAGE/../provision-worker.sh" 2>&1 | tail -20 \
-  || echo "  （provision 脚本不在主机上 —— 退化为直接重启，见下）"
-FP_AFTER=$(cat /opt/dr-worker/.code.sha256 2>/dev/null || echo "<无>")
+# 不加 || true：provision 失败就必须响亮地失败。
+# 这里退化成 `systemctl restart` 是最坏的做法 —— 代码还在 S3 里没落地，
+# 而 worker 会带着旧代码干净地重启，看起来一切正常。
+DR_CODE_BUCKET="$BUCKET" bash "$STAGE/provision-worker.sh"
+FP_AFTER=$(cat /opt/dr-worker/.code.sha256 2>/dev/null || echo "none")
+PID_AFTER=$(systemctl show -p MainPID --value dr-worker.service || echo 0)
 echo "  代码指纹：${FP_BEFORE:0:8}… → ${FP_AFTER:0:8}…"
 
-# 兜底：指纹变了但进程没换，说明重启这一步没生效。
-systemctl restart dr-worker.service || true
-sleep 6
-PID_AFTER=$(systemctl show -p MainPID --value dr-worker.service || echo 0)
-[ "$PID_BEFORE" != "$PID_AFTER" ] && ok "worker 进程已更换（PID $PID_BEFORE → $PID_AFTER）" \
-  || fail "worker PID 未变（$PID_AFTER）—— 进程可能还拿着旧模块"
+if [ "$FP_BEFORE" = "$FP_AFTER" ]; then
+  echo "  · 代码内容无变化，provision 按设计没有重启 —— 这不是问题。"
+  echo "    下面的验证仍然照跑：它查的是**现在跑着什么**，与本次是否重启无关。"
+elif [ "$PID_BEFORE" != "$PID_AFTER" ]; then
+  ok "代码有变且进程已更换（PID $PID_BEFORE → $PID_AFTER）"
+else
+  fail "代码指纹变了但 PID 没变（$PID_AFTER）—— 进程还拿着旧模块，这正是 2026-09-25 那个坑"
+fi
 
 # ── 3. 部署面验证 ──────────────────────────────────────────────────────
 say "4. 部署面验证"
