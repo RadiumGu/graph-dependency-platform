@@ -1,0 +1,100 @@
+# /opt/temporal/docker-compose.yml
+#
+# ## 为什么不再用 temporalio/auto-setup
+#
+# auto-setup 在 **1.29.7 停更**（Docker Hub 上 1.30/1.31/1.32 全是 404），
+# 而上游 1.32.0 的 config_template.yaml 顶部自己写了原因：
+#     # TODO: Remove this file after temporalio/docker-builds repository is archived
+#
+# 所以到 1.32 不是改个标签，而是换形态：auto-setup 把「建库 + 建 schema +
+# 创建 default namespace + 渲染配置」打包进容器启动脚本，server 镜像
+# 不做这些（它的 entrypoint.sh 只有一行 `exec temporal-server start`）。
+# 这里把那几件事显式拆出来。
+#
+# ## 配置为什么在启动时渲染，而不是烘成静态文件
+#
+# 模板里的 rpc 段要用 BIND_ON_IP 与 TEMPORAL_BROADCAST_ADDRESS，
+# 而广播地址是**容器的 IP**：烘死一个值，下次重启容器换了 IP 就会导致
+# membership 对不上 —— 那类故障的表现是服务看起来起来了但任务不流动，
+# 正是本项目最警惕的「启动成功≠在工作」。
+#
+# 所以 dockerize（从 auto-setup 镜像里取出来的那个二进制）被挂进 server
+# 容器，在 exec 之前渲染一次，取值逻辑照抄上游 entrypoint.sh。
+#
+# ## 密码只存在 .env 里
+#
+# 渲染发生在容器内、用容器 env，所以口令不会落到磁盘上的配置文件里。
+
+services:
+  postgresql:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - /opt/temporal/pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # 一次性作业：建两个库并把 schema 升到最新。
+  # auto-setup 以前替我们做这件事；现在它是一个显式的、可复查的步骤。
+  # 幂等：create-database 与 setup-schema 都能对已存在的对象安全重跑。
+  temporal-schema:
+    image: temporalio/admin-tools:1.32.0
+    depends_on:
+      postgresql:
+        condition: service_healthy
+    environment:
+      SQL_PLUGIN: postgres12
+      SQL_HOST: postgresql
+      SQL_PORT: 5432
+      SQL_USER: temporal
+      SQL_PASSWORD: ${POSTGRES_PASSWORD}
+    entrypoint: ["/bin/bash", "/opt/setup-schema.sh"]
+    volumes:
+      - /opt/temporal/setup-schema.sh:/opt/setup-schema.sh:ro
+    restart: "no"
+
+  temporal:
+    image: temporalio/server:1.32.0
+    depends_on:
+      temporal-schema:
+        condition: service_completed_successfully
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: ${POSTGRES_PASSWORD}
+      POSTGRES_SEEDS: postgresql
+      # 绑 0.0.0.0 才能被同 VPC 的 AgentCore / worker 连到。
+      # 暴露面由安全组控制（只放 VPC CIDR），不靠绑定地址控制。
+      BIND_ON_IP: 0.0.0.0
+      # Worker Controller Instance 的开关在这个文件里（见 dynamicconfig/）。
+      DYNAMIC_CONFIG_FILE_PATH: /etc/temporal/dynamicconfig/docker.yaml
+    volumes:
+      - /opt/temporal/tmpl/config_template_1.32.0.yaml:/etc/temporal/config_template.yaml:ro
+      - /opt/temporal/dynamicconfig:/etc/temporal/dynamicconfig:ro
+      - /opt/temporal/bin/dockerize:/usr/local/bin/dockerize:ro
+      - /opt/temporal/start-temporal.sh:/opt/start-temporal.sh:ro
+    # 启动逻辑放在挂载的脚本里，不写在这里 —— compose 会对 `$` 做插值，
+    # 实测 `docker compose config` 直接报 invalid interpolation format。
+    # 转义成 `$$` 能过，但那段取广播地址的逻辑不该被转义符弄得难读。
+    entrypoint: ["/bin/sh", "/opt/start-temporal.sh"]
+    ports:
+      - "7233:7233"   # gRPC   ← worker
+      - "7243:7243"   # HTTP API ← temporal-mcp
+    restart: unless-stopped
+
+  temporal-ui:
+    image: temporalio/ui:2.54.1
+    depends_on: [temporal]
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+    ports:
+      - "8080:8080"
+    restart: unless-stopped

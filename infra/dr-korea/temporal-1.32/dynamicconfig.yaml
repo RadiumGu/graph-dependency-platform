@@ -1,0 +1,42 @@
+# /opt/temporal/dynamicconfig/docker.yaml
+#
+# Worker Controller Instance（WCI）—— 升级到 1.32 的**唯一理由**。
+#
+# ## 它解决什么
+#
+# WCI 是监控任务队列并主动调用计算提供方的服务端组件。没有它，一个任务
+# 落在**零 poller** 的队列上会静静排队等一个不存在的 worker，不报错、
+# 不失败 —— 实测过：无 worker 的队列上起 workflow 同样返回
+# started:true / RUNNING。对灾备编排来说这是最坏的失败形态：
+# 所有信号都绿的，只有业务侧知道切换没在进行。
+#
+# 我为这个故障装了一个 30 分钟的三态探针 cron（dr-temporal-health），
+# 那是**检测器**；WCI 是**修复** —— Temporal 主动把 worker 叫起来。
+#
+# ## 为什么只列 aws-agentcore 和 no-sync
+#
+# 这两个值照抄官方 AgentCore 自托管 setup 页的原文。Lambda 那条路的
+# provider 名我没有核实过，所以**不写进来** —— 一个拼错的 provider 名
+# 会让 WCI 静默不生效，而那恰好与它要修的故障长得一样。
+# 需要 Lambda 时按 Lambda 自托管页把它的真实值加进这两个 allowlist。
+#
+# ## 前置条件（尚未满足，见部署记录）
+#
+#   · 服务端要能到 AgentCore 的控制面与数据面 API
+#   · 服务端的实例角色要有 sts:AssumeRole 到 invocation role
+#     （本机实例角色：dr-korea-temporal-TemporalRole-MbW4WYmjoR8J）
+#   · invocation role 要用官方 CloudFormation 模板建，带 External ID
+#
+# 所以开了这个开关**不等于** serverless worker 可用；它只是把服务端侧
+# 的门打开。没建 Worker Deployment Version 之前，行为与现在一致。
+
+workercontroller.enabled:
+  - value: true
+
+workercontroller.compute_providers.enabled:
+  - value:
+      - aws-agentcore
+
+workercontroller.scaling_algorithms.enabled:
+  - value:
+      - no-sync
