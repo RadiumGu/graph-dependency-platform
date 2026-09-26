@@ -3673,6 +3673,108 @@ updateadoptionstatusurl 韩国 → **与东京一字不差**，指向
 
 ---
 
+
+### 4.34 补上韩国的 PetAdoptionStatusUpdater —— 并刻意不照抄它的安全姿态
+
+**日期**:2026-09-26 ｜ 栈 `dr-korea-statusupdater` ｜ 修 4.33 发现的断链
+
+#### ① 修的是什么
+
+领养完成后 payforadoption 会 HTTP PUT 一个「改宠物可用性」的接口
+(`payforadoption-go/payforadoption/repository.go:246`)。而韩国的
+`/petstore/updateadoptionstatusurl` 原先**与东京一字不差**,指向东京网关,
+韩国**零个 REST API 网关**。真灾难时:领养记进 Aurora 但**宠物状态永远不更新**。
+
+#### ② Lambda 行为是**下载代码读出来的**,不是按名字猜的
+
+东京那个 Lambda 的实质(去掉埋点):
+
+```js
+const payload = JSON.parse(event.body);
+const availability = payload.petavailability === undefined ? 'no' : 'yes';
+UpdateItemCommand{ Key:{pettype, petid}, "set availability = :r" }
+```
+
+两个容易照抄错的点:
+
+| 点 | 照抄错的后果 |
+|---|---|
+| 值是**布尔化的,不透传** —— 带了 `petavailability`(任何值)就写 `"yes"`,完全不带才写 `"no"` | 若写成透传,会存进 `"true"`/`"1"`,而读取方期望 `"yes"`/`"no"` |
+| 主键**两个都要给**(`pettype` HASH + `petid` RANGE) | 少一个就是 ValidationException |
+
+**这个布尔化行为我实测印证过**:往东京那个网关发一个不带 `petavailability`
+的请求,表里出现的就是 `availability: "no"`。
+
+#### ③ ⚠️ 与东京的刻意偏离:授权
+
+东京那个网关实测是**完全公开、无认证的写接口**:
+
+```
+authorizationType: NONE     apiKeyRequired: false
+authorizers: []             disableExecuteApiEndpoint: false
+```
+
+任何知道 URL 的人都能把**任意**宠物的 availability 翻成 yes/no,Lambda 端零校验。
+**我不在首尔复制第二个这样的面。**
+
+不用 `AWS_IAM` 的原因:调用方是普通 HTTP 客户端(`sling`),**不签 SigV4**,
+改 IAM 会直接打断它,且要改 Go 代码 + 重建镜像。
+
+采用的办法:**资源策略按来源 IP 收窄**。韩国 VPC 只有一个 NAT
+(`nat-0582007e8f8b419f5`,EIP `3.37.176.45`),而 pod 所在两个子网实测都是
+`0.0.0.0/0 → 那个 NAT`。所以调用方**一行代码不改**,公网打不进来。
+
+顺带把角色也收窄了:东京那个角色挂 `AmazonDynamoDBFullAccess` +
+`AWSLambda_FullAccess`(两个 FullAccess);这里只给这一张表的 `UpdateItem`。
+
+##### 这个办法的边界(别当成强认证)
+
+- 它是**网络层**限制,不是身份认证。凡从那个 NAT 出网的都能调 ——
+  包括韩国 VPC 里任何一个 pod
+- NAT 的 EIP 被重建就会变,策略随之失效。**失效形态是调用方 403 而领养仍然成功**
+  —— 又一个静默形态。所以 EIP 写成参数,门禁守着它与实际 NAT 一致
+- **东京那个开放接口我没有动**。改它要先评估谁在调用,不在本次范围。
+  作为已知安全债记在这里
+
+#### ④ 核实(带对照)
+
+```
+出口 IP               3.37.176.45（= 韩国 NAT，实测而非假设）
+VPC 内 PUT            HTTP 200 success
+不带 petavailability  → availability = "no"     与东京逐字一致
+东京侧读到             availability = "no"       全局表双向复制打通
+公网打                403 "explicit deny in a resource-based policy"
+**东京同一发**         **200 success**           ← 对照:证明差别来自资源策略
+```
+
+链路:payforadoption(韩国) → 韩国网关 → 韩国 Lambda → 本区副本 → 复制回东京。
+
+#### ⑤ 全局表让这项变简单了
+
+`TABLE_NAME` 环境变量的值**一个字都不用改** —— 副本与源表同名,
+首尔 Lambda 用同一个表名写的是本区 replica。省掉了「改表名」和
+「首尔单独建表 + 迁数据」两步。
+
+⚠️ 但要知道副作用:两区的 updater 写的是**同一份逻辑数据**,
+全局表是 last-writer-wins。如果演练时两区同时写同一个 `(pettype, petid)`,
+会按时间戳覆盖。**「同名全局表」意味着灾备侧不是隔离副本** —— 对 DR 是对的
+(要的就是同一份数据),但做混沌实验时要意识到这一点。
+
+#### ⑥ 我这轮的一个副作用:为做对照往生产表写了一条垃圾行
+
+为了证明东京那个接口真的开放,我用公网发了一次 PUT —— 它**成功了**,
+于是 `UpdateItem` 在东京生产表里 upsert 出一条
+`(puppy, NONEXISTENT-probe-do-not-use)`。
+
+我特意用了 `NONEXISTENT-` 前缀避开真实宠物,但**那仍然是一次对生产表的写入**。
+已立即删除并核实两侧计数回到 26。
+
+> 记在这里是因为:**「演示一个漏洞存在」和「利用它」之间只差一次请求**,
+> 而我选择的是对生产发真请求。更稳妥的做法是只读 `describe-rest-api` 的
+> 授权配置就下结论 —— 那已经足够证明它是开放的。
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)

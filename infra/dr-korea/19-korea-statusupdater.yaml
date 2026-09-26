@@ -1,0 +1,248 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  韩国守夜灯的 PetAdoptionStatusUpdater（API Gateway + Lambda）。
+  补 2026-09-26 发现的断链:领养完成后宠物 availability 永不更新。
+
+# ═══════════════════════════════════════════════════════════════════════
+# 为什么需要这个栈
+#
+# payforadoption 在领养完成后会 HTTP PUT 一个「改宠物可用性」的接口
+# （payforadoption-go/payforadoption/repository.go:246，
+#   sling.New().Put(cfg.UpdateAdoptionURL)）。
+#
+# 实测（2026-09-26）韩国侧的 /petstore/updateadoptionstatusurl
+# **与东京一字不差**，指向 9dw5r2dqlb.execute-api.ap-northeast-1。
+# 而韩国**零个 REST API 网关**、没有对应 Lambda。
+#
+# 真灾难时的后果:韩国的 payforadoption → 调**东京**的网关 → 失败 →
+# **领养记进了 Aurora 但宠物状态永远不更新**。领养看起来成功，
+# 宠物却仍显示可领养。**又一个「全绿但不能服务」。**
+#
+# 之所以一直没被发现:那条链路是
+#     payforadoption → HTTP → API Gateway → Lambda → DynamoDB
+# **隔了两跳**，不在任何 Deployment 的环境变量里，也不在工作负载清单里。
+# 我之前扫的是「清单里的环境变量」，扫不到它。
+#
+# ═══════════════════════════════════════════════════════════════════════
+# ⚠️⚠️ 与东京的**一处刻意偏离**:授权
+#
+# 东京那个网关实测是**完全公开、无认证的写接口**:
+#     authorizationType: NONE     apiKeyRequired: false
+#     authorizers: []             disableExecuteApiEndpoint: false
+# 任何知道 URL 的人都能把**任意**宠物的 availability 翻成 yes/no，
+# Lambda 端零校验、零鉴权 —— 靠的纯粹是 URL 不公开。
+#
+# **我不在首尔原样复制一个新的无认证公网写入面。**
+#
+# 为什么不用 AWS_IAM 授权:调用方用的是普通 HTTP 客户端（sling），
+# **不签 SigV4**，改成 IAM 会直接打断调用方，且需要改 Go 代码 + 重建镜像。
+#
+# 采用的办法:**资源策略按来源 IP 收窄**。韩国 VPC 只有一个 NAT
+# （nat-0582007e8f8b419f5，EIP 3.37.176.45），而 pod 所在的两个子网
+# 实测都是 `0.0.0.0/0 → 那个 NAT`，所以 payforadoption 的出口 IP 是确定的。
+#
+# 这样:调用方**一行代码不用改**，而公网打不进来。
+#
+# ⚠️ 这个办法的边界（必须知道，别当成强认证）:
+#   - 它是**网络层**限制，不是身份认证。凡从那个 NAT 出网的东西都能调
+#     —— 包括韩国 VPC 里任何一个 pod。
+#   - NAT 的 EIP 如果被重建就会变，策略随之失效（表现是调用方 403，
+#     而**领养仍然会成功**，只是状态不更新 —— 又是个静默形态）。
+#     所以 EIP 写成参数，且 test_110 守着它与实际 NAT 一致。
+#   - 东京那个开放接口**我没有动** —— 改它需要评估谁在调用，
+#     不在本次范围。它作为已知安全债记在 4.34 节。
+# ═══════════════════════════════════════════════════════════════════════
+
+Parameters:
+  TableName:
+    Type: String
+    # ⚠️ 这个值与东京**完全相同**，不是写错了。
+    #    那张表已转成 DynamoDB 全局表，副本与源表同名
+    #    （"All replicas in a global table share the same table name"），
+    #    所以首尔 Lambda 用同一个表名写的是**本区 replica**，
+    #    再由全局表双向复制回东京。
+    Default: ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM
+    Description: 全局表名（两侧同名，刻意不改）
+
+  AllowedSourceIp:
+    Type: String
+    # 韩国 VPC 唯一 NAT 的 EIP。实测 pod 子网
+    # subnet-0f599ec0925b9158b / subnet-0ad20a5cd85143dff
+    # 都是 0.0.0.0/0 → nat-0582007e8f8b419f5。
+    Default: 3.37.176.45/32
+    Description: 允许调用的来源（韩国 NAT 出口 IP）
+
+Resources:
+  # ── Lambda 执行角色 ────────────────────────────────────────────────
+  # ⚠️ 与东京**刻意不同**:东京那个角色挂的是 AmazonDynamoDBFullAccess +
+  #    AWSLambda_FullAccess（两个 FullAccess）。这里只给这一张表的
+  #    UpdateItem —— 一个只改一个字段的 3 秒 Lambda 不需要 FullAccess。
+  UpdaterRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: UpdateAvailabilityOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: dynamodb:UpdateItem
+                Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}'
+
+  # ── Lambda ────────────────────────────────────────────────────────
+  # 行为逐字照东京那个 Lambda 的**真实代码**（已下载 Code.Location 读出，
+  # 与 worktree 的 PetAdoptions/petstatusupdater/index.js:24-51 一致）:
+  #
+  #   const payload = JSON.parse(event.body);
+  #   const availability = payload.petavailability === undefined ? 'no' : 'yes';
+  #   UpdateCommand{ Key:{pettype, petid}, "set availability = :r" }
+  #
+  # ⚠️ 两个容易照抄错的点:
+  #   ① 值是**布尔化的**，不透传 —— 只要请求里**带了** petavailability
+  #      字段（任何非 undefined 值）就写 "yes"，完全不带才写 "no"。
+  #      照抄成「透传 payload.petavailability」会写进 "true"/"1" 这类值，
+  #      而读取方期望的是 "yes"/"no"。
+  #   ② 主键**两个都必须给**（pettype HASH + petid RANGE），
+  #      少一个就是 ValidationException。
+  #
+  # 用 @aws-sdk/client-dynamodb 而不是 lib-dynamodb:前者确定随
+  # nodejs 运行时自带，后者不一定，而内联代码无法带依赖。
+  # 代价是要手写 AttributeValue 形状（{S: ...}），只有两个字符串键，可接受。
+  UpdaterFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: dr-korea-petstatusupdater
+      Runtime: nodejs22.x
+      Architectures: [arm64]
+      Handler: index.handler
+      MemorySize: 128
+      Timeout: 3
+      Role: !GetAtt UpdaterRole.Arn
+      TracingConfig:
+        Mode: Active
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref TableName
+      Code:
+        ZipFile: |
+          const { DynamoDBClient, UpdateItemCommand } = require('@aws-sdk/client-dynamodb');
+          const ddb = new DynamoDBClient({});
+
+          exports.handler = async function (event) {
+            const payload = JSON.parse(event.body);
+            // 布尔化，不透传 —— 与东京那个 Lambda 逐字一致
+            const availability = payload.petavailability === undefined ? 'no' : 'yes';
+            await ddb.send(new UpdateItemCommand({
+              TableName: process.env.TABLE_NAME,
+              Key: {
+                pettype: { S: payload.pettype },
+                petid: { S: payload.petid },
+              },
+              UpdateExpression: 'set availability = :r',
+              ExpressionAttributeValues: { ':r': { S: availability } },
+              ReturnValues: 'UPDATED_NEW',
+            }));
+            return { statusCode: 200, body: 'success' };
+          };
+
+  # ── REST API ──────────────────────────────────────────────────────
+  # REGIONAL + proxy，与东京同形态:东京只有 `/` 和 `/{proxy+}`，
+  # 两者都是 ANY（不是单独的 PUT）。调用方用 PUT 打根 URL，
+  # 而网关对方法完全不校验 —— 真正决定行为的是 Lambda，
+  # 而 Lambda 也忽略方法与路径。
+  UpdaterApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: dr-korea-PetAdoptionStatusUpdater
+      EndpointConfiguration:
+        Types: [REGIONAL]
+      # ⚠️ 这是与东京的关键偏离 —— 见文件头的说明。
+      Policy:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: execute-api:Invoke
+            Resource: execute-api:/*
+            Condition:
+              IpAddress:
+                aws:SourceIp: !Ref AllowedSourceIp
+          # 显式 Deny 兜底:只有 Allow 时，不匹配的请求本来也会被拒，
+          # 但写出 Deny 让意图不依赖「默认拒绝」这个隐含前提。
+          - Effect: Deny
+            Principal: '*'
+            Action: execute-api:Invoke
+            Resource: execute-api:/*
+            Condition:
+              NotIpAddress:
+                aws:SourceIp: !Ref AllowedSourceIp
+
+  ProxyResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref UpdaterApi
+      ParentId: !GetAtt UpdaterApi.RootResourceId
+      PathPart: '{proxy+}'
+
+  RootMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref UpdaterApi
+      ResourceId: !GetAtt UpdaterApi.RootResourceId
+      HttpMethod: ANY
+      AuthorizationType: NONE   # 授权由上面的资源策略按来源 IP 做
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UpdaterFunction.Arn}/invocations'
+
+  ProxyMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref UpdaterApi
+      ResourceId: !Ref ProxyResource
+      HttpMethod: ANY
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${UpdaterFunction.Arn}/invocations'
+
+  Deployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn: [RootMethod, ProxyMethod]
+    Properties:
+      RestApiId: !Ref UpdaterApi
+
+  # stage 名必须是 prod —— 调用方拼的 URL 里带 /prod/
+  ProdStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref UpdaterApi
+      DeploymentId: !Ref Deployment
+      StageName: prod
+      TracingEnabled: true
+
+  InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt UpdaterFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${UpdaterApi}/*'
+
+Outputs:
+  UpdateAdoptionStatusUrl:
+    Description: 写进韩国 /petstore/updateadoptionstatusurl 的值（注意结尾的斜杠）
+    Value: !Sub 'https://${UpdaterApi}.execute-api.${AWS::Region}.amazonaws.com/prod/'
+
+  FunctionName:
+    Value: !Ref UpdaterFunction
