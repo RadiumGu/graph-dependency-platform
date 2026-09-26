@@ -296,47 +296,69 @@ Neptune（写主库）
 
 另一条值得记住的定性：「A CMDB is **a graph database with an unusually hostile operating environment**: the thing it describes changes constantly, several systems describe it differently, nobody is accountable for its accuracy, and **its failure mode is silent**.」（[rezolve.ai](https://www.rezolve.ai/blog/cmdb-architecture-scalability)）—— 与 Netflix 那句「不完整数据比没有数据更糟」是同一洞察的两面。
 
-### 4.0.1 三态观测模型：`nutrition-kb` 误判的规范化解法
+### 4.0.1 三态观测模型：本项目**已经实现**，IETF 草案给了它一个规范名字
 
-本项目踩过的那次误判（`Retrieves → nutrition-kb` 因几小时无人提问被置 `active=false`，而知识库客观存在）有一个**规范化的解法**，来自 IETF 的多源印证草案（[draft-chandra-agent-registry-corroboration-00](https://www.ietf.org/archive/id/draft-chandra-agent-registry-corroboration-00.html)）。
+⚠️ **本节在第二版里写错了方向。** 它原本把这套机制写成「待引入的新设计」，而实测证明**本项目早已实现且正在生效**。保留本节是因为 IETF 草案提供了一套准确的术语和几条本项目还没覆盖的规则。
 
-它要求把每次观测分成**三态而非两态**：
+本项目踩过的那次误判（`Retrieves → nutrition-kb` 因几小时无人提问被置 `active=false`，而知识库客观存在）**已经有解**。`profiles/graph_contract.yaml` 的 `sparse_observation_sources` 段直接记录了这次事故，并给出处置：
 
-| 状态 | 含义 |
+> 「这些源产出的边不得走 `active=false` 的失效路径，只能标 `drift_status=observed_then_silent` + `unobserved_since`（与 `dependency_kind='inference'` 同一处置）。**判据从这里读，不在 `graph_cleanup.py` 里硬编码源名。**」
+
+实测这套机制**四态齐全且正在生效**：
+
+| `drift_status` | 条数 | 语义 |
+|---|---|---|
+| `observed_then_silent` | 14 | 观测到过然后沉默 —— **不断言依赖消失** |
+| `ok` | 15 | 观测到且正常 |
+| `declared_not_observed` | 10 | 声明源说有、观测源没看见 |
+
+**`deepflow-dns` 的 18 条边全部有 `drift_status`，且 `active` 覆盖率为 0** —— 正是契约承诺的「不走 active 失效路径」。
+
+还有一个闭环设计值得记录：结构边的 `expires_seconds: None` 注解写着「生命周期跟随两端节点」，节点侧的机制由 `expire_stale_nodes`（2026-09-04 新增）补上。实测**1,466 个陈旧 `Pod` 节点全部正确标记 `active=false`，一个不漏**；`GRAPH_NODE_EXPIRY_ENABLED` 与 `GRAPH_EDGE_EXPIRY_ENABLED` 线上均为 `true`。所以「结构边不独立判活」不是缺口，是设计，而且闭环了。
+
+#### IETF 草案还能补什么
+
+对照 [draft-chandra-agent-registry-corroboration-00](https://www.ietf.org/archive/id/draft-chandra-agent-registry-corroboration-00.html)，本项目的四态已覆盖它的核心；真正还缺的是这三条：
+
+| 草案要求 | 本项目现状 |
 |---|---|
-| `present` | 源给出了这条记录 |
-| `absent` | 源**积极断言**这个对象不存在 |
-| `error` | 其他任何情况：连接失败、超时、无法解析、采集器没跑 |
+| 观测分 `present` / `absent` / **`error`** 三态，且「**a source that failed to answer has asserted nothing and MUST NOT be treated as claiming absence**」——`error` 完全不参与判定 | `drift_status` 区分了「沉默」与「声明未观测」，但**没有显式的 `error` 态**：采集器自身失败（超时、异常）与「跑了但没看到」目前无法区分 |
+| 单源支持必须判 `INSUFFICIENT`，「**MUST NOT report agreement**」 | 图上无此概念。只有 `source`（首个发现者），看不出有几个源确认 |
+| 分歧本身也要确认：`suspected`（首次观测到）vs `confirmed`（超过 staleness window 后复现） | `declared_not_observed` 是单次判定，无「复现才算确认」的纪律 |
 
-核心规则（原文 MUST 级）：
+第二条正是 §8.1 第 1 项 `confirmed_by` 要补的。
 
-> "A resolver MUST NOT raise; failures are `error` claims. An `error` claim **MUST be excluded from the diff entirely**. This rule is central: **a source that failed to answer has asserted nothing and MUST NOT be treated as claiming absence** — otherwise every transient fault becomes a false omission finding."
+### 4.0.2 ⚠️ 13 个源不等于 13 个独立源
 
-**`nutrition-kb` 那次误判的根因正是把 `error`（没观测到）当成了 `absent`（观测到不存在）。** 这个模型比本文早先说的「不确定时判 inconclusive」更精确 —— 它指出没观测到应当**完全不参与**判定，而不是产生一个弱结论。
+契约 `sources` 段列了 **13 个源**，实测全部在用：
 
-配套的三条：
+| 源 | 边数 | 源 | 边数 |
+|---|---|---|---|
+| `eks-etl` | **6,652** | `deepflow-etl` | 17 |
+| `aws-etl` | 242 | `business-layer` | 6 |
+| `xray` | 33 | `deepflow-l4` | 6 |
+| `manual-fix` | 32 | `cfn-etl` | 5 |
+| `agentcore-etl` | 20 | `aws-etl-static` | 3 |
+| `deepflow-dns` | 18 | `nfm` | 3 |
+| | | `appsignals-etl` | 2 |
 
-- **单源支持不能算「已确认」。** 「A sweep with fewer than two `present`-or-`absent` claims has nothing to corroborate; its verdict is `INSUFFICIENT`, and an implementation **MUST NOT report agreement** in that case.」→ 本项目里只有一个源看见的边应显式标记为「证据不足」，而不是 confirmed。
-- **分歧本身也要确认，不只是存在要确认。** `suspected`（首次观测到分歧）vs `confirmed`（超过 staleness window 后再次观测到同一分歧）。「Consumers SHOULD treat `suspected` findings as monitoring signals and `confirmed` findings as evidence.」staleness window 由各源的传播特性（TTL、同步间隔）决定。
-- **一致也必须记录。** 「A corroboration trail recording only disagreements **cannot prove its checks ran**; the agreement record is the positive attestation.」→ 对应本项目已有的纪律：必须能证明检查跑过，不能只记录失败。
+`eks-etl` 独占 **72%** —— 它写的正是 §4.0 里那类「可对账」的 K8s 拓扑边。
 
-### 4.0.2 ⚠️ 8 个源不等于 8 个独立源
-
-这是同一份草案 Security Considerations 里最该被记住的一条：
+这是 IETF 草案 Security Considerations 里最该被记住的一条：
 
 > "Corroboration among k sources is worth exactly the **independence** among them. Sources sharing an upstream feed, an operator, or an incentive **corroborate each other's misinformation by construction**. This procedure records which sources agreed, enabling diversity-weighted consumption; **it cannot manufacture diversity**."
 
-本项目的 8 个源**存在明显的共享上游**：
+本项目的源**存在明显的共享上游**：
 
 | 疑似同源组 | 共享的上游 |
 |---|---|
-| `deepflow-dns` + `deepflow-l4` | 同一套 DeepFlow eBPF 采集 |
+| `deepflow-dns` + `deepflow-l4` + `deepflow-etl` | 同一套 DeepFlow eBPF 采集 |
 | `xray` + `appsignals-etl` | 都源自 AWS 的 trace／span 数据 |
-| `aws-etl` + `cfn-etl` | 都源自 AWS 控制面 |
+| `aws-etl` + `aws-etl-static` + `cfn-etl` + `eks-etl` | 都源自 AWS 控制面 API |
 
 **所以 `confirm_count` 必须按独立性分组计算**，不能简单数源的个数 —— 否则 `deepflow-dns` 与 `deepflow-l4` 同时确认会被当成两条独立证据，而它们实际只是一条。真正强的印证是**跨组**的，例如 eBPF 组 + trace 组同时看见。
 
-这意味着 §8.1 第 1 项的 `confirmed_by` 设计要带上分组信息，而不只是一个源名列表。
+契约的 `sources` 目前是**平铺列表，没有分组信息**。这是 §8.1 第 1 项要补的另一半：`confirmed_by` 记录确认源，而独立性分组要落进契约，判据从契约读而不在代码里硬编码 —— 与 `sparse_observation_sources` 已经确立的做法一致。
 
 ### 4.1 问题：零流量不等于依赖不存在
 
@@ -539,16 +561,23 @@ Neptune（写主库）
 
 实测后的优先级与本文第一版完全不同 —— 第一版四项里三项前提不成立(§9)。真正紧迫的是图谱**当前**陈述的正确性。
 
-1. **补多源交叉印证。** 本项目有 8 个独立采集源(`aws-etl` / `deepflow-dns` / `deepflow-l4` / `xray` / `appsignals-etl` / `nfm` / `cfn-etl` / `manual-fix`),但 `source` 是刻意的 write-once,**只记首个发现者** —— 这个 provenance 语义是对的,`upsert_edge` 为它修过两次 bug,不该动。代价是图里看不出「有几个源确认了这条边」。
-   做法是新增 `confirmed_by`(所有确认源的集合)与 `confirm_count`,不碰 `source`。**这是零语义风险的纯增量改动,而且不需要等时间累积 —— 8 个源已经在跑,立刻就能产出置信度**,并给未验证的边排出验证优先级:单源支持的先验,多源印证的可降级。
-2. **查清 inconclusive 率。** 已验证的 44 条边里 confirmed 17、**inconclusive 16**,几乎一样多。`Calls` 是 4 confirmed vs 6 inconclusive,`DependsOn` 是 2 vs 6 —— 两者都是「没结论」多于「有结论」。**在修好产出率之前扩大验证覆盖是白费力气。**
-   ⚠️ 但 inconclusive 也可能是**正确的** fail-safe 输出 —— 零流量与健康在指标上确实无法区分,此时判 inconclusive 而非 refuted 正是契约要求的行为。所以这一步的产出可能是「无需改动,当前行为正确」。
-3. **处理已知的错误陈述。** 5 条 `modeling_artifact`(建模产物冒充真实依赖,全部落在 `AccessesData` 上)、1 条 `source='manual-fix'` 且从未验证的边。
+1. **补多源交叉印证 —— 这是实测后唯一确认真正缺失的机制。** 契约 `sources` 列了 **13 个源**且全部在用,但 `source` 是刻意的 write-once,**只记首个发现者** —— 这个 provenance 语义是对的,`upsert_edge` 为它修过两次 bug,不该动。代价是图里看不出「有几个源确认了这条边」。
+   做法是新增 `confirmed_by`(所有确认源的集合,用 SET 基数天然幂等去重)与按独立性分组的 `confirm_count`,不碰 `source`。**这是零语义风险的纯增量改动,而且不需要等时间累积 —— 13 个源已经在跑,立刻就能产出置信度**,并给未验证的边排出验证优先级:单源支持的先验,跨组印证的可降级。
+   ⚠️ 独立性分组必须落进**契约**而非代码硬编码 —— 与 `sparse_observation_sources` 已确立的做法一致(见 §4.0.2)。
+2. **~~查清 inconclusive 率~~ —— 已查清,结论是「当前行为基本正确,但有 4 条可疑」。** 实测 16 条 inconclusive 的构成:
+   - **9 条(56%)是结构性正确的 inconclusive**:6 条 `DependsOn` 的实验注记写着「cutting ECR affects only new Pod image pulls, not already-running Pods; **no runtime degradation observable**」—— 依赖真实存在但运行时观测不到降级,既不能判 confirmed 也不能判 refuted;3 条 `Calls` 是 trace 推断出的自环(「same-function edge; **no distinct downstream to partition**」),结构上无法验证。
+   - **4 条可疑,值得单独查**:degradation 分别为 **24.66% / 66.67% / 100.0% / 0.37%** 却仍判 inconclusive。24% 与 66% 是相当明显的降级,判据为何不升为 confirmed 需要看验证器逻辑。
+   - 1 条 `Delegates` 的 `verify_experiment` 与 `verify_degradation` 均为 null —— 没跑实验却有 inconclusive 状态。
+   - 契约已有 `verify_blocked_reason`(2026-09-09 新增,四类取值)专门区分「不可验」与「没结论」,而 **16 条 inconclusive 全部 `blocked_reason=null`**,所以它们不是工具天花板导致的。
+3. **处理已知的错误陈述。** 5 条 `modeling_artifact`(4 条无原因记录、1 条注明「被测路径近 900s 只有 6 次调用,需 >= 20」属环境前提)。
+   ⚠️ `manual-fix` 的 32 条边**不构成问题**:实测 28 条是 `Incident -AffectedService-> Microservice`,即故障影响的历史记录,天然不该有生命周期;只有 4 条是依赖边(2 条 `DependsOn → SQSQueue`、1 条 `ProtectsAccess`、1 条 `AccessesData → DynamoDBTable`)。
 
 ### 8.2 第二阶段:建模决策
 
-4. **定 `Pod` 的建模归属。** 1,545 个 Pod 占节点总数 **71%**,而 Pod 每次部署全部换名 —— 抖动最高、价值密度最低,`graph_gc.py` 的存在就是为清理它们。
-   两条路:(a) Pod 不进图,依赖分析用 Service/Deployment 粒度,Pod 信息作节点属性或按需查 K8s API;(b) 保留 Pod,但显式接受 GC 成本与规模曲线。
+4. **定 `Pod` 的建模归属。** 1,545 个 Pod 占节点总数 **71%**,而 Pod 每次部署全部换名 —— 抖动最高、价值密度最低。
+   ⚠️ **这不是正确性问题。** 实测 1,466 个陈旧 Pod **全部被 `expire_stale_nodes` 正确标记 `active=false`**,一个不漏(见 §4.0.1)。所以它是**存储与查询效率**问题:图里 71% 的节点是已失活的历史 Pod,每次按 label 扫描都要跨过它们,而 Neptune 没有 (label, 属性) 复合索引,`hasLabel('Pod') + active` 只能靠两个独立 pattern 求交。
+   ⚠️ 另需注意 `graph_gc.py` 的 `run_gc` **只覆盖 10 种 AWS label**(`EC2Instance` `LambdaFunction` `RDSCluster` `NeptuneCluster` `RDSInstance` `NeptuneInstance` `EKSCluster` `LoadBalancer` `SQSQueue` `SNSTopic`),不含任何 K8s 对象,且**边级操作数为 0**。K8s 侧靠的是 `expire_stale_nodes` 标记而非 GC 删除 —— 这是刻意的(「节点置 `active=false` 会影响以它为端点的一切遍历,风险面比边大,要能独立灰度」)。
+   两条路:(a) Pod 不进图,依赖分析用 Service/Deployment 粒度,Pod 信息作节点属性或按需查 K8s API;(b) 保留 Pod 并保留当前的标记机制,但为失活节点加定期归档/删除,控制图的长期膨胀。
    **这个决定必须在第 5 项之前做**,因为它会改掉两类边划分里最大的一类(`RunsOn` 1,921 条正是 Pod→Node)。
 5. **落地「可对账 vs 需推断」的两类边划分**(见 §4.0),逐 label 归类并配各自的刷新机制。
 
@@ -578,7 +607,7 @@ Neptune（写主库）
 
 ## 9. 本文自我更正的记录
 
-两批更正：第一批来自调研（推翻调研前的口头结论），第二批来自 2026-09-26 的实测（推翻本文第一版基于推算写下的内容）。记在这里免得被继续引用。
+**三批**更正：第一批来自调研（推翻调研前的口头结论），第二批来自 2026-09-26 的实测（推翻本文第一版基于推算写下的内容），第三批来自同日更深的实测（推翻我在调查中报告的三处「问题」—— 它们其实是项目已经解决或刻意如此的设计）。记在这里免得被继续引用。
 
 ### 9.1 第一批：调研推翻的判断
 
@@ -603,16 +632,36 @@ Neptune（写主库）
 | 「失活对账按 `scope` 分片」 | **`scope` 在边上一条都没有**（9,293 条边覆盖率 0）。它是**节点**属性（`Pod` 1,545/1,545）。这个分片键当前不存在 |
 | 第一阶段四项「纯代码改动，现在就能做」 | **三项前提不成立**。实测后的正确优先级见 §8.1 —— 先修「正在错」（多源印证、inconclusive 率、已知错误陈述），不是性能 |
 
-### 9.3 这两批错误的共同模式
+### 9.3 第三批：把「没查」当成「有问题」
 
-**读到一句话就当成事实，没去验。** 具体形态：
+这一批与前两批**方向相反** —— 前两批是高估现状（以为没问题），这一批是低估现状（以为有问题，而项目早已解决）。三次都发生在同一轮调查里：
 
+| 我在调查中报告过 | 实测 |
+|---|---|
+| 「95% 的 `Pod` 顶点是幽灵」 | **1,466 个陈旧 Pod 全部被正确标记 `active=false`，一个不漏。** `expire_stale_nodes`（2026-09-04 为此专门新增）在生效，`GRAPH_NODE_EXPIRY_ENABLED` 线上为 `true` |
+| 「63% 的基础设施边是幽灵边」 | 结构边的 `expires_seconds: None` 注解写着「生命周期跟随两端节点」—— **不独立判活是设计而非缺口**，且节点侧机制已闭环 |
+| 「32 条 `manual-fix` 边不受任何机制管」 | 28 条是 `Incident -AffectedService-> Microservice`，**故障影响的历史记录天然不该有生命周期**。只有 4 条是依赖边 |
+
+更严重的是文档本身：**本文第二版的 §4.0.1 把项目已实现并正在生效的机制写成了「待引入的新设计」。** `sparse_observation_sources` 段不仅存在，其注释里直接记录了 `nutrition-kb` 那次事故并给出 `drift_status=observed_then_silent` 的处置；`verify_blocked_reason`（四类取值）也已经在区分「不可验」与「没结论」。
+
+### 9.4 三批错误的共同模式
+
+**不读现有实现就下结论 —— 两个方向都会错。**
+
+方向一（前两批）：
 - 把注释的声明（"防止并发写入 Neptune"）当成生效的行为
 - 把某个子集查询的结果（126）当成全局基线
 - 把往返延迟推算当成实测，还在标题里写"（实测）"
 - 把节点属性（`scope`）当成边属性，因为记得"最近补过 scope 写入"
 
-修正它们只用了不到一小时的实测 —— `openCypher` 数三次、CloudWatch 查一次指标、`explain` 跑两次、`git blame` 一次。**代价不对称到这个程度，说明「先验后写」不是纪律问题而是效率问题。**
+方向二（第三批）：
+- 看到一个数字异常（95% 陈旧）就断言机制缺失，而没去查那个机制是否存在、是否刻意如此
+
+**方向二的代价更高：它会导致重造已有的轮子，甚至可能删掉被刻意保留的数据。** 如果按「止血」去实现 Pod GC 并执行删除，会删掉 1,466 个被有意保留、且已正确标记的历史节点 —— 而那个"保留而非删除"正是 2026-09-04 那次设计的明确选择。
+
+`profiles/graph_contract.yaml` 是这类问题的权威来源：它的注释里写着事故记录、处置决定与实测代价。**断言某个机制缺失之前，先读契约。**
+
+修正三批错误用的实测总计不到两小时：`openCypher` 十余次、CloudWatch 一次、`explain` 两次、`git blame` 一次、读契约四段。代价不对称到这个程度，说明「先验后写」不是纪律问题而是效率问题。
 
 ---
 
@@ -656,7 +705,18 @@ Neptune（写主库）
 - 写入耗时：`etl_deepflow` 6.7 s、`etl_aws` 79.9 s、`etl_cfn` 3.8 s（Lambda 上限 900 s）
 - 并发峰值：`etl_aws` = 3，无事故
 - DFE：`autoCompute: True`，估计值精确（Calls 12↔12、RunsOn 1964↔1964）
-- 验证结论：confirmed 17／inconclusive 16／modeling_artifact 5／bootstrap_only 2／untested 2
+- 验证结论：confirmed 19／inconclusive 16／modeling_artifact 5／bootstrap_only 2／untested 2
+- 源分布：13 个源全部在用，`eks-etl` 独占 6,652 条边（72%）
+- `drift_status`：`observed_then_silent` 14／`ok` 15／`declared_not_observed` 10；`deepflow-dns` 18 条边全部有 `drift_status` 且 `active` 覆盖率 0
+- 节点过期：1,466 个陈旧 `Pod` **全部**正确标记 `active=false`；`GRAPH_NODE_EXPIRY_ENABLED` 与 `GRAPH_EDGE_EXPIRY_ENABLED` 线上均为 `true`
+- `run_gc` 覆盖范围：10 种 AWS label，**不含任何 K8s 对象**，边级操作数 0
+
+**本项目已实现、不要当作待引入的机制（第三批更正的教训）**
+- `profiles/graph_contract.yaml` → `sparse_observation_sources`：稀疏观测源不走 `active=false`，改标 `drift_status` + `unobserved_since`。注释里直接记录了 `nutrition-kb` 事故
+- 同上 → `verify_blocked_reason`（四类取值）：区分「不可验」与「没结论」
+- 同上 → `node_attr_authority`：节点属性的权威源（ServiceNow reconciliation rules 的对应物，当前只覆盖 `Microservice` 三个属性）
+- 同上 → `edge_write_once_attrs`：`source` / `dependency_kind` / `first_seen`
+- `graph_cleanup.py` → `expire_stale_nodes`：节点过期收敛，与边的开关分开灰度
 
 **明确查不到（勿当依据）**
 - 单 writer 每秒写入边/节点数：AWS 无公布，须实测
