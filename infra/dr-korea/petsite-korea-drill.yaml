@@ -55,7 +55,21 @@ spec:
       containers:
         - name: petsite
           # ⚠️ ap-northeast-2 —— 这正是这次演练要验的东西
-          image: 926093770964.dkr.ecr.ap-northeast-2.amazonaws.com/cdk-hnb659fds-container-assets-926093770964-ap-northeast-1:e849677d52a8bdfdcf34a388637c4205026abec9698a3977eda42fd89c830acc
+          # ⚠️ 2026-09-26 换成热修镜像（按 digest 钉死，不用 tag）。
+          #
+          # 原来这里是 CDK asset 的 :e849677d…（digest sha256:52af83bb…），
+          # 那份镜像构建于 2026-09-05T03:34:47Z，而「领养假成功」修复 ca60bc8f
+          # 提交于 03:38:40Z —— **镜像比修复早 3 分 53 秒**，所以不含修复。
+          #
+          # 不换的后果不是「首尔缺个补丁」，而是**切过去会把已修掉的缺陷带回来**：
+          # 页面显示「Adoption Complete」而后端一行没写，HTTP 200 零异常。
+          # 两侧跑不同版本的代码是灾备最难发现的那类不一致 ——
+          # 切过去时一切"正常"，只有数据不对。
+          #
+          # 东京同一 digest 已在线上（2026-09-26 14:12 起），
+          # 首尔这份由 09-ecr-replication 的 petsite-hotfix 前缀复制而来，
+          # 两侧 digest 逐字相同（已核实）。
+          image: 926093770964.dkr.ecr.ap-northeast-2.amazonaws.com/petsite-hotfix@sha256:0a7dde1bf631b4568ce7b8f762c6a0e82576b9aeaf8b054d7e5b0255df316c93
           imagePullPolicy: Always
           ports:
             - containerPort: 8080

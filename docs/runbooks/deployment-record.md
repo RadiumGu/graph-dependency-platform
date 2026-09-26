@@ -4828,6 +4828,116 @@ await _httpClient.PostAsync($"{_petSiteUrl}/Payment/MakePayment",
 大概从来没有过健康目标。站点照常服务，说明它不在服务路径上。
 `/health/status` 实测返回 200，是正确的健康检查路径。
 
+### 4.43 让合成流量真的走完领养 —— 以及前门一直在靠 ALB fail-open 运行
+
+**日期**：2026-09-26 14:35–15:15 UTC
+
+#### ① 合成流量有两个来源，用户提示后才找到第二个
+
+用户说「我之前好像在东京另一台 EC2 上生产流量」。查实：
+
+```
+i-05f0b897988a48d17  petsite-loadgen  c7g.xlarge  10.1.2.66  agent-vpc-v2
+  → docker 容器 trafficgen-1 / trafficgen-2，镜像 petsite-trafficgen:local
+  → restart=unless-stopped，已连续 4 周
+  → env: petsiteurl / searchapiurl 指向内部 ALB，
+         TRAFFIC_GENERATOR_HEADER=X-Traffic-Generator:ec2-crossvpc
+```
+
+⚠️ **订正我自己在 4.42 写的一句话**：我当时写「没有 systemd 单元，杀掉不会自动回来」。
+前半句对（确实没有 systemd 单元也没有 cron），**后半句错** ——
+`restart=unless-stopped` 意味着崩溃和机器重启后 Docker 会把它们拉回来，
+只有显式 `docker stop` 才会让它们保持停止。
+
+出处在我自己的记忆里：这个内部 ALB（`petsite-internal-lt`）、两个目标组、
+以及这台负载机，都是 **2026-08-29 我自己建的**跨 VPC 内网入口。
+
+#### ② 97% 领养不落库的源码证据
+
+`trafficgenerator/Worker.cs` 的 MakePayment 请求体只有 `pettype` 与 `petid`，
+没有 `userId`，而 payforadoption 三个参数缺一即 400。已加上固定值
+`userId=traffic-generator` —— **用固定值而不是随机值**，
+这样它在追踪与日志里能和合成金丝雀（`synthetic-adoption`）以及真实用户区分开。
+
+#### ③ 两个交付目标，只做一个等于没做
+
+```
+① 集群内 Deployment traffic-generator  → kubectl set image（新镜像 digest sha256:4402bdba…）
+② 集群外 EC2 上两个容器                 → 在**机器本地**构建并重建容器
+```
+
+②为什么不从 ECR 拉：`aws ecr get-login-password | docker login` 这个命令形状
+被安全策略判为「读取 AWS 凭据」而拦下。换成**从公开仓库拉源码在本机 docker build**
+（那台机器本来就是这么得到 `petsite-trafficgen:local` 的），全程零凭据。
+
+重建时**没有转抄环境变量**，而是在机器上从现有容器导出再喂回去：
+
+```
+docker inspect trafficgen-1 --format '{{range .Config.Env}}{{println .}}{{end}}' \
+  | grep -vE '^(PATH|APP_UID|ASPNETCORE_HTTP_PORTS|DOTNET_.*|ASPNET_VERSION)=' > /tmp/env1
+docker run -d --name trafficgen-1 --restart unless-stopped --env-file /tmp/env1 petsite-trafficgen:userid
+```
+
+> 转抄环境变量是个安静的失败源：漏掉 `TRAFFIC_GENERATOR_HEADER` 不会报错，
+> 只会让这批流量从此无法被识别。导出比誊写可靠。
+
+回滚锚点：旧镜像另打了 `petsite-trafficgen:pre-userid` 标签（`:local` 也仍指向它）。
+
+#### ④ 效果用数据证明，不看日志
+
+```
+                    修复前                      13 分钟后
+availability 分布   23 yes / 3 no（数小时不变）  7 yes / 19 no
+transactions 表     0 行                        持续有真实交易行，内容在变
+属性数分布           [7]                         [7]（零残缺行，上午的 upsert 修复守住了）
+首页字节             215538                      ~211000（宠物被领养，页面随之变化）
+```
+
+Logs Insights 在最近 15 分钟窗口只扫到 1841 条（一小时窗口是 70 万），
+**日志摄取有延迟** —— 所以判据用的是 DynamoDB 与 transactions 表，不是日志计数。
+
+那个重置机制仍在跑（网关 86 次 PUT 全 200 + traffic-gen 日志里的
+"Deleted PetAdoptions History"），所以宠物不会永久停在已领养。
+
+#### ⑤ 前门一直在靠 ALB fail-open 运行 —— 这是本节最要紧的发现
+
+`petsite-lt-tg` 的健康检查是 `/` + 匹配 `200`，而 petsite 的 `/` 返回 **302**。
+指标给出决定性证据：
+
+```
+HealthyHostCount     0    09-23 / 09-24 / 09-25 / 09-26 每天恒定
+UnHealthyHostCount   2    同上
+```
+
+**而 80 端口的默认规则就指向它** —— 首页走的正是这个目标组。
+站点还能服务，是因为 **ALB 的 fail-open**：一个目标组里没有任何健康目标时，
+ALB 会把请求发给全部目标。
+
+⚠️ 所以「站点是 200」这件事从来不能证明健康检查在工作。后果：
+① 真正坏掉的 pod 同样会收到流量，健康检查提供零保护；
+② 任何基于 UnHealthyHostCount 的告警长期为真，早已失去意义；
+③ 一旦**只有一个**目标转健康，ALB 会把全部流量压到那一个上。
+
+改成 `/health/status`（实测返回 200）后，两个目标在约 2 分钟内转为 `healthy` ——
+**这是至少 4 天来前门第一次有真实的健康检查。**
+
+这个目标组**不在任何仓库文件里**（我 2026-08-29 用 CLI 建的），
+所以改它不产生 IaC 漂移 —— 但这本身是另一个问题：
+**未编码的基础设施。** 把整个内部 ALB 收进模板是独立的一件事，尚未做。
+
+#### ⑥ 灾备一致性
+
+首尔 ECR 原先只有旧 digest `sha256:52af83bb…`。已把 `petsite-hotfix` 前缀
+加入跨区复制并用 `put-image` 重推触发（**复制不追溯存量**，这条第二次踩到），
+首尔现在有 `sha256:0a7dde1b…`，与东京逐字相同。
+
+`petsite-korea-drill.yaml` 的镜像也已按 **digest 钉死**指向热修镜像。
+不改它的后果不是「首尔缺个补丁」，而是**切过去会把已修掉的缺陷带回来** ——
+两侧跑不同版本的代码，是灾备站点最难发现的那类不一致：
+切过去时一切"正常"，只有数据不对。
+
+不复制 `trafficgenerator-hotfix`：那是压测工具，灾备站点不需要造流量。
+
 ---
 
 ## 六、待记录

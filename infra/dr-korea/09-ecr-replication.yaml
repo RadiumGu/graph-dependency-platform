@@ -78,6 +78,23 @@ Parameters:
       用户 2026-09-26 要求把 WaggleAI 也在首尔建起来,于是这 5 个镜像变成了
       灾备范围内的东西,必须复制。
 
+  HotfixRepoPrefix:
+    Type: String
+    Default: petsite-hotfix
+    Description: >
+      热修镜像仓库。2026-09-26 加入。
+
+      为什么必须复制:东京的 petsite 已经换成 petsite-hotfix 镜像
+      (含「领养假成功」修复 ca60bc8f),而首尔 ECR 里只有那个**旧 digest**
+      sha256:52af83bb…(与东京原镜像同一个,跨区复制来的)。
+
+      ⚠️ 不复制的后果不是「首尔缺个镜像」,而是**灾备切换会把已修掉的缺陷带回来**:
+      页面显示「Adoption Complete」而后端一行没写,HTTP 200 零异常。
+      两侧跑不同版本的代码,是灾备站点最难发现的那类不一致 ——
+      切过去时一切"正常",只有数据不对。
+
+      不含 trafficgenerator-hotfix:那是压测工具,灾备站点不需要造流量。
+
       选复制而不是在首尔重新构建镜像,理由是**同一个 digest 才是同一个东西** ——
       重建出来的镜像不是演练过的那个。实测复制后两侧 digest 逐一相同。
 
@@ -114,6 +131,8 @@ Resources:
               - Filter: !Ref NamedRepoPrefix
                 FilterType: PREFIX_MATCH
               - Filter: !Ref WaggleRepoPrefix
+                FilterType: PREFIX_MATCH
+              - Filter: !Ref HotfixRepoPrefix
                 FilterType: PREFIX_MATCH
 
 Outputs:

@@ -1,0 +1,154 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  trafficgenerator 镜像构建（东京 ap-northeast-1）—— 让合成流量带上 userId，
+  使这个 demo 展示的领养链路追踪不再有 97% 是假的。
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 为什么要改流量生成器
+#
+# trafficgenerator/Worker.cs 的 MakePayment 请求体只有两个字段：
+#     pettype={...}&petid={...}          ← 没有 userId
+#
+# 而 payforadoption 的 decodeCompleteAdoptionRequest 三个参数缺一即返回 400。
+# 所以这条领养链路**从来没到达过支付后端**。东京线上实测（2026-09-26）：
+#
+#     Inside MakePayment（尝试）                3574 / 小时
+#     transaction_created_successfully（落库）    104 / 小时   ← 2.9%
+#
+# 那 104 笔来自显式传 userId 的合成金丝雀。也就是说这个**可观测性 demo**
+# 里最核心的那条端到端链路，97% 的样本没有 payforadoption 段、
+# 没有 Aurora 段、没有 SQS 段 —— 展示的东西本身是空的。
+#
+# ⚠️ 在 ca60bc8f（2026-09-05 合并、2026-09-26 才上线）之前，这个缺陷的表现是
+#    **假成功**：页面显示「Adoption Complete」而后端一行没写，HTTP 200 零异常。
+#    修复上线后它变成诚实的错误页 —— 于是这个本来被掩盖的问题才暴露出来。
+#    **本栈修的是被那次修复揭开的真问题，不是修复引入的新问题。**
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# 两个交付目标，不要只做一个
+#
+# 合成流量有**两个来源**，都跑同一份 trafficgenerator：
+#
+#   ① 集群内 Deployment  traffic-generator（1 个 pod）→ 换镜像
+#   ② 集群外 EC2         i-05f0b897988a48d17 / petsite-loadgen / 10.1.2.66
+#                        两个 `dotnet trafficgenerator.dll` 进程，已连续 28 天
+#                        **没有 systemd 单元、没有 cron** —— 手工起的，
+#                        杀掉不会自动回来，必须按原样重启
+#
+# 只换集群那份，三分之二的合成流量仍然是坏的。
+# ══════════════════════════════════════════════════════════════════════════════
+
+Parameters:
+  RepoUrl:
+    Type: String
+    Default: https://github.com/RadiumGu/one-observability-demo.git
+  SourceBranch:
+    Type: String
+    Default: main
+  EcrRepoName:
+    Type: String
+    Default: trafficgenerator-hotfix
+  BuildContext:
+    Type: String
+    Default: PetAdoptions/trafficgenerator/trafficgenerator
+    Description: Dockerfile 在最内层那一级
+
+Resources:
+
+  HotfixRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref EcrRepoName
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"keep last 5",
+          "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":5},
+          "action":{"type":"expire"}}]}
+
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: trafficgen-hotfix-build
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: codebuild.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BuildAndPush
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:CompleteLayerUpload
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:DescribeImages
+                Resource: !GetAtt HotfixRepo.Arn
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: trafficgen-hotfix-build
+      Description: 构建带 userId 的 trafficgenerator 镜像（arm64）
+      ServiceRole: !GetAtt BuildRole.Arn
+      Artifacts: {Type: NO_ARTIFACTS}
+      Source:
+        Type: GITHUB
+        Location: !Ref RepoUrl
+        BuildSpec: !Sub |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+                - export TAG=$(git rev-parse --short HEAD)
+                - echo "building from commit $TAG"
+                # 构建前证明修复在源码里 —— 否则会产出一个「看起来是热修」
+                # 而 MakePayment 仍然不带 userId 的镜像。
+                - grep -q 'userId=traffic-generator' ${BuildContext}/Worker.cs
+                - echo "fix confirmed present in source"
+            build:
+              commands:
+                - cd ${BuildContext}
+                - docker build -t ${EcrRepoName}:$TAG .
+            post_build:
+              commands:
+                - export URI=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrRepoName}
+                - docker tag ${EcrRepoName}:$TAG $URI:$TAG
+                - docker push $URI:$TAG
+                - aws ecr describe-images --region ${AWS::Region} --repository-name ${EcrRepoName} --image-ids imageTag=$TAG --query 'imageDetails[0].{digest:imageDigest,pushed:imagePushedAt}' --output json
+      SourceVersion: !Ref SourceBranch
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_LARGE
+        Image: aws/codebuild/amazonlinux2-aarch64-standard:3.0
+        PrivilegedMode: true
+      TimeoutInMinutes: 60
+
+Outputs:
+  ProjectName:
+    Value: !Ref BuildProject
+  EcrRepoUri:
+    Value: !GetAtt HotfixRepo.RepositoryUri
+  RollbackAnchor:
+    Description: 回滚用 —— 当前集群内 traffic-generator 镜像
+    Value: 926093770964.dkr.ecr.ap-northeast-1.amazonaws.com/cdk-hnb659fds-container-assets-926093770964-ap-northeast-1:28111322a93d1fbacfdf11a76a1b8579f400c9d701351b6470404e567ae0bf89
+  Ec2SecondTarget:
+    Description: 别忘了集群外那两个进程
+    Value: i-05f0b897988a48d17 (petsite-loadgen, 10.1.2.66) — 2x dotnet trafficgenerator.dll, no systemd unit
