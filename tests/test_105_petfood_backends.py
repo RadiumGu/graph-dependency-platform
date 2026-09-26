@@ -114,19 +114,56 @@ class TestFoodsTableCarriesTheWholeContract:
         assert_contains(stack_text, "指向的是**另一张表**")
 
 
-class TestCartsTableStaysIdenticalToTokyo:
-    def test_composite_key_is_preserved(self, stack: dict):
-        """**不许把它「修好」成单键。**
+class TestCartsTableMatchesWhatTheAppActuallyWrites:
+    """⚠️ 2026-09-26 这个类被**有意识地反转**了，不是随手改绿。
 
-        改成单键能让 /Checkout 好起来，但灾备站点的行为会与生产不一致。
-        petfood 的 GetItem 只给 user_id 是**应用自身的缺陷**，东京也一样失败。
-        """
+    原先它守的是「不许把 carts 表『修好』成单键」，理由是
+    「改成单键能让 /Checkout 好起来，但会让灾备站点的行为与生产不一致」。
+
+    **那条理由的前提错了。** 当时我以为复合主键是东京生产的既定事实、
+    韩国该照抄；实际上复合主键**与应用从根上不匹配**，两侧都坏，
+    只是症状先撞在读上。
+
+    决定性证据（petfood-rs/src/repositories/cart_repository.rs）:
+      cart_to_item()（:108-159）写入的顶层属性**只有 4 个** ——
+        user_id (S) / items (L) / created_at (S) / updated_at (S)
+      **根本不写 item_id。** models/cart.rs:6-12 印证 Cart 只有 user_id
+      一个标量键。**一个用户的购物车是「一行」。**
+
+    比原判断更严重的一层:save_cart 的 PutItem（:372）**也必然失败** ——
+    所以这张表**从来没被成功写入过**（实测两侧 scan 计数都是 0）。
+
+    所以现在守的是反过来的不变量:**表键必须与应用实际写入的形状一致。**
+    原来那条「别单方面偏离生产」的用意仍然有效 —— 变的是生产自己也在被修，
+    两侧一起动，而不是灾备侧单方面偏离。
+    """
+
+    def test_carts_is_simple_key(self, stack: dict):
+        """键必须是 user_id 单键 —— 加回 sort key 就会让读写全部 ValidationException。"""
         t = _table(stack, "PetFoodCartsTable")
         keys = [(k["AttributeName"], k["KeyType"]) for k in t["KeySchema"]]
-        assert keys == [("user_id", "HASH"), ("item_id", "RANGE")], (
-            f"carts 表的键被改成了 {keys} —— 与东京不一致。"
-            "即使这样能让 /Checkout 好起来，也不该在灾备侧单方面偏离生产"
+        assert keys == [("user_id", "HASH")], (
+            f"carts 表的键是 {keys} —— 应用的 cart_to_item() 从不写 item_id，"
+            "任何 sort key 都会让 GetItem/PutItem/DeleteItem 全部报 "
+            "ValidationException «provided key element does not match the schema»"
         )
+
+    def test_no_stale_item_id_attribute_definition(self, stack: dict):
+        """item_id 的属性定义也要一起去掉，否则 CFN 拒绝（属性必须恰好等于键用到的）。"""
+        t = _table(stack, "PetFoodCartsTable")
+        attrs = {a["AttributeName"] for a in t["AttributeDefinitions"]}
+        assert attrs == {"user_id"}, f"属性定义应只剩 user_id，实际 {sorted(attrs)}"
+
+    def test_the_evidence_is_recorded_in_the_template(self, stack_text: str):
+        """证据必须留在模板里 —— 否则下一个人会看着复合键更「规范」而改回去。"""
+        assert_contains(stack_text, "**根本不写 item_id。**")
+        assert_contains(stack_text, "cart_repository.rs:108-159")
+        assert_contains(stack_text, "**从来没被成功写入过**")
+
+    def test_why_not_query_is_recorded(self, stack_text: str):
+        """「改成 Query」这个错方向要写明为什么错，否则会被重新提出来。"""
+        assert_contains(stack_text, "为什么不是「把读法改成 Query」")
+        assert_contains(stack_text, "只接收**单个** item")
 
     def test_no_gsi_on_carts(self, stack: dict):
         """东京实测 carts 无 GSI/LSI —— 多加也是偏离。"""

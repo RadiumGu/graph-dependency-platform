@@ -3360,6 +3360,160 @@ health  InsufficientNumberOfReplicas
 
 ---
 
+
+### 4.32 修东京目标组健康检查 + 查清 `/Checkout` 的真因(与我原先的判断相反)
+
+**日期**:2026-09-26 ｜ 用户放行四项新工作,这是风险最低的两项
+
+#### ① 东京 petsite 目标组:那个健康检查**没人写过**
+
+`services-eks.ts:200-205` 的 `PetSiteTargetGroup` **根本没有 `healthCheck` 配置块** ——
+线上那套 `/` + `200` + 30s + 5/2 **全是 CDK/ELBv2 的默认值**。
+
+对照:同文件 `:234-241` 的 `PetAdoptionsHistoryTargetGroup` 反倒**显式**写了
+`healthCheck: { path: '/health/status' }`。偏偏 petsite 这个漏了。
+
+根因链(读源码):`BaseController.EnsureUserId()` 在无 `userId` 时
+`Response.Redirect(...)` 并 return true → `HomeController` 收到后
+`return new EmptyResult()` —— **在调用 PetSearch 之前就返回 302**。
+所以 `/` 永远不可能是 200,默认 matcher 与这个应用**天生不兼容**。
+
+改动:`matcher` 由 `200` 改为 `200-399`,**path 保持 `/`**。
+
+事前/事后(两个独立测量通道):
+
+```
+describe-target-health     0/2 healthy                →  2/2 healthy
+  改前 reason              Target.ResponseCodeMismatch
+  改前 description         "Health checks failed with these codes: [302]"
+CloudWatch（最严格统计量）
+  UnHealthyHostCount 最大值   2.0                      →  0.0
+  HealthyHostCount   最小值   0.0                      →  2.0
+```
+
+**报错原文直接写了是 302** —— 这次真因是白给的,不需要推断。
+
+##### 这条 matcher 能证明什么、不能证明什么
+
+- **能**:ASP.NET 进程活着、中间件管线与路由正常、会话分配逻辑在跑
+- **不能**:下游(PetSearch / SSM / AgentCore)可用 —— 因为 302 在调 PetSearch **之前**返回
+
+**为什么不指向 `/health/status`:** 那个端点返回**硬编码 5 字节 `"Alive"`**,
+完全不碰配置与依赖 —— 掩盖程度比现在更高。真 readiness 需要**新增应用端点**,
+那是改应用代码,不在「修健康检查配置」范围内。诚实结论:
+**petsite 里没有一个端点既稳定返回 200、又真反映可用性。**
+
+##### ⚠️ `cdk deploy ServicesEks2` 现在不安全 —— 所以走了 CLI
+
+线上 443 监听器规则**被手工改过**,与源码已经不一致:
+
+```
+                  线上实际                          源码
+petsite TG 挂载   优先级 3（空条件 catch-all）+ default   仅 defaultTargetGroups
+优先级 1          /streamlit → streamlit-tg          不存在
+优先级 2          /graph → neptune-ui-tg             不存在
+优先级 30/40      不存在                             grafana / pethistory
+```
+
+部署整栈会把手工加的优先级 1/2/3 **收敛掉**。所以:
+**CLI 定点改线上 + 同时把 CDK 源码补上显式 healthCheck**(避免将来部署又退回默认值)。
+这条漂移必须留档 —— 它让「改源码再部署」这条本该最正规的路变成了最危险的路。
+
+#### ② `/Checkout` 的真因与我原先的判断**相反**
+
+4.28 我记的是「petfood 用 `GetItem` 只给分区键,应该用 `Query`」。**那个方向是错的。**
+
+决定性证据是**写入形状**(`cart_repository.rs`):`cart_to_item()`(`:108-159`)
+写入的顶层属性**只有 4 个** —— `user_id` / `items`(L) / `created_at` / `updated_at`,
+**根本不写 `item_id`**。`models/cart.rs:6-12` 印证:`Cart` 只有 `user_id`
+一个标量键,`items` 是嵌套集合。
+
+> **一个用户的购物车是「一行」,整车序列化进 `items` 列表。**
+> 所以 `GetItem` 是对的;改成 `Query` 反而错 —— `item_to_cart`(`:162`)
+> 只接收**单个** item。
+
+真正的缺陷在 CDK:`services-eks.ts` 把 carts 表声明成复合主键
+`user_id + item_id`,而应用从不产出 `item_id`。**而且比原判断更严重一层**:
+
+```
+find_cart     GetItem    :338   缺 range 键 → ValidationException
+cart_exists   GetItem    :418   同上
+delete_cart   DeleteItem :395   同上
+save_cart     PutItem    :372   ← **也必然失败**
+```
+
+**所以这张购物车表从来没被成功写入过。** 实测印证:两个 region 的 carts 表
+**scan 计数都是 0**(用 scan 而不是 `ItemCount` —— 后者是最终一致的)。
+
+那条 CDK 注释本身就是缺陷的一部分,原文写着
+「一个用户的购物车是多条 item,按 user_id 查询整车、按复合键定位单项」——
+**与应用实际行为相反**。
+
+##### 修法:改表键,Rust 代码一行不改
+
+改键必须替换表(CFN 文档原文 "Replacement if you edit an existing
+AttributeDefinition")。两侧都是空表,**替换零数据损失**。
+
+##### CFN 拒绝替换自定义名资源 —— 两段式绕过
+
+```
+CloudFormation cannot update a stack when a custom-named resource requires
+replacing. Rename dr-korea-petfood-carts and update the stack again.
+```
+
+**它不看名字是否已空出来**(表当时已经删掉了),只要是自定义名 + 需要替换就直接拒。
+改名会把这次事故永久刻进资源名,所以走两段式:
+
+1. 把 `PetFoodCartsTable` 与它的 Output **从模板里摘掉**,部署
+   (表已删、`DeletionPolicy: Retain`,所以是空操作)
+2. 带新键**加回来**,部署
+
+结果:表名保持 `dr-korea-petfood-carts`,生成器的 `PETFOOD_CARTS_TABLE_NAME`
+与门禁都不用改。
+
+#### ③ 韩国实测:4 个页面**全部**正确渲染(此前是 3/4)
+
+```
+/                    Home                 219673B
+/PetListAdoptions    Pet Adoption List     10316B
+/FoodService         Pet Food Store        34043B
+/Checkout            Checkout              22851B   ← 第一次不是 Error
+```
+
+**API 级的端到端证据**(比页面更硬):
+
+```
+读空车    200  {"user_id":"drilluser","items":[],"total_items":0,…}
+加商品    201  {"food_id":"F12626cea","food_name":"Catnip Kitten Treats",…}
+再读回    200  {"items":[{"food_id":"F12626cea",…}]}      ← 真的持久化了
+petfood 日志  "does not match the schema" 命中 0，ValidationException 命中 0
+```
+
+而且 `/Checkout` 页面里**出现了那个商品**(`Catnip Kitten Treats` ×2),
+`<title>Error` 命中 0 —— API 写入 → DynamoDB → 页面渲染,整条链打通。
+
+**那个「从来没成功写入过」的 PutItem 现在能写了 —— 这就是「缺陷在表键不在读法」的证明。**
+
+#### ④ 我这轮的测量失误:页面测试忘了带 userId
+
+第一次测四个页面,全部返回 `Home` 标题、大小几乎一样(219673B)。
+原因正是我刚给健康检查记档的那件事 —— **无 `userId` 时重定向会把原路径丢掉**,
+`curl -L` 就跟到首页。
+
+带上 `?userId=` 重测才得到四个不同标题。并做了对照:
+`/Checkout` 不带 userId → `Home` 219673B,**证明差别来自 userId 而不是别的**。
+
+> 讽刺的是:**我刚写进记录的那个重定向行为,下一步就把我自己的测量骗了。**
+> 知道一个机制和在测量里避开它是两件事。
+
+#### ⑤ 东京那张表**还没改** —— 需要用户确认
+
+东京 carts 表也是同样的缺陷、同样是空表。但改它要**删一张生产表**再重建
+(键不可变),而且没法用 `cdk deploy`(见 ① 的漂移)。
+按红线「删生产数据要先问」,命令已备好但**未执行**,等用户确认。
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
