@@ -160,6 +160,37 @@ for f in $STAGE/*.py; do
 done
 ok "$(ls "$STAGE"/*.py | wc -l) 个 .py 语法检查通过"
 
+# ⚠️ 校验取到的内容与仓库里已提交的一致。
+#
+# 2026-09-26 实测踩到：raw.githubusercontent.com 是 **CDN 缓存**的。
+# 推完提交立刻发布，取到的是缓存里的旧版本 —— 而后续每一步都报成功：
+#   · 语法检查通过        ✅（旧代码语法当然是对的）
+#   · 同步到 S3 成功      ✅
+#   · provision 说「应用代码未变」✅ ← 看起来是「已经最新」，其实是「没拿到新的」
+# 于是一次修复被完整地部署掉了，而线上一行都没变。
+#
+# 这里拿 git 里已提交的那份逐字节比 —— 只在仓库内运行时能比，
+# 比不了就明确说「跳过了这项校验」，不假装通过。
+if git -C "$(dirname "$0")/../../.." rev-parse --git-dir >/dev/null 2>&1; then
+  REPO_ROOT=$(git -C "$(dirname "$0")/../../.." rev-parse --show-toplevel)
+  DRIFT=0
+  for f in $FILES; do
+    if git -C "$REPO_ROOT" show "origin/${REF}:dr-plan-generator/worker/$f" \
+         > "$STAGE/.expected" 2>/dev/null; then
+      cmp -s "$STAGE/.expected" "$STAGE/$f" || { fail "$f 与 origin/${REF} 不一致（CDN 缓存？）"; DRIFT=1; }
+    fi
+  done
+  rm -f "$STAGE/.expected"
+  if [ "$DRIFT" = 1 ]; then
+    echo "  取到的内容与已提交的不一致 —— 多半是 raw.githubusercontent 的 CDN 还没刷新。" >&2
+    echo "  等一两分钟重试，或用 --ref <commit-sha>（SHA 是内容寻址，不会陈旧）。" >&2
+    exit 1
+  fi
+  ok "与 origin/${REF} 逐字节一致（已排除 CDN 陈旧）"
+else
+  unk "不在仓库内运行，**跳过了「与已提交内容一致」这项校验**"
+fi
+
 # ── 2. 上传并 provision ────────────────────────────────────────────────
 say "2. 同步到 S3（S3 是唯一代码来源，保持既有契约）"
 aws s3 sync "$STAGE/" "s3://$BUCKET/worker/" --only-show-errors \

@@ -58,6 +58,7 @@ P_PLAN=dr-plan-write
 P_NEPTUNE=dr-neptune-read
 P_ASSUME=dr-assume-invocation-role
 P_MCPSEC=dr-graph-mcp-secret-read
+P_SNAPWRITE=dr-snapshot-write
 
 # 图谱 MCP 凭证的 secret 名。放**东京** —— 与发出该凭证的 Cognito 池、
 # 以及它授权的 MCP runtime 同区域，轮换时只有一处要改；
@@ -65,6 +66,26 @@ P_MCPSEC=dr-graph-mcp-secret-read
 # 名字可改，但要与 dr-worker.service 里的 DR_GRAPH_MCP_SECRET_ID 一致。
 MCP_SECRET_NAME="${DR_GRAPH_MCP_SECRET_NAME:-dr-graph-mcp-m2m}"
 SECRET_REGION=ap-northeast-1
+
+doc_snapshot_write() {
+  # ⚠️ 与 plan-write 分开成两条，不合并。
+  # 2026-09-26 实测：dr-plan-write 只覆盖 plans/*，而快照写 snapshots/* ——
+  # 于是 6 条 MCP 查询全部成功、一路走到上传才 AccessDenied。
+  # 收得紧是对的，漏了前缀是我的疏漏。
+  #
+  # 分成两条而不是把前缀合进一条：这两个写权限的理由不同
+  # （计划正文由人审批产生 / 快照由 Schedule 周期产生），
+  # 将来撤掉一个不该连带撤掉另一个。一个大策略会让
+  # 「为什么有这条权限」无从追溯。
+  cat <<JSON
+{"Version":"2012-10-17","Statement":[{
+  "Sid":"WriteGraphSnapshots",
+  "Effect":"Allow",
+  "Action":["s3:PutObject"],
+  "Resource":"arn:aws:s3:::$PLAN_BUCKET/snapshots/*"
+}]}
+JSON
+}
 
 doc_mcp_secret() {
   # Secrets Manager 的 ARN 尾部有 6 位随机后缀，所以必须用 NAME-* 收尾。
@@ -168,6 +189,7 @@ case "${1:-}" in
     echo "── plan-write ──";     doc_plan
     echo "── neptune-read（已不推荐，见 --apply 时的提示）──"; doc_neptune
     echo "── mcp-secret-read ──"; doc_mcp_secret
+    echo "── snapshot-write ──"; doc_snapshot_write
     echo "── assume-invocation ──"
     echo "  需要 invocation role ARN 才能生成 —— 目前不应授予，见脚本头部说明。"
     ;;
@@ -192,6 +214,11 @@ WARN
         aws iam put-role-policy --role-name "$ROLE" --policy-name "$P_NEPTUNE" \
           --policy-document "$(doc_neptune)"
         echo "已授予 $P_NEPTUNE"
+        ;;
+      snapshot-write)
+        aws iam put-role-policy --role-name "$ROLE" --policy-name "$P_SNAPWRITE" \
+          --policy-document "$(doc_snapshot_write)"
+        echo "已授予 $P_SNAPWRITE"
         ;;
       mcp-secret-read)
         aws iam put-role-policy --role-name "$ROLE" --policy-name "$P_MCPSEC" \
@@ -227,7 +254,7 @@ ERR
           --policy-document "$(doc_assume "$ARN")"
         echo "已授予 $P_ASSUME -> $ARN"
         ;;
-      *) echo "用法: --apply plan-write|mcp-secret-read|neptune-read|assume-invocation <arn>" >&2; exit 2 ;;
+      *) echo "用法: --apply plan-write|snapshot-write|mcp-secret-read|neptune-read|assume-invocation <arn>" >&2; exit 2 ;;
     esac
     echo
     echo "复核："; show
@@ -263,9 +290,15 @@ EOF
     case "${2:-}" in
       plan-write)        aws iam delete-role-policy --role-name "$ROLE" --policy-name "$P_PLAN" ;;
       neptune-read)      aws iam delete-role-policy --role-name "$ROLE" --policy-name "$P_NEPTUNE" ;;
+      snapshot-write)
+        aws iam put-role-policy --role-name "$ROLE" --policy-name "$P_SNAPWRITE" \
+          --policy-document "$(doc_snapshot_write)"
+        echo "已授予 $P_SNAPWRITE"
+        ;;
       mcp-secret-read)   aws iam delete-role-policy --role-name "$ROLE" --policy-name "$P_MCPSEC" ;;
+      snapshot-write)    aws iam delete-role-policy --role-name "$ROLE" --policy-name "$P_SNAPWRITE" ;;
       assume-invocation) aws iam delete-role-policy --role-name "$ROLE" --policy-name "$P_ASSUME" ;;
-      *) echo "用法: --revert plan-write|mcp-secret-read|neptune-read|assume-invocation" >&2; exit 2 ;;
+      *) echo "用法: --revert plan-write|snapshot-write|mcp-secret-read|neptune-read|assume-invocation" >&2; exit 2 ;;
     esac
     echo "已撤销 ${2}"
     ;;

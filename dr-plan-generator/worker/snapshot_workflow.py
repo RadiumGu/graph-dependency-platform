@@ -86,6 +86,15 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 
 from temporalio import activity, workflow
+# ⚠️ ApplicationError 在 temporalio.exceptions，**不在 temporalio.workflow**。
+# 2026-09-26 实测踩到：写 `workflow.ApplicationError(...)` 会得到
+#     AttributeError: module 'temporalio.workflow' has no attribute 'ApplicationError'
+# 而它只在**失败路径**上才被执行 —— 所以这个缺陷一直潜伏，
+# 直到第一次真的失败时才露头。那一刻的表现是：
+#   workflow 想报告失败 -> 报告失败的代码自己抛异常 -> activation 无限重试
+#   -> 执行显示为「永远 RUNNING」，而不是「失败并写明原因」。
+# 也就是**报告失败的机制自己坏了**，而旁边的注释还声称它保证了明确失败。
+from temporalio.exceptions import ApplicationError
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
@@ -370,7 +379,7 @@ class ExportSnapshotWorkflow:
         if not res.ok:
             # 明确失败。Schedule 的 LastRunTime 会显示失败，
             # 而不是留下一条「成功但没有内容」的记录。
-            raise workflow.ApplicationError(
+            raise ApplicationError(
                 f"快照导出失败：{res.inconclusive_reason}", non_retryable=True
             )
         return res
