@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+# infra/dr-korea/temporal-1.32/deploy-worker.sh
+#
+# 把 dr-plan-generator 的 worker 代码部署到韩国灾备站点，并**用独立手段
+# 证明新代码真的在跑**。
+#
+#   在 i-09380e417a0177ed4（dr-korea-temporal）上执行：
+#       cd /opt/temporal
+#       sudo bash deploy-worker.sh                     # 默认带冒烟验证
+#       sudo bash deploy-worker.sh --no-smoke          # 只部署，不起 workflow
+#       sudo bash deploy-worker.sh --ref main          # 换分支/标签
+#
+# ## 为什么不直接 systemctl restart 就算完
+#
+# 仓库里已有 provision-worker.sh，它做得对：S3 是唯一代码来源，按 `.py` 的
+# **内容指纹**决定是否重启（不用 mtime，因为 sync 会重写 mtime 而内容可能没变）。
+# 它的注释里记着 2026-09-25 踩到的坑：
+#
+#     磁盘上的 md5 与本地一致   ✅  看起来部署成功了
+#     worker 在队列上接单       ✅  核实判据也通过了
+#     实际跑的还是旧代码        ❌
+#
+# 也就是说「worker 已在队列上接单」这个判据**分不出新旧代码**。
+# 本脚本补的正是那一环：起一条真的 DrPlanWorkflow 并查它的状态。
+# 旧 worker 不认识这个 workflow type —— 它会让执行停在 RUNNING 且永不前进，
+# 而**那个形态与「队列名拼错」「没有 worker」完全一样**。
+# 所以冒烟验证是三态的：成功 / 明确失败 / 无法判断，绝不把第三种写成第一种。
+
+set -euo pipefail
+
+REPO=RadiumGu/graph-dependency-platform
+REF="${DR_WORKER_REF:-feat/dr-plan-review-lifecycle}"
+RAW_BASE=""            # 见下，取决于 REF
+NS=default
+QUEUE=dr-plan-queue
+CLI_IMAGE=temporalio/admin-tools:1.32.0
+SMOKE=1
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-smoke) SMOKE=0; shift ;;
+    --ref) REF="$2"; shift 2 ;;
+    *) echo "未知参数 $1" >&2; exit 2 ;;
+  esac
+done
+RAW_BASE="https://raw.githubusercontent.com/$REPO/$REF/dr-plan-generator/worker"
+
+say()  { printf '\n\033[1m── %s ──\033[0m\n' "$1"; }
+fail() { echo "  ✗ $*" >&2; FAILED=1; }
+ok()   { echo "  ✓ $*"; }
+unk()  { echo "  ? $* （无法判断 —— 不当成通过）"; INCONCLUSIVE=1; }
+FAILED=0
+INCONCLUSIVE=0
+
+# temporal CLI 走 admin-tools 容器：server:1.32.0 镜像里**没有 temporal CLI**
+# （只有 temporal-server 与 dockerize），用 `docker compose exec temporal temporal …`
+# 的后果是探测永远超时、看起来服务端坏了而其实是好的。
+# 网络名从实际容器推导，不写死 temporal_default（compose 项目名跟目录名走）。
+tcli() {
+  cid=$(cd /opt/temporal && docker compose ps -q temporal)
+  net=$(docker inspect "$cid" \
+        --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' | head -1)
+  docker run --rm --network "$net" "$CLI_IMAGE" \
+    temporal --address temporal:7233 --namespace "$NS" "$@"
+}
+
+# ── 0. 前置 ────────────────────────────────────────────────────────────
+say "0. 前置检查"
+[ -f /opt/dr-worker/app/worker.py ] || {
+  echo "/opt/dr-worker 不存在 —— 这是首次部署，请先跑 provision-worker.sh" >&2; exit 1; }
+BUCKET="${DR_CODE_BUCKET:-$(systemctl show -p Environment dr-worker.service \
+  | tr ' ' '\n' | sed -n 's/^DR_PLAN_BUCKET=//p' | head -1)}"
+[ -n "$BUCKET" ] || { echo "拿不到代码桶名，请设 DR_CODE_BUCKET" >&2; exit 1; }
+echo "  分支/引用：$REF"
+echo "  代码桶：  $BUCKET"
+tcli operator cluster health >/dev/null 2>&1 \
+  && ok "Temporal 可达" \
+  || { echo "  Temporal 不可达 —— worker 起来也连不上，先修服务端" >&2; exit 1; }
+
+# ── 1. 取代码 ──────────────────────────────────────────────────────────
+say "1. 从 GitHub 取 worker 代码"
+STAGE=$(mktemp -d /tmp/dr-worker-stage.XXXXXX)
+trap 'rm -rf "$STAGE"' EXIT
+FILES="worker.py workflows.py plan_workflow.py activities.py snapshot_workflow.py requirements.txt"
+for f in $FILES; do
+  curl -fsSL -o "$STAGE/$f" "$RAW_BASE/$f"
+  printf '  %-24s %6s 字节\n' "$f" "$(stat -c%s "$STAGE/$f")"
+done
+# 语法先过一遍再上传。上传一份语法错的代码，worker 会进重启循环，
+# 而那时错误只在 journal 里 —— 在这里失败便宜得多。
+for f in $STAGE/*.py; do
+  python3.12 -m py_compile "$f" || { echo "  $f 语法错误，中止" >&2; exit 1; }
+done
+ok "5 个 .py 语法检查通过"
+
+# ── 2. 上传并 provision ────────────────────────────────────────────────
+say "2. 同步到 S3（S3 是唯一代码来源，保持既有契约）"
+aws s3 sync "$STAGE/" "s3://$BUCKET/worker/" --only-show-errors \
+  --exclude '__pycache__/*' --exclude '*.pyc'
+ok "已同步到 s3://$BUCKET/worker/"
+
+say "3. 跑 provision-worker.sh（它按内容指纹决定是否重启）"
+FP_BEFORE=$(cat /opt/dr-worker/.code.sha256 2>/dev/null || echo "<无>")
+PID_BEFORE=$(systemctl show -p MainPID --value dr-worker.service || echo 0)
+DR_CODE_BUCKET="$BUCKET" bash /opt/dr-worker/app/provision-worker.sh 2>&1 | tail -20 \
+  || bash "$STAGE/../provision-worker.sh" 2>&1 | tail -20 \
+  || echo "  （provision 脚本不在主机上 —— 退化为直接重启，见下）"
+FP_AFTER=$(cat /opt/dr-worker/.code.sha256 2>/dev/null || echo "<无>")
+echo "  代码指纹：${FP_BEFORE:0:8}… → ${FP_AFTER:0:8}…"
+
+# 兜底：指纹变了但进程没换，说明重启这一步没生效。
+systemctl restart dr-worker.service || true
+sleep 6
+PID_AFTER=$(systemctl show -p MainPID --value dr-worker.service || echo 0)
+[ "$PID_BEFORE" != "$PID_AFTER" ] && ok "worker 进程已更换（PID $PID_BEFORE → $PID_AFTER）" \
+  || fail "worker PID 未变（$PID_AFTER）—— 进程可能还拿着旧模块"
+
+# ── 3. 部署面验证 ──────────────────────────────────────────────────────
+say "4. 部署面验证"
+systemctl is-active --quiet dr-worker.service \
+  && ok "dr-worker.service active" || fail "dr-worker.service 未运行"
+
+# 8 个自定义属性由 worker 启动时的 ensure_search_attributes() 保证。
+# 重建后的新库里一个自定义属性都没有 —— 所以这一项同时验证了
+# 「新代码在跑」（旧代码只认 5 个）与「启动前置条件生效」。
+SA=$(tcli operator search-attribute list 2>/dev/null | grep -cE '^\s+DR' || true)
+case "$SA" in
+  8) ok "8 个 DR* Search Attribute 齐备（含新增的 DRPlanId/DRPlanVersion/DRPlanState）" ;;
+  5) fail "只有 5 个 DR* 属性 —— 跑的还是旧代码" ;;
+  0) fail "0 个 DR* 属性 —— ensure_search_attributes 没跑，workflow 会在 upsert 时静默卡死" ;;
+  *) unk "DR* 属性 $SA 个（既不是旧的 5 也不是新的 8）" ;;
+esac
+
+POLLERS=$(tcli task-queue describe --task-queue "$QUEUE" 2>/dev/null \
+          | grep -ci "@" || true)
+[ "$POLLERS" -ge 1 ] && ok "$QUEUE 上有 $POLLERS 个 poller" \
+  || unk "$QUEUE 查不到 poller —— 以下三种无法区分：队列名拼错 / 无 worker / 有 workflow 在等但无 worker"
+
+# ── 4. 冒烟：证明 DrPlanWorkflow 真的被注册了 ──────────────────────────
+if [ "$SMOKE" = 1 ]; then
+  say "5. 冒烟验证（起一条真的 DrPlanWorkflow）"
+  # ⚠️ 这一步是整个脚本存在的理由。
+  # 「队列上有 poller」分不出新旧代码；旧 worker 遇到未注册的 workflow type
+  # 会让执行停在 RUNNING 且永不前进 —— 与「没有 worker」形态相同。
+  # 只有真的起一条、并查到它的状态，才能把这三者分开。
+  PLAN_ID="smoke/$(date -u +%Y%m%d-%H%M%S)"
+  WF_ID="plan-smoke-$(date -u +%H%M%S)"
+  INPUT=$(printf '{"plan_id":"%s","body":"# 部署冒烟\\n仅用于验证 DrPlanWorkflow 已注册。\\n","author":"deploy-worker.sh","reason":"部署后冒烟","failover_task_queue":"%s"}' "$PLAN_ID" "$QUEUE")
+
+  if tcli workflow start --type DrPlanWorkflow --task-queue "$QUEUE" \
+        --workflow-id "$WF_ID" --input "$INPUT" >/dev/null 2>&1; then
+    STATE=""
+    for i in $(seq 1 20); do
+      STATE=$(tcli workflow query --workflow-id "$WF_ID" --type plan_state 2>/dev/null \
+              | grep -o '"state"[^,]*' | head -1 || true)
+      [ -n "$STATE" ] && break
+      sleep 3
+    done
+    if [ -n "$STATE" ]; then
+      ok "DrPlanWorkflow 已注册且可查询：$STATE"
+      # 收口，不留一条 RUNNING 的冒烟执行在那里。
+      tcli workflow update --workflow-id "$WF_ID" --name close_plan \
+        --input '{"author":"deploy-worker.sh","reason":"冒烟结束"}' >/dev/null 2>&1 \
+        || tcli workflow terminate --workflow-id "$WF_ID" --reason "冒烟结束" >/dev/null 2>&1 || true
+      ok "冒烟执行已收口"
+      echo "  留下的 S3 对象：s3://$BUCKET/plans/$PLAN_ID/v1.md"
+      echo "  （计划版本按设计不可覆盖，所以它不会被清掉 —— plan_id 带 smoke/ 前缀便于批量清理）"
+    else
+      fail "起了执行但 20×3 秒内查不到状态 —— worker 很可能不认识 DrPlanWorkflow（跑的是旧代码）"
+      echo "    查：tcli workflow describe --workflow-id $WF_ID"
+    fi
+  else
+    fail "起 DrPlanWorkflow 失败 —— 看上面的报错"
+  fi
+else
+  echo "  （--no-smoke：跳过。注意跳过它就等于放弃了唯一能分出新旧代码的判据）"
+fi
+
+# ── 5. 结论 ────────────────────────────────────────────────────────────
+say "结论"
+if [ "$FAILED" = 1 ]; then
+  echo "有明确失败项 —— 不要当成部署成功。日志：journalctl -u dr-worker -n 80 --no-pager"
+  exit 1
+fi
+if [ "$INCONCLUSIVE" = 1 ]; then
+  echo "没有失败，但有**无法判断**的项 —— 按本项目纪律，这不等于通过。"
+  echo "请人工核实上面标 ? 的那几条再宣布完成。"
+  exit 2
+fi
+echo "全部通过：新 worker 在跑，DrPlanWorkflow 可用。"
+echo
+echo "下一步（不在本脚本里，各自需要一次决定）："
+echo "  · 快照 Schedule dr-graph-snapshot 仍是暂停态：dr-snapshot-queue 上零 poller。"
+echo "    启用前要么给它一个 worker，要么让它保持暂停 —— 指向无 worker 的队列"
+echo "    会堆积永不前进的执行，正是这套东西要防的故障。"
+echo "  · 快照 workflow 要读东京 Neptune，需要网络放通（见 network-korea-to-neptune.sh）。"
+exit 0
