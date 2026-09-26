@@ -3775,6 +3775,145 @@ VPC 内 PUT            HTTP 200 success
 
 ---
 
+
+### 4.35 Temporal Web UI 公网入口(Cognito 认证)—— 以及我一个说错的结论
+
+**日期**:2026-09-26 ｜ 用户放行「可以在韩国 region 重建相关资源」+「走 CloudFront 也行」
+
+#### ① ⚠️ 先订正:我说「ALB 的 IP 目标不支持跨 region」是**错的**
+
+我用这条当结构性障碍讲了好几次,还据此论证要走 CloudFront。文档原文
+(`elasticloadbalancing/latest/application/load-balancer-target-groups.html`):
+
+> All of the supported CIDR blocks enable you to register the following targets
+> with a target group:
+> * Instances in a VPC that is peered to the load balancer VPC
+>   (**same Region or different Region**).
+
+**跨 region 对等的 VPC 是明确支持的。** 这一条推翻后,整个方案从
+「CloudFront + VPC origin + 新 ALB + 新 Cognito 池 + 两张证书」
+塌缩成「在现有监听器上加一条规则」。
+
+> **教训**:我把一个**没查过**的技术限制当成既定事实反复使用,并让它
+> 驱动了方案选择。这比查错更贵 —— 查错会被后续步骤暴露,
+> 而「用错误前提排除掉正确方案」不会留下任何失败痕迹。
+
+#### ② 最终方案:复用东京那条已验证的链路
+
+```
+temporal.rainmeadows.com
+  → 东京公网 ALB Servic-PetSi-by0kpyBtxswj（复用）
+  → 443 监听器优先级 15 规则（新增）
+      动作 1  authenticate-cognito（复用 openclaw-users 池）
+      动作 2  forward → dr-temporal-ui-tg（新增）
+  → 跨 region VPC 对等 pcx-09fc849e6ac38e7e1
+  → 10.20.1.10:8080（首尔 Temporal UI 容器）
+```
+
+复用了:证书(`*.rainmeadows.com`,已在监听器上)、Cognito 池 + client + domain、
+公网 ALB。**没有**新建 ALB、CloudFront、证书、Cognito 池、NAT。
+
+#### ③ 为什么用**主机名**而不是路径
+
+`/temporal` 这类路径前缀做不到 —— 实测 `/temporal`、`/temporal/`、
+`/temporal/namespaces` 都返回 **HTTP 200**,但那是 **SPA 的 catch-all**
+(任何路径都回 `index.html`)。HTML 里的资源引用是根绝对路径(`/_app/...`),
+浏览器会去请求 `https://rainmeadows.com/_app/...`,被默认规则转给 petsite。
+
+> **又一次「状态码骗人」。** 200 在这里完全不代表路径可用 ——
+> 它只说明 SPA 把一切都当成了前端路由。
+
+而 ALB 的 forward 动作**不做 URL 重写**,`temporalio/ui:2.54.1` 也没有
+base-path 配置项(实测容器环境变量只有 `TEMPORAL_ADDRESS` /
+`TEMPORAL_CORS_ORIGINS` / `TEMPORAL_CLOUD_UI`,settings API 里也没有
+任何 path/base/prefix 字段)。所以只能走主机名 —— UI 在根路径上,资源不断。
+
+#### ④ Cognito client 是**整体替换**,差点把现有入口全弄坏
+
+`update-user-pool-client` 不是补丁 —— 只传新字段会把现有
+`CallbackURLs` / OAuth flows / scopes **全部清空**,表现是
+petsite、`/graph`、`/streamlit` 的登录**一起坏掉**。
+
+所以先 `describe-user-pool-client` 读全量,追加后把**所有**字段回写。
+回写后 4 条回调都在,原有 3 条一条没丢。
+
+#### ⑤ 顺带关掉了一个真侧门
+
+Temporal UI 实测 `Auth.Enabled=false` 且 `DisableWriteActions=false` ——
+认证 100% 靠外层。而安全组原先放行 8080 给**整个** `10.20.0.0/16`,
+意味着韩国 VPC 里任何一个 pod 都能无凭据终止工作流。
+
+```
+改前   8080 ← 10.20.0.0/16        （整个 VPC）
+改后   8080 ← 11.0.0.0/24         （东京 ALB 子网 1a）
+       8080 ← 11.0.1.0/24         （东京 ALB 子网 1c）
+```
+
+只放行东京 ALB 的两个子网,而不是整个东京 VPC。`7233`(gRPC,worker 用)不受影响;
+我自己的 SSM 端口转发走 loopback 也不受影响。
+
+**给正门上锁而侧门大开** 是这类活最容易留下的洞。
+
+#### ⑥ 核实(带对照)
+
+```
+跨 region IP 目标        healthy          ← 对等 + 路由 + SG 三层都通
+未登录访问               302 → openclaw-auth-1739343674.auth.…amazoncognito.com
+                         set-cookie: AWSALBAuthNonce=…   专属 cookie 名生效
+跟随重定向               200 <title>Signin</title>
+TLS                      curl 无报错 → 通配符证书覆盖子域
+**对照（现有入口没坏）**
+  rainmeadows.com/       200 Signin
+  /streamlit             200 Signin
+  /graph                 200 Signin
+```
+
+验证用 `curl --resolve temporal.rainmeadows.com:443:3.114.52.64` **绕开 DNS**,
+所以不需要等 DNS 就能完整验证到登录页。
+
+#### ⑦ ⚠️ 还缺一步,而且只能由人做
+
+**本账号没有 `rainmeadows.com` 的托管区**(`list-hosted-zones` 只有一个私有区
+`demo.com.`),所以 DNS 记录我加不了。需要有人加一条:
+
+```
+temporal.rainmeadows.com   CNAME   Servic-PetSi-by0kpyBtxswj-1910028459.ap-northeast-1.elb.amazonaws.com
+```
+
+加完就能用。**登录后 UI 是否正常渲染我没法验证** —— 需要 Cognito 凭据。
+这一条记 inconclusive。
+
+#### ⑧ ⚠️ 这条规则与现有 Cognito 规则**共享同一个脆弱点**
+
+线上那些 `authenticate-cognito` 动作与 `X-Demo-Bypass` 旁路规则
+**全是手工加的,CDK 里零命中**(全仓 grep `AuthenticateCognito` /
+`X-Demo-Bypass` 都是 0)。而 CDK 纳管着同一监听器上的其它规则。
+
+**所以 `cdk deploy ServicesEks2` 会把我这条规则一起抹掉** ——
+和它会抹掉现有 Cognito 认证是同一个机制(见 4.32 的漂移记录)。
+
+顺带发现:那个 `X-Demo-Bypass` 头是一个**完全跳过认证**的旁路,
+优先级 1/2/3 三条规则带着它就直接 forward。我**没有**给 Temporal 规则
+加旁路 —— 多一条旁路就多一个绕过认证的入口。
+
+#### ⑨ 这些资源是 CLI 建的,不在 CFN 里
+
+跨 region 对等、路由、目标组、监听器规则、Cognito 回调都是 CLI 建的。
+原因:它们大部分是**东京**的资源,而本仓库的 `infra/dr-korea/` 管的是韩国;
+监听器本身还被东京的 CDK 部分纳管(见 ⑧)。
+
+完整重建命令记在门禁 `test_111` 的文档字符串里,资源标识记在下面:
+
+```
+对等         pcx-09fc849e6ac38e7e1   (11.0.0.0/16 ↔ 10.20.0.0/16, active)
+目标组       dr-temporal-ui-tg       target-type ip, AvailabilityZone=all
+监听器规则   优先级 15，host-header temporal.rainmeadows.com
+SG 规则      sgr-021fef09a3175df20 / sgr-0fa4fbd3a83ed9c0b
+Cognito      回调追加 https://temporal.rainmeadows.com/oauth2/idpresponse
+```
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
