@@ -4,6 +4,41 @@ Description: >-
   手册第五节缺口⑤。
 
 # ═══════════════════════════════════════════════════════════════════
+# ⚠️⚠️ 2026-09-26 重要状态变化:本栈的**三张 DynamoDB 表已被取代**
+#
+# 东京那三张表已转成 DynamoDB 全局表，并在 ap-northeast-2 建了副本:
+#     ServicesEks2-ddbpetfoodfoods00C5D62B-4FH25BBOAEWX
+#     ServicesEks2-ddbpetfoodcarts77F2B0EA-1HSU365TM7EXJ
+#     ServicesEks2-ddbpetadoption7B7CFEC9-3B009FBSQFAM
+#
+# 全局表副本**必须与源表同名**（文档 V2globaltables_HowItWorks:
+# "All replicas in a global table share the same table name"），所以韩国侧
+# 这三张副本的名字与东京**逐字相同**。
+#
+# 实测:东京写入约 2 秒后在韩国可读，**双向**；已有数据全量回填
+# （foods 9=9、petadoptions 26=26）；foods 的两个 GSI 自动建出且键与投影一致。
+#
+# 因此本栈的 PetFoodFoodsTable / PetFoodCartsTable / PetAdoptionsTable
+# （即 dr-korea-* 那三张）**已不在活动路径上**:
+#   - 生成器不再改写 PETFOOD_*_TABLE_NAME（照抄东京名字正好就是对的）
+#   - /petstore/dynamodbtablename 两侧现在是同一个值
+#   - scripts/sync_korea_ddb_items.py **不再需要**（复制由全局表实时做）
+#
+# ⚠️ 它们**还没删**。按红线「销毁类操作只给命令不跑」，删除命令记在
+#    docs/runbooks/deployment-record.md 的 4.33 节，由人执行。
+#    删之后再把这三个资源与对应 Output 从本模板移除。
+#
+# ⚠️ 留着它们的代价是真实的:**两套表会逐渐分叉**。旧表不受全局表复制，
+#    而且「旧表里有陈旧数据」比「旧表不存在」更危险 ——
+#    前者会让配置写错时静默读到过时数据，后者至少会报 ResourceNotFound。
+#
+# ⚠️ 一个诚实的退步:副本的资源策略是**用 CLI 打上去的**，不在 CFN 里。
+#    原因:ResourcePolicy 是 AWS::DynamoDB::Table 的属性，而副本由东京的
+#    CDK 栈拥有，本栈无法声明它。所以 4.26 确立的「授权与资源同生共死」
+#    这条性质在副本上**不成立** —— 副本被重建时策略不会自动跟着回来。
+# ═══════════════════════════════════════════════════════════════════
+
+# ═══════════════════════════════════════════════════════════════════
 # 这个栈只建「没有下游依赖」的四个资源。刻意**不含**:
 #
 #   - Secrets Manager 的 DB 密钥

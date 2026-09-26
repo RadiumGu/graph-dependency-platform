@@ -3216,6 +3216,46 @@ list-access-entries  韩国 dr-korea   有 dr-korea-temporal-TemporalRole-…
 - 「东京**真的可写**」**没有行为证据** —— 没有从韩国 VPC 到东京库的网络通路,
   也没有东京集群的访问权。**这一条记 inconclusive,不记通过。**
 
+> ### ⚠️⚠️ 2026-09-26 重大订正:这次演练**真的造成了 12 分 41 秒的支付中断**
+>
+> 上面那句「没有行为证据」在**我的测量范围内**是对的,但结论被它误导了 ——
+> 证据其实存在,只是不在我看的地方。别人从东京侧测到了:
+>
+> ```
+> 只读窗口     16:39:31 – 16:52:12     约 12 分 41 秒
+> 业务影响     payforadoption 168 次 POST /api/completeadoption **全部 500**
+> 后端报错     pq: cannot execute INSERT in a read-only transaction
+> 用户侧表现   petsite 返回 HTTP 200 + 错误页（txStatus=failure），**不是 5xx**
+> 合成流量     4 轮告警全部落在只读窗口内，窗口两侧 pay=8/8 正常
+> ```
+>
+> #### 我的记录在哪里误导了人
+>
+> 我报的是「提升 ≈57 秒、回切 ≈52 秒」。**那两个数字是准确的,但它们不是影响面。**
+> 真正决定业务中断时长的是**两次切换之间的间隔** —— 而那段时间我在跑可写验证,
+> 前后花了 12 分 41 秒。我把「单条命令的执行时长」当成了演练的代价来汇报。
+>
+> **「每步都很快」与「整件事很快」是两回事。** 一个只报单步耗时的演练记录,
+> 会让下一个人以为切换演练的窗口是一分钟量级。
+>
+> 正确的记法:**演练的代价 = 提升完成到回切开始之间的时长**,而不是两条命令各自的耗时。
+>
+> #### 这是第五种「全绿但不能服务」,而且是最危险的一种
+>
+> 只读窗口内 ALB 的 `HTTPCode_ELB_5XX_Count`、`HTTPCode_Target_5XX_Count`、
+> `TargetConnectionErrorCount`、`UnHealthyHostCount` **全部无数据**,
+> 请求量正常(400–650/分)。因为 **petsite 把后端 500 转成了自己的 200 错误页**。
+>
+> **靠 ALB 5xx 告警发现不了这类故障。** 而我这次恰恰用 ALB 指标核实了健康检查修复
+> (4.32)—— 同一个指标通道在那里可信,在这里完全失明。**指标通道的可信度是按故障
+> 形态分的,不是按通道分的。**
+>
+> 附带两条观测陷阱:
+> - petsite 容器日志里**没有异常** —— 异常走 X-Ray,采样是固定 5% + 蓄水池 1/秒,
+>   未采样的请求连子段都不创建。排障必须直接看 payforadoption 的日志。
+> - 「X-Ray 上这条边没有流量」≠「没有调用」 —— 同窗口内有 168 次真实调用,
+>   只是全部失败且大多未被采样。**遥测缺失 ≠ 事件未发生。**
+
 这正是本会话反复出现的纪律:**「没测到」不等于「好了」,也不等于「坏了」。**
 
 #### ⑦ 为演练加的那条授权
@@ -3511,6 +3551,125 @@ petfood 日志  "does not match the schema" 命中 0，ValidationException 命�
 东京 carts 表也是同样的缺陷、同样是空表。但改它要**删一张生产表**再重建
 (键不可变),而且没法用 `cdk deploy`(见 ① 的漂移)。
 按红线「删生产数据要先问」,命令已备好但**未执行**,等用户确认。
+
+---
+
+
+### 4.33 DynamoDB 全局表 —— 以及一份外部文档暴露的两个真缺陷
+
+**日期**:2026-09-26 ｜ 用户放行「按你的建议进行,demo 环境能跑通就行」
+
+#### ① 做了什么
+
+前置:东京 carts 表**同名重建为单键**(实测 scan=0,零数据损失),
+这一步必须在转全局表之前 —— 键不可变,而全局表副本组建好之后改键要麻烦得多。
+
+```
+三张表开 Streams NEW_AND_OLD_IMAGES      → 全部 ACTIVE，streamArn 已生成
+三张表加 ap-northeast-2 副本             → 全部 ACTIVE
+```
+
+**petadoptions 被拒过一次**,错误原文:
+
+```
+Table write capacity should either be Pay-Per-Request or AutoScaled.
+```
+
+它原先是 PROVISIONED(RCU/WCU 各 10)。两条路:开自动扩缩,或转按需。
+**转按需在成本与可用性上都更好**(26 条数据近零流量,按需比 10+10 预置便宜,
+且不会限流),所以转了按需。这改动了一张东京生产表的计费模式,记档备考。
+
+#### ② 核实(四层,层层递进)
+
+```
+数据回填      foods 9=9    carts 0=0    petadoptions 26=26        ✅
+GSI 自动建    副本的 FoodTypeIndex / PetTypeIndex 键与投影逐字一致  ✅
+活体复制      东京写 → 韩国约 2 秒可读；韩国写 → 东京约 2 秒可读    ✅ 双向
+端到端        韩国 petfood pod 加购 → **东京直接读到** items=1、
+              food_id=F12626cea；东京删掉后韩国归零                ✅
+```
+
+第三层带对照:写入前先确认韩国侧不存在那条。
+
+#### ③ 全局表带来的真实简化
+
+副本**必须与源表同名**,所以「按 region 改表名」这一层**整个不需要了**:
+
+- 生成器的 `REWRITE_ENV` **删掉** `PETFOOD_FOODS_TABLE_NAME` / `PETFOOD_CARTS_TABLE_NAME`
+  —— 照抄东京名字**正好就是对的**
+- `/petstore/dynamodbtablename` 两侧现在是**同一个值**
+- 参数分档里 `dynamodbtablename` **从 D 档移到逐字复制** ——
+  转全局表真正改变了「表名是否随 region 变化」这个属性
+- `sync_korea_ddb_items.py` **不再需要**(复制由全局表实时做)
+
+⚠️ 判据陷阱:如果有人把那两行改写加回来,**症状不是报错**,
+而是静默读到一张已退役但还没删的旧表里的陈旧数据。
+
+实测确认清单里旧名零残留,运行中的 pod 环境变量读出来也是副本名。
+
+#### ④ 遗留:两套表还在,且资源策略退步了
+
+`dr-korea-petfood-foods` / `-carts` / `dr-korea-petadoptions` 三张旧表**还没删**
+(红线:销毁类操作只给命令不跑):
+
+```bash
+aws dynamodb delete-table --region ap-northeast-2 --table-name dr-korea-petfood-foods
+aws dynamodb delete-table --region ap-northeast-2 --table-name dr-korea-petfood-carts
+aws dynamodb delete-table --region ap-northeast-2 --table-name dr-korea-petadoptions
+```
+
+删之后把这三个资源与对应 Output 从 `16-korea-backends.yaml` 移除。
+
+**一个诚实的退步**:副本的资源策略是**用 CLI 打上去的**,不在 CFN 里。
+`ResourcePolicy` 是 `AWS::DynamoDB::Table` 的属性,而副本由东京的 CDK 栈拥有,
+本栈无法声明。所以 4.26 确立的「授权与资源同生共死」**在副本上不成立**。
+
+(petadoptions 副本不需要资源策略 —— 实测 `payforadoption` 角色有 4 个
+DynamoDB 动作且 `Resource: *`,这也解释了旧表为什么一直没有策略。)
+
+#### ⑤ ⚠️ 一份外部文档暴露了两个我漏掉的真缺陷
+
+用户给了 `petsite-data-write-paths-for-dr.md`。它查清的两件事都是实打实的缺口。
+
+##### 缺陷一:`payforadoption` **永不重建数据库连接池**
+
+`payforadoption-go/refresh_manager.go` 有周期性配置刷新
+(`CONFIG_REFRESH_INTERVAL` 默认 300 秒),但 `StartPeriodicRefresh`(`:160`)
+**只更新内存缓存**。全仓没有任何重建 `sql.DB` 的路径:
+
+```
+database.go:40   otelsql.Open        只在启动时由 main.go 调用一次
+main.go:155      defer db.Close()    仅进程退出时关闭
+utils.go:251     另一处 otelsql.Open 属于混沌注入器，**不是重连路径**
+```
+
+> **所以切换后必须重启 payforadoption 的 pod,否则它会继续连旧主库。**
+> 把「刷新间隔 5 分钟」当成「5 分钟后会自动指向新主库」是错的。
+
+这一条 4.29 的演练**完全没覆盖** —— 因为演练只验证了数据库层可写,
+没验证应用层会不会跟着切。**「数据层能切」不等于「应用层会切」。**
+
+##### 缺陷二:韩国**没有** `PetAdoptionStatusUpdater`
+
+三个 region 硬编码参数,我只换对了两个:
+
+```
+queueurl                韩国 → dr-korea-petadoptions（SQS）           ✅
+petadoptionsstepfnarn   韩国 → dr-korea-petadoptions（状态机）        ✅
+updateadoptionstatusurl 韩国 → **与东京一字不差**，指向
+                        9dw5r2dqlb.execute-api.ap-northeast-1…        ❌
+```
+
+实测核实:**韩国零个 REST API 网关**,三个 Lambda 全是 StepFunctions 辅助
+(`dr-korea-stepfn-readddb` / `-price-gt-55` / `-price-lt-55`),
+没有 petstatusupdater。东京那个 `9dw5r2dqlb` 叫 `PetAdoptionStatusUpdater`。
+
+**真灾难时的后果**:韩国的 payforadoption 会去调**东京**的网关 → 失败 →
+领养记进了 Aurora 但**宠物状态永远不更新**。领养流程看起来成功,
+而宠物仍显示可领养。**又一个「全绿但不能服务」。**
+
+这一条之所以没被发现:那条链路是 `payforadoption → HTTP → API Gateway → Lambda`,
+**隔了两跳**,不在任何一个 Deployment 的环境变量里,也不在我扫过的清单里。
 
 ---
 

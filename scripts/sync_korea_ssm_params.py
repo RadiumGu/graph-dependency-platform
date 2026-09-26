@@ -50,7 +50,18 @@ PREFIX = "/petstore"
 # ── D 档:值里看不出 region，但资源是 region 级的 ──────────────────
 # **手工列出**，因为按值形状分类看不见这一层。
 REGION_SCOPED_BARE_NAMES = {
-    "dynamodbtablename": "DynamoDB 表",
+    # ⚠️⚠️ 2026-09-26: `dynamodbtablename` **从这份列表里移出去了**。
+    #      原因:那张表已转成 DynamoDB 全局表，而全局表副本**必须与源表同名**
+    #      （文档 V2globaltables_HowItWorks 原文:
+    #        "All replicas in a global table share the same table name"）。
+    #      所以它不再是「region 级」的 ——
+    #      两个 region 的值**逐字相同**，应当归到 B 档逐字复制。
+    #
+    #      这条移动是有代价的判断，不是简化:D 档的意义是「按值形状看不出它
+    #      是 region 级的」。转全局表把这个属性真正改变了 ——
+    #      表名不再随 region 变化。如果哪天副本被删掉、回到两张独立的表，
+    #      **必须把它挪回 D 档**，否则韩国会去读东京那张表。
+    #      test_109 记录了这个条件。
     "s3bucketname": "S3 桶",
     "agent/waggleai/guardrailid": "Bedrock guardrail",
     "agent/waggleai/memoryid": "AgentCore memory",

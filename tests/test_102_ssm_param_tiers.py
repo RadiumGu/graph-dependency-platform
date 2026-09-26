@@ -61,8 +61,15 @@ def mod():
 class TestBareNamedRegionScopedParamsAreListedByHand:
     """值里看不出 region 的那一档必须是显式列表，不能靠推断。"""
 
+    #: ⚠️ 2026-09-26 `dynamodbtablename` **从这里移出去了**，不是漏掉。
+    #
+    #  原因:那张表已转成 DynamoDB 全局表，而全局表副本**必须与源表同名**
+    #  （文档 V2globaltables_HowItWorks: "All replicas in a global table
+    #  share the same table name"）。所以两个 region 的值**逐字相同** ——
+    #  它不再具备「D 档」的定义性质（值里看不出它是 region 级的）。
+    #
+    #  这条移动的前提是**副本存在**。见下面 test_tier_d_move_is_conditional。
     EXPECTED = {
-        "dynamodbtablename",
         "s3bucketname",
         "agent/waggleai/guardrailid",
         "agent/waggleai/memoryid",
@@ -70,12 +77,38 @@ class TestBareNamedRegionScopedParamsAreListedByHand:
         "searchimage",
     }
 
-    def test_all_six_are_listed(self, mod):
+    #: 移出去的那些，以及移出的前提。前提不成立就必须挪回来。
+    MOVED_OUT = {
+        "dynamodbtablename": "已转 DynamoDB 全局表，副本与源表同名",
+    }
+
+    def test_all_listed(self, mod):
         listed = set(mod.REGION_SCOPED_BARE_NAMES)
         missing = self.EXPECTED - listed
         assert not missing, (
             f"这些参数的值里没有 region 字样，漏掉就会被当成可移植复制过去，"
             f"运行时 ResourceNotFound:{missing}"
+        )
+
+    def test_moved_out_ones_are_not_listed(self, mod):
+        """移出去的不许悄悄回来 —— 回来说明有人没读为什么移的。"""
+        listed = set(mod.REGION_SCOPED_BARE_NAMES)
+        back = set(self.MOVED_OUT) & listed
+        assert not back, (
+            f"{back} 回到 D 档了。它们是因为转成全局表（副本与源表同名）才移出的；"
+            "如果副本真的被删了，改这份测试并说明，不要只改脚本"
+        )
+
+    def test_tier_d_move_is_conditional(self, src: str):
+        """移出的**前提**必须写在脚本里 —— 前提没了要挪回去。
+
+        失效形态很隐蔽:副本被删之后表名又变成 region 级的，
+        而参数仍按「逐字复制」处理 → 韩国会去读**东京那张表**，
+        在真灾难时那张表不可达。
+        """
+        assert_contains(src, "**必须把它挪回 D 档**")
+        assert_contains(
+            src, "All replicas in a global table share the same table name"
         )
 
     def test_each_says_what_resource_is_needed(self, mod):

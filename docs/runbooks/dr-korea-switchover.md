@@ -334,6 +334,85 @@ GET {cluster_endpoint}/api/v1/namespaces/{ns}/pods/{pod}:{port}/proxy/{path}
 
 ---
 
+## 七之二、⚠️ 数据库切过去之后,应用**不会**自己跟着切
+
+这一节来自 2026-09-26 读到的 `petsite-data-write-paths-for-dr.md`,
+以及 2026-09-25 那次演练的事后证据。**4.29 的演练完全没覆盖这一层。**
+
+### 7.2.1 必须重启 payforadoption 的 pod
+
+`payforadoption-go/refresh_manager.go` 有周期性配置刷新
+(`CONFIG_REFRESH_INTERVAL`,默认 300 秒),但 `StartPeriodicRefresh`(`:160`)
+**只更新内存缓存**。全仓没有任何重建 `sql.DB` 的代码路径:
+
+```
+database.go:40   otelsql.Open        只在启动时由 main.go 调用一次
+main.go:155      defer db.Close()    仅进程退出时关闭
+utils.go:251     另一处 otelsql.Open 属于混沌注入器，不是重连路径
+```
+
+```bash
+# 提升数据库之后必须做这一步
+kubectl -n petadoptions rollout restart deploy/pay-for-adoption
+kubectl -n petadoptions rollout status deploy/pay-for-adoption --timeout=180s
+```
+
+> **把「刷新间隔 5 分钟」当成「5 分钟后会自动指向新主库」是错的。**
+> 改完密钥/参数不重启,它会一直连旧主库。
+
+### 7.2.2 切换的代价是**两次切换之间的间隔**,不是单条命令的耗时
+
+2026-09-25 演练的真实数字:
+
+```
+提升命令耗时    ≈57 秒
+回切命令耗时    ≈52 秒
+**只读窗口**    16:39:31 – 16:52:12，**约 12 分 41 秒**   ← 这才是业务中断时长
+业务影响        payforadoption 168 次 POST /api/completeadoption **全部 500**
+后端报错        pq: cannot execute INSERT in a read-only transaction
+```
+
+**「每步都很快」与「整件事很快」是两回事。** 演练记录只报单步耗时会让人
+以为窗口是一分钟量级。**规划演练窗口要按「提升完成到回切开始」算。**
+
+### 7.2.3 这类故障 ALB 指标**全绿**
+
+只读窗口内 `HTTPCode_ELB_5XX_Count`、`HTTPCode_Target_5XX_Count`、
+`TargetConnectionErrorCount`、`UnHealthyHostCount` **全部无数据**,
+请求量正常(400–650/分)。因为 **petsite 把后端 500 转成了自己的 200 错误页**
+(`txStatus=failure`)。
+
+> **靠 ALB 5xx 告警发现不了这类故障。**
+
+两条配套陷阱:
+
+- **petsite 容器日志里没有异常** —— 异常走 X-Ray,采样是固定 5% + 蓄水池 1/秒,
+  未采样的请求连子段都不创建。排障必须**直接看 payforadoption 的日志**。
+- **「X-Ray 上这条边没有流量」≠「没有调用」** —— 同窗口内有 168 次真实调用,
+  只是全部失败且大多未被采样。**遥测缺失 ≠ 事件未发生。**
+
+### 7.2.4 ⚠️ 韩国缺 `PetAdoptionStatusUpdater` —— 领养状态链路是断的
+
+实测(2026-09-26):**韩国零个 REST API 网关**,三个 Lambda 全是 StepFunctions
+辅助,没有 petstatusupdater。而 `/petstore/updateadoptionstatusurl` 在韩国
+**与东京一字不差**,指向 `9dw5r2dqlb.execute-api.ap-northeast-1…`。
+
+真灾难时:韩国的 payforadoption → 调**东京**的网关 → 失败 →
+**领养记进了 Aurora 但宠物状态永远不更新**。领养看起来成功,宠物仍显示可领养。
+
+对照(这两个我换对了):
+
+```
+queueurl                韩国 → dr-korea-petadoptions（SQS）      ✅
+petadoptionsstepfnarn   韩国 → dr-korea-petadoptions（状态机）   ✅
+updateadoptionstatusurl 仍指东京                                 ❌
+```
+
+之所以漏掉:那条链路是 `payforadoption → HTTP → API Gateway → Lambda`,
+**隔了两跳**,不在任何 Deployment 的环境变量里。
+
+---
+
 ## 八、演练时的纪律
 
 - 临时提权(如 `AmazonEKSClusterAdminPolicy`)**用完立刻摘,并核实
