@@ -99,19 +99,26 @@ Resources:
 
   # ── Lambda ────────────────────────────────────────────────────────
   # 行为逐字照东京那个 Lambda 的**真实代码**（已下载 Code.Location 读出，
-  # 与 worktree 的 PetAdoptions/petstatusupdater/index.js:24-51 一致）:
+  # 与 worktree 的 PetAdoptions/petstatusupdater/index.js 一致）:
   #
-  #   const payload = JSON.parse(event.body);
+  #   const payload = JSON.parse(event.body);          // 非 JSON → 400
+  #   if (!pettype || !petid) → 400                    // 缺主键 → 400
   #   const availability = payload.petavailability === undefined ? 'no' : 'yes';
-  #   UpdateCommand{ Key:{pettype, petid}, "set availability = :r" }
+  #   UpdateCommand{ Key:{pettype, petid}, "set availability = :r",
+  #                  ConditionExpression: 'attribute_exists(petid)' }
+  #   ConditionalCheckFailedException → 404
   #
-  # ⚠️ 两个容易照抄错的点:
+  # ⚠️ 三个容易照抄错的点:
   #   ① 值是**布尔化的**，不透传 —— 只要请求里**带了** petavailability
   #      字段（任何非 undefined 值）就写 "yes"，完全不带才写 "no"。
   #      照抄成「透传 payload.petavailability」会写进 "true"/"1" 这类值，
   #      而读取方期望的是 "yes"/"no"。
   #   ② 主键**两个都必须给**（pettype HASH + petid RANGE），
   #      少一个就是 ValidationException。
+  #   ③ **ConditionExpression 不能省。** UpdateItem 是 upsert，省掉它
+  #      就等于让这个「状态更新」接口可以凭三个属性造出一条残缺记录 ——
+  #      东京 2026-09-15 与 09-26 的两次领养全停都是这么来的。
+  #      省掉它的表现是**接口照样返回 200**，所以不会被当场发现。
   #
   # 用 @aws-sdk/client-dynamodb 而不是 lib-dynamodb:前者确定随
   # nodejs 运行时自带，后者不一定，而内联代码无法带依赖。
@@ -137,19 +144,43 @@ Resources:
           const ddb = new DynamoDBClient({});
 
           exports.handler = async function (event) {
-            const payload = JSON.parse(event.body);
+            let payload;
+            try {
+              payload = JSON.parse(event.body);
+            } catch {
+              return { statusCode: 400, body: 'invalid json body' };
+            }
+            // 主键两个都必须给，否则是 ValidationException → 502，
+            // 把调用方的错误伪装成服务故障。
+            if (!payload || !payload.pettype || !payload.petid) {
+              return { statusCode: 400, body: 'pettype and petid are required' };
+            }
             // 布尔化，不透传 —— 与东京那个 Lambda 逐字一致
             const availability = payload.petavailability === undefined ? 'no' : 'yes';
-            await ddb.send(new UpdateItemCommand({
-              TableName: process.env.TABLE_NAME,
-              Key: {
-                pettype: { S: payload.pettype },
-                petid: { S: payload.petid },
-              },
-              UpdateExpression: 'set availability = :r',
-              ExpressionAttributeValues: { ':r': { S: availability } },
-              ReturnValues: 'UPDATED_NEW',
-            }));
+            try {
+              await ddb.send(new UpdateItemCommand({
+                TableName: process.env.TABLE_NAME,
+                Key: {
+                  pettype: { S: payload.pettype },
+                  petid: { S: payload.petid },
+                },
+                UpdateExpression: 'set availability = :r',
+                ExpressionAttributeValues: { ':r': { S: availability } },
+                // ⚠️ 不能删。UpdateItem 是 upsert —— 没有这个条件时，
+                // 对不存在的键调用它会**创建**一条只含 pettype+petid+availability
+                // 的残缺行，而 search-service 读到那种行会 NPE，
+                // 导致 /api/search 整个 500、全部正常记录一起消失。
+                // 东京 2026-09-15 与 09-26 各发生过一次，形态相同。
+                // 与东京 petstatusupdater/index.js 的那一行保持一致。
+                ConditionExpression: 'attribute_exists(petid)',
+                ReturnValues: 'UPDATED_NEW',
+              }));
+            } catch (err) {
+              if (err && err.name === 'ConditionalCheckFailedException') {
+                return { statusCode: 404, body: 'pet not found' };
+              }
+              throw err;
+            }
             return { statusCode: 200, body: 'success' };
           };
 
