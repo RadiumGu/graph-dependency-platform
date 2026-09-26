@@ -56,6 +56,7 @@ from activities import (
     verify_step,
 )
 from plan_workflow import DrPlanWorkflow
+from snapshot_workflow import ExportSnapshotWorkflow, export_graph_snapshot
 from workflows import (
     DrFailoverWorkflow,
     FetchPlanWorkflow,
@@ -154,6 +155,9 @@ NAMESPACE = os.environ.get("DR_TEMPORAL_NAMESPACE", "default")
 #: 必须与发起方用的队列名一致。不一致的后果是 workflow 永远排队
 #: 而**看起来是 RUNNING**（实测过），不会报任何错。
 TASK_QUEUE = os.environ.get("DR_TEMPORAL_TASK_QUEUE", "dr-plan-queue")
+#: 快照队列。与切换队列分开是刻意的：Schedule 指向它，
+#: 而快照跑挂了不该影响切换队列上的执行排队。
+SNAPSHOT_QUEUE = os.environ.get("DR_SNAPSHOT_TASK_QUEUE", "dr-snapshot-queue")
 
 
 async def main() -> None:
@@ -216,6 +220,28 @@ async def main() -> None:
         max_concurrent_activities=5,
     )
 
+    # ── 第二个队列：图快照 ────────────────────────────────────────────────
+    #
+    # 为什么与切换 worker 同进程，而不是另起一个 systemd 单元：
+    #   · 这台 EC2 本身就是单点，多一个进程并不提高可用性，只多一份运维面
+    #   · Temporal 的两个 Worker 相互独立 —— activity 失败不会掀翻进程，
+    #     快照 activity 也把异常收成 SnapshotResult(ok=False)
+    #
+    # 代价要说清楚：**进程级故障会同时带走两个队列**。切换队列是关键路径，
+    # 快照是周期作业，所以这个耦合的方向是「次要拖累关键」——
+    # 如果哪天快照 activity 引入了能杀进程的东西（比如 segfault 的 C 扩展），
+    # 就该把它拆出去。现在的依赖只有 urllib + boto3，不值得为此拆。
+    snapshot_worker = Worker(
+        client,
+        task_queue=SNAPSHOT_QUEUE,
+        workflows=[ExportSnapshotWorkflow],
+        activities=[export_graph_snapshot],
+        # 快照是单步、无并发需求的周期作业。给 1 就够 ——
+        # overlap_policy=SKIP 已经在 Schedule 层面挡住了重叠。
+        max_concurrent_workflow_tasks=2,
+        max_concurrent_activities=1,
+    )
+
     stop = asyncio.Event()
 
     def _on_signal(signame: str) -> None:
@@ -229,8 +255,21 @@ async def main() -> None:
     for s in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(s, _on_signal, s.name)
 
-    logger.info("worker 开始轮询。⚠️ 当前实例角色只有 Describe 权限，只能跑 dry_run。")
-    async with worker:
+    # ⚠️ 这里原来写的是
+    #     「⚠️ 当前实例角色只有 Describe 权限，只能跑 dry_run。」
+    # 那是一句**写死的断言**，而它在 2026-09-26 授予 dr-plan-write 之后就成了
+    # 假话 —— 日志照旧这么说，而真执行其实已经可行。
+    #
+    # 一句启动日志**不可能知道**角色能做什么，除非真去做一次（而那就有副作用）。
+    # 所以改成只报身份：能不能真执行由每一步自己的闸门与 AWS API 说话，
+    # 不由一句看起来权威的日志说话。
+    logger.info(
+        "worker 开始轮询。队列：%s（切换）、%s（快照）。"
+        "真执行能力不在此断言 —— 由各步骤的闸门与 AWS API 在执行时裁定。",
+        TASK_QUEUE,
+        SNAPSHOT_QUEUE,
+    )
+    async with worker, snapshot_worker:
         await stop.wait()
     logger.info("worker 已退出")
 

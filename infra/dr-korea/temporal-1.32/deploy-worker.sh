@@ -52,7 +52,9 @@
 set -euo pipefail
 
 REPO=RadiumGu/graph-dependency-platform
-REF="${DR_WORKER_REF:-feat/dr-plan-review-lifecycle}"
+# 默认 main：feat/dr-plan-review-lifecycle 已于 2026-09-26 合入 main，
+# 继续指向它会发布一份落后的代码 —— 而那份代码看起来发布成功了。
+REF="${DR_WORKER_REF:-main}"
 RAW_BASE=""            # 见下，取决于 REF
 NS=default
 QUEUE=dr-plan-queue
@@ -117,7 +119,8 @@ if [ "$MODE" = publish ]; then
   BUCKET="${DR_CODE_BUCKET:?发布模式需要显式设 DR_CODE_BUCKET（避免误发到别的环境）}"
   echo "  分支/引用：${REF}"
   echo "  代码桶：  ${BUCKET}"
-  aws sts get-caller-identity --query '"  身份：" + Arn' --output text
+  # JMESPath 不支持字符串拼接（"x" + Arn 会报 Unknown token +）。
+  echo "  身份：   $(aws sts get-caller-identity --query Arn --output text)"
 else
   [ -f /opt/dr-worker/app/worker.py ] || {
     echo "/opt/dr-worker 不存在 —— 这是首次部署，请先跑 provision-worker.sh" >&2; exit 1; }
@@ -134,11 +137,18 @@ fi
 if [ "$MODE" = publish ]; then
 
 say "1. 从 GitHub 取 worker 代码"
+# ⚠️ dr-worker.service 也必须随包下发。
+# provision-worker.sh 第 120 行读的是 $APP/dr-worker.service ——
+# 主机上那份是 2026-09-24 手工装的，而 `aws s3 sync` 不带 --delete，
+# 所以它一直躺在那里不被更新：改了仓库里的环境变量，主机上一点变化都没有。
+# 这是本工作线第三次同类缺陷（前两次是 provision-worker.sh 自己、
+# 以及 graph_mcp_client.py / probe_graph_mcp.py）。
+#
 # provision-worker.sh 必须**随包下发**。
 # 它不在这个清单里会造成一个恰好最难看出来的故障：代码同步到了 S3，
 # 但没人把它从 S3 拉到 /opt/dr-worker/app，于是 worker 用旧代码重启 ——
 # 而「服务 active」「队列上有 poller」两个判据照样通过。
-FILES="worker.py workflows.py plan_workflow.py activities.py snapshot_workflow.py graph_mcp_client.py probe_graph_mcp.py requirements.txt provision-worker.sh"
+FILES="worker.py workflows.py plan_workflow.py activities.py snapshot_workflow.py graph_mcp_client.py probe_graph_mcp.py requirements.txt provision-worker.sh dr-worker.service"
 for f in $FILES; do
   curl -fsSL -o "$STAGE/$f" "$RAW_BASE/$f"
   printf '  %-24s %6s 字节\n' "$f" "$(stat -c%s "$STAGE/$f")"
@@ -148,7 +158,7 @@ done
 for f in $STAGE/*.py; do
   python3.12 -m py_compile "$f" || { echo "  $f 语法错误，中止" >&2; exit 1; }
 done
-ok "5 个 .py 语法检查通过"
+ok "$(ls "$STAGE"/*.py | wc -l) 个 .py 语法检查通过"
 
 # ── 2. 上传并 provision ────────────────────────────────────────────────
 say "2. 同步到 S3（S3 是唯一代码来源，保持既有契约）"

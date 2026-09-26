@@ -29,6 +29,29 @@ Environment=DR_GLOBAL_CLUSTER=petsite-global
 Environment=DR_SECONDARY_CLUSTER_ARN=arn:aws:rds:ap-northeast-2:926093770964:cluster:dr-korea-aurora-secondarycluster-5ctcqnmbkro4
 Environment=DR_PLAN_BUCKET=dr-korea-agentcore-926093770964-ap-northeast-2
 
+# ── 图快照队列 ───────────────────────────────────────────────────────────
+# Schedule dr-graph-snapshot 指向这个队列。与切换队列分开是刻意的：
+# 快照跑挂了不该影响切换队列上的执行排队。
+Environment=DR_SNAPSHOT_TASK_QUEUE=dr-snapshot-queue
+Environment=DR_SNAPSHOT_BUCKET=dr-korea-agentcore-926093770964-ap-northeast-2
+Environment=DR_SNAPSHOT_PREFIX=snapshots/
+
+# ── 图谱 MCP（不直连 Neptune，走受审的查询目录）──────────────────────────
+# 决定与理由见 snapshot_workflow.py 与 graph_mcp_client.py 的模块文档。
+# 认证是 Cognito JWT 而非 SigV4 —— 实测 SigV4 会得到
+# AccessDeniedException: Authorization method mismatch。
+Environment=DR_GRAPH_MCP_RUNTIME_ARN=arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/graph_dependency_mcp-12Vg2Z9XXu
+Environment=DR_GRAPH_MCP_REGION=ap-northeast-1
+Environment=DR_GRAPH_MCP_COGNITO_DOMAIN=graphdp-mcp-1788589178
+Environment=DR_GRAPH_MCP_COGNITO_REGION=ap-northeast-1
+Environment=DR_GRAPH_MCP_SCOPE=graphdp-mcp/invoke
+# 凭证放东京 —— 与发它的 Cognito 池、它授权的 runtime 同区域。
+Environment=DR_GRAPH_MCP_SECRET_ID=dr-graph-mcp-m2m
+Environment=DR_GRAPH_MCP_SECRET_REGION=ap-northeast-1
+# ⚠️ 契约版本断言。不一致时快照**拒绝落盘**而不是警告 ——
+# 契约变了还照样存，会得到一份形状不同却看起来正常的快照。
+Environment=DR_GRAPH_CONTRACT_VERSION=1
+
 # 重启：worker 掉了切换就没人执行，所以要拉起来。
 # 但不要疯狂重启 —— Temporal 没起来时每 15 秒试一次足够。
 Restart=always
