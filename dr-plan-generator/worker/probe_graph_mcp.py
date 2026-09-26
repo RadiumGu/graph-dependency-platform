@@ -99,13 +99,18 @@ def main() -> int:
         print(f"  ✗ {e}")
         return 1
     print(f"  ✓ {len(tools)} 个工具")
+    tools = {t["name"]: t for t in tools}
     print(f"  首个工具的形状：{shape(tools[0])}")
-    names = [t.get("name", "?") for t in tools]
-    print(f"\n  快照要用的那 5 条是否都在：")
+    names = list(tools)
+    print(f"\n  快照要用的那 {len(g.SNAPSHOT_QUERIES)} 条是否都在：")
     missing = []
     for q in g.SNAPSHOT_QUERIES:
         hit = q in names
-        print(f"    {'✓' if hit else '✗'} {q}")
+        req = ""
+        if hit:
+            r = (tools[q].get("inputSchema") or {}).get("required") or []
+            req = f"   必填 {r}" if r else ""
+        print(f"    {'✓' if hit else '✗'} {q}{req}")
         if not hit:
             missing.append(q)
     if missing:

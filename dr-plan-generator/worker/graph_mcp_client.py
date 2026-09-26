@@ -369,10 +369,52 @@ def _parse_content(res: dict, name: str) -> dict:
 # 都来自受审的 QUERY_CATALOG。缺什么事实**应当往目录里加一条**
 # （一次对版本化契约的受审改动），而不是在这里写临时查询 ——
 # 那会把「不直连 Neptune」这个决定的意义抹掉。
+#
+# ## 事实来源分工（2026-09-26 定案）
+#
+#   什么依赖什么、什么顺序切     -> **图谱**（东京拓扑，经本模块）
+#   灾备侧存在吗/健康吗/切过去了吗 -> **AWS API**（rds/eks Describe，当下）
+#
+# 图谱是单区域的（实测：31 种边标签里没有 ReplicatedTo，韩国的 Aurora 从集群
+# 完全不在图里）。这**不是缺陷，也不必修**：东京的样子就是韩国该建什么的
+# 规格说明，韩国的状态是计划的输出而不是输入。
+#
+# 更要紧的是，灾备侧状态**主动不该**从图谱取：图谱是周期刷新的 ETL 产物，
+# 一个 6 小时前的「从库健康吗」视图比没有视图更糟 —— 它读起来正常而实际是错的。
+# RDS/EKS API 是当下的，且 worker 实例角色已有 rds:Describe* / eks:Describe*。
 SNAPSHOT_QUERIES = (
     "q14_cross_region_resources",
     "q13_data_layer_topology",
-    "q12_service_dependency_tree",
+    "q12_service_dependency_tree",   # 必填 service_name，用 q2 的结果逐个调
     "q15_critical_path",
     "q2_tier0_status",
+    "q16_single_point_of_failure",   # 单点故障检测 —— 对灾备计划直接相关
 )
+
+# 需要参数的查询：名字 -> 必填参数名。
+# 实测 q12 必填 service_name，其余五条无参数。
+PARAMETERIZED = {"q12_service_dependency_tree": "service_name"}
+
+# ⚠️ 这条查询的空结果**会被读成它的反面**，必须特殊对待。
+#
+# 实测 q14_cross_region_resources 返回 0 行。它找的是 ReplicatedTo 边与
+# 全局 DynamoDB 表，而图谱里没有 ReplicatedTo —— 图谱是单区域的。
+#
+# 危险在于：问「什么跨区复制了？」得到空答案，一个直白的计划生成器会推出
+# 「没有任何复制，所以要建立复制」。而实际上 petsite-global 这个
+# Aurora 全局集群**已经横跨东京与韩国且 available**
+# （实测 describe-global-clusters：ap-northeast-1 Writer=true，
+#   ap-northeast-2 Writer=false, GlobalWriteForwarding=disabled）。
+#
+# 那台 server 自己的 empty_result_guidance 也在警告这一点：
+#   「不要把空结果解释成『依赖不存在』」
+#
+# 所以复制关系的权威来源是 **RDS API**，不是这条查询。
+# 这条查询的结果仍然存进快照（它是图谱状态的忠实记录），但**不得**
+# 被当作「跨区复制的完整清单」。
+EMPTINESS_READS_AS_OPPOSITE = {
+    "q14_cross_region_resources": (
+        "空结果不代表没有跨区复制。图谱是单区域的，不含 ReplicatedTo 边。"
+        "复制关系请取自 rds:DescribeGlobalClusters（petsite-global）。"
+    ),
+}
