@@ -4,11 +4,27 @@
 # 把 dr-plan-generator 的 worker 代码部署到韩国灾备站点，并**用独立手段
 # 证明新代码真的在跑**。
 #
-#   在 i-09380e417a0177ed4（dr-korea-temporal）上执行：
-#       cd /opt/temporal
-#       sudo bash deploy-worker.sh                     # 默认带冒烟验证
-#       sudo bash deploy-worker.sh --no-smoke          # 只部署，不起 workflow
-#       sudo bash deploy-worker.sh --ref main          # 换分支/标签
+#   ① 在**操作者机器**上发布（要有写 S3 的权限，比如你的 Mac / 这台工作机）：
+#       bash deploy-worker.sh --publish
+#   ② 在**主机**上部署（经 SSM，用实例角色）：
+#       sudo bash deploy-worker.sh --provision            # 默认带冒烟验证
+#       sudo bash deploy-worker.sh --provision --no-smoke
+#       sudo bash deploy-worker.sh --provision --ref main
+#
+# ## 为什么必须拆成两步 —— 这是一条该保住的安全属性
+#
+# 2026-09-26 第一版把发布和部署写在一起、都在主机上跑，结果 `aws s3 sync`
+# 全部 AccessDenied。当时的诱惑是「给实例角色加个 PutObject 就好了」。
+# **不要那样做。** 实例角色对 worker/* 刻意只有 GetObject，含义是：
+#
+#     worker 不能改写自己的代码来源。
+#
+# 这条约束正是这套灾备编排存在的理由之一 —— 一个能改写自己下次要执行什么的
+# 进程，它的「已审核、已演练」结论一文不值。给它 PutObject 会让整条
+# 审计链在最不显眼的地方失效：计划审批、演练闸门全都还在，而被执行的代码
+# 可以在两次审批之间被执行者自己换掉。
+#
+# 所以发布权限属于操作者，不属于 worker。这不是不便，是设计。
 #
 # ## 为什么不直接 systemctl restart 就算完
 #
@@ -25,6 +41,13 @@
 # 旧 worker 不认识这个 workflow type —— 它会让执行停在 RUNNING 且永不前进，
 # 而**那个形态与「队列名拼错」「没有 worker」完全一样**。
 # 所以冒烟验证是三态的：成功 / 明确失败 / 无法判断，绝不把第三种写成第一种。
+#
+# ## 便携性
+#
+# 发布这一步会在 macOS 上跑，那里的 /bin/bash 是 3.2。
+# 紧跟全角字符的变量引用**必须加花括号**：bash 3.2 会把全角字节算进变量名，
+# 配合 `set -u` 直接退出。2026-09-26 实测就是它让第一次 apply 停在
+# 安全组那一步之前（路由已加、SG 未加）。已全仓修正，改动时别退回去。
 
 set -euo pipefail
 
@@ -35,15 +58,35 @@ NS=default
 QUEUE=dr-plan-queue
 CLI_IMAGE=temporalio/admin-tools:1.32.0
 SMOKE=1
+MODE=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --no-smoke) SMOKE=0; shift ;;
-    --ref) REF="$2"; shift 2 ;;
+    --publish)   MODE=publish; shift ;;
+    --provision) MODE=provision; shift ;;
+    --no-smoke)  SMOKE=0; shift ;;
+    --ref)       REF="$2"; shift 2 ;;
     *) echo "未知参数 $1" >&2; exit 2 ;;
   esac
 done
 RAW_BASE="https://raw.githubusercontent.com/$REPO/$REF/dr-plan-generator/worker"
+
+if [ -z "$MODE" ]; then
+  cat >&2 <<'USAGE'
+必须指明模式 —— 这两步在不同的机器上、用不同的身份执行，不是同一件事：
+
+  ① 操作者机器（有写 S3 的权限）：
+       bash deploy-worker.sh --publish
+
+  ② worker 主机（用实例角色，经 SSM）：
+       sudo bash deploy-worker.sh --provision
+
+为什么不能合成一步：实例角色对 worker/* 刻意只有 GetObject —— worker 不能
+改写自己的代码来源。合成一步就会诱使人给它加 PutObject，那会让「已审核、
+已演练」的结论失效：被执行的代码可以在两次审批之间被执行者自己换掉。
+USAGE
+  exit 2
+fi
 
 say()  { printf '\n\033[1m── %s ──\033[0m\n' "$1"; }
 fail() { echo "  ✗ $*" >&2; FAILED=1; }
@@ -65,22 +108,32 @@ tcli() {
 }
 
 # ── 0. 前置 ────────────────────────────────────────────────────────────
-say "0. 前置检查"
-[ -f /opt/dr-worker/app/worker.py ] || {
-  echo "/opt/dr-worker 不存在 —— 这是首次部署，请先跑 provision-worker.sh" >&2; exit 1; }
-BUCKET="${DR_CODE_BUCKET:-$(systemctl show -p Environment dr-worker.service \
-  | tr ' ' '\n' | sed -n 's/^DR_PLAN_BUCKET=//p' | head -1)}"
-[ -n "$BUCKET" ] || { echo "拿不到代码桶名，请设 DR_CODE_BUCKET" >&2; exit 1; }
-echo "  分支/引用：$REF"
-echo "  代码桶：  $BUCKET"
-tcli operator cluster health >/dev/null 2>&1 \
-  && ok "Temporal 可达" \
-  || { echo "  Temporal 不可达 —— worker 起来也连不上，先修服务端" >&2; exit 1; }
-
-# ── 1. 取代码 ──────────────────────────────────────────────────────────
-say "1. 从 GitHub 取 worker 代码"
-STAGE=$(mktemp -d /tmp/dr-worker-stage.XXXXXX)
+say "0. 前置检查（模式：${MODE}）"
+STAGE=$(mktemp -d "${TMPDIR:-/tmp}/dr-worker-stage.XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT
+
+if [ "$MODE" = publish ]; then
+  # 发布只需要写 S3 的权限，不需要主机上的任何东西。
+  BUCKET="${DR_CODE_BUCKET:?发布模式需要显式设 DR_CODE_BUCKET（避免误发到别的环境）}"
+  echo "  分支/引用：${REF}"
+  echo "  代码桶：  ${BUCKET}"
+  aws sts get-caller-identity --query '"  身份：" + Arn' --output text
+else
+  [ -f /opt/dr-worker/app/worker.py ] || {
+    echo "/opt/dr-worker 不存在 —— 这是首次部署，请先跑 provision-worker.sh" >&2; exit 1; }
+  BUCKET="${DR_CODE_BUCKET:-$(systemctl show -p Environment dr-worker.service \
+    | tr ' ' '\n' | sed -n 's/^DR_PLAN_BUCKET=//p' | head -1)}"
+  [ -n "$BUCKET" ] || { echo "拿不到代码桶名，请设 DR_CODE_BUCKET" >&2; exit 1; }
+  echo "  代码桶：  ${BUCKET}"
+  tcli operator cluster health >/dev/null 2>&1 \
+    && ok "Temporal 可达" \
+    || { echo "  Temporal 不可达 —— worker 起来也连不上，先修服务端" >&2; exit 1; }
+fi
+
+# ══ 发布模式 ═══════════════════════════════════════════════════════════
+if [ "$MODE" = publish ]; then
+
+say "1. 从 GitHub 取 worker 代码"
 # provision-worker.sh 必须**随包下发**。
 # 它不在这个清单里会造成一个恰好最难看出来的故障：代码同步到了 S3，
 # 但没人把它从 S3 拉到 /opt/dr-worker/app，于是 worker 用旧代码重启 ——
@@ -102,10 +155,23 @@ say "2. 同步到 S3（S3 是唯一代码来源，保持既有契约）"
 aws s3 sync "$STAGE/" "s3://$BUCKET/worker/" --only-show-errors \
   --exclude '__pycache__/*' --exclude '*.pyc'
 ok "已同步到 s3://$BUCKET/worker/"
+cat <<EOF
 
+发布完成。下一步在 worker 主机上（经 SSM，用实例角色）执行：
+
+    sudo bash deploy-worker.sh --provision
+
+主机侧刻意没有写 S3 的权限 —— 见脚本头部「这是一条该保住的安全属性」。
+EOF
+exit 0
+fi   # ══ 发布模式结束 ═══════════════════════════════════════════════════
+
+# ══ 部署模式 ═══════════════════════════════════════════════════════════
 say "3. 跑 provision-worker.sh（它按内容指纹决定是否重启）"
-# 从暂存目录跑，而不是从 /opt/dr-worker/app ——
+# provision-worker.sh 从 **S3** 取，而不是从 /opt/dr-worker/app ——
 # 主机上那份可能还是旧的，甚至可能不存在（它最初是手工装的，不在 IaC 里）。
+# 而把代码从 S3 落到磁盘这件事本身就是它做的，所以不能依赖磁盘上那份。
+aws s3 cp "s3://$BUCKET/worker/provision-worker.sh" "$STAGE/provision-worker.sh" --only-show-errors
 FP_BEFORE=$(cat /opt/dr-worker/.code.sha256 2>/dev/null || echo "none")
 PID_BEFORE=$(systemctl show -p MainPID --value dr-worker.service || echo 0)
 # 不加 || true：provision 失败就必须响亮地失败。
@@ -120,9 +186,9 @@ if [ "$FP_BEFORE" = "$FP_AFTER" ]; then
   echo "  · 代码内容无变化，provision 按设计没有重启 —— 这不是问题。"
   echo "    下面的验证仍然照跑：它查的是**现在跑着什么**，与本次是否重启无关。"
 elif [ "$PID_BEFORE" != "$PID_AFTER" ]; then
-  ok "代码有变且进程已更换（PID $PID_BEFORE → $PID_AFTER）"
+  ok "代码有变且进程已更换（PID $PID_BEFORE → ${PID_AFTER}）"
 else
-  fail "代码指纹变了但 PID 没变（$PID_AFTER）—— 进程还拿着旧模块，这正是 2026-09-25 那个坑"
+  fail "代码指纹变了但 PID 没变（${PID_AFTER}）—— 进程还拿着旧模块，这正是 2026-09-25 那个坑"
 fi
 
 # ── 3. 部署面验证 ──────────────────────────────────────────────────────

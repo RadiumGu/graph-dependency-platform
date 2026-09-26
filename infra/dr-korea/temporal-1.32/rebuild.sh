@@ -220,7 +220,7 @@ cat <<EOF
      WCI 开着只是把服务端侧的门打开。
 
 存证目录：/opt/temporal/pre-rebuild-$STAMP/
-旧数据：  /opt/temporal/pgdata.old-$STAMP（确认健康后再删）
+旧数据：  /opt/temporal/pgdata.old-${STAMP}（确认健康后再删）
 回滚：    EBS 快照 snap-0566ddf3da1b75996
 EOF
 

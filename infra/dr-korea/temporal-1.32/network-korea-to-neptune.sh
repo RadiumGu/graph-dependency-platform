@@ -127,7 +127,7 @@ for rt in $ROUTE_TABLES; do
   fi
 done
 
-say "2. 放通 Neptune 安全组的 $NEPTUNE_PORT（只放 $WORKER_CIDR）"
+say "2. 放通 Neptune 安全组的 ${NEPTUNE_PORT}（只放 ${WORKER_CIDR}）"
 if aws ec2 authorize-security-group-ingress --region "$TOKYO_REGION" \
      --group-id "$NEPTUNE_SG" --ip-permissions \
      "IpProtocol=tcp,FromPort=$NEPTUNE_PORT,ToPort=$NEPTUNE_PORT,IpRanges=[{CidrIp=$WORKER_CIDR,Description=DR worker subnet Korea to Neptune}]" \
@@ -145,7 +145,7 @@ for rt in $ROUTE_TABLES; do
   have=$(aws ec2 describe-route-tables --region "$TOKYO_REGION" --route-table-ids "$rt" \
     --query "RouteTables[0].Routes[?DestinationCidrBlock=='$KOREA_CIDR'].VpcPeeringConnectionId" \
     --output text)
-  [ -n "$have" ] && echo "  ✓ $rt 回程路由在（$have）" || echo "  ✗ $rt 回程路由缺失"
+  [ -n "$have" ] && echo "  ✓ $rt 回程路由在（${have}）" || echo "  ✗ $rt 回程路由缺失"
 done
 sg_now=$(aws ec2 describe-security-groups --region "$TOKYO_REGION" --group-ids "$NEPTUNE_SG" \
   --query "SecurityGroups[0].IpPermissions[?FromPort==\`$NEPTUNE_PORT\`].IpRanges[].CidrIp" \
