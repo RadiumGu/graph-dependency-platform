@@ -57,6 +57,25 @@ NEPTUNE_RESOURCE_ID=cluster-TPNY7IXPX2YQ5ZIAPC5Y6EJRRM
 P_PLAN=dr-plan-write
 P_NEPTUNE=dr-neptune-read
 P_ASSUME=dr-assume-invocation-role
+P_MCPSEC=dr-graph-mcp-secret-read
+
+# 图谱 MCP 凭证的 secret 名（放韩国，与 worker 同区域）。
+# 名字可改，但要与 dr-worker.service 里的 DR_GRAPH_MCP_SECRET_ID 一致。
+MCP_SECRET_NAME="${DR_GRAPH_MCP_SECRET_NAME:-dr-graph-mcp-m2m}"
+SECRET_REGION=ap-northeast-2
+
+doc_mcp_secret() {
+  # Secrets Manager 的 ARN 尾部有 6 位随机后缀，所以必须用 NAME-* 收尾。
+  # 这仍然是按资源收紧的 —— 它只匹配这一个名字的 secret，不是整个账号的 secret。
+  cat <<JSON
+{"Version":"2012-10-17","Statement":[{
+  "Sid":"ReadGraphMcpM2mCredential",
+  "Effect":"Allow",
+  "Action":["secretsmanager:GetSecretValue"],
+  "Resource":"arn:aws:secretsmanager:$SECRET_REGION:$ACCOUNT:secret:$MCP_SECRET_NAME-*"
+}]}
+JSON
+}
 
 doc_plan() {
   cat <<JSON
@@ -145,7 +164,8 @@ case "${1:-}" in
     show
     echo
     echo "── plan-write ──";     doc_plan
-    echo "── neptune-read ──";   doc_neptune
+    echo "── neptune-read（已不推荐，见 --apply 时的提示）──"; doc_neptune
+    echo "── mcp-secret-read ──"; doc_mcp_secret
     echo "── assume-invocation ──"
     echo "  需要 invocation role ARN 才能生成 —— 目前不应授予，见脚本头部说明。"
     ;;
@@ -157,9 +177,28 @@ case "${1:-}" in
         echo "已授予 $P_PLAN"
         ;;
       neptune-read)
+        cat >&2 <<'WARN'
+⚠️ 2026-09-26 后这一项通常不该再授予。
+快照已定案改走受审的查询目录（graph_dependency_mcp），不直连 Neptune ——
+理由是查询质量：直连意味着 worker 自己写 openCypher，那样快照记录的
+不是「图谱事实」而是「某次临时查询的偶然结果」。
+
+仍要授予请加 --i-mean-it。要的多半是：
+    bash iam-grants.sh --apply mcp-secret-read
+WARN
+        [ "${3:-}" = --i-mean-it ] || exit 2
         aws iam put-role-policy --role-name "$ROLE" --policy-name "$P_NEPTUNE" \
           --policy-document "$(doc_neptune)"
         echo "已授予 $P_NEPTUNE"
+        ;;
+      mcp-secret-read)
+        aws iam put-role-policy --role-name "$ROLE" --policy-name "$P_MCPSEC" \
+          --policy-document "$(doc_mcp_secret)"
+        echo "已授予 $P_MCPSEC（secret: $MCP_SECRET_NAME @ $SECRET_REGION）"
+        echo
+        echo "注意：走 JWT 时**不需要** bedrock-agentcore:InvokeAgentRuntime ——"
+        echo "调用由 Bearer token 授权而不是 SigV4。这是本方案授权面比"
+        echo "「另建一个 SigV4 runtime」更小的原因。"
         ;;
       assume-invocation)
         ARN="${3:-}"
@@ -186,7 +225,7 @@ ERR
           --policy-document "$(doc_assume "$ARN")"
         echo "已授予 $P_ASSUME -> $ARN"
         ;;
-      *) echo "用法: --apply plan-write|neptune-read|assume-invocation <arn>" >&2; exit 2 ;;
+      *) echo "用法: --apply plan-write|mcp-secret-read|neptune-read|assume-invocation <arn>" >&2; exit 2 ;;
     esac
     echo
     echo "复核："; show
@@ -222,8 +261,9 @@ EOF
     case "${2:-}" in
       plan-write)        aws iam delete-role-policy --role-name "$ROLE" --policy-name "$P_PLAN" ;;
       neptune-read)      aws iam delete-role-policy --role-name "$ROLE" --policy-name "$P_NEPTUNE" ;;
+      mcp-secret-read)   aws iam delete-role-policy --role-name "$ROLE" --policy-name "$P_MCPSEC" ;;
       assume-invocation) aws iam delete-role-policy --role-name "$ROLE" --policy-name "$P_ASSUME" ;;
-      *) echo "用法: --revert plan-write|neptune-read|assume-invocation" >&2; exit 2 ;;
+      *) echo "用法: --revert plan-write|mcp-secret-read|neptune-read|assume-invocation" >&2; exit 2 ;;
     esac
     echo "已撤销 ${2}"
     ;;
