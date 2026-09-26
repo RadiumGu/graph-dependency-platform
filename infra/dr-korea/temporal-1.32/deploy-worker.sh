@@ -138,7 +138,7 @@ say "1. 从 GitHub 取 worker 代码"
 # 它不在这个清单里会造成一个恰好最难看出来的故障：代码同步到了 S3，
 # 但没人把它从 S3 拉到 /opt/dr-worker/app，于是 worker 用旧代码重启 ——
 # 而「服务 active」「队列上有 poller」两个判据照样通过。
-FILES="worker.py workflows.py plan_workflow.py activities.py snapshot_workflow.py requirements.txt provision-worker.sh"
+FILES="worker.py workflows.py plan_workflow.py activities.py snapshot_workflow.py graph_mcp_client.py probe_graph_mcp.py requirements.txt provision-worker.sh"
 for f in $FILES; do
   curl -fsSL -o "$STAGE/$f" "$RAW_BASE/$f"
   printf '  %-24s %6s 字节\n' "$f" "$(stat -c%s "$STAGE/$f")"

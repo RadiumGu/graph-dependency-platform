@@ -29,7 +29,6 @@ secret 值与 access token 全程只在内存里，输出只报长度。
 """
 from __future__ import annotations
 
-import json
 import os
 import sys
 
@@ -120,7 +119,7 @@ def main() -> int:
         print(f"\n  ⚠️ 缺 {len(missing)} 条。**不要在 worker 里写临时查询补上** ——")
         print("     那会抹掉「不直连 Neptune」这个决定的意义。")
         print("     正确做法是往 QUERY_CATALOG 里加（一次对版本化契约的受审改动）。")
-        print(f"\n  目录里实际有的（前 20 个）：")
+        print("\n  目录里实际有的（前 20 个）：")
         for n in names[:20]:
             print(f"      {n}")
 
@@ -148,7 +147,7 @@ def main() -> int:
     # 这里原本写的是 "provenance"，于是打印出「实际 None → 一致」——
     # 一个自相矛盾却报通过的输出，正是本项目一直在清理的那类假判据。
     prov = doc.get("_provenance", {})
-    print(f"\n  _provenance 关键字段：")
+    print("\n  _provenance 关键字段：")
     for k in ("source", "graph_cluster", "region", "graph_contract_version",
               "query", "queried_at", "determinism", "caveat"):
         if k in prov:

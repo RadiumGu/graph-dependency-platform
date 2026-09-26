@@ -84,14 +84,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any
 
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    import json
     import os
-    import subprocess
+    from datetime import datetime, timezone
+    # subprocess 已移除：快照不再 shell out 到 main.py + aws s3 cp，
+    # 改为直接走 MCP 客户端与 boto3 —— 少一层 shell 就少一类
+    # 「命令成功但没生效」的路径，且错误能拿到结构化的原因。
 
 #: 快照超过这个年龄就不许再用于生成计划。
 #: 12 小时是按「Schedule 每 6 小时跑一次，容许漏一次」定的 ——
@@ -134,47 +137,193 @@ class SnapshotResult:
 
 @activity.defn
 async def export_graph_snapshot(inp: SnapshotInput) -> SnapshotResult:
-    """导出一份图快照并上传到主区之外的桶。
+    """经受审的查询目录导出一份图快照，上传到主区之外的桶。
 
-    ⚠️ 这个 activity **必须跑在能连上 Neptune 的 VPC 里**（PetSite VPC）。
-    连不上时要**明确失败并写明原因**，不许返回一个空快照 ——
-    一份空快照会让下游生成出「没有任何依赖」的 DR 计划，
-    而那份计划看起来是成功生成的。
+    ## 数据来自哪里
+
+    图谱事实走 MCP 受审目录（graph_mcp_client），**不直连 Neptune** ——
+    理由见模块 docstring：直连意味着自己写 openCypher，那样快照记录的
+    不是「图谱事实」而是「某次临时查询的偶然结果」。
+
+    跨区复制事实走 **RDS API**。这不是冗余：图谱是单区域的（实测 31 种边标签
+    里没有 ReplicatedTo），而 q14 的空结果**会被读成它的反面** ——
+    「没有任何复制」。而 petsite-global 实际横跨两区且在跑。
+    图谱管「什么依赖什么」，AWS API 管「灾备侧的当下状态」。
+
+    ## 三条判据，都刻意做成可分辨
+
+    1. **全部查询都为零行** -> 失败。单条为零不失败（server 自己的
+       empty_result_guidance 说得对：q14 在单区域部署下本就应为空）。
+       但**全部**为零意味着图谱或 ETL 坏了。
+    2. **契约版本在一次快照内必须一致。** 中途变了说明 server 被重新部署，
+       那份快照内部就不自洽 —— 前半截和后半截描述的是两个不同的图谱契约。
+       这种快照比没有快照更糟，因为它看起来完整。
+    3. 任何一条查询失败 -> 失败并写明是哪条。不许留一份残缺快照，
+       一份残缺快照会让下游生成出「没有这个依赖」的 DR 计划，
+       而那份计划看起来是成功生成的。
     """
+    import asyncio
+    import boto3
+
+    import graph_mcp_client as gmc
+
     stamp = activity.info().workflow_run_id[:8]
-    local = f"/tmp/graph-snapshot-{stamp}.json"  # noqa: S108
     key = f"{SNAPSHOT_PREFIX}graph-{inp.source}-{stamp}.json"
 
-    cmds = [
-        f"python3 {GENERATOR_DIR}/main.py snapshot "
-        f"--scope {inp.scope} --source {inp.source} --output {local}",
-        f"aws s3 cp {local} s3://{SNAPSHOT_BUCKET}/{key}",
-    ]
+    plan = [f"MCP query {q}" for q in gmc.SNAPSHOT_QUERIES]
+    plan += ["rds:DescribeGlobalClusters", f"s3 put s3://{SNAPSHOT_BUCKET}/{key}"]
     if inp.dry_run:
-        return SnapshotResult(ok=True, would_run=cmds)
+        return SnapshotResult(ok=True, would_run=plan)
 
+    queries: dict[str, dict] = {}
+    contract_versions: set[str] = set()
     try:
-        for c in cmds:
-            activity.heartbeat(c[:80])
-            r = subprocess.run(  # noqa: S602
-                c, shell=True, capture_output=True, text=True, timeout=600
+        # 一次快照取一个 token。不是每条查询取一次 ——
+        # token TTL 一小时，而整次快照是秒级的；也不跨快照缓存（见客户端文档）。
+        token = await asyncio.to_thread(gmc.fetch_token)
+
+        # ── 无参数的那几条 ───────────────────────────────────────────────
+        for q in gmc.SNAPSHOT_QUERIES:
+            if q in gmc.PARAMETERIZED:
+                continue
+            activity.heartbeat(q)
+            queries[q] = await asyncio.to_thread(gmc.query, q, token)
+            contract_versions.add(
+                str(queries[q].get("_provenance", {}).get("graph_contract_version"))
             )
-            if r.returncode != 0:
-                return SnapshotResult(
-                    ok=False,
-                    would_run=cmds,
-                    inconclusive_reason=(
-                        f"命令失败（exit {r.returncode}）：{c[:60]}…\n"
-                        f"stderr: {r.stderr.strip()[:300]}"
-                    ),
+
+        # ── q12 由 q2 的结果驱动，**按服务名去重** ───────────────────────
+        # 实测 q2_tier0_status 返回 6 行但只有 3 个不同服务
+        # （petsite / payforadoption / petsearch，每个服务一行一个 AZ）。
+        # 不去重就会对每个服务调两次 —— 结果一样，白花两倍时间，
+        # 而且快照里会出现重复条目。
+        tier0 = queries.get("q2_tier0_status", {}).get("results") or []
+        services = sorted({r["name"] for r in tier0 if r.get("name")})
+        for q, pname in gmc.PARAMETERIZED.items():
+            per_service = {}
+            for svc in services:
+                activity.heartbeat(f"{q}[{svc}]")
+                per_service[svc] = await asyncio.to_thread(
+                    gmc.query, q, token, **{pname: svc}
                 )
+                contract_versions.add(
+                    str(per_service[svc].get("_provenance", {})
+                        .get("graph_contract_version"))
+                )
+            queries[q] = {"by_service": per_service, "services": services}
+
+    except gmc.ContractVersionMismatch as e:
+        # 独立处理：这不是抖动，重试不会变好，而且它正是我们要挡的那类故障。
+        return SnapshotResult(
+            ok=False, would_run=plan,
+            inconclusive_reason=f"图谱契约版本不符，拒绝存这份快照：{e}",
+        )
     except Exception as e:  # noqa: BLE001
         return SnapshotResult(
-            ok=False, would_run=cmds,
-            inconclusive_reason=f"{type(e).__name__}: {e}",
+            ok=False, would_run=plan,
+            inconclusive_reason=f"查询图谱失败 {type(e).__name__}: {e}",
         )
 
-    return SnapshotResult(ok=True, s3_key=key, would_run=cmds)
+    # ── 判据 2：契约版本必须一致 ─────────────────────────────────────────
+    if len(contract_versions) > 1:
+        return SnapshotResult(
+            ok=False, would_run=plan,
+            inconclusive_reason=(
+                f"一次快照内出现多个图谱契约版本 {sorted(contract_versions)} —— "
+                f"MCP server 很可能在采集中途被重新部署。这份快照内部不自洽，"
+                f"不存。下一轮 Schedule 会重新采。"
+            ),
+        )
+
+    # ── 判据 1：全部为零才是失败 ─────────────────────────────────────────
+    row_counts = {
+        q: (d.get("row_count") if "row_count" in d
+            else sum(x.get("row_count") or 0 for x in d.get("by_service", {}).values()))
+        for q, d in queries.items()
+    }
+    if row_counts and not any(row_counts.values()):
+        return SnapshotResult(
+            ok=False, would_run=plan, node_count=0,
+            inconclusive_reason=(
+                f"全部 {len(row_counts)} 条查询都返回零行 —— 图谱或 ETL 坏了。"
+                f"单条为零是正常的（q14 在单区域部署下本就应为空），"
+                f"但全部为零不是。不存这份快照。"
+            ),
+        )
+
+    # ── 图谱缺的那个事实：跨区复制，取自 RDS API ─────────────────────────
+    # 见模块 docstring 的「事实来源分工」。这一段失败**不**让整份快照失败：
+    # 图谱事实已经拿到了，缺这一段的快照仍然有用，只是要**明确标出缺了**，
+    # 而不是让下游以为「没有跨区复制」。
+    replication: dict = {}
+    try:
+        gc_id = os.environ.get("DR_GLOBAL_CLUSTER", "")
+        if gc_id:
+            rds = await asyncio.to_thread(
+                boto3.client, "rds", region_name=inp.source
+            )
+            resp = await asyncio.to_thread(
+                rds.describe_global_clusters, GlobalClusterIdentifier=gc_id
+            )
+            g0 = (resp.get("GlobalClusters") or [{}])[0]
+            replication = {
+                "source": "rds:DescribeGlobalClusters",
+                "global_cluster": gc_id,
+                "engine": g0.get("Engine"),
+                "status": g0.get("Status"),
+                "members": [
+                    {
+                        "cluster_arn": m.get("DBClusterArn"),
+                        "region": (m.get("DBClusterArn") or "").split(":")[3] or None,
+                        "is_writer": m.get("IsWriter"),
+                        "global_write_forwarding": m.get("GlobalWriteForwardingStatus"),
+                    }
+                    for m in g0.get("GlobalClusterMembers") or []
+                ],
+            }
+        else:
+            replication = {"unavailable": "未设 DR_GLOBAL_CLUSTER"}
+    except Exception as e:  # noqa: BLE001
+        replication = {"unavailable": f"{type(e).__name__}: {e}"}
+
+    snapshot = {
+        "schema": "dr-graph-snapshot/2",
+        "taken_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "source_region": inp.source,
+        "graph_contract_version": contract_versions.pop() if contract_versions else None,
+        "row_counts": row_counts,
+        # 每条查询的结果都连**溯源**一起存。只存 rows 是错的：
+        # 那样以后无法回答「这条事实是哪个查询、哪个契约版本、什么时候取的」。
+        "queries": queries,
+        # 跨区复制取自 RDS，与图谱事实分开放 —— 来源不同就该看得出来。
+        "cross_region_replication": replication,
+        # 把「哪条查询的空结果会被误读」一起写进快照，让读快照的人/agent
+        # 不必再去翻代码注释。
+        "emptiness_caveats": {
+            q: msg for q, msg in gmc.EMPTINESS_READS_AS_OPPOSITE.items()
+            if row_counts.get(q) == 0
+        },
+    }
+
+    try:
+        s3 = await asyncio.to_thread(boto3.client, "s3")
+        await asyncio.to_thread(
+            s3.put_object,
+            Bucket=SNAPSHOT_BUCKET,
+            Key=key,
+            Body=json.dumps(snapshot, ensure_ascii=False, default=str).encode(),
+            ContentType="application/json",
+        )
+    except Exception as e:  # noqa: BLE001
+        return SnapshotResult(
+            ok=False, would_run=plan,
+            inconclusive_reason=f"上传快照失败 {type(e).__name__}: {e}",
+        )
+
+    return SnapshotResult(
+        ok=True, s3_key=key, would_run=plan,
+        node_count=sum(v or 0 for v in row_counts.values()),
+    )
 
 
 @workflow.defn(name="ExportSnapshotWorkflow")
