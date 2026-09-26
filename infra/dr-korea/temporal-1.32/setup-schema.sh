@@ -1,5 +1,9 @@
-#!/bin/bash
+#!/bin/sh
 # /opt/temporal/setup-schema.sh —— auto-setup 以前替我们做的那件事，显式化。
+#
+# ⚠️ shebang 是 sh 而不是 bash：admin-tools:1.32.0 是 **busybox 镜像，没有 bash**
+# （2026-09-26 实测，写 bash 时这个作业直接起不来）。脚本里刻意不用 bash 专有
+# 语法；pipefail 在 busybox ash 上可用，但仍按可选处理，见下。
 #
 # ⚠️ 顺序是承重的：create-database -> setup-schema -v 0.0 -> update-schema。
 # 跳过 setup-schema 直接 update-schema 会失败（没有版本表可比对）；
@@ -8,7 +12,10 @@
 #
 # 幂等：两个 create-database 对已存在的库返回"已存在"并继续；
 # setup-schema 与 update-schema 都能安全重跑。所以这个作业可以反复执行。
-set -euo pipefail
+set -eu
+# busybox ash 支持 pipefail，但不保证每个 sh 都支持 —— 有就用，没有不致命。
+# shellcheck disable=SC3040
+set -o pipefail 2>/dev/null || true
 
 : "${SQL_PLUGIN:?}" "${SQL_HOST:?}" "${SQL_PORT:?}" "${SQL_USER:?}" "${SQL_PASSWORD:?}"
 
