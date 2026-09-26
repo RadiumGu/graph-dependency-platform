@@ -335,7 +335,26 @@ class ExportSnapshotWorkflow:
     """
 
     @workflow.run
-    async def run(self, args: SnapshotInput) -> SnapshotResult:
+    async def run(self, args: SnapshotInput | None = None) -> SnapshotResult:
+        # ⚠️ 参数必须可省。2026-09-26 实测踩到：
+        # Schedule 创建时**没带输入**，而这里原来是必填位置参数，于是
+        #
+        #     TypeError: ExportSnapshotWorkflow.run() missing 1 required
+        #                positional argument: 'args'
+        #
+        # 这个错发生在 **activation 阶段**，workflow 内接不住，Temporal 会
+        # 无限重试 —— 表现是 `workflow list` 显示 **Running**，
+        # 而它永不前进。整整两分钟看起来一切正常。
+        #
+        # 唯一露底的地方是 Temporal 1.32 自动填的搜索属性：
+        #     TemporalReportedProblems = ["category=WorkflowTaskFailed",
+        #       "cause=WorkflowTaskFailedCauseWorkflowWorkerUnhandledFailure"]
+        #
+        # 所以这里给默认值：SnapshotInput 的每个字段都有默认，
+        # 一个不带参数的 Schedule 触发应当能正常跑，而不是静默卡死。
+        # 用 None 而不是 `= SnapshotInput()`：dataclass 实例作默认值会被
+        # 所有调用共享，那是另一个坑。
+        args = args or SnapshotInput()
         res: SnapshotResult = await workflow.execute_activity(
             export_graph_snapshot,
             args,
