@@ -97,13 +97,34 @@ class TestDrillUsesKoreaImage:
         )
 
     def test_repo_name_keeps_the_tokyo_suffix(self, drill: dict):
-        """仓库名里仍带 ap-northeast-1 —— 复制不支持改名，那是名字的一部分。"""
+        """CDK asset 仓库名里的 ap-northeast-1 **是名字的一部分**，不能「顺手改成 2」。
+
+        ⚠️ 2026-09-26 订正：原断言写成「仓库名必须以 ap-northeast-1 结尾」，
+        那是**语法片段**而不是它想守的性质。当 drill 清单合法地换成另一个仓库
+        （petsite-hotfix，含「领养假成功」修复 ca60bc8f）时，
+        这条断言把一个**正确的改动**挡了下来 —— 这是「判据切片段而非性质」
+        这个失误族的又一例，而且这次是我自己写的门禁绊了我自己。
+
+        它真正要守的性质是：**如果**用的是 CDK asset 仓库，那么仓库名必须原样保留
+        （包括那个看起来像 region 其实是名字一部分的后缀）。
+        换成别的仓库不在它的射程内 —— 那种情况由 test_image_is_korea_region
+        与下面那条「按 digest 钉死」来守，而且后者要求更严。
+        """
         img = drill["spec"]["template"]["spec"]["containers"][0]["image"]
-        repo = img.split("/", 1)[1].split(":")[0]
-        assert repo.endswith("ap-northeast-1"), (
-            f"仓库名是 {repo} —— CDK asset 仓库名里的 ap-northeast-1 是名字的一部分，"
-            "改掉会让 ECR 复制落到另一个仓库"
-        )
+        repo = img.split("/", 1)[1].split(":")[0].split("@")[0]
+
+        if "cdk-hnb659fds-container-assets" in repo:
+            assert repo.endswith("ap-northeast-1"), (
+                f"仓库名是 {repo} —— CDK asset 仓库名里的 ap-northeast-1 是名字的一部分，"
+                "改掉会让 ECR 复制落到另一个仓库"
+            )
+        else:
+            # 非 asset 仓库：必须按 digest 钉死。tag 说不出「跑的是哪一版」，
+            # 而灾备切换时只有同一个 digest 才能证明两侧是同一个东西。
+            assert "@sha256:" in img, (
+                f"镜像 {img} 不是 CDK asset 仓库，那就必须按 digest 钉死 —— "
+                "tag 在灾备场景下无法证明两侧跑的是同一份代码"
+            )
 
     def test_uses_the_existing_irsa_service_account(self, drill: dict):
         sa = drill["spec"]["template"]["spec"]["serviceAccountName"]
