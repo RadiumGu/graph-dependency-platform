@@ -195,6 +195,14 @@ def rpc(method: str, params: dict | None = None, token: str | None = None) -> di
         data=json.dumps(body).encode(),
         headers={
             "Content-Type": "application/json",
+            # ⚠️ 这个 Accept 头是**必需的**，不是礼貌。
+            # 2026-09-26 实测：不带它 -> HTTP 406
+            #   {"error":{"code":-32011,"message":"MCP protocol requires
+            #     Accept header: application/json, text/event-stream"}}
+            # 端点走的是 MCP Streamable HTTP 传输，要求同时声明 JSON 与 SSE。
+            # 这条是探出来的，不是推断出来的 —— 靠猜写不对，
+            # 而它会在半夜的 activity 里失败。
+            "Accept": "application/json, text/event-stream",
             "Authorization": f"Bearer {tok}",
             "X-Amzn-Bedrock-AgentCore-Runtime-Session-Id": _session_id(),
         },
@@ -202,7 +210,9 @@ def rpc(method: str, params: dict | None = None, token: str | None = None) -> di
     )
     try:
         with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
-            payload = json.loads(r.read())
+            ctype = r.headers.get("Content-Type", "")
+            raw = r.read().decode()
+        payload = _decode(raw, ctype)
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")[:300]
         # 这几个状态码含义不同，混成一句「调用失败」会让排查从头再来。
@@ -210,6 +220,7 @@ def rpc(method: str, params: dict | None = None, token: str | None = None) -> di
             401: "token 无效或过期（本模块不缓存 token，所以更可能是 secret 被轮换）",
             403: "token 有效但 scope 不含 graphdp-mcp/invoke，或该 client 不在 allowedClients 里",
             404: "runtime ARN 或 qualifier 不对（URL 形式已于 2026-09-26 验证过，先怀疑 ARN）",
+            406: "缺 Accept: application/json, text/event-stream —— 本模块已带，若仍报请看是否被代理改写",
         }.get(e.code, "")
         raise GraphMcpError(f"MCP 调用失败 HTTP {e.code}：{detail}\n  {hint}") from e
 
@@ -223,6 +234,41 @@ def rpc(method: str, params: dict | None = None, token: str | None = None) -> di
     return payload["result"]
 
 
+def _decode(raw: str, ctype: str) -> dict:
+    """解析响应体。Streamable HTTP 允许两种回法，必须都认。
+
+    既然请求里声明了 `Accept: application/json, text/event-stream`，
+    server 就有权选任意一种回 —— 只认 JSON 会在它某天改回 SSE 时炸，
+    而那时的表现是「JSONDecodeError」，看不出根因。
+    """
+    if "text/event-stream" in ctype:
+        # SSE 帧：形如 `event: message` / `data: {...}`，空行分隔。
+        # 一次 JSON-RPC 响应可能跨多帧，取最后一个能解析成对象的 data。
+        last = None
+        for line in raw.splitlines():
+            if line.startswith("data:"):
+                chunk = line[5:].strip()
+                if not chunk or chunk == "[DONE]":
+                    continue
+                try:
+                    obj = json.loads(chunk)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(obj, dict):
+                    last = obj
+        if last is None:
+            raise GraphMcpError(
+                f"SSE 响应里没有可解析的 data 帧（前 200 字符）：{raw[:200]}"
+            )
+        return last
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise GraphMcpError(
+            f"响应既不是 SSE 也不是 JSON（Content-Type: {ctype}，前 200 字符）：{raw[:200]}"
+        ) from e
+
+
 def list_tools(token: str | None = None) -> list[dict]:
     res = rpc("tools/list", {}, token=token)
     tools = res.get("tools")
@@ -234,25 +280,58 @@ def list_tools(token: str | None = None) -> list[dict]:
 def query(name: str, token: str | None = None, **params) -> dict:
     """调一条目录查询，校验溯源与契约版本后返回。
 
-    返回 {"rows": …, "provenance": …} —— 两者都进快照。
-    只存 rows 不存 provenance 是错的：那样以后没法回答
-    「这条事实是哪个查询、哪个契约版本、什么时候取的」。
+    ## 响应结构是实测的，不是推断的（2026-09-26）
+
+        result
+          content: [{type:"text", text:"<同样内容的 JSON 字符串>"}]
+          isError: false
+          structuredContent:            <- 用这个
+            query / result_shape / row_count / results
+            _provenance:                <- 注意前导下划线
+              source / graph_cluster / region
+              graph_contract_version    <- **int**，不是 str
+              query / params / queried_at / determinism / caveat
+            empty_result_guidance       <- 仅当 row_count == 0 时出现
+
+    优先用 `structuredContent`（MCP 的结构化输出字段），而不是再去解析
+    `content[].text` —— 后者是同一份内容的字符串副本，多一次解析就多一处
+    可能不一致。text 那条路留作回退：万一 server 某天不再给
+    structuredContent，回退能工作且会说清自己走了回退。
+
+    ## 零行不是错误
+
+    那台 server 自己给了指引：
+        「空结果不等于错误 —— 例如 q14_cross_region_resources 在单区域部署下
+          本就应为空。不要把空结果解释成『依赖不存在』。」
+    所以本函数**不**因 row_count==0 失败。判断「这份快照有没有用」是
+    调用方的事，而且判据应当是「是否所有查询都为空」（那说明图谱或 ETL 坏了），
+    不是「某一条为空」。
     """
     res = rpc("tools/call", {"name": name, "arguments": params}, token=token)
 
     if res.get("isError"):
         txt = _text_of(res)
-        raise GraphMcpError(f"查询 {name} 返回 isError：{txt[:300]}")
+        raise GraphMcpError(
+            f"查询 {name} 返回 isError：{txt[:300]}\n"
+            f"  参数校验失败时这里会列出缺哪个必填参数 —— 照它传。"
+        )
 
-    doc = _parse_content(res, name)
-    prov = doc.get("provenance")
+    doc = res.get("structuredContent")
+    via = "structuredContent"
+    if not isinstance(doc, dict):
+        doc = _parse_content(res, name)
+        via = "content[].text（回退路径）"
+
+    prov = doc.get("_provenance")
     if not isinstance(prov, dict):
         raise GraphMcpError(
-            f"查询 {name} 的响应里没有 provenance。"
-            f"本 server 的设计是每条结果都带溯源 —— 没有它说明 server 版本变了，"
+            f"查询 {name} 的响应里没有 _provenance（取自 {via}，顶层键 {list(doc)}）。\n"
+            f"  本 server 的设计是每条结果都带溯源 —— 没有它说明 server 版本变了，"
             f"而不是「这次恰好没有」。"
         )
 
+    # 契约版本实测是 int(1)，但两边都转 str 比 —— 以后它变成 "1.1" 也不会
+    # 因为类型不同而假性通过。
     got = str(prov.get("graph_contract_version", "unknown"))
     if got != str(EXPECTED_CONTRACT_VERSION):
         raise ContractVersionMismatch(
@@ -261,6 +340,7 @@ def query(name: str, token: str | None = None, **params) -> dict:
             f"会得到一份形状不同却看起来正常的快照。\n"
             f"  确认新契约兼容后，改 DR_GRAPH_CONTRACT_VERSION 并重跑。"
         )
+    doc["_read_via"] = via
     return doc
 
 
