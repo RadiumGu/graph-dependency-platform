@@ -1,0 +1,185 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  petsite 镜像构建（东京 ap-northeast-1）—— 把已合并但从未部署的
+  「领养假成功」修复（ca60bc8f）构建成可部署的镜像。
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 为什么需要这个栈：一个合并了 22 天却从未上线的修复
+#
+# 实测的时间差（这是本栈存在的全部理由）：
+#
+#   修复提交 ca60bc8f              2026-09-05T03:38:40Z
+#   线上 petsite 镜像推送           2026-09-05T03:34:47Z   ← 早 3 分 53 秒
+#   镜像 digest                    sha256:52af83bbd2885b98dda7980f22f4e9a0aa9f3d05968501c19ffc811c0f3150b7
+#
+# 也就是说：镜像是在修复提交前 4 分钟构建的，此后再没重建过。
+# 首尔 ECR 里那一份是**同一个 digest**（跨区复制的），所以两个 region
+# 跑的都是不含修复的代码。
+#
+# ⚠️ 这类「已合并 ≠ 已部署」的缺口，靠读代码是发现不了的 ——
+#    源码里修复明明在。判据只能是**镜像构建时间 vs 提交时间**。
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# 那个修复解决的是什么（以及为什么它自己不会被发现）
+#
+# 旧代码调 payforadoption 的 /api/completeadoption 时：
+#   ① 不传 userId —— 而服务端 decodeCompleteAdoptionRequest 三个参数缺一就
+#      返回 ErrBadRequest（400）
+#   ② 拿到响应后**从不检查 IsSuccessStatusCode**
+#
+# 两个加在一起 = 彻底的假成功：页面显示「Adoption Complete / Thank you for
+# adopting me!」，而后端一行都没写。**HTTP 200 且零异常**，所以监控看不见。
+#
+# 东京线上此刻的实测数据（13:00–14:00 一小时窗口）：
+#   Inside MakePayment（petsite 记录的领养尝试）      3574
+#   transaction_created_successfully（真正落库）       104
+#   create_transaction_failed                           0
+#   payforadoption returned <非 2xx>                    0   ← 一条都没有
+#
+# 约 97% 的领养尝试连支付后端都没到达，而且**一条异常都没记**。
+# 那 104 笔成功来自显式传 userId 的合成金丝雀（userId=synthetic-adoption）。
+#
+# ⚠️ 不要把「transactions 表是空的」当成后端坏了：同一小时内
+#    cleanupadoptions 被调用 **69 次**，每次 `DELETE FROM transactions` 清全表。
+#    我自己先误判过一次 —— 空表是重置循环的结果，不是落库失败的证据。
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# 上线后怎么判断修复生效（判据不是「页面显示成功」）
+#
+# 修复的作用是**把静默失败变成响亮失败**，所以成功判据是：
+#   ① transaction_created_successfully 的每小时计数向 MakePayment 计数靠近
+#   ② 若 userId 仍缺失，日志里会出现 `payforadoption returned 400`
+#      （旧代码永远不会打印这句，因为它不看状态码）
+#
+# **不能用「领养页面显示完成」作判据** —— 那正是坏掉时的表现。
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# 与 01-petsearch-hotfix-build.yaml 相同的三个刻意选择
+#
+# 1. 原生 arm64（节点全是 arm64，Dockerfile 里也写明了上游硬编码 x86_64 的坑）
+# 2. 新命名的 ECR 仓库，不占用任何现有名字
+# 3. 源是公开 GitHub 仓库，不需要凭据
+#
+# 一个不同点：**超时给到 90 分钟**。petsite 的 Dockerfile 注释里记着实测数据：
+# `dotnet restore` 在带 --no-cache 时要 26.16 分钟，第一次实验就是因为 25 分钟
+# 上限被砍、报 "context canceled"，看起来像网络挂住其实是正常的。
+# 现在的 Dockerfile 去掉了 --no-cache，但 .NET restore 仍是最慢的一步，
+# 给足余量比再踩一次那个误导性的失败便宜。
+# ══════════════════════════════════════════════════════════════════════════════
+
+Parameters:
+  RepoUrl:
+    Type: String
+    Default: https://github.com/RadiumGu/one-observability-demo.git
+  SourceBranch:
+    Type: String
+    Default: main
+    Description: 修复 ca60bc8f 已在 main 上（2026-09-05 合并）
+  EcrRepoName:
+    Type: String
+    Default: petsite-hotfix
+  BuildContext:
+    Type: String
+    Default: PetAdoptions/petsite/petsite
+    Description: Dockerfile 在这一层（不是 PetAdoptions/petsite）
+
+Resources:
+
+  HotfixRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref EcrRepoName
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"keep last 5",
+          "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":5},
+          "action":{"type":"expire"}}]}
+
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: petsite-hotfix-build
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: codebuild.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BuildAndPush
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*
+              # DescribeImages 从第一天就给上 —— petsearch 那次漏了它，
+              # 镜像推送成功却因最后的核实命令 AccessDenied 被判 FAILED。
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:CompleteLayerUpload
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:DescribeImages
+                Resource: !GetAtt HotfixRepo.Arn
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: petsite-hotfix-build
+      Description: 构建含「领养假成功」修复的 petsite 镜像（arm64）
+      ServiceRole: !GetAtt BuildRole.Arn
+      Artifacts: {Type: NO_ARTIFACTS}
+      Source:
+        Type: GITHUB
+        Location: !Ref RepoUrl
+        BuildSpec: !Sub |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+                - export TAG=$(git rev-parse --short HEAD)
+                - echo "building from commit $TAG"
+                # 构建前证明修复在源码里。两条都必须命中：
+                #   ① userId 必填的显式失败（不再静默发一个注定 400 的请求）
+                #   ② 检查响应码（旧代码拿到 result 却从不看它）
+                - grep -q 'userId is required by payforadoption' ${BuildContext}/Controllers/PaymentController.cs
+                - grep -q 'IsSuccessStatusCode' ${BuildContext}/Controllers/PaymentController.cs
+                - echo "fix confirmed present in source"
+            build:
+              commands:
+                - cd ${BuildContext}
+                - docker build -t ${EcrRepoName}:$TAG .
+            post_build:
+              commands:
+                - export URI=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrRepoName}
+                - docker tag ${EcrRepoName}:$TAG $URI:$TAG
+                - docker push $URI:$TAG
+                - aws ecr describe-images --region ${AWS::Region} --repository-name ${EcrRepoName} --image-ids imageTag=$TAG --query 'imageDetails[0].{digest:imageDigest,pushed:imagePushedAt}' --output json
+      SourceVersion: !Ref SourceBranch
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_LARGE
+        Image: aws/codebuild/amazonlinux2-aarch64-standard:3.0
+        PrivilegedMode: true
+      TimeoutInMinutes: 90
+
+Outputs:
+  ProjectName:
+    Value: !Ref BuildProject
+  EcrRepoUri:
+    Value: !GetAtt HotfixRepo.RepositoryUri
+  RollbackAnchor:
+    Description: 回滚用 —— 当前线上 petsite 镜像（patch 前）
+    Value: 926093770964.dkr.ecr.ap-northeast-1.amazonaws.com/cdk-hnb659fds-container-assets-926093770964-ap-northeast-1@sha256:52af83bbd2885b98dda7980f22f4e9a0aa9f3d05968501c19ffc811c0f3150b7

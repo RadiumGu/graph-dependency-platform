@@ -4688,6 +4688,146 @@ ConditionalCheckFailedException → 404 'pet not found'
 > 前六项是「它现在没被用」，第四到第七项才是「没有人**准备**用它」。
 > 只查前者就释放，会打断一个正在写配置的人。
 
+### 4.42 一个合并了 22 天却从未上线的修复 —— 以及「已合并 ≠ 已部署」怎么发现
+
+**日期**：2026-09-26 14:00–14:30 UTC
+
+#### ① 判据只有一个：镜像构建时间 vs 提交时间
+
+```
+修复提交 ca60bc8f              2026-09-05T03:38:40Z
+线上 petsite 镜像推送           2026-09-05T03:34:47Z   ← 早 3 分 53 秒
+镜像 digest                    sha256:52af83bbd2885b98dda7980f22f4e9a0aa9f3d05968501c19ffc811c0f3150b7
+首尔 ECR 里那一份               **同一个 digest**（跨区复制的）
+```
+
+镜像是在修复提交前不到 4 分钟构建的，此后再没重建过。
+
+⚠️ **这类缺口靠读代码发现不了** —— 源码里修复明明在，review 也会通过。
+判据只能是镜像构建时间与提交时间的先后。本次是差 **3 分 53 秒**：
+如果只看日期（都是 09-05），会得出完全相反的结论。
+
+#### ② 那个修复解决的是什么
+
+旧代码调 payforadoption 的 `/api/completeadoption` 时：① 不传 `userId`，
+而服务端三个参数缺一就返回 400；② 拿到响应后**从不检查 `IsSuccessStatusCode`**。
+
+两个加在一起 = 彻底的假成功：页面显示「Adoption Complete / Thank you for
+adopting me!」而后端一行没写，**HTTP 200 且零异常**，监控看不见。
+
+#### ③ 我的成败判据一开始选错了
+
+我本打算数两条日志：`payforadoption returned 400` 与 `userId is required`。
+部署后两条都是 0，我差点判定修复无效。
+
+**真因：那两条字符串只存在于抛出的异常 message 里，而异常被外层 catch
+放进 `ViewData["error"]` 渲染到页面 —— 从不写日志。** 所以数日志永远是 0，
+无论修复有没有生效。
+
+正确判据是直接 POST 读页面（`[ValidateAntiForgeryToken]` 在源码里是注释掉的）：
+
+```
+带 userId    → "Adoption Complete / Thank you for adopting"   真成功
+不带 userId  → "Sorry, something went wrong"                  诚实失败（旧代码这里显示成功）
+```
+
+> 教训：**选判据前要先确认那个信号真的会被产生。** 「异常一定会进日志」
+> 是个想当然的假设，而这份代码把异常渲染给了用户而不是运维。
+
+#### ④ 上线与核实
+
+新镜像 `petsite-hotfix@sha256:0a7dde1bf631b4568ce7b8f762c6a0e82576b9aeaf8b054d7e5b0255df316c93`
+（arm64/linux、`dotnet PetSite.dll`、非 root `appuser`、8080），
+构建栈 `infra/tokyo/02-petsite-hotfix-build.yaml`。
+
+```
+                     部署前          部署后
+首页 title            Home - Observability PetAdoptions   同
+首页字节              215538          215538   ← 逐字节相同
+takemehome 链接        26              26
+Unavailable 标记       3               3
+连打 5 次首页          —               5/5 HTTP 200
+pod 重启次数           —               0 / 0
+```
+
+回滚锚点写进了 deployment 的 `change-cause` 注解。
+
+#### ⑤ 真实浏览器流程实测通过（此前一直是推测）
+
+带 cookie 与防伪令牌走完整三步：
+
+```
+1) GET /?userId=x              200 / 215538 字节 / 取到 155 字符令牌
+2) POST /adoption/takemehome   302 → /Adoption?userId=x&petid=001
+3) GET 确认页                   200 / 21592 字节 / title "Adopt Me - Observability PetAdoptions"
+                               含 MakePayment 表单，且 name="userId" value="x"
+```
+
+⚠️ 之前我和子代理都观察到确认页「302 回 Home/Index」，并据此怀疑确认页坏了。
+**那是因为请求缺防伪令牌与 userId，不是页面的问题。**
+少了这两样，一个正常工作的页面看起来和坏掉的一模一样。
+
+#### ⑥ 合成流量有两个来源，其中一个不在集群里
+
+用户提示「好像在另一台 EC2 上生产流量」，查实了：
+
+```
+i-05f0b897988a48d17  petsite-loadgen  c7g.xlarge  10.1.2.66  vpc-06731f30388b57818（agent-vpc-v2）
+  → 两个 dotnet trafficgenerator.dll 进程，已连续运行 2417916 秒 ≈ 28 天
+  → **没有 systemd 服务单元、没有 cron** —— 手工起的，杀掉不会自动回来
+```
+
+加上集群里的 `traffic-generator` deployment（1 个 pod），共三个进程在打流量。
+**这台 EC2 也是东京网关第三条公网调用路径**（NAT EIP 54.178.250.138）——
+即收窄那个无认证网关时绕不开的那一条。
+
+#### ⑦ 为什么 97% 的领养尝试不落库（源码直接证据）
+
+`trafficgenerator/Worker.cs:139`：
+
+```csharp
+await _httpClient.PostAsync($"{_petSiteUrl}/Payment/MakePayment",
+    new StringContent(
+        $"pettype={currentPet.pettype}&" +
+        $"petid={currentPet.petid}",      // ← 没有 userId
+```
+
+而真实用户的表单带 userId（首页 26 个表单实测每个都有）。所以：
+**真实用户的领养是好的，坏的是合成流量。**
+
+⚠️ 修复上线后的行为变化：这些合成请求现在会渲染诚实的错误页，
+而不是假的「Adoption Complete」。**对 demo 观感是变差的，但那是真相。**
+
+#### ⑧ 后端其实一直是好的 —— 我为此错了两次
+
+```
+东京 13:00–14:00
+  transaction_created_successfully   104        create_transaction_failed  0
+  availability_updated_successfully  104        update_availability_failed 0
+  cleanupadoptions                    69   ← 每次 DELETE FROM transactions 全表
+```
+
+我先后得出过两个错误结论，都订正在此：
+
+1. **「22 天没有新增交易」—— 看错了表。** `payforadoption` 写 `transactions`，
+   `pethistory` 读 `transactions_history`，是两张不同的表。
+2. **「那 85 次 200 什么都没写」—— 错。** 它们写了，随后被那个重置循环清掉。
+   子代理报的「transactions 0 行」同样是清表后的快照，不是失败证据。
+
+还有一处纯操作失误：`/api/adoptionlist/` 我探测全 404，是因为路由
+**带尾斜杠**而我漏了。
+
+> 这一节值得单独记住：**「表是空的」几乎从不等于「写入失败」。**
+> 先找清空它的东西，再怀疑写入路径。
+
+#### ⑨ 既有错配，不是本次造成
+
+`petsite-lt-tg` 的健康检查是 `/` + 匹配 `200`，而 petsite 的 `/` 返回 **302**，
+所以两个 petsite 目标都是 `unhealthy`。健康检查是**目标组的属性**，
+本次未动过；同一 digest 的旧镜像在首尔也是 `/`→302，所以这个目标组
+大概从来没有过健康目标。站点照常服务，说明它不在服务路径上。
+`/health/status` 实测返回 200，是正确的健康检查路径。
+
 ---
 
 ## 六、待记录
