@@ -13,25 +13,60 @@ docstring 原话已经说明了正确形态：
 所以快照不是权宜之计，**它才是正确架构**。本文件把那句话变成一个
 Temporal Schedule。
 
-## ⚠️ worker 放哪里：只有一个位置可行
+## ⚠️ 图谱访问：不走直连 Neptune，走受审的查询目录
 
-实测的连通性（2026-09-26）：
+2026-09-26 定案：本 workflow **不直连 Neptune**，改经东京的
+`graph_dependency_mcp`（AgentCore runtime，MCP 协议）查图。
 
-    从 openclaw VPC 10.1.0.0/16（当前跑 agent 的机器）
-        → 东京 Neptune 8182          ✓ 可达
-        → 韩国 Temporal 7233          ✗ 不可达
+理由不是网络更干净，而是**查询质量**：那个 server 暴露的是一份固定的
+`QUERY_CATALOG`（约 20 条受审的 openCypher），并随结果返回溯源元数据 ——
+`source` / `graph_contract_version` / `query` / `params` / `queried_at`，
+外加一句 `determinism: 固定 openCypher，无 LLM 参与，同参数同结果`。
 
-    VPC 对等关系（**对等不可传递**，这是关键）：
-        10.20.0.0/16（韩国）  ↔  11.0.0.0/16（东京 PetSite）
-        11.0.0.0/16（PetSite）↔  10.1.0.0/16（openclaw）
-        10.20.0.0/16 ↮ 10.1.0.0/16   ← 没有直接对等
+直连的问题是 worker 得自己写查询。那样快照记录的就不是「图谱事实」，
+而是「某次临时查询的偶然结果」—— 一份灾备计划所倚赖的事实集合
+不该是这种东西。目录里已经有正好需要的几条：
 
-**只有 PetSite VPC（11.0.0.0/16）同时能到 Neptune 和韩国 Temporal。**
-所以这个 workflow 的 worker 必须跑在 PetSite VPC 里（EKS 上的一个
-Deployment，或该 VPC 内的 EC2），任务队列 `dr-snapshot-queue`。
+    q14_cross_region_resources      跨区域资源
+    q13_data_layer_topology         数据层拓扑
+    q12_service_dependency_tree     服务依赖树
+    q15_critical_path               关键路径
+    q2_tier0_status                 Tier0 状态
 
-放在 openclaw 那台机器上是不行的 —— 它连不上 Temporal，
-worker 起不来，而 Schedule 会照常触发并堆积一批永不前进的执行。
+**必须断言契约版本。** 那个 runtime 已经到版本 3，它在演进。
+若其 `graph_contract_version` 与本 workflow 期望的不一致，
+应当响亮失败而不是照样存一份 —— 否则你会得到一份形状不同
+却看起来正常的快照，而这正是直连时你根本察觉不到的那类故障。
+
+### 两处已被证伪的早期结论（留在这里免得有人照着改回去）
+
+1. **「只有 PetSite VPC 能同时到两边」是错的。** 实测：韩国 ↔ PetSite 对等
+   `pcx-09fc849e6ac38e7e1` active、韩国侧有去程路由、Neptune DNS 从韩国解析
+   得到 11.0.2.187。当时 8182 不通的原因是两处配置缺失（Neptune 子网缺回程
+   路由 + 安全组未放韩国网段），**不是没有路径**。所以 worker 跑在韩国 EC2
+   上一直是可行的。
+
+2. 既然改走 MCP，上面那两处网络配置**也不需要了** —— `InvokeAgentRuntime`
+   走 AWS API 端点，不是 VPC 路径。为此加的 2 条路由 + 1 条安全组规则应当
+   回退（`infra/dr-korea/temporal-1.32/network-korea-to-neptune.sh --revert`）。
+
+### 未决：那个 runtime 的入站认证是 Cognito JWT，不是 SigV4
+
+    customJWTAuthorizer.discoveryUrl -> Cognito pool ap-northeast-1_Dwd1wVX7j
+    allowedClients -> ["2u5s7r3gprc8mo86890sdi1h7t"]
+
+实测用 boto3 `invoke_agent_runtime`（SigV4）调它得到
+`AccessDeniedException: Authorization method mismatch`。
+
+所以 worker 需要一个 Cognito client secret 去换 JWT。对灾备组件而言这是
+个不理想的失败模式：**密钥会过期，IAM 角色不会**，而密钥过期的表现是
+快照静默停更。缓解手段已经在位 —— `MAX_SNAPSHOT_AGE_HOURS` 那道硬闸门
+会让计划生成拒绝陈旧快照，把静默失效变成响亮失败。
+
+更好的形态（待定）：用同一个代码包再部署一个**入站认证为 SigV4** 的
+runtime，专供机器消费者。查询目录相同（质量保证不变），但只需实例角色
++ `bedrock-agentcore:InvokeAgentRuntime`，没有密钥要管，且独立 ARN 让
+IAM 与 CloudTrail 能把机器流量和 agent 流量分开。
 
 ## 为什么用 Temporal Schedule 而不是另建 cron
 
