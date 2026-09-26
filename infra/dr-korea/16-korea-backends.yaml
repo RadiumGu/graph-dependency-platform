@@ -314,16 +314,44 @@ Resources:
     Properties:
       TableName: dr-korea-petfood-carts
       BillingMode: PAY_PER_REQUEST
+      # ⚠️⚠️ 2026-09-26 键结构改了，理由是**读源码得到的决定性证据**，
+      #      不是「看起来更合理」:
+      #
+      #      petfood 的 cart_to_item()（petfood-rs/src/repositories/
+      #      cart_repository.rs:108-159）写入的顶层属性**只有 4 个**:
+      #          user_id (S) / items (L) / created_at (S) / updated_at (S)
+      #      **根本不写 item_id。**
+      #
+      #      也就是说一个 user 的购物车是**一行**（整车序列化进 items 列表），
+      #      不是每个商品一行。数据模型 models/cart.rs:6-12 印证:Cart 只有
+      #      user_id 一个标量键，items 是嵌套集合。
+      #
+      #      所以原先声明的复合主键 user_id+item_id 与应用**从根上不匹配**:
+      #        - find_cart / cart_exists 的 GetItem（:338/:418）缺 range 键 → 必然
+      #          ValidationException "provided key element does not match the schema"
+      #        - delete_cart 的 DeleteItem（:395）同理
+      #        - **save_cart 的 PutItem（:372）也必然失败** ——
+      #          所以这张表**从来没被成功写入过**（实测 scan 计数 = 0）
+      #
+      #      东京那张表（ServicesEks2-ddbpetfoodcarts…）有**完全相同的缺陷**，
+      #      它也是 scan 计数 0。这不是灾备侧的问题，是 demo 应用与 CDK
+      #      声明之间的不一致，源头在
+      #      PetAdoptions/cdk/pet_stack/lib/services-eks.ts:850-855。
+      #
+      # ⚠️ 为什么不是「把读法改成 Query」:
+      #      Query 返回集合，而 item_to_cart（:162）只接收**单个** item。
+      #      单行模型下 GetItem 才是对的。**改表键才是最小且正确的修法，
+      #      Rust 代码一行不改。**
+      #
+      # ⚠️ 改键必须替换表:CFN 文档原文 "Replacement if you edit an existing
+      #      AttributeDefinition"。因为两侧都是空表（实测 scan=0），
+      #      替换零数据损失。
       AttributeDefinitions:
         - AttributeName: user_id
-          AttributeType: S
-        - AttributeName: item_id
           AttributeType: S
       KeySchema:
         - AttributeName: user_id
           KeyType: HASH
-        - AttributeName: item_id
-          KeyType: RANGE
       ResourcePolicy:
         PolicyDocument:
           Version: '2012-10-17'
