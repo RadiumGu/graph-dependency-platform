@@ -54,7 +54,10 @@ services:
       SQL_PORT: 5432
       SQL_USER: temporal
       SQL_PASSWORD: ${POSTGRES_PASSWORD}
-    entrypoint: ["/bin/bash", "/opt/setup-schema.sh"]
+    # ⚠️ /bin/sh，不是 /bin/bash。admin-tools:1.32.0 是 **busybox 镜像，没有 bash**
+    # （2026-09-26 实测：写 /bin/bash 时这个作业直接起不来）。
+    # setup-schema.sh 的 shebang 同步是 #!/bin/sh，脚本里没有 bash 专有语法。
+    entrypoint: ["/bin/sh", "/opt/setup-schema.sh"]
     volumes:
       - /opt/temporal/setup-schema.sh:/opt/setup-schema.sh:ro
     restart: "no"
@@ -75,11 +78,29 @@ services:
       BIND_ON_IP: 0.0.0.0
       # Worker Controller Instance 的开关在这个文件里（见 dynamicconfig/）。
       DYNAMIC_CONFIG_FILE_PATH: /etc/temporal/dynamicconfig/docker.yaml
+      # ⚠️⚠️ 这一项缺了会让整套配置**静默失效**，是本文件里最危险的一行。
+      #
+      # server 镜像的 entrypoint 只有 `exec temporal-server start`，不带 --env，
+      # 而 temporal-server 的默认 environment 是 **development** —— 它会去读
+      # config/development.yaml，而不是我们用 dockerize 渲染出来的
+      # config/docker.yaml。
+      #
+      # auto-setup 以前在它的 start-temporal.sh 里替我们带上了这个参数，
+      # 换成 server 镜像后这一层没了。2026-09-26 实测：不设它服务端会起来，
+      # 但跑的不是我们给的配置 —— 「起来了却不是你配的那套」比起不来难查得多。
+      TEMPORAL_ENVIRONMENT: docker
     volumes:
       - /opt/temporal/tmpl/config_template_1.32.0.yaml:/etc/temporal/config_template.yaml:ro
       - /opt/temporal/dynamicconfig:/etc/temporal/dynamicconfig:ro
       - /opt/temporal/bin/dockerize:/usr/local/bin/dockerize:ro
       - /opt/temporal/start-temporal.sh:/opt/start-temporal.sh:ro
+      # ⚠️ 渲染目标目录必须是**宿主机挂进来且可写**的。
+      # server:1.32.0 以 uid 1000（temporal）运行，而镜像里 /etc/temporal 属 root，
+      # 所以 start-temporal.sh 里的 `mkdir -p /etc/temporal/config` 会
+      # Permission denied 并进入 crash loop（2026-09-26 实测）。
+      # 宿主机侧要先 `mkdir -p /opt/temporal/config && chown 1000:1000 …`，
+      # rebuild.sh 已包含这一步。
+      - /opt/temporal/config:/etc/temporal/config
     # 启动逻辑放在挂载的脚本里，不写在这里 —— compose 会对 `$` 做插值，
     # 实测 `docker compose config` 直接报 invalid interpolation format。
     # 转义成 `$$` 能过，但那段取广播地址的逻辑不该被转义符弄得难读。
