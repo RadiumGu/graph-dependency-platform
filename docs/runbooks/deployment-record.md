@@ -4231,6 +4231,194 @@ ALB Target_5XX           无数据（petsite 把 500 包成 200 错误页）
 
 ---
 
+---
+
+### 4.38 WaggleAI 在首尔重建完成（不做切换，主站点仍是东京）
+
+**日期**：2026-09-26 08:54–09:4x UTC ｜ 用户授权：「继续建完剩下的全部，但最后一步的
+切换不要做，主站点还是在东京，韩国是灾备站点」
+
+四个新栈，全部部在 ap-northeast-2：
+
+```
+dr-korea-waggle-iam        8 个角色 + 1 份托管策略
+dr-korea-waggle-bedrock    Guardrail / Memory / S3 Vectors 桶+索引 / KB / 数据源
+dr-korea-waggle-routes     4 个目标组 + 4 个监听器（复用已有 ALB）+ runtime 专用 SG
+dr-korea-waggle-runtimes   5 个 Runtime + Gateway + 5 个 target + 10 个 SSM 参数
+```
+
+#### ① 三个前提被实测推翻
+
+**（a）我警告的那个静默失败点不存在。** 我曾提醒「东京角色列举了 `jp.` profile ARN，
+换 `global.` 会 AccessDenied」。逐条读东京策略原文：
+
+```json
+"Resource": ["arn:aws:bedrock:*::foundation-model/*",
+             "arn:aws:bedrock:*:926093770964:*"]
+```
+
+通配符，与前缀和 region 都无关。`simulate-principal-policy` 对 `global.*` profile
+及其背后 **region-less 与 ap-northeast-2 两种形态**的 model ARN 逐项 allowed。
+**换模型不需要动权限。**
+
+**（b）但真正的静默失败点在同一批角色的其他语句上，而且不止权限策略。**
+同一条内联策略有 **9 条写死 `ap-northeast-1`**（SSM 参数、KB retrieve、
+InvokeAgentRuntime、InvokeGateway、memory 事件、workload identity token、
+logs、ECR）。更要紧的是**信任策略**里 `aws:SourceArn` 也是
+`ArnLike arn:aws:bedrock-agentcore:ap-northeast-1:...:*` ——
+首尔的 AgentCore 服务主体**连 AssumeRole 都过不去**。
+
+> 「IAM 角色是账号级（全局）资源，所以可以复用」—— 这句话对**资源本身**成立，
+> 对**授权范围**不成立。只看权限策略的人会以为加几条 Resource 就能复用，
+> 但信任策略先拒，表现是 runtime 根本起不来。
+
+**（c）首尔不是「零 AgentCore 资源」。** 它已有 `temporal_mcp`（READY，
+是 09-25 我自己部的），与 WaggleAI 无关。我原先的前提说错了。
+
+#### ② 镜像：ECR 跨区复制不追溯，用「重推同一 manifest 换 tag」触发
+
+本机**没有 docker / podman / skopeo / crane**（逐个查过），所以搬不了镜像。
+但 ECR 跨区复制已经配着（这就是首尔为什么有 `pet-adoptions-history`），
+只是过滤器没覆盖 `waggle-ai-*`。
+
+官方文档明确「Any preexisting content in a repository isn't replicated」，
+实测印证：加完过滤器后首尔仍只有原来那两个仓库。
+
+做法：`batch-get-image` 取出 manifest → `put-image` 用**新 tag `dr-seed`** 重推
+（层已在东京，这是 registry 层操作，不传输数据）→ 触发复制 → 首尔仓库自动创建、
+层被复制过去 → 再在首尔 `put-image` 补 `latest` tag（层已在首尔，同样不传输）。
+
+**判据是 digest 相同，不是「仓库存在」：**
+
+```
+waggle-ai-orchestrator  sha256:0ed4af42…  ✅ 两侧一致
+waggle-ai-concierge     sha256:a7f9bb5c…  ✅
+waggle-ai-nutrition     sha256:b38768c2…  ✅
+waggle-ai-ordering      sha256:08a790ce…  ✅
+waggle-ai-adoption      sha256:9f4a5217…  ✅
+```
+
+**选复制而不是在首尔重新构建，理由是同一个 digest 才是同一个东西** ——
+重建出来的镜像不是演练过的那个。
+
+⚠️ 这个改动对 `dr-ecr-replication` 栈造成了漂移（我先用 CLI 改的）。
+已把 `waggle-ai-` 前缀写进 `09-ecr-replication.yaml` 并重新部署，live 与声明一致。
+那份模板里原有一句「waggle-ai-* 是 petsite 切换用不到的东西」——
+**留着原句并加订正**，因为「范围变了所以判断变了」与「当初判断错了」
+是两件不同的事，后人需要分得清。
+
+#### ③ 源码侧一个真实缺陷：`AGENT_KB_CONFIG` 是死配置
+
+`PetAdoptions/cdk/pet_stack/lib/agents/agent-config.ts:281` 声明
+`vectorBucketName: 'waggle-nutrition-kb'` / `indexName: 'nutrition-v1'`，
+而真正建资源的 `waggle-ai-nutrition-kb.ts:43,51` 用的是
+`waggle-ai-nutrition-vectors-${account}` / `nutrition-index`。
+**全仓只有一处注释提到 `AGENT_KB_CONFIG`，没有任何代码引用它建资源。**
+
+这是「写了但没人读」的又一例，而且是个陷阱：照 `agent-config.ts` 重建的人
+会建出两个名字都不对的资源，而**失败点会出现在 ingestion，指不到这里**。
+
+#### ④ 三处我自己踩过又踩的坑
+
+**`!Ref` 取到的不是名字。** `AWS::S3Vectors::VectorBucket` 的
+`primaryIdentifier` 是 `/properties/VectorBucketArn`，所以 `!Ref` 返回 **ARN**。
+填进限长 63 的 `VectorBucketName` 报
+`#/VectorBucketName: expected maxLength: 63, actual: 99` ——
+**报错指向长度，真因是引用取到的东西不是名字**。改用 `VectorBucketArn: !Ref`。
+
+**petfood 的端口是 8080，不是 80。** 从东京 `describe-target-health` 读出的
+真实注册端口。09-26 早些时候我用 pod proxy 打 petfood 的 80 得到
+`connection refused`，当时归因成「我测错了端口」——
+这次证实**端口本身就是 8080**，petfood 确实不监听 80。
+按服务名统一填 80 会得到永远 unhealthy 的目标组。
+
+**安全组规则必须由拥有它的栈声明。** `12-korea-alb.yaml` 用**内联**
+`SecurityGroupIngress` 声明 ALB 安全组，从 22 号栈往同一个组加规则
+会让 12 号栈的漂移检测报 MODIFIED。所以 8081-8084 那条加在了 12 里。
+
+#### ⑤ 模型替换：全部实测，含一次反证
+
+```
+东京 jp.anthropic.claude-sonnet-4-6              → global.anthropic.claude-sonnet-4-6              1046ms ✅
+东京 jp.amazon.nova-2-lite-v1:0                  → global.amazon.nova-2-lite-v1:0                   476ms ✅
+东京 jp.anthropic.claude-haiku-4-5-20251001-v1:0 → global.anthropic.claude-haiku-4-5-20251001-v1:0 1265ms ✅
+东京 openai.gpt-oss-120b-1:0                     → global.openai.gpt-5.4                           1193ms ✅
+反证：拿东京现用的 jp. 直接打首尔 → ValidationException
+```
+
+`openai.gpt-oss-*` 在首尔**整族不存在**（`list-foundation-models` 与
+`list-inference-profiles` 两边都返回空数组）。换成 `global.openai.gpt-5.4`
+而不是换成 Claude：那个 agent 的实现目录就叫 `concierge_openai`，
+**保持同一厂商比换框架风险小**。
+
+> ⚠️ **一个非技术取舍，必须写明**：东京用 `jp.` 前缀是为把推理数据留在
+> **日本境内**。首尔既没有 `jp.` 也没有 `kr.`，只有 `global.`（全球路由，
+> 背后的 foundation-model ARN 是 **region-less** 的，可由任意有容量的区域服务）。
+> **所以首尔这套失去了区域驻留属性。** demo 环境按可用性优先，
+> 但如果要用于合规场景演示，这一条是问题。
+
+#### ⑥ 两处刻意偏离东京，各有理由
+
+**5 份相同的内联策略 → 1 份托管策略挂 5 个角色。** 实测东京 5 个角色的策略
+**md5 完全相同**（`6c7d7c7d28ba`，未做任何归一化就相同）——
+所谓「按 agent 分的最小权限」在东京并不存在，是 5 份复制。
+用托管策略表达这个实测事实，而复制 5 遍的代价是它们会各自漂移且无人察觉。
+**仍保留 5 个独立角色**，所以「单独吊销某一个 agent」这个能力没丢。
+
+**复用已有 ALB 而不新建第二个。** 东京的 agent 走一个独立内网 ALB
+（80/8081-8084）。首尔照抄要多付 ~$16/月，而 `dr-korea-petsite-alb`
+也是 internal、同 VPC、同两个 internal-elb 子网，加监听器与目标组都免费。
+代价是「东京把 agent 流量与入口流量分开、首尔混在一个 ALB 上」，
+对演练结论没有影响（两者都是内网），对成本有影响。
+
+#### ⑦ 刻意不建的一项
+
+东京缺失清单里的 `/petstore/searchimage`（值 `petsearch-java:latest`）
+**没有在首尔建**：它指向一个**两个 region 都不存在**的 ECR 仓库，
+是东京自己的悬空引用。首尔 petsite 现在没有它也能正常服务（4.26 实测 4 个页面全对），
+**照抄一个已知坏掉的值只会把悬空引用复制一份。**
+
+#### ⑧ 端到端验证（不是看资源状态）
+
+```
+KB 检索      retrieve "senior dog with kidney disease"
+             → 3 条命中，最高分 0.8319 = kidney-renal-support.md   ✅ 语义正确
+向量化       10 篇扫描 / 10 篇入库 / 0 失败                        与东京那次逐项相同
+真调 runtime invoke-agent-runtime dr_korea_WaggleAIOrchestrator
+             → 流式返回，且**委派给了 Nutrition agent**
+               （"our Nutrition Advisor recommends"）
+             → 内容正是 kidney-renal-support.md 的要点：
+               低磷、适量优质蛋白、湿粮、Omega-3、补钾与 B 族
+```
+
+**这一条同时证明了 gateway → target → KB 检索 → 模型 → 流式返回整条链路**，
+而不只是「资源 READY」。
+
+#### ⑨ 没有做切换 —— 已核实
+
+用户明确要求不做切换。核实证据：
+
+```
+东京 /petstore/agent/waggleairuntimearn
+  值        arn:aws:bedrock-agentcore:ap-northeast-1:...:runtime/WaggleAIOrchestrator-K85tG867Xt
+  最后修改  2026-09-04T15:28:19Z   ← 本轮之前，没被动过
+东京 /petstore/agent 参数总数  11 个（与本轮之前相同）
+```
+
+首尔的 `waggleairuntimearn` 指向首尔 runtime —— 那是让**首尔站点自洽**，
+不是切换。petsite 在东京读的仍是东京 SSM 的东京 ARN。
+
+#### ⑩ 静息成本
+
+```
+S3 Vectors   10 个向量            约 $0.000004/月
+KB / Memory / Guardrail / Gateway / Runtime   静置不调用即不计费
+ECR          5 个镜像约 850MB     约 $0.09/月
+监听器/目标组                     免费（复用已有 ALB）
+```
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)

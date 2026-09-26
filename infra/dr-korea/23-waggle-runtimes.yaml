@@ -1,0 +1,433 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  韩国灾备站点 — WaggleAI 的 5 个 AgentCore Runtime + Gateway + 5 个 target
+  + 11 个 SSM 参数。
+
+  部到 ap-northeast-2。依赖 dr-korea-waggle-iam / -bedrock / -routes。
+  **主站点仍是东京，本栈不做任何切换**：这些资源建好即静置，
+  petsite 侧的 waggleairuntimearn 仍指向东京（东京 SSM 一处不动）。
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 模型 ID 替换表 —— 每一项都实测过，不是按前缀推断的
+#
+#   东京 jp.anthropic.claude-sonnet-4-6            → global.anthropic.claude-sonnet-4-6            实测 1046ms
+#   东京 jp.amazon.nova-2-lite-v1:0                → global.amazon.nova-2-lite-v1:0                实测  476ms
+#   东京 jp.anthropic.claude-haiku-4-5-20251001-v1:0 → global.anthropic.claude-haiku-4-5-20251001-v1:0 实测 1265ms
+#   东京 openai.gpt-oss-120b-1:0                   → global.openai.gpt-5.4                         实测 1193ms
+#
+# 反证也做了：拿东京现用的 `jp.` 直接打首尔 → ValidationException。
+# 这就是「静默全挂」的机理 —— 照搬 jp. 的话 5 个 agent 全部 ResourceNotFound，
+# 而页面上不会报任何东西。
+#
+# ⚠️ concierge 为什么换成 global.openai.gpt-5.4 而不是换成 Claude：
+#    `openai.gpt-oss-*` 在首尔**整族不存在**（list-foundation-models 与
+#    list-inference-profiles 两边都返回空数组，实测）。而首尔有
+#    global.openai.gpt-5.x 一族 —— 那个 agent 的实现目录就叫 concierge_openai，
+#    保持同一厂商比换成 Claude 风险小。本仓库已有 ADOPTION_SUBSTITUTE 这种
+#    「换模型但保留框架」的先例，这是同一手法。
+#
+# ⚠️ 一个必须写明的非技术取舍：
+#    东京用 `jp.` 前缀是为把推理数据留在**日本境内**。首尔既没有 jp. 也没有 kr.，
+#    只有 global.（全球路由，背后的 foundation-model ARN 是 region-less 的，
+#    可由任意有容量的区域服务）。**所以首尔这套失去了区域驻留属性。**
+#    demo 环境按可用性优先，但如果这套要用于合规场景演示，这一条是问题。
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# 权限上的一个好消息（实测推翻了预期的风险）
+#
+# 原以为执行角色列举了 jp. profile ARN、换 global. 会 AccessDenied。
+# 实测东京 5 个角色的 Resource 是
+#   arn:aws:bedrock:*::foundation-model/*  +  arn:aws:bedrock:*:<account>:*
+# —— 通配符，与前缀和 region 都无关。simulate-principal-policy 对 global.*
+# profile 及其背后 region-less / ap-northeast-2 两种形态的 model ARN
+# 逐项返回 allowed。所以换模型不需要动权限。
+# 真正需要换区的是**其他** 9 条写死 ap-northeast-1 的 Resource，
+# 已在 20-waggle-iam.yaml 处理。
+# ══════════════════════════════════════════════════════════════════════════════
+
+Parameters:
+  AlbDns:
+    Type: String
+    Default: internal-dr-korea-petsite-alb-263460690.ap-northeast-2.elb.amazonaws.com
+    Description: >
+      首尔内网 ALB。22-waggle-backend-routes.yaml 在它上面加了 8081-8084。
+      与东京同形：同一主机名 + 不同端口。
+
+  EcrBase:
+    Type: String
+    Default: 926093770964.dkr.ecr.ap-northeast-2.amazonaws.com
+    Description: >
+      ⚠️ 必须是**首尔** ECR。镜像已于 2026-09-26 经 ECR 跨区复制过去，
+      digest 与东京逐一相同（选复制而非重建：同一 digest 才是同一个东西）。
+      指着东京仓库的后果正是灾难时 5 个 runtime 全部拉不到镜像。
+
+  ClaudeModel:
+    Type: String
+    Default: global.anthropic.claude-sonnet-4-6
+  NovaLiteModel:
+    Type: String
+    Default: global.amazon.nova-2-lite-v1:0
+  HaikuModel:
+    Type: String
+    Default: global.anthropic.claude-haiku-4-5-20251001-v1:0
+  OpenAiModel:
+    Type: String
+    Default: global.openai.gpt-5.4
+
+Resources:
+
+  # ══════════════════════ 5 个 Runtime ══════════════════════
+  # 名字只允许字母数字下划线（**不能有连字符**）—— 与 06-agentcore-runtime.yaml
+  # 记的同一条约束，参照实现叫 graph_dependency_mcp 而不是 graph-dependency-mcp。
+  #
+  # 网络：VPC 模式 + 两个 private 子网 + WaggleAI 专用 SG。
+  # 刻意不用 public-nat-only 子网 —— runtime 不需要入站可达，
+  # 出网由 NAT 承担（那条路由在 01-network.yaml 已建）。
+
+  OrchestratorRuntime:
+    Type: AWS::BedrockAgentCore::Runtime
+    Properties:
+      AgentRuntimeName: dr_korea_WaggleAIOrchestrator
+      AgentRuntimeArtifact:
+        ContainerConfiguration:
+          ContainerUri: !Sub ${EcrBase}/waggle-ai-orchestrator:latest
+      RoleArn: {Fn::ImportValue: dr-korea-waggle-orchestrator-role}
+      ProtocolConfiguration: HTTP
+      NetworkConfiguration:
+        NetworkMode: VPC
+        NetworkModeConfig:
+          SecurityGroups: [{Fn::ImportValue: dr-korea-waggle-runtime-sg}]
+          Subnets: [subnet-0f599ec0925b9158b, subnet-0ad20a5cd85143dff]
+      EnvironmentVariables:
+        ADOPTION_MODEL_ID: !Ref HaikuModel
+        ADOPTION_TARGET: adoption
+        AGENT_OBSERVABILITY_ENABLED: 'true'
+        AGENT_TRANSPORT: gateway
+        AWS_AGENTIC_INSTRUMENTATION_OPT_IN: 'true'
+        AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT: 'true'
+        AWS_REGION: !Ref AWS::Region
+        BEDROCK_CLAUDE_MODEL_ID: !Ref ClaudeModel
+        BEDROCK_GPT_OSS_MODEL_ID: !Ref OpenAiModel
+        BEDROCK_NOVA_LITE_MODEL_ID: !Ref NovaLiteModel
+        CONCIERGE_MODEL_ID: !Ref OpenAiModel
+        CONCIERGE_TARGET: concierge
+        HTTP_TIMEOUT: '30'
+        NUTRITION_MODEL_ID: !Ref ClaudeModel
+        NUTRITION_TARGET: nutrition
+        ORCHESTRATOR_MODEL_ID: !Ref ClaudeModel
+        ORDERING_MODEL_ID: !Ref NovaLiteModel
+        ORDERING_TARGET: ordering
+        OTEL_PYTHON_EXCLUDED_URLS: /ping
+        PARAMETER_STORE_PREFIX: /petstore/agent
+        UNIFIED_TRACES_DESTINATION_ENABLED: 'true'
+
+  ConciergeRuntime:
+    Type: AWS::BedrockAgentCore::Runtime
+    Properties:
+      AgentRuntimeName: dr_korea_WaggleAIConcierge
+      AgentRuntimeArtifact:
+        ContainerConfiguration:
+          ContainerUri: !Sub ${EcrBase}/waggle-ai-concierge:latest
+      RoleArn: {Fn::ImportValue: dr-korea-waggle-concierge-role}
+      ProtocolConfiguration: HTTP
+      NetworkConfiguration:
+        NetworkMode: VPC
+        NetworkModeConfig:
+          SecurityGroups: [{Fn::ImportValue: dr-korea-waggle-runtime-sg}]
+          Subnets: [subnet-0f599ec0925b9158b, subnet-0ad20a5cd85143dff]
+      EnvironmentVariables:
+        ADOPTION_MODEL_ID: !Ref HaikuModel
+        ADOPTION_TARGET: adoption
+        AGENT_OBSERVABILITY_ENABLED: 'true'
+        AGENT_TRANSPORT: gateway
+        AWS_AGENTIC_INSTRUMENTATION_OPT_IN: 'true'
+        AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT: 'true'
+        AWS_REGION: !Ref AWS::Region
+        BEDROCK_CLAUDE_MODEL_ID: !Ref ClaudeModel
+        BEDROCK_GPT_OSS_MODEL_ID: !Ref OpenAiModel
+        BEDROCK_NOVA_LITE_MODEL_ID: !Ref NovaLiteModel
+        CONCIERGE_MODEL_ID: !Ref OpenAiModel
+        CONCIERGE_TARGET: concierge
+        HTTP_TIMEOUT: '30'
+        NUTRITION_MODEL_ID: !Ref ClaudeModel
+        NUTRITION_TARGET: nutrition
+        ORCHESTRATOR_MODEL_ID: !Ref ClaudeModel
+        ORDERING_MODEL_ID: !Ref NovaLiteModel
+        ORDERING_TARGET: ordering
+        OTEL_PYTHON_EXCLUDED_URLS: /ping
+        PARAMETER_STORE_PREFIX: /petstore/agent
+        UNIFIED_TRACES_DESTINATION_ENABLED: 'true'
+
+  NutritionRuntime:
+    Type: AWS::BedrockAgentCore::Runtime
+    Properties:
+      AgentRuntimeName: dr_korea_WaggleAINutrition
+      AgentRuntimeArtifact:
+        ContainerConfiguration:
+          ContainerUri: !Sub ${EcrBase}/waggle-ai-nutrition:latest
+      RoleArn: {Fn::ImportValue: dr-korea-waggle-nutrition-role}
+      ProtocolConfiguration: HTTP
+      NetworkConfiguration:
+        NetworkMode: VPC
+        NetworkModeConfig:
+          SecurityGroups: [{Fn::ImportValue: dr-korea-waggle-runtime-sg}]
+          Subnets: [subnet-0f599ec0925b9158b, subnet-0ad20a5cd85143dff]
+      EnvironmentVariables:
+        ADOPTION_MODEL_ID: !Ref HaikuModel
+        ADOPTION_TARGET: adoption
+        AGENT_OBSERVABILITY_ENABLED: 'true'
+        AGENT_TRANSPORT: gateway
+        AWS_AGENTIC_INSTRUMENTATION_OPT_IN: 'true'
+        AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT: 'true'
+        AWS_REGION: !Ref AWS::Region
+        BEDROCK_CLAUDE_MODEL_ID: !Ref ClaudeModel
+        BEDROCK_GPT_OSS_MODEL_ID: !Ref OpenAiModel
+        BEDROCK_NOVA_LITE_MODEL_ID: !Ref NovaLiteModel
+        CONCIERGE_MODEL_ID: !Ref OpenAiModel
+        CONCIERGE_TARGET: concierge
+        HTTP_TIMEOUT: '30'
+        NUTRITION_MODEL_ID: !Ref ClaudeModel
+        NUTRITION_TARGET: nutrition
+        ORCHESTRATOR_MODEL_ID: !Ref ClaudeModel
+        ORDERING_MODEL_ID: !Ref NovaLiteModel
+        ORDERING_TARGET: ordering
+        OTEL_PYTHON_EXCLUDED_URLS: /ping
+        PARAMETER_STORE_PREFIX: /petstore/agent
+        UNIFIED_TRACES_DESTINATION_ENABLED: 'true'
+
+  OrderingRuntime:
+    Type: AWS::BedrockAgentCore::Runtime
+    Properties:
+      AgentRuntimeName: dr_korea_WaggleAIOrdering
+      AgentRuntimeArtifact:
+        ContainerConfiguration:
+          ContainerUri: !Sub ${EcrBase}/waggle-ai-ordering:latest
+      RoleArn: {Fn::ImportValue: dr-korea-waggle-ordering-role}
+      ProtocolConfiguration: HTTP
+      NetworkConfiguration:
+        NetworkMode: VPC
+        NetworkModeConfig:
+          SecurityGroups: [{Fn::ImportValue: dr-korea-waggle-runtime-sg}]
+          Subnets: [subnet-0f599ec0925b9158b, subnet-0ad20a5cd85143dff]
+      EnvironmentVariables:
+        ADOPTION_MODEL_ID: !Ref HaikuModel
+        ADOPTION_TARGET: adoption
+        AGENT_OBSERVABILITY_ENABLED: 'true'
+        AGENT_TRANSPORT: gateway
+        AWS_AGENTIC_INSTRUMENTATION_OPT_IN: 'true'
+        AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT: 'true'
+        AWS_REGION: !Ref AWS::Region
+        BEDROCK_CLAUDE_MODEL_ID: !Ref ClaudeModel
+        BEDROCK_GPT_OSS_MODEL_ID: !Ref OpenAiModel
+        BEDROCK_NOVA_LITE_MODEL_ID: !Ref NovaLiteModel
+        CONCIERGE_MODEL_ID: !Ref OpenAiModel
+        CONCIERGE_TARGET: concierge
+        HTTP_TIMEOUT: '30'
+        NUTRITION_MODEL_ID: !Ref ClaudeModel
+        NUTRITION_TARGET: nutrition
+        ORCHESTRATOR_MODEL_ID: !Ref ClaudeModel
+        ORDERING_MODEL_ID: !Ref NovaLiteModel
+        ORDERING_TARGET: ordering
+        OTEL_PYTHON_EXCLUDED_URLS: /ping
+        PARAMETER_STORE_PREFIX: /petstore/agent
+        UNIFIED_TRACES_DESTINATION_ENABLED: 'true'
+
+  # ⚠️ Adoption 是唯一一个 ADOPTION_MODEL_ID 与其余四个不同的 runtime：
+  #    东京实测它用 sonnet，其余四个用 haiku。这个不对称是东京的真实状态，
+  #    不是配置错误 —— 统一成一个值会让灾备侧与生产行为不同。
+  AdoptionRuntime:
+    Type: AWS::BedrockAgentCore::Runtime
+    Properties:
+      AgentRuntimeName: dr_korea_WaggleAIAdoption
+      AgentRuntimeArtifact:
+        ContainerConfiguration:
+          ContainerUri: !Sub ${EcrBase}/waggle-ai-adoption:latest
+      RoleArn: {Fn::ImportValue: dr-korea-waggle-adoption-role}
+      ProtocolConfiguration: HTTP
+      NetworkConfiguration:
+        NetworkMode: VPC
+        NetworkModeConfig:
+          SecurityGroups: [{Fn::ImportValue: dr-korea-waggle-runtime-sg}]
+          Subnets: [subnet-0f599ec0925b9158b, subnet-0ad20a5cd85143dff]
+      EnvironmentVariables:
+        ADOPTION_MODEL_ID: !Ref ClaudeModel        # ← 与其余四个不同，照东京
+        ADOPTION_TARGET: adoption
+        AGENT_OBSERVABILITY_ENABLED: 'true'
+        AGENT_TRANSPORT: gateway
+        AWS_AGENTIC_INSTRUMENTATION_OPT_IN: 'true'
+        AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT: 'true'
+        AWS_REGION: !Ref AWS::Region
+        BEDROCK_CLAUDE_MODEL_ID: !Ref ClaudeModel
+        BEDROCK_GPT_OSS_MODEL_ID: !Ref OpenAiModel
+        BEDROCK_NOVA_LITE_MODEL_ID: !Ref NovaLiteModel
+        CONCIERGE_MODEL_ID: !Ref OpenAiModel
+        CONCIERGE_TARGET: concierge
+        HTTP_TIMEOUT: '30'
+        NUTRITION_MODEL_ID: !Ref ClaudeModel
+        NUTRITION_TARGET: nutrition
+        ORCHESTRATOR_MODEL_ID: !Ref ClaudeModel
+        ORDERING_MODEL_ID: !Ref NovaLiteModel
+        ORDERING_TARGET: ordering
+        OTEL_PYTHON_EXCLUDED_URLS: /ping
+        PARAMETER_STORE_PREFIX: /petstore/agent
+        UNIFIED_TRACES_DESTINATION_ENABLED: 'true'
+
+  # ══════════════════════ Gateway + 5 个 target ══════════════════════
+  # 东京实测 authorizerType=AWS_IAM（不是 JWT/Cognito），protocolType 为空（默认）。
+  # 入站鉴权在 gateway 这一层，runtime 本身没有 authorizerConfiguration。
+  Gateway:
+    Type: AWS::BedrockAgentCore::Gateway
+    Properties:
+      Name: drKoreaWaggleAIGateway
+      Description: WaggleAI 委派入口（首尔灾备）。
+      AuthorizerType: AWS_IAM
+      RoleArn: {Fn::ImportValue: dr-korea-waggle-gateway-role}
+
+  # target 的真实结构来自东京 get-gateway-target：
+  #   targetConfiguration.http.agentcoreRuntime.arn
+  #   credentialProviderConfigurations[0].credentialProviderType = GATEWAY_IAM_ROLE
+  # 东京 list-oauth2-credential-providers / list-api-key-credential-providers
+  # 都是空数组 —— 整套用 IAM 角色，没有外部 credential provider 要迁。
+  OrchestratorTarget:
+    Type: AWS::BedrockAgentCore::GatewayTarget
+    Properties:
+      Name: orchestrator
+      GatewayIdentifier: !GetAtt Gateway.GatewayIdentifier
+      CredentialProviderConfigurations: [{CredentialProviderType: GATEWAY_IAM_ROLE}]
+      TargetConfiguration:
+        Http:
+          AgentcoreRuntime:
+            Arn: !GetAtt OrchestratorRuntime.AgentRuntimeArn
+
+  ConciergeTarget:
+    Type: AWS::BedrockAgentCore::GatewayTarget
+    Properties:
+      Name: concierge
+      GatewayIdentifier: !GetAtt Gateway.GatewayIdentifier
+      CredentialProviderConfigurations: [{CredentialProviderType: GATEWAY_IAM_ROLE}]
+      TargetConfiguration:
+        Http:
+          AgentcoreRuntime:
+            Arn: !GetAtt ConciergeRuntime.AgentRuntimeArn
+
+  NutritionTarget:
+    Type: AWS::BedrockAgentCore::GatewayTarget
+    Properties:
+      Name: nutrition
+      GatewayIdentifier: !GetAtt Gateway.GatewayIdentifier
+      CredentialProviderConfigurations: [{CredentialProviderType: GATEWAY_IAM_ROLE}]
+      TargetConfiguration:
+        Http:
+          AgentcoreRuntime:
+            Arn: !GetAtt NutritionRuntime.AgentRuntimeArn
+
+  OrderingTarget:
+    Type: AWS::BedrockAgentCore::GatewayTarget
+    Properties:
+      Name: ordering
+      GatewayIdentifier: !GetAtt Gateway.GatewayIdentifier
+      CredentialProviderConfigurations: [{CredentialProviderType: GATEWAY_IAM_ROLE}]
+      TargetConfiguration:
+        Http:
+          AgentcoreRuntime:
+            Arn: !GetAtt OrderingRuntime.AgentRuntimeArn
+
+  AdoptionTarget:
+    Type: AWS::BedrockAgentCore::GatewayTarget
+    Properties:
+      Name: adoption
+      GatewayIdentifier: !GetAtt Gateway.GatewayIdentifier
+      CredentialProviderConfigurations: [{CredentialProviderType: GATEWAY_IAM_ROLE}]
+      TargetConfiguration:
+        Http:
+          AgentcoreRuntime:
+            Arn: !GetAtt AdoptionRuntime.AgentRuntimeArn
+
+  # ══════════════════════ 10 个 SSM 参数 ══════════════════════
+  # 全部写在**首尔** SSM（Parameter Store 是 regional）。
+  # agent 侧读取顺序是 env 覆盖 → SSM → 空串（common/config.py 实测），
+  # 而 env 里刻意不放这些值，所以它们必须在 SSM 里。
+  #
+  # ⚠️ 东京缺失清单里的第 11 个 /petstore/searchimage **刻意不建**：
+  #    它的东京值 petsearch-java:latest 指向一个**两个 region 都不存在**的
+  #    ECR 仓库（2026-09-26 实测），是东京自己的悬空引用。
+  #    首尔 petsite 现在没有它也能正常服务（4.26 实测 4 个页面全对），
+  #    照抄一个已知坏掉的值只会把悬空引用复制一份。
+
+  SearchApiUrl:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /petstore/agent/searchapiurl
+      Type: String
+      Value: !Sub http://${AlbDns}:8081
+  PetListAdoptionsUrl:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /petstore/agent/petlistadoptionsurl
+      Type: String
+      Value: !Sub http://${AlbDns}:8082
+  PaymentApiUrl:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /petstore/agent/paymentapiurl
+      Type: String
+      Value: !Sub http://${AlbDns}:8083
+  PetFoodApiUrl:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /petstore/agent/petfoodapiurl
+      Type: String
+      Value: !Sub http://${AlbDns}:8084/api/foods
+  PetFoodCartUrl:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /petstore/agent/petfoodcarturl
+      Type: String
+      Value: !Sub http://${AlbDns}:8084/api/cart
+
+  GatewayUrlParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /petstore/agent/waggleai/gatewayurl
+      Type: String
+      Value: !GetAtt Gateway.GatewayUrl
+  GuardrailIdParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /petstore/agent/waggleai/guardrailid
+      Type: String
+      Value: {Fn::ImportValue: dr-korea-waggle-guardrail-id}
+  MemoryIdParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /petstore/agent/waggleai/memoryid
+      Type: String
+      Value: {Fn::ImportValue: dr-korea-waggle-memory-id}
+  NutritionKbIdParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /petstore/agent/waggleai/nutritionkbid
+      Type: String
+      Value: {Fn::ImportValue: dr-korea-waggle-kb-id}
+
+  # petsite 从这个参数取 orchestrator 的 ARN。
+  # ⚠️ 这里写的是**首尔**的 runtime ARN，但**东京的同名参数一处不动** ——
+  #    主站点仍是东京，这只是让首尔站点自洽，不是切换。
+  RuntimeArnParam:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: /petstore/agent/waggleairuntimearn
+      Type: String
+      Value: !GetAtt OrchestratorRuntime.AgentRuntimeArn
+
+Outputs:
+  GatewayUrl:
+    Value: !GetAtt Gateway.GatewayUrl
+  OrchestratorRuntimeArn:
+    Value: !GetAtt OrchestratorRuntime.AgentRuntimeArn
+  RuntimeNames:
+    Value: dr_korea_WaggleAIOrchestrator,Concierge,Nutrition,Ordering,Adoption
+  DataResidencyNote:
+    Description: ⚠️ 首尔用 global.* 全球路由，失去东京 jp. 的区域驻留属性
+    Value: global routing - no in-region data residency guarantee

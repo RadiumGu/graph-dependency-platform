@@ -66,6 +66,21 @@ Parameters:
     Default: pet-adoptions-history
     Description: pethistory 用的具名仓库(唯一一个不走 CDK asset 仓库的)
 
+  WaggleRepoPrefix:
+    Type: String
+    Default: waggle-ai-
+    Description: >
+      WaggleAI 的 5 个私有仓库(orchestrator / concierge / nutrition /
+      ordering / adoption)。2026-09-26 加入。
+
+      ⚠️ 这条是对下面那段旧注释的**订正**:第一版刻意把 waggle-ai-* 排除在外,
+      理由是「petsite 切换用不到」。那在当时是对的 —— 那时灾备范围只到 petsite。
+      用户 2026-09-26 要求把 WaggleAI 也在首尔建起来,于是这 5 个镜像变成了
+      灾备范围内的东西,必须复制。
+
+      选复制而不是在首尔重新构建镜像,理由是**同一个 digest 才是同一个东西** ——
+      重建出来的镜像不是演练过的那个。实测复制后两侧 digest 逐一相同。
+
 Resources:
   # ⚠️ 这个资源是 registry 单例 —— 一个 region 的 registry 只能有一份复制配置。
   # 如果账号里别处已经配过复制,这个栈会覆盖它。
@@ -82,8 +97,14 @@ Resources:
                 # 同账号复制时填自己的账号 ID。
                 RegistryId: !Ref AWS::AccountId
             # 刻意加过滤器而不是复制整个 registry：
-            # 那 11 个仓库里有 waggle-ai-*、translator-ws、yace-cloudwatch-exporter
+            # 那 11 个仓库里有 translator-ws、yace-cloudwatch-exporter
             # 等 petsite 切换用不到的东西，复制它们只是白花存储和跨 region 流量。
+            #
+            # ⚠️ 2026-09-26 订正：原文这里还写着 waggle-ai-* 也「用不到」。
+            # 那句话在灾备范围只到 petsite 时是对的，在 WaggleAI 也要在首尔
+            # 建起来之后就不对了 —— 已把 waggle-ai- 加进过滤器。
+            # 留着这条订正而不是直接改掉原句，是因为「范围变了所以判断变了」
+            # 与「当初判断错了」是两件不同的事，后人需要分得清。
             #
             # FilterType 的枚举**只有** PREFIX_MATCH 一个值（查 CFN schema 得到，
             # 不是从印象里写的）。
@@ -91,6 +112,8 @@ Resources:
               - Filter: !Ref CdkAssetRepoPrefix
                 FilterType: PREFIX_MATCH
               - Filter: !Ref NamedRepoPrefix
+                FilterType: PREFIX_MATCH
+              - Filter: !Ref WaggleRepoPrefix
                 FilterType: PREFIX_MATCH
 
 Outputs:

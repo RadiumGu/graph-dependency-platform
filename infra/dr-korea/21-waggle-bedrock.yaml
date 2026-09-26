@@ -1,0 +1,234 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  韩国灾备站点 — WaggleAI 的 Bedrock 侧资源：
+  Guardrail、AgentCore Memory、S3 Vectors 桶+索引、Nutrition 知识库+数据源。
+
+  部到 ap-northeast-2。依赖 dr-korea-waggle-iam（角色）。
+  主站点仍是东京，这里只加首尔侧资源。
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 所有配置值都是 2026-09-26 从东京活资源逐项读出来的，不是按文档默认值填的
+#
+#   Guardrail  aws bedrock get-guardrail --guardrail-identifier u4jw0mo0r7pq
+#   Memory     aws bedrock-agentcore-control get-memory --memory-id WaggleAIMemory-HuA0HS92Yd
+#   KB         aws bedrock-agent get-knowledge-base --knowledge-base-id QOWP8XIMMU
+#   S3 Vectors aws s3vectors get-index
+#
+# ⚠️ 不要照 PetAdoptions/cdk/pet_stack/lib/agents/agent-config.ts 的
+#    AGENT_KB_CONFIG 建资源。2026-09-26 查明那是一段**没有任何代码引用的死配置**
+#    （全仓只有一处注释提到它），它声明的桶名 waggle-nutrition-kb 与索引名
+#    nutrition-v1 **都不是**线上真实值 —— 真实值来自 waggle-ai-nutrition-kb.ts。
+#    照它建会得到两个名字都不对的资源，而失败点会出现在 ingestion，指不到这里。
+# ══════════════════════════════════════════════════════════════════════════════
+
+Parameters:
+  EmbeddingModelId:
+    Type: String
+    Default: amazon.titan-embed-text-v2:0
+    Description: >
+      2026-09-26 在首尔实测可调、实测输出 1024 维。
+      这个模型不走跨区推理 profile，所以没有 jp./global. 前缀问题。
+
+  EmbeddingDimension:
+    Type: Number
+    Default: 1024
+    Description: >
+      东京 get-index 实测 dimension=1024。维度必须与模型输出一致 ——
+      不一致的表现是 ingestion 失败，而不是建资源失败。
+
+  EventExpiryDays:
+    Type: Number
+    Default: 30
+    Description: 东京 get-memory 实测 eventExpiryDuration=30（天）。
+
+Resources:
+
+  # ── S3 Vectors：向量桶 + 索引 ──────────────────────────────────────────────
+  # 上游选 S3 Vectors 而非 OpenSearch Serverless，正好避开后者的最低 OCU 月费
+  # （数百美元级）。首尔沿用同一选择：10 个向量的存储费约 $0.000004/月。
+  VectorBucket:
+    Type: AWS::S3Vectors::VectorBucket
+    Properties:
+      VectorBucketName: !Sub dr-korea-waggle-nutrition-vectors-${AWS::AccountId}
+      # 东京实测 sseType=AES256（不是 KMS），沿用。
+      EncryptionConfiguration:
+        SseType: AES256
+
+  VectorIndex:
+    Type: AWS::S3Vectors::Index
+    Properties:
+      # ⚠️ 这里必须用 VectorBucketArn 而不是 VectorBucketName。
+      # 查 schema：VectorBucket 的 primaryIdentifier 是 /properties/VectorBucketArn，
+      # 所以 !Ref VectorBucket 返回的是 **ARN**（99 字符），
+      # 填进限长 63 的 VectorBucketName 会报
+      #   #/VectorBucketName: expected maxLength: 63, actual: 99
+      # —— 那个报错指向长度，真因是引用取到的东西不是名字。
+      VectorBucketArn: !Ref VectorBucket
+      IndexName: nutrition-index
+      # 三项都是必填（查 schema 的 required 得到，不是猜）：
+      DataType: float32
+      Dimension: !Ref EmbeddingDimension
+      DistanceMetric: cosine     # 东京实测 distanceMetric=cosine
+
+  # ── 知识文档源桶 ──────────────────────────────────────────────────────────
+  # 名字与 20-waggle-iam.yaml 的 KbSourceBucketName 参数必须一致 ——
+  # 那边要在桶存在前就授权，所以两边都用确定值而不是互相 ImportValue（否则成环）。
+  KbSourceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub dr-korea-waggle-nutrition-kb-source-${AWS::AccountId}
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+
+  # ── Guardrail ─────────────────────────────────────────────────────────────
+  # 东京只有 DRAFT 版本（没有已发布的数字版本），首尔保持一致 ——
+  # 首尔 SSM 里 guardrailversion 已经是 DRAFT，改成发布版会对不上。
+  Guardrail:
+    Type: AWS::Bedrock::Guardrail
+    Properties:
+      Name: dr-korea-WaggleAIGuardrail
+      Description: WaggleAI 护栏（首尔灾备）。配置逐项对齐东京 u4jw0mo0r7pq。
+      BlockedInputMessaging: I can only help with pet care, food, and adoption questions.
+      BlockedOutputsMessaging: Sorry, I can't help with that — let's keep it about your pet.
+      ContentPolicyConfig:
+        FiltersConfig:
+          # 强度全部照东京实测值，input/output 同强度。
+          # 注意 PROMPT_ATTACK 在东京是 NONE/NONE —— 这看起来像漏配，
+          # 但灾备站点的职责是**与生产一致**，不是在这里顺手加固：
+          # 两侧护栏强度不同会让「在首尔复现一个东京的 prompt 注入问题」失效。
+          - Type: VIOLENCE
+            InputStrength: MEDIUM
+            OutputStrength: MEDIUM
+          - Type: PROMPT_ATTACK
+            InputStrength: NONE
+            OutputStrength: NONE
+          - Type: MISCONDUCT
+            InputStrength: MEDIUM
+            OutputStrength: MEDIUM
+          - Type: HATE
+            InputStrength: HIGH
+            OutputStrength: HIGH
+          - Type: SEXUAL
+            InputStrength: HIGH
+            OutputStrength: HIGH
+          - Type: INSULTS
+            InputStrength: MEDIUM
+            OutputStrength: MEDIUM
+      TopicPolicyConfig:
+        TopicsConfig:
+          - Name: MedicalDosing
+            Type: DENY
+            Definition: >
+              Specific medication dosages, prescriptions, or drug administration
+              instructions for pets. Excludes vaccines, flea/tick prevention,
+              dewormers, and nutrition.
+            Examples:
+              - How many milligrams of ibuprofen can I give my dog?
+              - What is the correct amoxicillin dose for a 5kg cat?
+              - Can I give my puppy half a human painkiller tablet?
+      SensitiveInformationPolicyConfig:
+        PiiEntitiesConfig:
+          - Type: EMAIL
+            Action: ANONYMIZE
+          - Type: PHONE
+            Action: ANONYMIZE
+          - Type: ADDRESS
+            Action: ANONYMIZE
+          # 只有这一项是 BLOCK 而非 ANONYMIZE —— 东京实测值，照抄。
+          - Type: CREDIT_DEBIT_CARD_NUMBER
+            Action: BLOCK
+
+  # ── AgentCore Memory ──────────────────────────────────────────────────────
+  # MemoryStrategy 在 CFN 里是**联合类型**：每个元素只能带一个策略键
+  # （schema 的 maxProperties/minProperties 都是 1），策略类型由外层键决定，
+  # 不是靠里面的 Type 字段 —— 按 API 的 {type: "SUMMARIZATION"} 形状写会报错。
+  Memory:
+    Type: AWS::BedrockAgentCore::Memory
+    Properties:
+      Name: dr_korea_WaggleAIMemory
+      Description: WaggleAI 共享记忆（首尔灾备）。策略与命名空间对齐东京。
+      EventExpiryDuration: !Ref EventExpiryDays
+      MemoryExecutionRoleArn:
+        Fn::ImportValue: dr-korea-waggle-memory-role
+      MemoryStrategies:
+        - SummaryMemoryStrategy:
+            Name: ConversationSummary
+            Namespaces:
+              - /waggleai/{actorId}/{sessionId}/summary
+        - UserPreferenceMemoryStrategy:
+            Name: PetPreferences
+            Namespaces:
+              - /waggleai/{actorId}/preferences
+
+  # ── 知识库 ────────────────────────────────────────────────────────────────
+  NutritionKb:
+    Type: AWS::Bedrock::KnowledgeBase
+    DependsOn: VectorIndex
+    Properties:
+      Name: dr-korea-waggle-ai-nutrition-kb
+      Description: 宠物营养 RAG 知识库（首尔灾备）。
+      RoleArn:
+        Fn::ImportValue: dr-korea-waggle-kb-role
+      KnowledgeBaseConfiguration:
+        Type: VECTOR
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelArn: !Sub arn:aws:bedrock:${AWS::Region}::foundation-model/${EmbeddingModelId}
+          EmbeddingModelConfiguration:
+            BedrockEmbeddingModelConfiguration:
+              Dimensions: !Ref EmbeddingDimension
+              EmbeddingDataType: FLOAT32
+      StorageConfiguration:
+        # S3_VECTORS 这个枚举值不是猜的 —— 东京 get-knowledge-base 返回的就是它。
+        Type: S3_VECTORS
+        S3VectorsConfiguration:
+          # schema 的 oneOf 允许 [IndexArn] 或 [VectorBucketArn + IndexName]，
+          # 用 IndexArn 一项即可，且能让 CFN 自己建立依赖。
+          IndexArn: !GetAtt VectorIndex.IndexArn
+
+  NutritionDataSource:
+    Type: AWS::Bedrock::DataSource
+    Properties:
+      Name: dr-korea-nutrition-docs
+      KnowledgeBaseId: !Ref NutritionKb
+      # ⚠️ 刻意不声明 VectorIngestionConfiguration。
+      # 东京 get-data-source 实测**没有**这一段 → 走 Bedrock 默认分块。
+      # 在这里补一个「更好的」分块策略会让两侧检索结果不同，
+      # 而灾备站点的职责是与生产一致。
+      DataSourceConfiguration:
+        Type: S3
+        S3Configuration:
+          BucketArn: !GetAtt KbSourceBucket.Arn
+          InclusionPrefixes:
+            - nutrition/
+      DataDeletionPolicy: DELETE     # 东京实测值
+
+Outputs:
+  GuardrailId:
+    Value: !GetAtt Guardrail.GuardrailId
+    Export: {Name: dr-korea-waggle-guardrail-id}
+  GuardrailVersion:
+    Description: 东京只有 DRAFT，首尔保持一致
+    Value: DRAFT
+  MemoryId:
+    Value: !GetAtt Memory.MemoryId
+    Export: {Name: dr-korea-waggle-memory-id}
+  KnowledgeBaseId:
+    Value: !Ref NutritionKb
+    Export: {Name: dr-korea-waggle-kb-id}
+  DataSourceId:
+    Value: !GetAtt NutritionDataSource.DataSourceId
+    Export: {Name: dr-korea-waggle-kb-datasource-id}
+  KbSourceBucket:
+    Value: !Ref KbSourceBucket
+  VectorIndexArn:
+    Value: !GetAtt VectorIndex.IndexArn

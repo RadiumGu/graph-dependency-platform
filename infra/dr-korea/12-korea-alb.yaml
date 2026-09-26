@@ -135,6 +135,30 @@ Resources:
       SourceSecurityGroupId: !Ref AlbSecurityGroup
       Description: dr-korea ALB to pethistory pod 80
 
+  # ── WaggleAI agent 到 ALB 的 8081-8084 ───────────────────────────
+  # 2026-09-26 加。22-waggle-backend-routes.yaml 在这个 ALB 上加了
+  # 8081-8084 四个监听器（search / listadopt / payadopt / petfood），
+  # 调用方是首尔的 AgentCore runtime。
+  #
+  # ⚠️ 规则写在**这个**栈里而不是 22 里，因为 AlbSecurityGroup 的入站是本栈
+  #    用内联 SecurityGroupIngress 声明的 —— 从别的栈往同一个组加规则，
+  #    会让本栈的漂移检测报 MODIFIED。安全组的规则永远由拥有它的栈声明。
+  #
+  # ⚠️ 这条刻意用**安全组来源**而不是上面那条 80 用的 VpcCidr：
+  #    需要 8081-8084 的只有 WaggleAI 的 runtime ENI，边界是已知的，
+  #    没有理由放给整个 VPC。上面那条 80 是入口流量、来源确实是整个内网，
+  #    两者形态不同不是不一致。
+  AllowWaggleRuntimeToAlb:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref AlbSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8081
+      ToPort: 8084
+      SourceSecurityGroupId:
+        Fn::ImportValue: dr-korea-waggle-runtime-sg
+      Description: WaggleAI runtime to agent backend ports 8081-8084
+
   # ── ALB ───────────────────────────────────────────────────────────
   Alb:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer

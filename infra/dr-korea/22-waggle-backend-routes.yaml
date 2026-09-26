@@ -1,0 +1,174 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  韩国灾备站点 — WaggleAI 的后端路由：复用已有的 dr-korea-petsite-alb，
+  加 4 个目标组 + 4 个监听器（8081-8084），以及 AgentCore runtime 专用安全组。
+
+  部到 ap-northeast-2。主站点仍是东京。
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 为什么复用已有 ALB 而不新建一个
+#
+# 东京的 agent 走一个**独立的内网 ALB** petsite-internal-lt（端口 80/8081-8084）。
+# 首尔照抄「再建一个 ALB」要多付一份 ~$16/月，而已有的 dr-korea-petsite-alb
+# 也是 internal、同 VPC、同两个 internal-elb 子网 —— 加监听器与目标组都免费。
+#
+# 这是刻意偏离东京的拓扑（一个 ALB 承两种用途而不是两个），偏离的代价是
+# 「东京把 agent 流量与 petsite 入口流量分开、首尔混在一个 ALB 上」——
+# 对演练结论没有影响（两者都是内网、都不面向公网），对成本有影响，所以这么选。
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# 端口与目标端口全部来自东京活资源实测，不是按服务名推断的
+#
+#   监听 8081 -> search-tg      目标端口 80      HC /health/status 期望 200
+#   监听 8082 -> listadopt-tg   目标端口 80      HC /health/status 期望 200
+#   监听 8083 -> payadopt-tg    目标端口 80      HC /health/status 期望 200
+#   监听 8084 -> petfood-tg     目标端口 **8080** HC /health/status 期望 200
+#
+# ⚠️ petfood 的目标端口是 8080 而不是 80 —— 从东京
+#    describe-target-health 读出来的真实注册端口。
+#    2026-09-26 我曾用 pod proxy 打 petfood 的 80 得到 connection refused，
+#    当时归因成「我测错了端口」；这次证实**端口本身就是 8080**，
+#    petfood 确实不监听 80。按服务名统一填 80 会得到永远 unhealthy 的目标组。
+# ══════════════════════════════════════════════════════════════════════════════
+
+Parameters:
+  AlbArn:
+    Type: String
+    Default: arn:aws:elasticloadbalancing:ap-northeast-2:926093770964:loadbalancer/app/dr-korea-petsite-alb/49a4fa7e6ec7295b
+    Description: 已有的 dr-korea-petsite-alb（internal）
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-0238efd50c0bf0dac
+
+  HealthCheckPath:
+    Type: String
+    Default: /health/status
+    Description: >
+      东京四个后端目标组实测都用这个路径、期望 200。
+      注意 petsite 自己的目标组用的是 `/` —— 那条是 4.32 修过的坑
+      （`/` 永远 302），与这四个无关。
+
+Resources:
+
+  # ── AgentCore runtime 专用安全组 ──────────────────────────────────────────
+  # 东京给 WaggleAI 用的是独立 SG（sg-067d521fe3f2ceec4），不与别的东西共用。
+  # 首尔沿用这个隔离：不复用 temporal_mcp 那个 sg-0be34c74ee6211412，
+  # 否则一次 WaggleAI 的放行会顺带扩大 temporal_mcp 的可达面。
+  WaggleRuntimeSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      # GroupDescription 只接受 ASCII（12-korea-alb.yaml 踩过并记录）。
+      GroupDescription: dr-korea WaggleAI AgentCore runtime ENIs
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: outbound to ALB backends and AWS APIs
+      Tags:
+        - Key: Name
+          Value: dr-korea-waggle-runtime-sg
+
+  # ── 4 个目标组 ────────────────────────────────────────────────────────────
+  SearchTg:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: dr-korea-waggle-search-tg
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 80
+      TargetType: ip
+      HealthCheckPath: !Ref HealthCheckPath
+      Matcher: {HttpCode: '200'}
+
+  ListAdoptTg:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: dr-korea-waggle-listadopt-tg
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 80
+      TargetType: ip
+      HealthCheckPath: !Ref HealthCheckPath
+      Matcher: {HttpCode: '200'}
+
+  PayAdoptTg:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: dr-korea-waggle-payadopt-tg
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: 80
+      TargetType: ip
+      HealthCheckPath: !Ref HealthCheckPath
+      Matcher: {HttpCode: '200'}
+
+  PetFoodTg:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: dr-korea-waggle-petfood-tg
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      # ⚠️ 8080，不是 80。见文件头的说明。
+      Port: 8080
+      TargetType: ip
+      HealthCheckPath: !Ref HealthCheckPath
+      Matcher: {HttpCode: '200'}
+
+  # ── 4 个监听器 ────────────────────────────────────────────────────────────
+  SearchListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref AlbArn
+      Port: 8081
+      Protocol: HTTP
+      DefaultActions: [{Type: forward, TargetGroupArn: !Ref SearchTg}]
+
+  ListAdoptListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref AlbArn
+      Port: 8082
+      Protocol: HTTP
+      DefaultActions: [{Type: forward, TargetGroupArn: !Ref ListAdoptTg}]
+
+  PayAdoptListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref AlbArn
+      Port: 8083
+      Protocol: HTTP
+      DefaultActions: [{Type: forward, TargetGroupArn: !Ref PayAdoptTg}]
+
+  PetFoodListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref AlbArn
+      Port: 8084
+      Protocol: HTTP
+      DefaultActions: [{Type: forward, TargetGroupArn: !Ref PetFoodTg}]
+
+Outputs:
+  RuntimeSgId:
+    Value: !Ref WaggleRuntimeSg
+    Export: {Name: dr-korea-waggle-runtime-sg}
+  SearchTgArn:
+    Value: !Ref SearchTg
+    Export: {Name: dr-korea-waggle-search-tg}
+  ListAdoptTgArn:
+    Value: !Ref ListAdoptTg
+    Export: {Name: dr-korea-waggle-listadopt-tg}
+  PayAdoptTgArn:
+    Value: !Ref PayAdoptTg
+    Export: {Name: dr-korea-waggle-payadopt-tg}
+  PetFoodTgArn:
+    Value: !Ref PetFoodTg
+    Export: {Name: dr-korea-waggle-petfood-tg}
+  AgentBaseUrl:
+    Description: >
+      agent 侧 5 个后端 URL 的基址（SSM 参数里要写的值）。
+      与东京同形：同一个主机名 + 不同端口。
+    Value: !Sub
+      - http://${Dns}
+      - Dns: internal-dr-korea-petsite-alb-263460690.ap-northeast-2.elb.amazonaws.com
