@@ -4419,6 +4419,155 @@ ECR          5 个镜像约 850MB     约 $0.09/月
 
 ---
 
+---
+
+### 4.39 NPE 热修上线 —— 以及「修复落在了不会被构建的副本上」
+
+**日期**：2026-09-26 11:56–12:20 UTC ｜ 用户授权：「你是这方面的专家，你去做，需要权限我都给你」
+
+#### ① 先解开一个被我说错的前提：那个 fork 的 CI 不是「不能跑」，是从没被放行
+
+上一轮我在提交信息里写「CI 会构建，编译由它证明」，随后实测
+`actions/runs` 的 `total_count = 0`，于是订正成「编译没有任何自动证明」。
+**那条订正本身也不完整。** 逐项查下去：
+
+```
+actions/permissions            enabled=true, allowed_actions=all
+actions/workflows              三个都是 state=active
+仓库属性                        public / 非 fork 禁用 / 未归档 / 未 disabled
+工作流文件在 myfork/main 上      存在（pull_request 取的是基分支的文件，已确认）
+触发条件                        branches:[main] + paths 含 petsearch-java/**  ← 全部满足
+```
+
+表面全通而零运行。**显式 `PUT actions/permissions {enabled:true}` 之后再推一次，
+运行立刻出现** —— 所以真因是这个 fork 的 Actions 从未被真正启用过，
+而 `permissions` API 报的 `enabled: true` 与「工作流会被触发」不是同一件事。
+
+> 第一次 PUT 我用 `-f enabled=true` 失败（422：`"true" is not a boolean`），
+> 换 `-F` 才成功。**那次 422 如果没看错误正文，会被当成「API 不支持」**。
+
+#### ② 编译被真实证明了
+
+```
+docker-builds (petsearch-java, PetAdoptions/petsearch-java)   pass  6m13s
+另外 8 个 build/dotnet/nodejs 作业                             全 pass
+Trigger AWS CodePipeline                                      fail  2s
+```
+
+那条 fail 的真因读了日志：`configure-aws-credentials` →
+`Could not load credentials from any providers`。它是上游 aws-samples 指向
+**他们自己测试账号**（us-east-2）的 OIDC 角色，这个 fork 里不存在，
+**结构上永远不可能成功**。
+
+按「门禁误报比漏报更糟，因为它让人开始不信门禁」这条，已停用该工作流
+（`acceptance-tests.yaml` 只有这一个作业，`nodejs-build` 属于另一个已通过的工作流，
+所以停用它零损失）。恢复只需一条命令：
+
+```
+gh api -X PUT repos/RadiumGu/one-observability-demo/actions/workflows/234224183/enable
+```
+
+#### ③ 那个修复原本落在不会被构建的副本上
+
+`fa263fbc` 三个文件全在 `manual-instrumentation-complete/` 下。三条独立证据说明
+镜像不从那里构建：
+
+```
+① Dockerfile 只 COPY ./build.gradle ./src ./settings.gradle（上下文是上一层）
+② settings.gradle 只有 rootProject.name，**没有 include** 那个子目录
+③ 两份 SearchController.java 的 md5 不同，且 **AWS SDK 版本不同**：
+   被部署的是 v2（.s() / .items()），另一份是 v1 风格（.getS() / .getItems()）
+   → 机械复制过去连编译都过不了
+```
+
+所以它单独存在时是**静默无效的**：会被 review、被合并、看起来修好了，
+而线上那个 NPE 一行都没动。已按 SDK v2 重写移植到 `src/` 并合并
+（rebase 合并，保留原作者署名：`851d352a` + `f15f7194`）。
+
+⚠️ 「错误日志文案在事故日志里出现过」**不能作为判据** —— 两份副本里都有那句。
+判据是 Dockerfile 的 COPY 路径。
+
+#### ④ 为什么自己建 CodeBuild 而不是 cdk deploy
+
+线上 search-service 跑的是 **CDK asset 镜像**（tag 是内容哈希
+`012a95fb34e6…`）。让修复上线只有两条路，而 `cdk deploy ServicesEks2`
+**已被证明不安全**：443 监听器上的 Cognito 规则与 `X-Demo-Bypass` 旁路
+全是手工加的（CDK 里零命中），整栈部署会收敛掉它们。
+
+所以建了 `infra/tokyo/01-petsearch-hotfix-build.yaml`：原生 arm64 CodeBuild
+（不是 x86 上模拟）、源是公开仓库（不需要任何凭据）、推到**新命名**的
+`petsearch-java-hotfix` 仓库 —— 刻意不叫 `petsearch-java`，因为 SSM 里那个
+悬空参数 `/petstore/searchimage = petsearch-java:latest` 会因此突然解析成功，
+**而谁在读它、读到后做什么我没查清，不制造未知副作用**。
+
+buildspec 里有一条**构建前的自证**：`grep REQUIRED_PET_ATTRIBUTES` 与
+`grep petsSkippedMalformed`。少了它，一次搞错分支的构建会产出一个
+「看起来是热修」而实际没有修复的镜像。
+
+> ⚠️ 这是**停一步的权宜之计**：下一次 `cdk deploy` 会把 image 覆盖回 asset 镜像。
+> 但那时 asset 会从**已含修复的源码**重新构建，所以覆盖不是退步。
+> 这一条必须写下来，否则后人会把「image 被改回去了」当成回归。
+
+#### ⑤ 第一次构建「失败」其实成功了
+
+```
+POST_BUILD FAILED：ecr:DescribeImages AccessDenied
+但日志里：f15f719: digest: sha256:309a9797ed50… size: 1372   ← 已经推送成功
+```
+
+漏权限的是我最后那条**核实**命令，不是构建或推送。
+**教训：构建脚本里的核实步骤自己也需要权限，而它失败的表现是「构建失败」——
+会让人以为产物根本没出来。** 已把 `ecr:DescribeImages` 补进角色。
+
+#### ⑥ 部署前证明了架构，而不是等 pod 报 exec format error
+
+单平台 manifest 里没有架构字段，所以取配置 blob 直接读：
+
+```
+get-download-url-for-layer  → curl 配置对象
+architecture : arm64
+os           : linux
+entrypoint   : ['java','-jar','/app/app.jar']
+env          : JAVA_TOOL_OPTIONS=-javaagent:/app/aws-opentelemetry-agent.jar
+```
+
+#### ⑦ 上线与核实（带部署前基线）
+
+```
+                     部署前                          部署后
+pod 镜像 digest       sha256:2983db73…（CDK asset）    sha256:309a9797…（热修）
+/api/search 条数      26                              26
+首页 <title>          Home - Observability PetAdoptions  同
+首页字节              —                               216055
+宠物卡片链接数         —                               31
+```
+
+按 digest 钉版本而不是 tag，`change-cause` 注解里写了回滚命令。回滚锚点：
+
+```
+926093770964.dkr.ecr.ap-northeast-1.amazonaws.com/
+  cdk-hnb659fds-container-assets-926093770964-ap-northeast-1@sha256:2983db73c18055b27bc9aefb7c7f937778ba59b8c58dd0a5b54a21aba73e69bd
+```
+
+#### ⑧ ⚠️ 仍然没有验证的那一半 —— 不许当作修好了
+
+**已验证**：新代码在线上跑（pod digest 匹配）、没有退化（26 条、首页正常）。
+
+**未验证**：跳过残缺条目这个行为本身。原因是**没有安全的注入途径** ——
+那张表现在是 DynamoDB 全局表，往首尔写会复制回东京，
+而往东京写就是重演 4.36 那次我自己造的故障。**我不会为了验证再对生产写一次。**
+
+那个回归测试也仍然跑不起来：它在 `manual-instrumentation-complete/src/test/` 下，
+而顶层 `src/test/` 不存在、Gradle 也不 include 子目录，且它带
+`@Tag("integration")` 而 Dockerfile 是 `gradle build -DexcludeTags='integration'`。
+
+**所以本次上线带的回归保护是 0。** 正确的补法是把 IT 移到顶层测试树，
+用 testcontainers/localstack 在 CodeBuild 里真跑一遍（build.gradle 已有
+testcontainers 依赖，CodeBuild 特权模式支持 docker-in-docker）——
+那是一件独立的事，本机无 JDK 无法先验证。
+
+---
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
