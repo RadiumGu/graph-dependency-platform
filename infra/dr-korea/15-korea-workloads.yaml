@@ -743,7 +743,20 @@ spec:
     spec:
       containers:
       - name: search-service
-        image: 926093770964.dkr.ecr.ap-northeast-2.amazonaws.com/cdk-hnb659fds-container-assets-926093770964-ap-northeast-1:012a95fb34e6e00ddd23958c8fb6ae4170e6a34648979a5a52812a6a52915fb2
+        # ⚠️ 2026-09-27 换成热修镜像（按 digest 钉死，不用 tag）。
+        #
+        # 原来这里是 CDK asset 的 :012a95fb34e6…（digest sha256:2983db73…），
+        # 那**正是东京换掉之前的那一份**，不含「残缺记录容错」修复
+        # （mapToPet 读到缺属性的行会 NPE → /api/search 整个 500 → 全部记录一起消失）。
+        #
+        # 这个防御**不是冗余的**：首尔的 statusupdater 现在有 attribute_exists(petid)，
+        # 但那张表是 DynamoDB **全局表** —— 一条从东京侧任何路径写进去的残缺行
+        # 都会复制到首尔。少了这个容错，首尔会重演 2026-09-15 与 09-26 那两次故障。
+        #
+        # 东京同一 digest 已在线上（2026-09-26 12:00 起）；
+        # 首尔这份由 09-ecr-replication 的 petsearch-java-hotfix 前缀复制而来，
+        # 两侧 digest 逐字相同（已核实）。
+        image: 926093770964.dkr.ecr.ap-northeast-2.amazonaws.com/petsearch-java-hotfix@sha256:309a9797ed509683ec06920d7eca9cd247e973a4a6849143d0f1f24cb8b18b10
         ports:
         - containerPort: 80
           protocol: TCP
