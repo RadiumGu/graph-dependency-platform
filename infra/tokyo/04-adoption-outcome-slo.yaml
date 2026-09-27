@@ -1,0 +1,283 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  领养「业务结果」比率指标与告警（东京 ap-northeast-1）。
+  守的是 2026-09-26 那一类缺陷：HTTP 200 + 零异常 + 什么都没落库。
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 为什么需要这个栈：现有的每一个信号都对那类缺陷盲
+#
+# 2026-09-05 到 2026-09-26，petsite 的领养流程持续「假成功」22 天：
+# 页面显示「Adoption Complete」，而后端一行都没写。当时的观测面：
+#
+#   HTTP 状态码            200          ← 正常
+#   错误日志               零条          ← 正常（异常被渲染给用户，从不写日志）
+#   ALB 目标健康           "正常"        ← 其实是 fail-open，健康目标数恒为 0
+#   DynamoDB 条数           26           ← 正常
+#
+# **没有任何一个信号是红的。** 它是被人肉发现的，而不是被告知的。
+#
+# 唯一能捕获它的信号是「业务结果与尝试的比率」：
+#
+#   transaction_created_successfully  ÷  Inside MakePayment
+#
+# 实测值：缺陷期 104/3574 ≈ 2.9%；修好后应显著抬升。
+# 阈值 50% 在缺陷出现的第一天就会报。
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# 为什么是定时 Lambda 而不是 metric filter（这是被迫的，不是偏好）
+#
+# 目标日志组 /aws/containerinsights/PetSite/application 的类别是
+# **INFREQUENT_ACCESS**，而 IA 类不支持 metric filter —— 实测报错原文：
+#
+#   DescribeMetricFilters: This operation is only supported on the Standard log class.
+#
+# 三条路都评估过：
+#   ① 改成 Standard 类 —— 日志类**创建后不可更改**，等于重建 Container Insights
+#      的日志组（14GB/天），代价和风险都远大于收益
+#   ② 应用侧用 EMF 直接打指标 —— 要改 petsite 与 payforadoption 两处代码并重新构建
+#   ③ 定时 Lambda 跑 Logs Insights 再 PutMetricData —— IA 类**支持** StartQuery
+#
+# 选 ③：不改代码、不动日志组、当天可上线。代价是指标有查询延迟（分钟级），
+# 对这个用途足够 —— 它守的是「持续多日的静默失败」，不是秒级抖动。
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# 两个刻意的设计选择
+#
+# 1. **没有流量时不发布比率。** attempts 低于 AttemptFloor 时只发 Attempts 与
+#    Persisted，不发比率 —— 配合 treatMissingData=notBreaching，
+#    「夜里没人打流量」不会变成一次误报。
+#    分母接近 0 的比率是噪声，发布它等于制造假警报，而假警报会让人不信告警。
+#
+# 2. **窗口 15 分钟、每 5 分钟跑一次**（刻意重叠）。分子分母取自同一窗口，
+#    所以重叠不影响比率的正确性，但能把单轮抖动摊平。
+#    这个指标要抓的是持续多日的失败，不是一次偶发。
+# ══════════════════════════════════════════════════════════════════════════════
+
+Parameters:
+  LogGroupName:
+    Type: String
+    Default: /aws/containerinsights/PetSite/application
+  MetricNamespace:
+    Type: String
+    Default: PetAdoptions/AdoptionOutcome
+  AttemptFloor:
+    Type: Number
+    Default: 20
+    Description: 窗口内尝试数低于此值时不发布比率（避免分母噪声造成误报）
+  RatioThresholdPercent:
+    Type: Number
+    Default: 50
+    Description: >
+      低于此值报警。缺陷期实测 2.9%，健康期应远高于 50% ——
+      刻意不设成 95%：这个 demo 有重置循环与合成金丝雀，
+      门槛过高会产生持续假警报，而持续假警报比没有告警更糟。
+  AlertTopicArn:
+    Type: String
+    Default: arn:aws:sns:ap-northeast-1:926093770964:petsite-ops-alerts
+    Description: 既有通道（→ petsite-ops-slack-notifier，已有 24 个告警接在它上面）
+
+Resources:
+
+  SloRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: petadoptions-outcome-slo
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: lambda.amazonaws.com}
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: QueryAndPublish
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # StartQuery 的资源是日志组；GetQueryResults 不接受资源限定
+              # （服务限制，不是偷懒 —— 它按 queryId 授权，而 queryId 不可预知）。
+              - Effect: Allow
+                Action: [logs:StartQuery, logs:StopQuery]
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:${LogGroupName}:*
+              - Effect: Allow
+                Action: logs:GetQueryResults
+                Resource: '*'
+              # PutMetricData 只支持 Resource: *，用条件把命名空间钉死。
+              - Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: !Ref MetricNamespace
+
+  SloFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: petadoptions-outcome-slo
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: index.handler
+      Timeout: 120
+      MemorySize: 256
+      Role: !GetAtt SloRole.Arn
+      Environment:
+        Variables:
+          LOG_GROUP: !Ref LogGroupName
+          METRIC_NS: !Ref MetricNamespace
+          ATTEMPT_FLOOR: !Ref AttemptFloor
+      Code:
+        ZipFile: |
+          import json, os, time
+          import boto3
+
+          LOGS = boto3.client("logs")
+          CW = boto3.client("cloudwatch")
+
+          LG = os.environ["LOG_GROUP"]
+          NS = os.environ["METRIC_NS"]
+          FLOOR = int(os.environ["ATTEMPT_FLOOR"])
+
+          # 两个事件名都来自真实日志行：
+          #   "Inside MakePayment Action method - PetId:..."     ← petsite 记的尝试
+          #   "action":"transaction_created_successfully"        ← payforadoption 记的落库
+          # 两者在同一个日志组（两个容器都往 containerinsights 发）。
+          QUERY = """
+          filter @message like /Inside MakePayment|transaction_created_successfully/
+          | parse @message /(?<ev>Inside MakePayment|transaction_created_successfully)/
+          | filter ispresent(ev)
+          | stats count(*) as n by ev
+          """
+
+          def handler(event, context):
+              end = int(time.time())
+              start = end - 900  # 15 分钟窗口，与 5 分钟调度刻意重叠
+
+              qid = LOGS.start_query(
+                  logGroupName=LG, startTime=start, endTime=end,
+                  queryString=QUERY, limit=10,
+              )["queryId"]
+
+              res = None
+              for _ in range(50):
+                  res = LOGS.get_query_results(queryId=qid)
+                  if res["status"] in ("Complete", "Failed", "Cancelled", "Timeout"):
+                      break
+                  time.sleep(2)
+
+              if not res or res["status"] != "Complete":
+                  # 查询本身失败时**什么都不发布** —— 发 0 会被当成「领养全挂」
+                  # 而触发一次假警报。宁可缺一个数据点。
+                  print(json.dumps({"query_status": res["status"] if res else "none"}))
+                  return {"published": False}
+
+              counts = {}
+              for row in res["results"]:
+                  d = {f["field"]: f["value"] for f in row}
+                  if "ev" in d and "n" in d:
+                      counts[d["ev"]] = int(d["n"])
+
+              attempts = counts.get("Inside MakePayment", 0)
+              persisted = counts.get("transaction_created_successfully", 0)
+
+              data = [
+                  {"MetricName": "Attempts", "Value": attempts, "Unit": "Count"},
+                  {"MetricName": "Persisted", "Value": persisted, "Unit": "Count"},
+              ]
+              ratio = None
+              if attempts >= FLOOR:
+                  ratio = round(100.0 * persisted / attempts, 2)
+                  data.append({"MetricName": "SuccessRatioPercent",
+                               "Value": ratio, "Unit": "Percent"})
+
+              CW.put_metric_data(Namespace=NS, MetricData=data)
+              print(json.dumps({"attempts": attempts, "persisted": persisted,
+                                "ratio": ratio, "floor": FLOOR}))
+              return {"published": True, "attempts": attempts,
+                      "persisted": persisted, "ratio": ratio}
+
+  Schedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: petadoptions-outcome-slo-5min
+      ScheduleExpression: rate(5 minutes)
+      State: ENABLED
+      Targets:
+        - Id: slo
+          Arn: !GetAtt SloFunction.Arn
+
+  SchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt SloFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt Schedule.Arn
+
+  # ── 告警 ① 业务结果比率 ───────────────────────────────────────────────
+  RatioAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: petadoptions-adoption-success-ratio-low
+      AlarmDescription: >
+        领养尝试与真正落库的比率过低。这正是 2026-09-05..09-26 那 22 天的形态：
+        HTTP 200、零异常、页面显示成功，而 transactions 一行没写（实测 2.9%）。
+        收到这个告警时**不要先看状态码** —— 状态码在那次缺陷里全程是 200。
+        直接查 transaction_created_successfully 与 create_transaction_failed 的比例，
+        以及 petsite 是否根本没发出下游请求。
+      Namespace: !Ref MetricNamespace
+      MetricName: SuccessRatioPercent
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: !Ref RatioThresholdPercent
+      ComparisonOperator: LessThanThreshold
+      # 没有流量时 Lambda 不发布比率 —— notBreaching 让「夜里空闲」不变成误报。
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopicArn]
+      OKActions: [!Ref AlertTopicArn]
+
+  # ── 告警 ② 前门健康目标数 ─────────────────────────────────────────────
+  # 2026-09-27 之前这个告警是没有意义的：petsite-lt-tg 的健康检查路径是 `/`
+  # 而 petsite 的 `/` 返回 302，所以 HealthyHostCount 恒为 0、
+  # UnHealthyHostCount 恒为 2，任何阈值都长期为真。
+  # 健康检查改成 /health/status 之后它才第一次有信号价值。
+  FrontDoorHealthyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: petsite-frontdoor-no-healthy-target
+      AlarmDescription: >
+        petsite-lt-tg 没有健康目标。⚠️ 站点此时**仍可能返回 200** ——
+        ALB 在目标组全不健康时会 fail-open，把请求发给全部目标。
+        所以「页面能打开」不能作为排除依据。
+      Namespace: AWS/ApplicationELB
+      MetricName: HealthyHostCount
+      Dimensions:
+        - Name: TargetGroup
+          Value: targetgroup/petsite-lt-tg/1fcdf49552117d4c
+        - Name: LoadBalancer
+          Value: app/petsite-internal-lt/b651f61f074cbbfe
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref AlertTopicArn]
+      OKActions: [!Ref AlertTopicArn]
+
+Outputs:
+  FunctionName:
+    Value: !Ref SloFunction
+  RatioAlarmName:
+    Value: !Ref RatioAlarm
+  HowToVerify:
+    Description: 上线后怎么确认它真的在工作
+    Value: >
+      aws lambda invoke --function-name petadoptions-outcome-slo /dev/stdout
+      然后看返回里的 attempts/persisted/ratio；再用
+      aws cloudwatch get-metric-statistics --namespace PetAdoptions/AdoptionOutcome
+      --metric-name SuccessRatioPercent 确认数据点真的落进了指标。

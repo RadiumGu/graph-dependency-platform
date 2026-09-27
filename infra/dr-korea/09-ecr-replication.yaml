@@ -48,6 +48,28 @@ Description: >
 # 上限:全部规则合计最多 25 个目标、最多 25 条规则、每条规则最多 100 个过滤器
 # ══════════════════════════════════════════════════════════════════════════════
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ⚠️ 操作注意：**跨区复制不追溯存量**
+#
+# 加一个新的前缀过滤器之后，**已经存在于东京的镜像不会被复制过去**。
+# 复制是由「推送」事件触发的，而过滤器只影响此后发生的推送。
+#
+# 这一条 2026-09-26（petsite-hotfix）与 2026-09-27（petsearch-java-hotfix）
+# 各踩过一次 —— 两次都是「过滤器加好了、`describe-registry` 显示生效了、
+# 而首尔那边空空如也」。表现不是报错，是**什么都没发生**。
+#
+# 触发存量复制的办法（不需要重新构建镜像）：取回 manifest，再用一个新 tag 重推 ——
+# 内容不变、digest 不变，但产生一次推送事件：
+#
+#   aws ecr batch-get-image --repository-name <repo> --image-ids imageTag=<tag> \
+#     --query 'images[0].imageManifest' --output text > /tmp/m.json
+#   aws ecr put-image --repository-name <repo> --image-tag replicate-trigger \
+#     --image-manifest "$(cat /tmp/m.json)"
+#
+# 然后在首尔侧 `describe-images` 确认 digest 与东京**逐字相同** ——
+# 同一个 digest 才是同一个东西，tag 一致不能作为判据。
+# ══════════════════════════════════════════════════════════════════════════════
+
 Parameters:
   DestinationRegion:
     Type: String
@@ -77,6 +99,21 @@ Parameters:
       理由是「petsite 切换用不到」。那在当时是对的 —— 那时灾备范围只到 petsite。
       用户 2026-09-26 要求把 WaggleAI 也在首尔建起来,于是这 5 个镜像变成了
       灾备范围内的东西,必须复制。
+
+  SearchHotfixRepoPrefix:
+    Type: String
+    Default: petsearch-java-hotfix
+    Description: >
+      search-service 的热修镜像仓库。2026-09-27 加入。
+      为什么必须复制:首尔的 search-service 清单指向的是
+      cdk-hnb659fds-…:012a95fb34e6…,那**正是东京换掉之前的那一份**
+      (digest sha256:2983db73…),不含「残缺记录容错」修复。
+
+      ⚠️ 这个防御**不是冗余的**。首尔的 statusupdater 现在有
+      attribute_exists(petid) 了,但那张表是 DynamoDB **全局表** ——
+      一条从东京侧任何路径写进去的残缺行都会复制到首尔,
+      而首尔的 search-service 读到它会 NPE,让 /api/search 整个 500。
+      纵深防御在这里是必需的,不是锦上添花。
 
   HotfixRepoPrefix:
     Type: String
@@ -133,6 +170,8 @@ Resources:
               - Filter: !Ref WaggleRepoPrefix
                 FilterType: PREFIX_MATCH
               - Filter: !Ref HotfixRepoPrefix
+                FilterType: PREFIX_MATCH
+              - Filter: !Ref SearchHotfixRepoPrefix
                 FilterType: PREFIX_MATCH
 
 Outputs:
