@@ -4940,6 +4940,111 @@ ALB 会把请求发给全部目标。
 
 ---
 
+---
+
+### 4.44 业务结果告警上线,并在第一次运行就抓到一次静默停摆
+
+**日期**:2026-09-27 03:30-05:00 UTC
+
+#### ① 为什么必须是「业务结果」而不是状态码
+
+2026-09-05..09-26 那 22 天的假成功,现有每一个信号都是绿的:
+状态码 200、错误日志零条、DynamoDB 条数 26、ALB 目标"正常"(其实是 fail-open)。
+**它是被人肉发现的,不是被告知的。**
+
+唯一能捕获它的是 `transaction_created_successfully ÷ Inside MakePayment`。
+新建 `infra/tokyo/04-adoption-outcome-slo.yaml` 实现它。
+
+#### ② metric filter 用不了 —— 这是被迫的技术选择,不是偏好
+
+目标日志组是 **INFREQUENT_ACCESS** 类,实测报错原文:
+
+```
+DescribeMetricFilters: This operation is only supported on the Standard log class.
+```
+
+而**日志类创建后不可更改**,改成 Standard 等于重建 Container Insights 的日志组
+(14GB/天)。所以走「定时 Lambda 跑 Insights → PutMetricData」——
+IA 类支持 StartQuery。代价是分钟级延迟,对「持续多日的静默失败」这个用途足够。
+
+两个刻意设计:**没有流量时不发布比率**(分母接近 0 的比率是噪声,
+发布它等于制造假警报);窗口 15 分钟而调度 5 分钟,刻意重叠以摊平抖动。
+
+#### ③ 它在第一次运行就抓到一个真实停摆
+
+```
+第一次调用:  attempts=740  persisted=0  ratio=0.0
+```
+
+随后用 Insights 逐 10 分钟分桶核实:02:10-03:30 每个桶 `Inside MakePayment`
+都有约 600 次,而 `transaction_created_successfully` **一次都没有**。
+⚠️ 全程 HTTP 200、零异常、页面正常渲染 —— 与 09-26 那次是**同一个观测盲区**。
+
+#### ④ 根因:一个「修好之后反而停摆」的自限循环
+
+```
+completeadoption           5493 次    ← userId 修复确实生效,请求到了后端
+ValidatePet               10986 次
+transaction_created_successfully  0   ← 在 CreateTransaction 之前就返回了
+create_transaction_failed         0   ← 连失败都没记
+```
+
+`ValidatePet` 去问 search-service 这只宠物是否可领养,非 200 即返回。
+而 traffic-generator 从 `/api/search` 取到的是**全部 26 只**(不分可用性),
+所以目录被领养光后约 96% 的随机挑选被拒。
+
+**链路修好 → 目录被领养光 → 校验开始拒绝 → 领养全停。**
+
+#### ⑤ 一个更深的缺陷:被孤立的宠物永远回不来
+
+`ResetPetsAvailability` 的宠物列表来源是:
+
+```sql
+SELECT DISTINCT pet_id, pet_type FROM transactions
+```
+
+所以 `availability='no'` 但**交易表里没有对应行**的宠物,
+**没有任何机制会复原它**。可用性在 DynamoDB、交易在 Aurora,
+两个存储只靠正常路径保持一致;任何一次中断都会永久孤立一只宠物。
+
+⚠️ 这不是我引入的,但它让系统**无法自愈**。已用应用自己的 statusupdater
+接口复原(带 petavailability → 写 yes),两轮共 50 只,零失败。
+**正确的修法是让 ResetPetsAvailability 从 DynamoDB 查 availability='no' 的宠物,
+而不是从交易表** —— 那样系统就能自愈。尚未做。
+
+#### ⑥ 上限:算术决定了取值,不是凭感觉
+
+`if (loadSize > 20)` **不是上限,是"要不要清理领养历史"的分支** ——
+我先误读成上限并写进了 4.43,此处订正。真实情况是 `random.Next(5, 26)` 5..25,
+**根本没有上限**。
+
+新增 `maxadoptionspercycle`。取值靠算术:
+
+```
+3 个生成器 x 每轮 N 只 x 每 20 秒一轮 = 9N 只/分钟,而目录只有 26 只
+  N=8  → 72/分钟   几秒清空       实测 ratio 3.71%
+  N=2  → 18/分钟                  实测 ratio 10.5%
+```
+
+改动时避开一个静默陷阱:分支判断继续用**未截断的** `picked`,
+只有领养循环用截断后的 `loadSize` —— 否则上限小于 20 时清理历史的路径
+**永远不走**,而没人会注意到。
+
+#### ⑦ 仍未修完的那一半
+
+比率从 0 → 3.71% → 10.5%,但按算术应稳定在更高。查出补货侧也断着:
+
+```
+pay-for-adoption 近 10 分钟:  transaction_created 20 / CleanupAdoptions 仅 4 次
+petsite 近 10 分钟:           housekeeping 日志 0 条
+```
+
+3 个生成器每 20 秒一轮,10 分钟本该约 90 次 housekeeping,**petsite 侧一条都没有**。
+SSM 参数 `/petstore/cleanupadoptionsurl` 是对的(实测 DELETE 返回 200,
+而 CDK 源码里那个 `/api/home/cleanupadoptions` 路径是错的、已被线上订正),
+所以断点在生成器发出的 `GET /housekeeping/` 与 petsite 路由之间。**未定位完。**
+
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
