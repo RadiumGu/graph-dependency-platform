@@ -1,0 +1,212 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  依赖图谱 ETL 与 Neptune 的容量告警（东京 ap-northeast-1）。
+  对应 docs/design/large-scale-graph-refresh-architecture.md §8.0 的触发条件。
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 为什么是两条，而不是文档 §8.0 写的四条
+#
+# §8.0 原本列了四条触发条件。2026-10-02 建栈时按 tests/test_121 刚立下的
+# 「告警必须可处置」纪律重审，后两条**不该做成告警**：
+#
+#   ① etl_aws Duration > 300s          ✓ 可恢复 —— ETL 跑快了就回 OK
+#   ② BufferCacheHitRatio < 99.9%      ✓ 可恢复 —— 升实例或热点变了就回 OK
+#   ③ 边总数 > 50,000                  ✗ **单调上升**，越线后永远红着
+#   ④ Pod 节点占比 > 80%               ✗ 同上，Pod 只增不减（只标 active=false）
+#
+# test_121 记的代价就是这个：当天 08:20 给领养历史队列加的告警「正确触发、
+# 又被 watchdog 正确捞出」，然后才发现告警本身是错的 —— 积压是永久架构属性，
+# 它永远回不到 OK。而**一条永远红着的告警会训练人忽略整个频道**，
+# 那恰好是 adoption-success-ratio 响 5 天没人看的机制。
+#
+# ③④ 是容量**趋势**，归属定期复盘而不是实时告警。它们的正确形态是
+# 周期性报告（像 crons/petsite_watch.py 那样定时查、只在跨阈值时说一次），
+# 而且两者都**不是 CloudWatch 指标** —— ETL 的 stats 字典（gc_dropped /
+# node_expiry_stale 等）只写进日志，没有 PutMetricData。要做得先补那一步。
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# 为什么复用 petsite-ops-alerts 而不新建 topic
+#
+# 该 topic 已有一个 Lambda 订阅（petsite-ops-slack-notifier），运维告警的
+# Slack 通路已经建好。实测线上现有告警（全部是 ApplicationInsights 自动创建的）
+# 的 AlarmActions **全是 None** —— 建了但没人收。复用这个 topic 并补一个邮件
+# 订阅是净增益，不增加基础设施，也让这两条新告警与既有运维告警同路。
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# 部署
+#
+#   aws cloudformation deploy --region ap-northeast-1 \
+#     --stack-name graph-platform-capacity-alarms \
+#     --template-file infra/tokyo/05-graph-platform-capacity-alarms.yaml \
+#     --parameter-overrides NotifyEmail=<你的邮箱> \
+#     --no-fail-on-empty-changeset
+#
+# 邮件订阅建好后 AWS 会发确认邮件，**必须点确认**，否则订阅停在
+# PendingConfirmation 而告警静默丢弃 —— 这就是「失败长得像成功」。
+# 用 aws sns list-subscriptions-by-topic 核对 SubscriptionArn 不是
+# "PendingConfirmation" 才算真的订上了。
+# ══════════════════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  NotifyEmail:
+    Type: String
+    Description: 接收告警的邮箱。订阅后需点击 AWS 的确认邮件。
+    AllowedPattern: '^[^@\s]+@[^@\s]+\.[^@\s]+$'
+
+  OpsTopicArn:
+    Type: String
+    Default: arn:aws:sns:ap-northeast-1:926093770964:petsite-ops-alerts
+    Description: >
+      既有的运维告警 topic（已有 petsite-ops-slack-notifier Lambda 订阅）。
+      本栈只往它加一个邮件订阅，不创建新 topic。
+
+  EtlFunctionName:
+    Type: String
+    Default: neptune-etl-from-aws
+    Description: 写入量最大的 ETL（实测占全部写入时间的 93%）。
+
+  NeptuneClusterId:
+    Type: String
+    Default: petsite-neptune
+
+Resources:
+
+  # 邮件订阅 —— 注意这是往**既有** topic 加订阅，删栈会删掉这个订阅，
+  # 但不会动 topic 本身，也不会动 Slack 那条订阅。
+  OpsEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      TopicArn: !Ref OpsTopicArn
+      Endpoint: !Ref NotifyEmail
+
+  # ── ① ETL 耗时 ───────────────────────────────────────────────────────────────
+  #
+  # 实测基线（2026-09-26，近 24 小时）：
+  #     neptune-etl-from-aws       平均 79.9 s   最大 85.1 s   调用 117
+  #     neptune-etl-from-deepflow  平均  6.7 s   最大 10.1 s   调用 288
+  #     neptune-etl-from-cfn       平均  3.8 s   最大  3.8 s   调用   1
+  #
+  # Lambda 上限 900 s。阈值取 300 s = 上限的 1/3，距当前最大值有 3.5 倍余量 ——
+  # 留这么宽是因为它要表达「该开始做批量化了」，不是「现在就要超时」。
+  # 真到 900 s 才告警就只剩救火。
+  #
+  # 用 Maximum 而非 Average：一次慢调用就说明数据形状变了，
+  # 被平均掉反而迟报。
+  #
+  # TreatMissingData=notBreaching 是刻意的：ETL 由 EventBridge 定时 +
+  # SQS 事件驱动，并非每个周期都有调用，缺数据是常态。
+  # ⚠️ 这也意味着**本告警管不了「ETL 停了」** —— 那需要盯 Invocations，
+  # 是另一条告警，目前没有。不在这里混进来是为了让这条告警的语义单一：
+  # 它只回答「ETL 是不是变慢了」。
+  EtlDurationHigh:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: graph-platform-etl-aws-duration-high
+      AlarmDescription: >
+        neptune-etl-from-aws 单次执行超过 300 秒（Lambda 上限 900 秒的 1/3）。
+        实测基线平均 79.9 秒、最大 85.1 秒，所以触发说明写入量或数据形状
+        发生了实质变化。
+
+        处置：先看 CloudWatch Logs 里该次调用的 stats（edges / nodes 计数），
+        确认是数据量增长还是单条写入变慢。若是数据量增长，按
+        docs/design/large-scale-graph-refresh-architecture.md §8.5 做边写入
+        批量化（mergeE + 批量解析顶点 id），改 etl_aws 的 upsert_edge ——
+        注意该函数因 provenance 语义修过两次 bug，属高风险区。
+
+        本告警不覆盖「ETL 完全停止」，那需要另外盯 Invocations。
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref EtlFunctionName
+      Statistic: Maximum
+      Unit: Milliseconds
+      Period: 900
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 300000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref OpsTopicArn
+      OKActions:
+        - !Ref OpsTopicArn
+
+  # ── ② Neptune buffer cache 命中率 ────────────────────────────────────────────
+  #
+  # 99.9% 不是我挑的数，是 AWS 官方判据：
+  #   「BufferCacheHitRatio 持续低于 99.9% 就该升实例」
+  #   https://docs.aws.amazon.com/neptune/latest/userguide/best-practices-general-metrics.html
+  #
+  # 当前实例 db.r6g.large（2 vCPU / 16 GiB），buffer pool ≈ 2/3 系统内存
+  # ≈ 10 GiB，单实例无读副本。当前数据量（2,182 节点 / 9,293 边）远未构成压力。
+  #
+  # EvaluationPeriods=3 / Period=300 → 要连续 15 分钟低于阈值才报。
+  # 单点抖动（一次大查询扫过冷数据）不该惊动人；而真正的工作集超出
+  # buffer pool 是持续现象。
+  #
+  # TreatMissingData=missing（保持上一状态）：Neptune 持续发指标，
+  # 短暂缺点通常是实例重启或维护窗口，按 breaching 处理会误报。
+  BufferCacheHitRatioLow:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: graph-platform-neptune-buffer-cache-low
+      AlarmDescription: >
+        petsite-neptune 的 BufferCacheHitRatio 连续 15 分钟低于 99.9%。
+        这是 AWS 官方给出的升实例判据，不是自拟阈值。
+
+        含义：查询的工作集装不进 buffer pool（当前 db.r6g.large，
+        buffer pool 约 10 GiB），开始从存储读取。
+
+        处置：① 先确认是否有新的大范围扫描查询（看 Neptune 的
+        慢查询日志与 DFE 统计是否新鲜 —— 统计过期会让 planner 选错扫描方向，
+        而 Neptune 没有 (label, 属性) 复合索引）；② 若工作集确实增长了，
+        按 §8.5 升实例规格（r6g 线性扩展到 16xlarge），或加只读副本把
+        查询流量从写主库分走。
+
+        ⚠️ Neptune 不支持水平分片（官方 "single-sharded by design"），
+        写吞吐只能纵向扩 —— 这是架构硬边界，见 §2.1。
+      Namespace: AWS/Neptune
+      MetricName: BufferCacheHitRatio
+      Dimensions:
+        - Name: DBClusterIdentifier
+          Value: !Ref NeptuneClusterId
+      Statistic: Average
+      Unit: Percent
+      Period: 300
+      EvaluationPeriods: 3
+      DatapointsToAlarm: 3
+      Threshold: 99.9
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: missing
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref OpsTopicArn
+      OKActions:
+        - !Ref OpsTopicArn
+
+Outputs:
+
+  EmailSubscriptionNote:
+    Description: >
+      订阅确认是必需的一步，不是可选的。
+    Value: !Sub >
+      已向 ${NotifyEmail} 发出订阅确认邮件。未点击确认前订阅停在
+      PendingConfirmation，告警会被静默丢弃。核对命令：
+      aws sns list-subscriptions-by-topic --region ap-northeast-1
+      --topic-arn ${OpsTopicArn}
+
+  AlarmsCreated:
+    Description: 本栈创建的告警
+    Value: !Sub '${EtlDurationHigh}, ${BufferCacheHitRatioLow}'
+
+  NotCreated:
+    Description: 刻意未创建的两条（理由见模板顶部注释）
+    Value: >
+      边总数 > 50,000 与 Pod 占比 > 80% —— 两者都是单调上升的容量趋势，
+      越线后永远回不到 OK，违反「告警必须可处置」。它们归属定期复盘，
+      且都不是 CloudWatch 指标（ETL 的 stats 只写日志，没有 PutMetricData）。
