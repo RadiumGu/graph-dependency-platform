@@ -39,10 +39,23 @@ def section() -> str:
 
 
 class TestQueueCriterionIsAgeNotCount:
-    def test_alarm_uses_age_metric(self):
+    """⚠️ 这个类在 2026-10-02 14:30 被改过 —— 见 4.47。
+
+    原来三条断言「模板里有一条队列年龄告警」。那条告警当天就被移除了
+    （队列在 CDK 设计上就是只写的，告警永远回不到 OK），所以那三条断言
+    守的是一个已被推翻的要求，门禁因此红了 —— **门禁在正确工作**。
+
+    但「年龄比条数可靠」这个判断**本身仍然成立**，只是不再适用于
+    一条活着的告警。所以改成守知识留档，而不是守告警存在。
+    由 test_121 负责守「那条告警不能被加回来」。
+    """
+
+    def test_age_vs_count_knowledge_is_preserved(self):
+        """判断仍要留着：若将来真部署了消费者，这个判据选择会再次相关。"""
         tpl = SLO.read_text(encoding="utf-8")
-        assert "ApproximateAgeOfOldestMessage" in tpl
-        assert "AdoptionHistoryQueueStaleAlarm" in tpl
+        assert "ApproximateAgeOfOldestMessage" in tpl, (
+            "年龄 vs 条数的判断应作为注释留在模板里，供将来真有消费者时参考"
+        )
 
     def test_why_count_would_lie_is_recorded(self, section: str):
         # ⚠️ 片段必须**不跨行**。我第一版写了一个跨越换行的长句并用
@@ -51,15 +64,9 @@ class TestQueueCriterionIsAgeNotCount:
         assert_contains(section, "而**不是消息条数**")
         assert_contains(section, "条数是个会骗人的指标")
 
-    def test_template_explains_the_same_choice(self):
-        """模板自己也要解释，不能只在 runbook 里。"""
-        tpl = SLO.read_text(encoding="utf-8")
-        assert "条数是个会骗人的指标" in tpl
-
-    def test_alarm_tells_responder_not_to_chase_adoption(self):
-        """领养可能完全正常 —— 告警描述必须先排除这个误导方向。"""
-        tpl = SLO.read_text(encoding="utf-8")
-        assert "不要去查领养流程" in tpl
+    def test_record_points_to_its_own_correction(self, section: str):
+        """4.46 说"加了这条告警"，若不指向 4.47 这份 runbook 就在说谎。"""
+        assert_contains(section, "4.47")
 
 
 class TestCausalOrderMustNotBeLost:

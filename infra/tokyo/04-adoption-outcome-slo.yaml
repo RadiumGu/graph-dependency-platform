@@ -282,6 +282,11 @@ Resources:
   #       1060:  '/petstore/queueurl': sqsQueue.queueUrl     （写进 SSM）
   #       1090:  QueueURL: sqsQueue.queueUrl                 （传给生产者）
   #   - **从未 grantConsumeMessages，从未挂任何事件源映射。**
+  #
+  # 顺便把当时那个判据选择留档 —— 若将来真部署了消费者会再次相关：
+  # 盯 ApproximateAgeOfOldestMessage 而不是消息条数，因为队列有保留期
+  # （这里是 4 天），超期消息被静默丢弃，**条数会自己"恢复"而积压从未被
+  # 处理** —— 条数是个会骗人的指标；年龄不会。
   #   - 那个 DLQ（maxReceiveCount=3）是装饰：没有消费者就永远不会有消息进去。
   #   - petadoptionshistory-py 只对 transactions_history 做
   #     SELECT / DELETE / count —— **从不 INSERT**。
