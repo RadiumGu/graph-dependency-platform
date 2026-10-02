@@ -269,6 +269,50 @@ Resources:
       AlarmActions: [!Ref AlertTopicArn]
       OKActions: [!Ref AlertTopicArn]
 
+  # ── 告警 ③ 领养历史队列积压 ───────────────────────────────────────────
+  # 2026-10-02 实测：这个队列有 710 条消息、0 条在处理中、
+  # **零个 Lambda 事件源映射** —— 消费者从未部署。
+  #
+  # 后果：pethistory 读的 transactions_history 表自 **2026-09-04** 起
+  # 一行都没变过（28 天），而领养链路本身是好的（transactions 表有当天的新行）。
+  # 两张表是不同的：payforadoption 写 transactions，
+  # pethistory 读 transactions_history，后者靠这个队列喂。
+  #
+  # ⚠️ 这个缺口是 2026-08-29 查清并**刻意不补**的架构决定
+  # （部署消费者是架构变更，不是运维修复）。本告警**不改变那个决定** ——
+  # 它只是把一个静默 28 天的缺口变成被监控的缺口。
+  #
+  # 判据用 ApproximateAgeOfOldestMessage 而不是消息条数：
+  # 队列有保留期（默认 4 天），超期消息会被静默丢弃，
+  # 所以**条数会自己"恢复"而积压从未被处理** —— 条数是个会骗人的指标。
+  # 年龄不会骗人：它一直在涨，直到有东西真正消费了它。
+  AdoptionHistoryQueueStaleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: petadoptions-history-queue-not-consumed
+      AlarmDescription: >
+        领养历史队列里最老的消息超过 1 小时没被消费。
+        ⚠️ 收到这个告警时**不要去查领养流程** —— 领养本身可能完全正常
+        （transactions 表照常写入）。要查的是这个队列**有没有消费者**：
+        aws lambda list-event-source-mappings --query
+        "EventSourceMappings[?contains(EventSourceArn,'sqspetadoption')]"
+        2026-10-02 的实测结果是空数组：消费者从未部署。
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj
+      Statistic: Maximum
+      Period: 900
+      EvaluationPeriods: 4
+      DatapointsToAlarm: 4
+      Threshold: 3600
+      ComparisonOperator: GreaterThanThreshold
+      # 队列空时该指标不发布 —— notBreaching 让「真的被消费干净了」不误报。
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref AlertTopicArn]
+      OKActions: [!Ref AlertTopicArn]
+
 Outputs:
   FunctionName:
     Value: !Ref SloFunction
