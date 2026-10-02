@@ -5045,6 +5045,113 @@ SSM 参数 `/petstore/cleanupadoptionsurl` 是对的(实测 DELETE 返回 200,
 所以断点在生成器发出的 `GET /housekeeping/` 与 petsite 路由之间。**未定位完。**
 
 
+---
+
+### 4.45 补货从来没发生过 —— 以及一个告警连续响了 5 天
+
+**日期**:2026-10-02 07:40-08:20 UTC
+
+#### ① 先确认 5 天后的状态
+
+```
+三个热修镜像           都还在（期间没人跑过 cdk deploy）
+petsite-frontdoor-…    OK
+petadoptions-…-ratio   ALARM，自 2026-09-27T03:53 起**连续 5 天**
+SLO 读数               attempts=197  persisted=0  ratio=0.0
+availability           25 no / 1 yes
+```
+
+**告警是对的,没人去看。** 这本身是个结论:建了告警不等于有人响应,
+而这次没有接收方去追 —— 它只接到 petsite-ops-alerts(→ Slack),
+而我在 09-27 结束会话时没有把"这条正在响"交接给任何人。
+
+#### ② 根因:`/housekeeping/` 少一个查询参数,而失败长得像成功
+
+```
+GET /housekeeping/                  → 302, Location: /Home/Index    重置**不执行**
+GET /housekeeping/?userId=sre-probe → 200 "House Keeping" 页面
+                                      DropTransactionsByPets rowsAffected=25
+```
+
+petsite 的 HouseKeeping action 在没有 `userId` 时直接 302 到首页。
+而 **HttpClient 默认跟随重定向**,所以 traffic-generator 拿到的是
+`/Home/Index` 的 **200** —— 调用方看到的是"成功",而补货一次都没发生过。
+
+> 这是本项目第三次遇到**同一个故障族**:HTTP 200 + 零异常 + 什么都没做。
+> 前两次是「领养假成功」(4.42)与「upsert 造出残缺行」(4.40)。
+> 共同点都是**调用方不检查结果**。这一次我在修复里显式加了状态码校验
+> 并在失败时 LogError,让下一次断掉是响亮的。
+
+#### ③ 为什么以前还能看到宠物:那个合成金丝雀在替它补货
+
+补货机制本身是好的。真正在调用它的是 `cwsyn-petsite-e2e-canary`
+(它带 userId),但金丝雀频率远低于 3 个生成器的领养频率 ——
+于是目录长期见底,`ValidatePet` 拒掉约 96% 的领养。
+
+#### ④ 修复与实测效果
+
+```
+                      修复前（ALARM 5 天）        修复后
+SLO                   attempts=197 persisted=0    attempts=184 persisted=98 ratio=53.26%
+availability          25 no / 1 yes               24 yes / 2 no
+resetting_pet_…       10 分钟 4 次                 5 分钟 23 次
+transaction_created   ~0                           5 分钟 92 次
+```
+
+三处都已上线(集群 Deployment + EC2 两个容器),EC2 侧仍走
+「从公开仓库拉源码在本机构建」那条零凭据路径,构建前自证三条修复都在源码里。
+
+#### ⑤ ⚠️ 订正我自己 09-27 的判断
+
+我当时写「主因是被孤立的宠物永远回不来」(`ResetPetsAvailability` 的列表来自
+`SELECT DISTINCT FROM transactions`)。那个缺陷**是真的**,但**不是这次的主因** ——
+实测显示交易行是存在的、重置也确实复原了 25 只,问题在于**重置压根没被调用**。
+
+孤立问题降级为次要的鲁棒性缺口:只有当交易被整表 `DropTransactions`
+(repository.go:173,无 WHERE)清掉而可用性没复原时才会发生。单独修。
+
+> 教训:我当时手工复原了 50 只宠物并看到"几分钟后又见底",就据此推断
+> 孤立是主因。**手工修复掩盖了真正的变量** —— 如果当时先去看
+> housekeeping 的返回码,会少走一天。
+
+#### ⑥ 图数据闭环:边确实出现了
+
+X-Ray 服务图(图平台 `etl_xray` 的数据源)现在有完整链路:
+
+```
+PetSite               → sqs / StepFnStateMachine / pay-for-adoption.petadoptions.svc / SSM / SNS
+payforadoption-api-go → HTTP GET / PetAdoptionStatusUpdater/prod / SSM / SQS / postgres / PetSearch
+postgres              [Database::SQL]
+```
+
+`payforadoption-api-go → postgres` 这条 Aurora 边,在 97% 的领养到不了后端时
+是不存在的。**Neptune 侧是否已摄取尚未核实**(ETL 有调度周期)。
+
+#### ⑦ ④ 那把万能钥匙:卡在一个硬约束上,已先开日志
+
+三条旁路规则的实际形态:
+
+```
+prio 1  /streamlit* + header  →  streamlit-demo-tg
+prio 2  header + /graph*      →  neptune-ui-tg
+prio 3  header（无路径条件）   →  Servic-PetSi-7JEWC19HNKSR（petsite 本体）
+```
+
+prio 1/2 已用显式路径覆盖了两个已知用途,所以 **prio 3 给的是对 petsite 本体的
+免认证访问**。而该 ALB 的 `access_logs.s3.enabled = false` ——
+**谁在用、用哪个路径,查不到。**
+
+⚠️ **枚举不出消费者时不能收窄。** 这与 2026-09-26 按出口 IP 收窄
+无认证网关失败是同一个教训(见 4.39 ⑦ 与 4.36)。所以先做前置件:
+复用既有桶 `openclaw-alb-logs-1770913299`(`openclaw-alb-v2` 已在用,
+桶策略允许 ap-northeast-1 的 ELB 投递账号 582318560864 写整个桶),
+前缀 `petsite-443`,开启访问日志 —— 加性改动,不影响流量。
+
+回滚:`modify-load-balancer-attributes … access_logs.s3.enabled=false`。
+
+**攒够日志(至少跨几小时、最好跨整点与日切)之后再枚举,然后才收窄。**
+
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
