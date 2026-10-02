@@ -196,6 +196,7 @@ def q6_pod_status(service_name: str) -> list:
     """
     cypher = """
     MATCH (svc {name: $svc})-[:RunsOn]->(pod:Pod)
+    WHERE coalesce(pod.active, true)
     RETURN pod.name AS pod_name, pod.status AS status,
            pod.restarts AS restarts, pod.reason AS reason,
            pod.node AS node
@@ -226,6 +227,7 @@ def q9_service_infra_path(service_name: str) -> list:
     """
     cypher = """
     MATCH (svc {name: $svc})-[:RunsOn]->(pod:Pod)-[:RunsOn]->(ec2:EC2Instance)
+    WHERE coalesce(pod.active, true)
     OPTIONAL MATCH (ec2)-[:LocatedIn]->(az:AvailabilityZone)
     RETURN pod.name AS pod_name, pod.status AS pod_status,
            pod.node_name AS node_name,
@@ -256,6 +258,7 @@ def q10_infra_root_cause(affected_service: str) -> dict:
     WHERE ec2.state IS NOT NULL AND ec2.state <> 'running'
     OPTIONAL MATCH (ec2)-[:LocatedIn]->(az:AvailabilityZone)
     OPTIONAL MATCH (pod:Pod)-[:RunsOn]->(ec2)
+      WHERE coalesce(pod.active, true)
     OPTIONAL MATCH (svc:Microservice)-[:RunsOn]->(pod)
     RETURN ec2.instance_id AS ec2_id, ec2.name AS ec2_name,
            ec2.state AS state, az.name AS az,
@@ -267,6 +270,7 @@ def q10_infra_root_cause(affected_service: str) -> dict:
     # 2) AZ 维度：同一 AZ 下所有 Pod 数 vs 受影响 Pod 数
     cypher_az = """
     MATCH (svc {name: $svc})-[:RunsOn]->(pod:Pod)-[:LocatedIn]->(az:AvailabilityZone)
+    WHERE coalesce(pod.active, true)
     RETURN az.name AS az, count(pod) AS total_pods
     """
     az_rows = nc.results(cypher_az, {"svc": affected_service})
@@ -304,7 +308,7 @@ def q11_broader_impact(ec2_ids: list) -> list:
         return []
     cypher = """
     MATCH (svc:Microservice)-[:RunsOn]->(pod:Pod)-[:RunsOn]->(ec2:EC2Instance)
-    WHERE ec2.instance_id IN $ids
+    WHERE ec2.instance_id IN $ids AND coalesce(pod.active, true)
     RETURN DISTINCT svc.name AS service, pod.name AS pod, ec2.instance_id AS ec2_id
     """
     return nc.results(cypher, {"ids": ec2_ids})

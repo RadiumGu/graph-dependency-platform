@@ -559,24 +559,48 @@ Neptune（写主库）
 | 边总数 | > 50,000(现 9,293) | 失活对账与索引扫描开始有实际代价 |
 | `Pod` 节点占比 | 持续 > 80%(现 71%) | 低价值节点挤占图,该重审建模粒度 |
 
-#### 这四条告警的实现前提（实测后补）
+#### 实际建了两条，另两条刻意不建（2026-10-02 落地）
 
-⚠️ **项目当前没有任何 CloudWatch 告警定义，也没有 SNS 通知通路。** `infra/lib/` 三个 stack 里 `new cloudwatch.Alarm` 出现 0 次；`alert-buffer-stack.ts` 是 RCA 的**业务**告警缓冲（DynamoDB + Lambda + Scheduler），不是监控告警。
+栈 `graph-platform-capacity-alarms`，模板 `infra/tokyo/05-graph-platform-capacity-alarms.yaml`。
 
-所以这四条的落地代价不均：
+落地时按 `tests/test_121_alarms_must_be_actionable.py` 刚立下的「告警必须可处置」纪律重审了上面四条，**后两条被否决**：
+
+| 条件 | 能回到 OK 吗 | 结论 |
+|---|---|---|
+| `etl_aws` Duration > 300 s | ✓ 跑快了就回 OK | **已建** |
+| `BufferCacheHitRatio` < 99.9% | ✓ 升实例或热点变了就回 OK | **已建** |
+| 边总数 > 50,000 | ✗ **单调上升**，越线后永远红着 | 不建 |
+| `Pod` 占比 > 80% | ✗ 同上，Pod 只增不减（只标 `active=false`） | 不建 |
+
+`test_121` 记的代价正是这个：2026-10-02 08:20 给领养历史队列加的告警「正确触发、又被 watchdog 正确捞出」，然后才发现**告警本身是错的** —— 积压是永久架构属性，它永远回不到 OK。而
+
+> 一条永远红着的告警会训练人忽略整个频道，而那恰好是 adoption-success-ratio 响 5 天没人看的机制。
+
+所以 ③④ 归属**定期复盘**而非实时告警，正确形态是周期性报告（像 `crons/petsite_watch.py` 那样定时查、只在跨阈值时说一次）。它们同时还有前述的指标缺口：ETL 的 `stats` 只写日志，没有 `PutMetricData`。
+
+**通知复用 `petsite-ops-alerts`**（已有 `petsite-ops-slack-notifier` Lambda 订阅）并补一个邮件订阅，不新建 topic。实测线上现有告警（全是 ApplicationInsights 自动创建的）`AlarmActions` **全是 `None`** —— 建了但没人收，所以加邮件是净增益。
+
+⚠️ **邮件订阅必须点确认邮件。** 未确认时订阅停在 `PendingConfirmation`，告警被静默丢弃 —— 又是一次「失败长得像成功」。核对：
+
+```
+aws sns list-subscriptions-by-topic --region ap-northeast-1 \
+  --topic-arn arn:aws:sns:ap-northeast-1:926093770964:petsite-ops-alerts
+```
+
+`SubscriptionArn` 不是 `PendingConfirmation` 才算真的订上。
+
+⚠️ **`etl_aws` Duration 这条管不了「ETL 停了」**（`TreatMissingData=notBreaching`，而 ETL 本就不是每周期都跑）。盯停摆需要另一条看 `Invocations` 的告警，目前**没有**。不混进来是为了让这条的语义单一。
+
+#### 这四条告警的指标前提
+
+⚠️ 项目在此之前**没有任何自建 CloudWatch 告警**。`infra/lib/` 三个 CDK stack 里 `new cloudwatch.Alarm` 出现 0 次；`alert-buffer-stack.ts` 是 RCA 的**业务**告警缓冲（DynamoDB + Lambda + Scheduler），不是监控告警。项目的告警做法是 **CloudFormation 模板放 `infra/tokyo/`** + `crons/` 里的 watchdog 脚本。
 
 | 条件 | 指标来源 | 额外工作 |
 |---|---|---|
-| `etl_aws` Duration | **Lambda 原生指标** | 无，直接告警 |
-| `BufferCacheHitRatio` | **Neptune 原生指标** | 无，直接告警 |
-| 边总数 | **不是 CloudWatch 指标** | 需先由 ETL 推成自定义指标 |
-| `Pod` 占比 | **不是 CloudWatch 指标** | 需先由 ETL 推成自定义指标 |
-
-ETL 已有 `stats` 字典（`stats['gc_dropped']`、`stats['node_expiry_stale']` 等）写进日志，但**没有推成 CloudWatch 自定义指标**。后两条要先补这一步。
-
-还有一个**必须由人决定、不该由实现方猜**的前提：**告警通知发到哪**（邮箱／Slack／现有的值班通道）。没有通知目标的告警只是控制台上的一个颜色，不满足「判据要能自动触发」。
-
-建议的落地顺序：先加前两条（纯 CDK、原生指标、零额外依赖），SNS topic 建好但订阅留给使用者填；后两条等自定义指标就绪再加。
+| `etl_aws` Duration | **Lambda 原生指标** | 无 |
+| `BufferCacheHitRatio` | **Neptune 原生指标**（维度 `DBClusterIdentifier`，实测 300 s 周期有数据） | 无 |
+| 边总数 | **不是 CloudWatch 指标** | 需先 `PutMetricData` |
+| `Pod` 占比 | **不是 CloudWatch 指标** | 需先 `PutMetricData` |
 
 ### 8.1 第一阶段：这一节在更正后基本被清空了
 
