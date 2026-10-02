@@ -901,3 +901,242 @@ class TestFaultRegistry:
             assert fault_type in CATALOG, (
                 f"FIS_ACTION_MAP 包含 '{fault_type}'，但 CATALOG 中未找到对应定义"
             )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# S4-15  target_resolver — kubectl 查询的三态诚实性
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# 2026-10-02 golden 周检 hypothesis S002 失败（agent 对 payforadoption 生成 0 个
+# 假设）的根因在这里，而原实现**零测试覆盖**。三个缺陷叠加：
+#
+#   ① get_infra_snapshot 的 namespace 默认 "default"，而唯一调用方不传 ——
+#      业务 Pod 全在 petadoptions，于是 running_pods 恒为 0；
+#   ② _kubectl_get_pods 不检查 returncode，失败时 stdout 空 → items=[] →
+#      返回 []，与「真的没有 Pod」完全同形；
+#   ③ _kubectl_get_replicas 拿 app label 当 deployment 名用，而
+#      petsite-deployment / pethistory-deployment 名字带后缀、自身又没有
+#      app label，于是必然 NotFound 并被折成 0。
+#
+# agent 的 prompt 规则 5 是「没有 running Pod 的服务不要提 pod-kill 类故障」，
+# 于是它在「不生成」与「生成但标注延后执行」之间摇摆 —— 不稳定的不是模型，
+# 是它被喂了假事实。本段把三个缺陷各自钉住。
+
+
+def _mk_proc(returncode=0, stdout="", stderr=""):
+    """构造一个 subprocess.CompletedProcess 替身。"""
+    proc = MagicMock()
+    proc.returncode = returncode
+    proc.stdout = stdout
+    proc.stderr = stderr
+    return proc
+
+
+class TestKubectlQueryHonesty:
+    """S4-15: kubectl 查询必须区分「查不到」与「真的是 0」"""
+
+    def _resolver(self):
+        with patch("runner.neptune_client.query_opencypher", return_value=[]), \
+             patch("runner.neptune_client.query_gremlin", return_value=[]), \
+             patch("boto3.client"):
+            from runner.target_resolver import TargetResolver
+            return TargetResolver()
+
+    def test_s4_15_pods_nonzero_rc_returns_none_not_empty(self):
+        """S4-15: kubectl 非 0 退出时 _kubectl_get_pods 返回 None，不是 []。
+
+        返回 [] 会让 get_infra_snapshot 算出 running_pods=0 —— 那是一个
+        关于集群的强陈述，而一次失败的查询什么也没陈述。
+        """
+        if not _runner_exists():
+            pytest.skip("runner 模块不存在")
+
+        resolver = self._resolver()
+        with patch("runner.target_resolver.subprocess.run",
+                   return_value=_mk_proc(returncode=1, stderr="Unable to connect")):
+            got = resolver._kubectl_get_pods("pay-for-adoption", "petadoptions")
+
+        assert got is None, "kubectl 失败必须返回 None，返回 [] 会被下游当成「0 个 Pod」"
+
+    def test_s4_15_pods_success_but_empty_returns_empty_not_none(self):
+        """S4-15: 查询成功且确实没有 Pod 时返回 []，不是 None。
+
+        这是三态的另一半：[] 是事实陈述（该服务没有 Pod），None 是「不知道」。
+        两者都折成同一个值就失去了区分能力。
+        """
+        if not _runner_exists():
+            pytest.skip("runner 模块不存在")
+
+        resolver = self._resolver()
+        with patch("runner.target_resolver.subprocess.run",
+                   return_value=_mk_proc(returncode=0, stdout='{"items": []}')):
+            got = resolver._kubectl_get_pods("ghost-service", "petadoptions")
+
+        assert got == [], "查询成功但无 Pod 应返回 []（事实陈述），而不是 None"
+
+    def test_s4_15_pods_none_namespace_uses_all_namespaces(self):
+        """S4-15: namespace=None 时命令必须带 --all-namespaces。
+
+        业务 Pod 在 petadoptions 而不是 default，所以快照用途不能限定任何
+        单一 namespace —— 服务列表本身可能跨 namespace。
+        """
+        if not _runner_exists():
+            pytest.skip("runner 模块不存在")
+
+        resolver = self._resolver()
+        with patch("runner.target_resolver.subprocess.run",
+                   return_value=_mk_proc(stdout='{"items": []}')) as mock_run:
+            resolver._kubectl_get_pods("pay-for-adoption", None)
+
+        argv = mock_run.call_args[0][0]
+        assert "--all-namespaces" in argv, f"namespace=None 应跨全部 namespace 查询，实际 argv={argv}"
+        assert "-n" not in argv, "namespace=None 时不应出现 -n 限定"
+
+    def test_s4_15_pods_carry_namespace_field(self):
+        """S4-15: 返回的每个 Pod 必须带 namespace 字段。
+
+        跨 namespace 查询时，只有 Pod 自己知道它在哪 —— get_infra_snapshot
+        靠这个字段回推实际 namespace 再去查 replicas。
+        """
+        if not _runner_exists():
+            pytest.skip("runner 模块不存在")
+
+        import json
+        payload = json.dumps({"items": [{
+            "metadata": {"name": "pay-for-adoption-x", "namespace": "petadoptions"},
+            "status": {"phase": "Running", "podIP": "11.0.2.6"},
+            "spec": {"nodeName": "ip-11-0-2-6"},
+        }]})
+        resolver = self._resolver()
+        with patch("runner.target_resolver.subprocess.run",
+                   return_value=_mk_proc(stdout=payload)):
+            got = resolver._kubectl_get_pods("pay-for-adoption", None)
+
+        assert got and got[0]["namespace"] == "petadoptions"
+
+    def test_s4_15_replicas_matches_by_spec_selector_not_name(self):
+        """S4-15: replicas 按 spec.selector.matchLabels.app 匹配，不按名字。
+
+        实测 petsite 的 deployment 叫 petsite-deployment，而且它自身**没有**
+        app label —— 既不能按名字查，也不能用 `-l app=X`（那过滤的是
+        metadata.labels）。spec.selector 是 K8s 必填字段，且语义上正好对应
+        _kubectl_get_pods 的 `-l app=<service>`。
+        """
+        if not _runner_exists():
+            pytest.skip("runner 模块不存在")
+
+        import json
+        payload = json.dumps({"items": [
+            {"metadata": {"name": "search-service", "labels": {"app": "search-service"}},
+             "spec": {"replicas": 3, "selector": {"matchLabels": {"app": "search-service"}}}},
+            # 名字带后缀、metadata.labels 里**没有** app —— 复刻 petsite-deployment
+            {"metadata": {"name": "petsite-deployment"},
+             "spec": {"replicas": 2, "selector": {"matchLabels": {"app": "petsite"}}}},
+        ]})
+        resolver = self._resolver()
+        with patch("runner.target_resolver.subprocess.run",
+                   return_value=_mk_proc(stdout=payload)):
+            got = resolver._kubectl_get_replicas("petsite", "petadoptions")
+
+        assert got == 2, "应按 spec.selector 匹配到 petsite-deployment 并取 replicas=2"
+
+    def test_s4_15_replicas_no_match_returns_none_not_zero(self):
+        """S4-15: 没有 deployment 匹配时返回 None，不是 0。
+
+        0 副本是「服务被缩容到零」这一强陈述，不该由一次查不到产生。
+        """
+        if not _runner_exists():
+            pytest.skip("runner 模块不存在")
+
+        resolver = self._resolver()
+        with patch("runner.target_resolver.subprocess.run",
+                   return_value=_mk_proc(stdout='{"items": []}')):
+            got = resolver._kubectl_get_replicas("nonexistent", "petadoptions")
+
+        assert got is None, "查不到 deployment 必须返回 None，返回 0 等于断言「零副本」"
+
+    def test_s4_15_snapshot_defaults_to_all_namespaces(self):
+        """S4-15: get_infra_snapshot 的 namespace 默认值必须不是 'default'。
+
+        这是 golden S002 失败的直接原因：唯一调用方
+        （runner/neptune_helpers.py）不传该参数，于是默认值决定一切，
+        而业务 Pod 从来不在 default。
+        """
+        if not _runner_exists():
+            pytest.skip("runner 模块不存在")
+
+        import inspect
+        with patch("runner.neptune_client.query_opencypher", return_value=[]), \
+             patch("runner.neptune_client.query_gremlin", return_value=[]), \
+             patch("boto3.client"):
+            from runner.target_resolver import TargetResolver
+
+        sig = inspect.signature(TargetResolver.get_infra_snapshot)
+        default = sig.parameters["namespace"].default
+        assert default is None, (
+            f"get_infra_snapshot 的 namespace 默认值是 {default!r}；"
+            "必须是 None（跨全部 namespace），硬编码任何单一 namespace 都是猜"
+        )
+
+    def test_s4_15_snapshot_marks_query_failed_instead_of_zero(self):
+        """S4-15: kubectl 失败时快照写 query_failed 且计数为 None，不是 0。
+
+        agent 的 prompt 规则 5 按 running_pods 决定能否提 pod 类故障。
+        把「查不到」写成 0 会让它以为服务没有 Pod 在跑 —— 这正是
+        2026-09-27 那次 golden 失败时它在输出里写下
+        「当前所有服务 running_pods = 0」的来源。
+        """
+        if not _runner_exists():
+            pytest.skip("runner 模块不存在")
+
+        resolver = self._resolver()
+        resolver._fis_cache_loaded = True
+        with patch("runner.target_resolver.subprocess.run",
+                   return_value=_mk_proc(returncode=1, stderr="connection refused")):
+            snap = resolver.get_infra_snapshot(["payforadoption"])
+
+        k8s = (snap.get("payforadoption") or {}).get("k8s") or {}
+        assert k8s.get("query_failed") is True, "查询失败必须显式标记 query_failed"
+        assert k8s.get("running_pods") is None, (
+            f"查询失败时 running_pods 应为 None，实际 {k8s.get('running_pods')!r} —— "
+            "写 0 会让 agent 以为服务真的没有 Pod"
+        )
+        assert k8s.get("replicas") is None
+
+    def test_s4_15_chaosmesh_target_flags_replicas_failure_too(self):
+        """S4-15: resolve_chaosmesh_target 的 kubectl_failed 必须也看 replicas。
+
+        这条是 review 自己这次修复时补的：只看 pods_raw 会留下一个与原 bug
+        同形的洞 —— pods 查询成功、replicas 查询失败时，replicas 退回 0 就是
+        「服务被缩容到零」这一强陈述，而 kubectl_failed 却是 False，调用方
+        无从得知。
+        """
+        if not _runner_exists():
+            pytest.skip("runner 模块不存在")
+
+        import json
+        pods_payload = json.dumps({"items": [{
+            "metadata": {"name": "pay-for-adoption-x", "namespace": "petadoptions"},
+            "status": {"phase": "Running", "podIP": "11.0.2.6"},
+            "spec": {"nodeName": "ip-11-0-2-6"},
+        }]})
+
+        # 第一次调用（pods）成功，第二次（deployment）非 0 退出
+        calls = {"n": 0}
+
+        def _fake_run(argv, **kwargs):
+            calls["n"] += 1
+            if "pods" in argv:
+                return _mk_proc(returncode=0, stdout=pods_payload)
+            return _mk_proc(returncode=1, stderr="Unable to connect")
+
+        resolver = self._resolver()
+        with patch("runner.target_resolver.subprocess.run", side_effect=_fake_run):
+            entry = resolver.resolve_chaosmesh_target("payforadoption", "petadoptions")
+
+        assert entry["pods"], "pods 查询成功，应有 Pod"
+        assert entry["kubectl_failed"] is True, (
+            "replicas 查询失败也必须让 kubectl_failed 为 True —— "
+            f"实际 {entry.get('kubectl_failed')!r}，而 replicas 退回了 "
+            f"{entry.get('replicas')!r}"
+        )
