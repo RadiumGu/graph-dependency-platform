@@ -269,49 +269,36 @@ Resources:
       AlarmActions: [!Ref AlertTopicArn]
       OKActions: [!Ref AlertTopicArn]
 
-  # ── 告警 ③ 领养历史队列积压 ───────────────────────────────────────────
-  # 2026-10-02 实测：这个队列有 710 条消息、0 条在处理中、
-  # **零个 Lambda 事件源映射** —— 消费者从未部署。
+  # ── 这里本来有「告警 ③ 领养历史队列积压」，已移除 ─────────────────────
   #
-  # 后果：pethistory 读的 transactions_history 表自 **2026-09-04** 起
-  # 一行都没变过（28 天），而领养链路本身是好的（transactions 表有当天的新行）。
-  # 两张表是不同的：payforadoption 写 transactions，
-  # pethistory 读 transactions_history，后者靠这个队列喂。
+  # 2026-10-02 我（Kiro）在 08:20 加了一条告警，盯
+  # ApproximateAgeOfOldestMessage > 1 小时。它在 09:15 正确触发，
+  # 并在 14:24 被 alarm-watchdog 按设计捞出来（已 4.9 小时无人处理）。
   #
-  # ⚠️ 这个缺口是 2026-08-29 查清并**刻意不补**的架构决定
-  # （部署消费者是架构变更，不是运维修复）。本告警**不改变那个决定** ——
-  # 它只是把一个静默 28 天的缺口变成被监控的缺口。
+  # **然后我发现这条告警本身是错的，于是移除它。**
   #
-  # 判据用 ApproximateAgeOfOldestMessage 而不是消息条数：
-  # 队列有保留期（默认 4 天），超期消息会被静默丢弃，
-  # 所以**条数会自己"恢复"而积压从未被处理** —— 条数是个会骗人的指标。
-  # 年龄不会骗人：它一直在涨，直到有东西真正消费了它。
-  AdoptionHistoryQueueStaleAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: petadoptions-history-queue-not-consumed
-      AlarmDescription: >
-        领养历史队列里最老的消息超过 1 小时没被消费。
-        ⚠️ 收到这个告警时**不要去查领养流程** —— 领养本身可能完全正常
-        （transactions 表照常写入）。要查的是这个队列**有没有消费者**：
-        aws lambda list-event-source-mappings --query
-        "EventSourceMappings[?contains(EventSourceArn,'sqspetadoption')]"
-        2026-10-02 的实测结果是空数组：消费者从未部署。
-      Namespace: AWS/SQS
-      MetricName: ApproximateAgeOfOldestMessage
-      Dimensions:
-        - Name: QueueName
-          Value: ServicesEks2-sqspetadoption2E8B1217-4T0KP1GHgwoj
-      Statistic: Maximum
-      Period: 900
-      EvaluationPeriods: 4
-      DatapointsToAlarm: 4
-      Threshold: 3600
-      ComparisonOperator: GreaterThanThreshold
-      # 队列空时该指标不发布 —— notBreaching 让「真的被消费干净了」不误报。
-      TreatMissingData: notBreaching
-      AlarmActions: [!Ref AlertTopicArn]
-      OKActions: [!Ref AlertTopicArn]
+  # 查清的事实（CDK lib/services-eks.ts:47-55）：
+  #   - sqs_petadoption 在整个 CDK 里只有两处用法：
+  #       1060:  '/petstore/queueurl': sqsQueue.queueUrl     （写进 SSM）
+  #       1090:  QueueURL: sqsQueue.queueUrl                 （传给生产者）
+  #   - **从未 grantConsumeMessages，从未挂任何事件源映射。**
+  #   - 那个 DLQ（maxReceiveCount=3）是装饰：没有消费者就永远不会有消息进去。
+  #   - petadoptionshistory-py 只对 transactions_history 做
+  #     SELECT / DELETE / count —— **从不 INSERT**。
+  #   - 上游 aws-samples 最新 main 也没有任何 SQS 消费者。
+  #
+  # 所以这个队列**在设计上就是只写的**，积压是这个 demo 的
+  # **永久架构属性，不是回归**。保留期 4 天自动封顶，无成本风险。
+  #
+  # 为什么移除而不是调阈值：**一条永远不可能回到 OK 的告警，
+  # 会训练人忽略整个频道** —— 那恰好是 adoption-success-ratio
+  # 响 5 天没人看的机制。告警必须能回答「收到的人该做什么」，
+  # 而这条的答案是「做一次架构变更」，那就不是告警，是待办。
+  #
+  # ⚠️ **不要重新加回来。** 若将来真的部署了消费者，那时该加的是
+  #    DLQ 深度告警（消费者失败才是可处置信号），不是队列年龄。
+  #
+  # 缺口本身记在 docs/runbooks/deployment-record.md 的 4.47。
 
 Outputs:
   FunctionName:
