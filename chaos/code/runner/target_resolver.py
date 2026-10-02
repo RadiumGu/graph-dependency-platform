@@ -384,9 +384,13 @@ class TargetResolver:
 
         # 这条路径的 namespace 由调用方精确传入（runner / chaos_mcp / 内部批量），
         # 本来就工作正常，所以保持 pods/replicas 的原有类型不变，避免波及
-        # 三个调用方。但 kubectl 失败不能继续伪装成「0 个 Pod」——
+        # 三个调用方。但 kubectl 失败不能继续伪装成「0 个 Pod」／「0 副本」——
         # 新增 kubectl_failed 让想区分的调用方能区分，不想区分的照旧。
-        kubectl_failed = pods_raw is None
+        #
+        # ⚠️ 两个查询**都**要看：pods 成功而 replicas 失败时，replicas 退回 0
+        # 就是「服务被缩容到零」这一强陈述，与本方法要消除的缺陷同形。
+        # 只看 pods_raw 会在这里留下一个和原 bug 一样的洞。
+        kubectl_failed = pods_raw is None or replicas_raw is None
         pods     = pods_raw if pods_raw is not None else []
         replicas = replicas_raw if replicas_raw is not None else 0
 

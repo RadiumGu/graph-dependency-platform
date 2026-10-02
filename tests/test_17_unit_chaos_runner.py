@@ -1102,3 +1102,41 @@ class TestKubectlQueryHonesty:
             "写 0 会让 agent 以为服务真的没有 Pod"
         )
         assert k8s.get("replicas") is None
+
+    def test_s4_15_chaosmesh_target_flags_replicas_failure_too(self):
+        """S4-15: resolve_chaosmesh_target 的 kubectl_failed 必须也看 replicas。
+
+        这条是 review 自己这次修复时补的：只看 pods_raw 会留下一个与原 bug
+        同形的洞 —— pods 查询成功、replicas 查询失败时，replicas 退回 0 就是
+        「服务被缩容到零」这一强陈述，而 kubectl_failed 却是 False，调用方
+        无从得知。
+        """
+        if not _runner_exists():
+            pytest.skip("runner 模块不存在")
+
+        import json
+        pods_payload = json.dumps({"items": [{
+            "metadata": {"name": "pay-for-adoption-x", "namespace": "petadoptions"},
+            "status": {"phase": "Running", "podIP": "11.0.2.6"},
+            "spec": {"nodeName": "ip-11-0-2-6"},
+        }]})
+
+        # 第一次调用（pods）成功，第二次（deployment）非 0 退出
+        calls = {"n": 0}
+
+        def _fake_run(argv, **kwargs):
+            calls["n"] += 1
+            if "pods" in argv:
+                return _mk_proc(returncode=0, stdout=pods_payload)
+            return _mk_proc(returncode=1, stderr="Unable to connect")
+
+        resolver = self._resolver()
+        with patch("runner.target_resolver.subprocess.run", side_effect=_fake_run):
+            entry = resolver.resolve_chaosmesh_target("payforadoption", "petadoptions")
+
+        assert entry["pods"], "pods 查询成功，应有 Pod"
+        assert entry["kubectl_failed"] is True, (
+            "replicas 查询失败也必须让 kubectl_failed 为 True —— "
+            f"实际 {entry.get('kubectl_failed')!r}，而 replicas 退回了 "
+            f"{entry.get('replicas')!r}"
+        )
