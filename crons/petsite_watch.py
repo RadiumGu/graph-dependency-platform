@@ -36,7 +36,9 @@ BYPASS_PRIORITIES = {"1", "2", "3"}
 WATCHED_ALARMS = [
     "petadoptions-adoption-success-ratio-low",
     "petsite-frontdoor-no-healthy-target",
-    "petadoptions-history-queue-not-consumed",
+    # petadoptions-history-queue-not-consumed 已移除 ——
+    # 它 alarm 的是设计上的只写队列，永远回不到 OK。见
+    # infra/tokyo/04-adoption-outcome-slo.yaml 里的说明。
 ]
 
 # 超过这个小时数仍在 ALARM，就当成「没人在处理」而再提醒一次。
