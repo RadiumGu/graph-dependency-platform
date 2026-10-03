@@ -5306,6 +5306,97 @@ pethistory 页面因此永远显示旧数据。补它需要新建一个 Lambda �
 属于架构决定而非运维修复 —— 留给人定。
 
 
+---
+
+### 4.48 我写的日志解析器是错的 —— 一个看起来像证据的数字
+
+**日期**:2026-10-03 00:45-01:00 UTC
+
+#### 第一份报告的两个毛病
+
+```
+PetSite 443 旁路使用面调查（近 24 小时，共 1939 条请求）
+走旁路规则（prio 1/2/3）的请求：**0** 条
+按规则优先级分布：
+  prio=   0     673 条
+  prio=  -1     246 条      ← 这个值当时没有解释
+  prio=   -       7 条
+  prio=  10       6 条
+```
+
+**毛病一:分母是假的。** 报「共 1939 条」但只分类了 932 条(673+246+7+6),
+剩下 1007 条从未被检查,而报告读起来像是全部检查过了。
+
+**毛病二:解析方法本身是错的。** 我用「锚定 `chosen_cert_arn` 再取下一个
+token」的正则取优先级。行形状一变就错位 —— 实测把优先级解析成了:
+
+```
+prio="arn:aws:acm:...certificate/ce750241..."   250 条
+prio=ECDHE-RSA-AES128-GCM-SHA256                 28 条
+prio="session-reused"                             6 条
+```
+
+ALB 日志是**定长字段**(带引号的字段可含空格),正确做法是按格式分词
+再按下标取(`matched_rule_priority` 是第 20 个字段)。已改成这样。
+
+#### 修好之后的读数(可信了)
+
+```
+日志总行数          1940
+其中 TLS（https/h2）1156   ← 只有这些才可能命中 443 规则
+成功取到规则优先级   1156
+解析失败            0      ← 这一行是结论可信的前提
+明文 http:80        784    ← 另一个监听器，与旁路无关
+
+prio=  0   676 条   actions=waf,authenticate   默认规则，认证正常执行
+prio= -1   250 条   actions=waf                WAF 在规则评估前就拦掉了
+prio=  -   224 条   actions=-                  畸形请求（400），规则未评估
+prio= 10     6 条   actions=waf,authenticate   /graph* 走认证
+prio 1/2/3   0 条   ← 旁路规则
+```
+
+`-1` 是**真实值**不是解析假象:AWS 文档说规则评估出错时为 -1,
+而这 250 条的 `actions_executed` 全是 `waf` 单独出现 ——
+**WAF 在规则评估前就拦掉了它们**。顺带确认 WAF 确实在工作。
+
+报告格式也改了:**先报覆盖率,不报一个没检查过的分母**,
+并把「解析失败」单列 —— 它不为 0 则结论不完整。
+
+#### 旁路目标是活的 —— 所以「0 次使用」是真信号
+
+我自己脚本里写的那条警告必须执行:
+
+```
+streamlit-demo-tg              healthy
+neptune-ui-tg                  healthy
+Servic-PetSi-7JEWC19HNKSR      healthy healthy
+```
+
+三个目标组全部健康,所以「0 次使用」**不是服务停了**,是真的没人用。
+
+#### prio 3 的处置依据(定义已核实)
+
+```
+prio 1: 条件=[path:/streamlit,/streamlit/*, header:X-Demo-Bypass=<48字符>]  → forward
+prio 2: 条件=[header:X-Demo-Bypass=<48字符>, path:/graph,/graph/*]          → forward
+prio 3: 条件=[header:X-Demo-Bypass=<48字符>]                                → forward
+```
+
+prio 1/2 已用**显式路径**覆盖 streamlit 与 graph 两个合法用途。
+**prio 3 唯一独有的功能,就是对 petsite 本体的整站免认证访问** ——
+而这与「任何公网 IP 都不能直接暴露,要有认证或 CloudFront」直接冲突。
+
+所以处置是**删除**而不是收窄:给它补路径条件只会让它变成 prio 1/2 的重复。
+
+回滚锚点已存:`/home/ec2-user/.kiro/crew/workspace/rollback/alb-443-prio3-rule.json`
+(含令牌值,权限 600,刻意不打印)。恢复方式是 `aws elbv2 create-rule`
+照该文件的 Conditions/Actions 重建,优先级仍用 3。
+
+⚠️ **删除本身属于「修改访问控制」,留给人拍。** 24 小时 0 使用是有力证据
+但只是一天,而那个头的名字是 `X-Demo-Bypass` —— 有人临时演示时用它的可能性
+不能靠一天的日志排除。
+
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
