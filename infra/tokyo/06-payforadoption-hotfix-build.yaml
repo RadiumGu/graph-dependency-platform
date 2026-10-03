@@ -1,0 +1,180 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  payforadoption 镜像构建（东京 ap-northeast-1）—— 修掉 ResetPetsAvailability
+  与 DropTransactionsByPets 之间的 TOCTOU 竞态，它在 20 小时里把 26 只宠物
+  中的 17 只永久移出了流通。
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 这个竞态是怎么吃掉宠物的
+#
+# CleanupAdoptions 的两步本身是对的（只删「成功复原」的那些宠物的交易），
+# 但第二步的删除条件是 (pet_id, pet_type) 而不是「第一步看到的那几行」：
+#
+#   1. ResetPetsAvailability 读列表 → [宠物 X]（X 当前 availability='no'）
+#   2. 调 statusupdater 把 X 复原成 'yes'，X 进 successfulResets
+#   3. ★ 生成器又领养了 X → X 变 'no'，**产生一条新的交易行**
+#   4. DropTransactionsByPets([X]) → DELETE WHERE pet_id='X' AND pet_type=...
+#      ← 把第 3 步那条**新**行一起删掉了
+#   5. X 现在是 'no' 且**无交易行**。而重置的列表就来自 transactions ——
+#      所以 X **永远回不到流通里**。
+#
+# 2026-10-03 东京线上实测（这是本栈存在的全部理由）：
+#
+#     SuccessRatioPercent 20 小时序列（每 30 分钟）
+#       80.2  78.0  79.3  71.5  70.7  70.6
+#       68.5  59.7  60.4  58.2  58.6  55.0
+#       53.6  53.5  51.8  47.1  50.4  51.8
+#       ...
+#       35.1  33.8  33.2  35.4  34.3        ← 单调下降，不是抖动
+#
+#     DropTransactionsByPets  petCount=1  rowsAffected=1   （前一天是 25）
+#     adoptionlist            3 字节 = []  → transactions 表已空
+#     availability            17 no / 9 yes → 那 17 只全部已孤立
+#
+# 3 个生成器每 20 秒领养、cleanup 每约 16 秒一次 —— 这个竞态持续在命中，
+# 每命中一次就永久减少一只宠物。
+#
+# 修法：第一步连同主键 id 一起读（不用 DISTINCT），第四步按
+# `DELETE FROM transactions WHERE id IN (...)` 删。第 3 步那条新行会留下，
+# 下一轮重置能重新看到它。
+#
+# ⚠️ 本栈**不修复既有的 17 只孤立宠物** —— 它们没有交易行，任何基于
+#    transactions 的重置都看不到它们。上线后需要用 statusupdater 手工复原一次。
+#    这是「停止流血」与「补回失血」的区别，两件事都要做。
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# 订正我自己 2026-09-27 的判断
+#
+# 我当时识别出了「宠物被孤立」这个缺陷，但判定它**不是主因**（当时的主因是
+# housekeeping 少了 userId，补货从来没发生过）。那个判断是对的 ——
+# 但我把它放进了「尚未做」，而它正是 10-03 这次单调下降的主因。
+#
+# 教训：一个被正确降级的缺陷，不等于一个可以忘记的缺陷。
+# ══════════════════════════════════════════════════════════════════════════════
+
+Parameters:
+  RepoUrl:
+    Type: String
+    Default: https://github.com/RadiumGu/one-observability-demo.git
+  SourceBranch:
+    Type: String
+    Default: main
+  EcrRepoName:
+    Type: String
+    Default: payforadoption-hotfix
+  BuildContext:
+    Type: String
+    Default: PetAdoptions/payforadoption-go
+    Description: Dockerfile 与 go.mod 在同一级
+
+Resources:
+
+  HotfixRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref EcrRepoName
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"keep last 5",
+          "selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":5},
+          "action":{"type":"expire"}}]}
+
+  BuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: payforadoption-hotfix-build
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: {Service: codebuild.amazonaws.com}
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BuildAndPush
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogGroup, logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:CompleteLayerUpload
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:DescribeImages
+                Resource: !GetAtt HotfixRepo.Arn
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: payforadoption-hotfix-build
+      Description: 构建修掉重置竞态的 payforadoption 镜像（arm64）
+      ServiceRole: !GetAtt BuildRole.Arn
+      Artifacts: {Type: NO_ARTIFACTS}
+      Source:
+        Type: GITHUB
+        Location: !Ref RepoUrl
+        BuildSpec: !Sub |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+                - export TAG=$(git rev-parse --short HEAD)
+                - echo "building from commit $TAG"
+                # 构建前证明修复在源码里 —— 否则会产出一个「看起来是热修」
+                # 而删除条件仍是按 pet_id 的镜像。本机没有 go 工具链，
+                # 所以**这里的 docker build 就是真正的编译门**。
+                - grep -q 'SELECT id, pet_id, pet_type FROM transactions' ${BuildContext}/payforadoption/repository.go
+                - grep -q 'DELETE FROM transactions WHERE id IN' ${BuildContext}/payforadoption/repository.go
+                # 并证明危险的旧写法确实不在了
+                - "! grep -q 'SELECT DISTINCT pet_id' ${BuildContext}/payforadoption/repository.go"
+                - echo "fix confirmed present in source"
+            build:
+              commands:
+                - cd ${BuildContext}
+                - docker build -t ${EcrRepoName}:$TAG .
+            post_build:
+              commands:
+                - export URI=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrRepoName}
+                - docker tag ${EcrRepoName}:$TAG $URI:$TAG
+                - docker push $URI:$TAG
+                - aws ecr describe-images --region ${AWS::Region} --repository-name ${EcrRepoName} --image-ids imageTag=$TAG --query 'imageDetails[0].{digest:imageDigest,pushed:imagePushedAt}' --output json
+      SourceVersion: !Ref SourceBranch
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_LARGE
+        Image: aws/codebuild/amazonlinux2-aarch64-standard:3.0
+        PrivilegedMode: true
+      TimeoutInMinutes: 60
+
+Outputs:
+  ProjectName:
+    Value: !Ref BuildProject
+  EcrRepoUri:
+    Value: !GetAtt HotfixRepo.RepositoryUri
+  RollbackAnchor:
+    Description: 回滚用 —— 当前集群内 pay-for-adoption 镜像（2026-10-03 核实）
+    Value: 926093770964.dkr.ecr.ap-northeast-1.amazonaws.com/cdk-hnb659fds-container-assets-926093770964-ap-northeast-1:a8ac82bfb06e3cce9e668419facbab19b81193f63042a515e0f40bc73f4119f1
+  AfterDeployMustDo:
+    Description: 上线后必须另外做的一步
+    Value: >
+      本栈只停止流血。既有的 17 只孤立宠物没有交易行，任何基于 transactions
+      的重置都看不到它们，必须用 statusupdater Lambda 手工复原一次
+      （PetAdoptionStatusUpdater，petavailability=yes）。
+  HowToVerify:
+    Description: 怎么确认它真的起作用
+    Value: >
+      看 pay-for-adoption 日志里 pet_transactions_deleted 事件是否带 txnCount
+      字段（旧镜像没有这个字段）；再看 SuccessRatioPercent 是否停止单调下降。

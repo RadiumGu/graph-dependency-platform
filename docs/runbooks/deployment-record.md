@@ -5397,6 +5397,118 @@ prio 1/2 已用**显式路径**覆盖 streamlit 与 graph 两个合法用途。
 不能靠一天的日志排除。
 
 
+---
+
+### 4.49 一个竞态每命中一次就永久吃掉一只宠物;以及一个线上有、主干没有的修复
+
+**日期**:2026-10-03 08:25-09:00 UTC
+**触发**:`petsite-alarm-watchdog` 报 `adoption-success-ratio-low` 已 5.8 小时
+
+#### 这次和 9 月那次不同:那次是 0%,这次是单调下降
+
+```
+SuccessRatioPercent 20 小时序列（每 30 分钟）
+  80.2  78.0  79.3  71.5  70.7  70.6
+  68.5  59.7  60.4  58.2  58.6  55.0
+  53.6  53.5  51.8  47.1  50.4  51.8
+  46.3  47.6  47.2  45.8  46.3  48.5
+  42.2  46.3  41.9  40.0  45.0  39.2
+  37.9  39.0  41.5  40.7  39.6  39.0
+  35.1  33.8  33.2  35.4  34.3     ← 单调，不是在均衡点抖动
+```
+
+**「单调」这个形状本身就是判据** —— 它排除了「50% 阈值选错了、系统本来就在
+这附近抖」这个解释,指向有东西在累积。三个决定性读数:
+
+```
+DropTransactionsByPets  petCount=1  rowsAffected=1   （前一天是 25）
+adoptionlist            3 字节 = []  → transactions 表已空
+availability            17 no / 9 yes → 那 17 只全部已孤立
+```
+
+#### 竞态机制(TOCTOU)
+
+`CleanupAdoptions` 的两步本身是对的(只删「成功复原」的宠物的交易),
+但第二步的删除条件是 `(pet_id, pet_type)` 而不是「第一步看到的那几行」:
+
+```
+1. ResetPetsAvailability 读列表 → [宠物 X]（X 当前 availability='no'）
+2. 调 statusupdater 把 X 复原成 'yes'，X 进 successfulResets
+3. ★ 生成器又领养了 X → X 变 'no'，产生一条**新**交易行
+4. DropTransactionsByPets([X]) → DELETE WHERE pet_id='X' AND pet_type=...
+   ← 把第 3 步那条新行一起删掉了
+5. X 是 'no' 且**无交易行**。而重置列表就来自 transactions → **永远回不来**
+```
+
+3 个生成器每 20 秒领养、cleanup 每约 16 秒一次 —— 持续命中。
+
+**排除过的两条**:`DropTransactions`(无 WHERE 的全表删)我一度怀疑是元凶,
+`grep` 后发现它**只有接口声明和实现、没有任何调用者** —— 是死代码。
+`cleanupadoptions` 端点走的是安全的 `DropTransactionsByPets` 路径。
+
+#### 修法与验证
+
+读列表时连同主键一起取(去掉 `DISTINCT`),删除改成 `WHERE id IN (...)`。
+`len(ids)==0` 时**刻意什么都不删**,而不是退回按宠物删 —— 那正是竞态来源。
+
+**本机没有 go 也没有 docker**,所以编译证明来自两处:GitHub Actions 的
+`docker-builds (payforadoption-go)` pass(那个 Dockerfile 里是 `go build`),
+以及 CodeBuild 构建成功。⚠️ 我中途写过一句「编译通过」是 `&&` 链出来的
+**假成功**(`go: command not found` 之后 `head` 成功了)—— 正是我这几天
+一直在修的那一族。
+
+上线后用 `txnCount` 字段自证新镜像在跑(旧镜像没有这个字段):
+`带 txnCount: 5  不带: 0`。
+
+```
+                  今早告警时            修复 + 复原后
+SLO               33.0%（67/203）      68.66%（138/201）
+availability      17-18 no / 8-9 yes   3 no / 23 yes
+```
+
+#### 停止流血 ≠ 补回失血
+
+修复只阻止**新**的孤立。既有的 18 只没有交易行,任何基于 `transactions`
+的重置都看不到它们,必须手工复原 —— 用 statusupdater Lambda 复原 18 只
+(成功 18 / 失败 0)。
+
+载荷形状踩了一次:handler 是 `JSON.parse(event.body)`,
+我先按 `queryStringParameters` 传,18 个全部 `400 invalid json body`。
+正确形状是 `{"body": "{\"petid\":...}"}`。
+
+#### 订正我自己 09-27 的判断
+
+我当时识别出了这个「宠物被孤立」的缺陷,但判定它**不是主因**
+(那次主因是 housekeeping 少 userId,补货从来没发生过)。那个判断是对的 ——
+但我把它放进了「尚未做」,而它正是这次单调下降的主因。
+
+**一个被正确降级的缺陷,不等于一个可以忘记的缺陷。**
+
+#### 顺手查出:一个线上有、主干没有的修复(7 天没人发现)
+
+复原宠物时顺手看了 `index.js`,发现它**没有**我之前加的
+`attribute_exists(petid)` 守卫。往下查:
+
+```
+线上 Lambda（CodeSha256=9K35JaeStHGhn+iiyiNr9g9AKfJc7+f5Gv+ELihgcJE=，
+            2026-09-26 13:02 部署）        有守卫
+myfork/main                                **没有**
+PR #3                                      **一直是 OPEN，从未合并**
+```
+
+**而我自己的会话记录把 ood #3 写成了「已合并」。** 任何一次从源码重新部署
+都会把这个线上已生效的守卫静默回滚,而它防的正是「26 只宠物一起消失」
+那次事故的根因(`UpdateItem` 默认 upsert → 残缺行 → search NPE → 500)。
+
+已 rebase 到最新 main 后重开为 PR #8 并合并,8 个 jest 用例全绿。
+
+**核对方法的一处订正**:我最初想用「线上代码与源码逐字一致」做判据,
+**那个判据是错的** —— 线上跑的是 esbuild 打包产物(含 `__commonJS` 包装
+与内联依赖),源码是未打包单文件,本来就不可能逐字相同。正确判据是
+**下载线上代码确认守卫语义在产物里存在**(`grep attribute_exists(petid)` 命中,
+连那条中文注释都在)。我已把 PR 描述里那句错话订正掉。
+
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
