@@ -49,6 +49,30 @@ SOURCE_MAP = {
     "neptune-etl-from-cfn": ("infra/lambda/etl_cfn/neptune_etl_cfn.py", "neptune_etl_cfn.py"),
     "neptune-etl-from-deepflow": ("infra/lambda/etl_deepflow/neptune_etl_deepflow.py", "neptune_etl_deepflow.py"),
     "neptune-etl-from-aws": ("infra/lambda/etl_aws/neptune_client.py", "neptune_client.py"),
+    # 2026-10-04 补入。**刻意不比主模块** —— 这是本检测器第一个「主模块一致
+    # 但函数仍在漂移」的实例，实测：
+    #
+    #     window_flush_handler.py   （入口，Handler 配置指向它）  线上 ≡ 仓库
+    #     handler.py / config.py / core/rca_engine.py 等 9 个      线上 ≡ 仓库
+    #     neptune/neptune_queries.py                               线上 ✗ 仓库
+    #
+    # PR #47 的 5 处 Pod active 过滤只落在 neptune_queries.py 上（差 181 字节）。
+    # 若按惯例比入口模块，这次漂移会被**完全漏掉**而报告一片绿。
+    #
+    # 选它的依据：它承载 RCA 的全部图查询（42 KB，产物里最大的业务模块），
+    # 是改动最频繁、也最直接影响结论正确性的那个。
+    #
+    # ⚠️ **已知局限：一个函数只比一个模块。** 本 SOURCE_MAP 的 value 是单个
+    # (path, member) 对，所以 gp-window-flush 的其他模块漂移仍不会被发现。
+    # 要彻底解决得让 value 支持多成员，那会动 check() 的 checked_b 计数与
+    # 报告分母 —— 而 #51 刚因为报告逻辑把它修成「差点永远红着」，所以这次
+    # 刻意只补覆盖面、不动结构。下一个人若要做，这里是入口。
+    #
+    # 形态同构成立：rca_window_flush 产物是 build.sh 从 rca/ cp 过去的未打包
+    # .py（test_90 保证产物 ≡ 权威源），所以可以比字节 —— 不违反顶部
+    # 「不要用逐字一致做跨形态比较」那条。权威源取 rca/ 而非产物目录，
+    # 让这条检测同时覆盖「产物是否脱离权威源」。
+    "gp-window-flush": ("rca/neptune/neptune_queries.py", "neptune/neptune_queries.py"),
 }
 
 STALE_HOURS = 1.0
