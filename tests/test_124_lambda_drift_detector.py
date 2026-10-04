@@ -77,7 +77,12 @@ class TestCrossFormatComparisonTrap:
         assert "同形态" in src
 
     def test_source_map_holds_only_python(self, src: str):
-        """那个 Node Lambda 刻意不在表里 —— 它线上是打包产物。"""
+        """那个 Node Lambda 刻意不在表里 —— 它线上是打包产物。
+
+        2026-10-04 起 value 是**成员列表**（tuple of (path, member)），所以
+        这里要嵌套遍历。只放未打包 .py 这条不变 —— json / 打包产物不要进来，
+        跨形态比对永远不可能逐字相同。
+        """
         import ast
 
         tree = ast.parse(src)
@@ -87,8 +92,17 @@ class TestCrossFormatComparisonTrap:
             ):
                 vals = ast.literal_eval(node.value)
                 assert vals, "SOURCE_MAP 不能是空的"
-                for _path, member in vals.values():
-                    assert member.endswith(".py"), f"{member} 不是未打包的 .py"
+                for fn, pairs in vals.items():
+                    assert isinstance(pairs, tuple) and pairs, (
+                        f"{fn} 的 value 必须是非空的成员列表 —— "
+                        "单成员判据在 2026-10-04 两次给出假绿"
+                    )
+                    for pair in pairs:
+                        assert isinstance(pair, tuple) and len(pair) == 2, (
+                            f"{fn} 的成员项必须是 (path, member) 二元组，实际 {pair!r}"
+                        )
+                        _path, member = pair
+                        assert member.endswith(".py"), f"{member} 不是未打包的 .py"
                 return
         pytest.fail("找不到 SOURCE_MAP")
 
@@ -137,50 +151,166 @@ class TestImageDriftConclusion:
 
 
 class TestMainModuleCanHideDrift:
-    """gp-window-flush 这条刻意不比入口模块 —— 这是实测出来的判据。
+    """单成员判据会给出假绿 —— 两次实测，所以 SOURCE_MAP 改成多成员。
 
-    2026-10-04 实测：gp-window-flush 线上包里 11 个业务模块有 10 个与仓库
-    逐字一致，**包括 Handler 配置指向的入口 window_flush_handler.py**；
-    唯一不一致的是 neptune/neptune_queries.py（PR #47 的 5 处 Pod active
-    过滤，差 181 字节）。
+    2026-10-04 两个独立实例，都是「被检查的那个模块恰好一致」：
 
-    所以「比入口模块」这个看似自然的选择，在这个函数上会让漂移
-    **完全漏掉而报告一片绿**。本段守住这个选择不被「顺手改成一致」。
+        gp-window-flush        入口 window_flush_handler.py 一致，
+                               而 neptune/neptune_queries.py 漂移 181 B
+                               （PR #47 的 5 处 Pod active 过滤）
+        neptune-etl-from-aws   表里的 neptune_client.py 一致，
+                               而 neptune_client_base.py + business_layer.py
+                               合计漂移 3110 B（含清 6 条业务层假边）
+
+    主模块往往是最稳定的那个（入口签名很少改），业务逻辑在依赖模块里 ——
+    所以单成员判据在结构上偏向漏报。本段守住多成员不被退回去。
     """
 
-    def test_gp_window_flush_is_covered(self, src: str):
-        """它必须在 SOURCE_MAP 里 —— 加入前它完全没被内容比对覆盖过。"""
-        assert '"gp-window-flush"' in src, (
-            "gp-window-flush 不在 SOURCE_MAP 里。它承载 RCA 的全部图查询，"
-            "且 2026-10-04 实测确认它漂移过（PR #47 合并后未部署）。"
-        )
+    @staticmethod
+    def _source_map(src: str) -> dict:
+        import ast
 
-    def test_gp_window_flush_does_not_compare_entry_module(self, src: str):
-        """比的必须是 neptune_queries.py，不是入口 window_flush_handler.py。
+        for node in ast.walk(ast.parse(src)):
+            if isinstance(node, ast.Assign) and any(
+                getattr(t, "id", "") == "SOURCE_MAP" for t in node.targets
+            ):
+                return ast.literal_eval(node.value)
+        pytest.fail("找不到 SOURCE_MAP")
 
-        改成入口模块不会报错、不会告警，只会让这个函数的漂移永远检测不到 ——
-        而那正是加它进来要解决的问题。
+    def test_drifted_functions_are_multi_member(self, src: str):
+        """两个实测漂移过的函数必须是多成员 —— 退回单成员就是退回假绿。"""
+        sm = self._source_map(src)
+        for fn in ("gp-window-flush", "neptune-etl-from-aws"):
+            assert fn in sm, f"{fn} 不在 SOURCE_MAP 里"
+            assert len(sm[fn]) > 1, (
+                f"{fn} 只有 {len(sm[fn])} 个成员。它是 2026-10-04 实测到"
+                "「被检查的模块恰好一致、漂移在别的模块里」的实例，"
+                "单成员会让它报假绿。"
+            )
+
+    def test_actually_drifted_members_are_covered(self, src: str):
+        """实测漂移过的那几个模块必须在表里 —— 它们是判据的来源。"""
+        sm = self._source_map(src)
+        required = {
+            # 函数名: 必须覆盖的成员（都是 2026-10-04 实测确认漂移过的）
+            "gp-window-flush": {"neptune/neptune_queries.py"},
+            "neptune-etl-from-aws": {"neptune_client_base.py", "business_layer.py"},
+        }
+        for fn, must in required.items():
+            members = {m for _p, m in sm.get(fn, ())}
+            missing = must - members
+            assert not missing, (
+                f"{fn} 没覆盖实测漂移过的模块：{sorted(missing)}。\n"
+                "这些模块正是暴露「单成员假绿」的证据，去掉它们等于把判据的"
+                "依据删掉。"
+            )
+
+    def test_package_downloaded_once_per_function(self, src: str):
+        """多成员必须复用同一个下载好的包，不能每个成员下一次整包。
+
+        etl_aws 有 7 个成员、gp-window-flush 有 5 个。沿用原来
+        「每取一个成员下载一次整包」会把一次巡检的下载量放大一个量级
+        （单包 1~15 MB）。
         """
-        line = next(
-            (ln for ln in src.splitlines() if '"gp-window-flush"' in ln and "(" in ln),
-            "",
+        assert "_deployed_package" in src, (
+            "缺 _deployed_package —— 多成员比对必须先整包下载一次再逐个取成员"
         )
-        assert line, "找不到 gp-window-flush 的 SOURCE_MAP 条目"
-        assert "neptune_queries.py" in line, (
-            f"gp-window-flush 比的不是 neptune_queries.py：{line.strip()}\n"
-            "实测入口模块 window_flush_handler.py 线上与仓库逐字一致，"
-            "比它等于让这个函数永不报漂移。"
-        )
-        assert "window_flush_handler" not in line, (
-            f"gp-window-flush 比的是入口模块：{line.strip()}\n"
-            "入口模块一致掩盖了依赖模块的漂移 —— 这是 2026-10-04 实测到的，"
-            "见 crons/lambda_drift.py 里该条目的注释。"
+        assert "_member_from_package" in src, "缺 _member_from_package"
+        # check() 里应当调整包下载而不是逐成员下载
+        assert "blob = _deployed_package(lam, fn)" in src, (
+            "check() 没有按函数整包下载一次"
         )
 
-    def test_known_limitation_is_recorded(self, src: str):
-        """「一个函数只比一个模块」这个局限必须写在代码里。
+    def test_checked_b_still_counts_functions(self, src: str):
+        """checked_b 必须仍按函数计数 —— #51 把静默判据接在它上面。
 
-        不写的话，下一个人会以为 gp-window-flush 已被完整覆盖，而实际上
-        它其余 10 个模块的漂移仍然检测不到。
+        改成按模块计数会让 `checked_b/len(SOURCE_MAP)` 的分母语义错位，
+        而那个表达式参与 #51 刚修好的「没有新漂移就 Skip」。
         """
-        assert_contains(src, "一个函数只比一个模块")
+        assert "checked_b}/{len(SOURCE_MAP)}" in src or \
+               "{checked_b}/{len(SOURCE_MAP)}" in src, (
+            "找不到按函数计数的覆盖面表达式"
+        )
+        assert "verified_any" in src, (
+            "缺 verified_any —— 必须「至少一个成员真比对成功」才算该函数已核实，"
+            "否则「全部成员都取不到」会冒充已核实"
+        )
+
+    def test_false_green_evidence_is_recorded(self, src: str):
+        """「单成员会给出假绿」的实测记录必须留在代码里。
+
+        不写的话，下一个人看到 etl_aws 列了 7 个模块会觉得啰嗦而精简回一个 ——
+        而那恰好是这次要修的东西。
+        """
+        assert_contains(src, "单成员会给出假绿")
+        assert_contains(src, "恰好一致")
+
+
+class TestMemberMatchMustNotGuess:
+    """成员匹配不能用裸 endswith —— 它会命中同后缀的别的文件。
+
+    2026-10-04 实测：多成员改造后给 gp-window-flush 加了 `handler.py`，
+    裸 `endswith("handler.py")` 命中了 **window_flush_handler.py**（9586 B）
+    而非根目录的 handler.py（14454 B），于是报出一条**不存在的漂移**。
+
+    同包内以 handler.py 结尾的路径实测有 9 个。假漂移比漏报更危险 ——
+    它会更快训练人忽略这个检测（与 #51「永远红着的告警」同一机制）。
+    """
+
+    def test_no_bare_endswith_on_member(self, src: str):
+        """`_member_from_package` 的**代码**里不得有 `endswith(member)`。
+
+        用 AST 而不是字符串搜索：本文件与检测器的 docstring 都要引用这个
+        反例来说明踩过的坑，字符串搜索会把注释当成违规抓出来
+        （写这条测试时就先这么失败了一次）。
+        """
+        import ast
+
+        tree = ast.parse(src)
+        fn_node = next(
+            (
+                n
+                for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == "_member_from_package"
+            ),
+            None,
+        )
+        assert fn_node, "找不到 _member_from_package"
+
+        for node in ast.walk(fn_node):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "endswith"
+                and len(node.args) == 1
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id == "member"
+            ):
+                pytest.fail(
+                    "成员匹配用了裸 endswith(member)。它会把 "
+                    "window_flush_handler.py 当成 handler.py —— 实测产生过"
+                    "假漂移。退化匹配必须带 '/' 分隔符。"
+                )
+
+    def test_exact_match_tried_first(self, src: str):
+        """member 就是包内路径时必须直接命中，不走模糊匹配。"""
+        assert "if member in names" in src, (
+            "缺精确匹配分支 —— 绝大多数成员就是包内根路径，应当直接取"
+        )
+
+    def test_separator_required_in_fallback(self, src: str):
+        """退化匹配必须带 '/' —— 这是区分 handler.py 与 *_handler.py 的关键。"""
+        assert 'endswith("/" + member)' in src, (
+            "退化匹配没带 '/' 分隔符。不带的话 foo_handler.py 会被当成 handler.py。"
+        )
+
+    def test_ambiguous_match_returns_none_not_a_guess(self, src: str):
+        """候选不唯一时必须返回 None（未核实），不能猜一个。
+
+        猜错产生假漂移；返回 None 会让报告显示「未核实」—— 后者是诚实的，
+        前者会让人不再相信这个检测。
+        """
+        assert "len(cands) == 1" in src, (
+            "没有「候选唯一才取」的判断 —— 多候选时猜一个会产生假漂移"
+        )
+        assert_contains(src, "而**不猜**")
