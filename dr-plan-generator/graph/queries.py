@@ -105,6 +105,7 @@ def _services_hosted_in_az(az_name: str) -> List[Dict[str, Any]]:
     """
     cypher = """
 MATCH (s:Microservice)-[:RunsOn]->(p:Pod)-[:LocatedIn]->(z:AvailabilityZone)
+WHERE coalesce(p.active, true)
 RETURN s.name AS name, s.recovery_priority AS tier, s.state AS state,
        z.name AS az, count(DISTINCT p) AS pods
 """
@@ -193,6 +194,7 @@ def _services_hosted_in_region(region_name: str) -> List[Dict[str, Any]]:
     cypher = """
 MATCH (r:Region {name: $region_name})-[:Contains]->(:AvailabilityZone)
       <-[:LocatedIn]-(p:Pod)<-[:RunsOn]-(s:Microservice)
+WHERE coalesce(p.active, true)
 RETURN DISTINCT s.name AS name, s.recovery_priority AS tier, s.state AS state
 """
     try:
