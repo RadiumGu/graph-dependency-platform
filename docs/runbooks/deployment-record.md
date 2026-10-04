@@ -5509,6 +5509,138 @@ PR #3                                      **一直是 OPEN，从未合并**
 连那条中文注释都在)。我已把 PR 描述里那句错话订正掉。
 
 
+---
+
+### 4.50 把「偶然撞见」变成检测:两个方向的代码漂移
+
+**日期**:2026-10-04 00:45-01:10 UTC
+**起因**:昨天那个「线上有、主干没有」是**偶然撞见的** —— 复原宠物时顺手
+看了一眼源码。靠偶然发现这类问题不可接受,所以系统化查一遍。
+
+#### 旁路调查:第二天仍是 0,前置条件仍成立
+
+```
+日志总行数 2346 / TLS 1283 / 取到优先级 1283 / 解析失败 0
+走旁路规则（prio 1/2/3）：0 条
+streamlit-demo-tg  healthy    neptune-ui-tg  healthy
+```
+
+新出现 `prio=4`(3 条)—— 那是 `temporal.rainmeadows.com` 的主机规则走认证,
+说明这个 ALB 有真实使用者而不只是扫描流量。
+
+#### 镜像层面没有漂移,而且原因值得记下
+
+四个热修镜像的标签就是构建时的短提交,逐个核对:
+
+```
+payforadoption-hotfix   a01fa93  ✅ 在主干上
+petsite-hotfix          f57a27e  ✅ 在主干上
+petsearch-java-hotfix   f15f719  ✅ 在主干上
+trafficgenerator-hotfix e5bbca2  ✅ 在主干上
+```
+
+**这件事有个重要含义**:CDK 的容器资产是**部署时从本地源码构建**的,
+所以从 `myfork/main` 跑 `cdk deploy` 会产出**含修复**的镜像 ——
+镜像层面的回滚风险低。昨天那个 statusupdater 之所以危险,
+正因为它**不在主干上**。
+
+#### 健康检查路径:一个反转
+
+```
+线上 petsite-lt-tg   /health/status
+CDK 声明（第 242 行）  /health/status
+```
+
+**CDK 本来就声明 `/health/status`** —— 我 09-28 那次 CLI 改动是把线上
+**对齐**到 CDK,漂移是先前就存在的。我此前把它记成「CLI 改动造成漂移」,
+方向记反了。
+
+#### 检测器:两个方向
+
+```
+方向 A  函数 LastModified 比其所属栈新  → 有人在栈外改过它
+方向 B  线上主模块与仓库源码逐字比      → 内容真的不一致
+```
+
+方向 A 在东京查出 **5 个**函数。但 A **不能单独当结论** ——
+`neptune-etl-trigger` 比栈新 3163 小时,而它与仓库源码**逐字一致**
+(111 行 / 4187 字节),栈外改动恰好是把线上对齐到仓库,重新部署不丢东西。
+方向 B 把 5 条收敛成 **1 条真风险**。
+
+#### 真风险:契约门禁合并了 12 天,从未部署
+
+这是**第三次「合并 ≠ 部署」**,而且方向与昨天相反:
+
+```
+仓库 986738c（2026-09-22）      assert_node_type 4 / assert_edge_type 8 / assert_source 9
+线上（LastModified 2026-09-06）  三者全部 0，连 graph_contract 模块都不在包里
+                                 ← 线上代码比那个修复提交早 16 天
+```
+
+那个提交的标题是「**etl_deepflow 补上契约门禁 —— 它是唯一写图却无门禁的
+写入方**」。修复写了、合并了、12 天没部署,**所以那句话至今仍然成立**。
+而它是代码量最大(2095 行)、写边最多的那个写入方。
+
+对照组:`etl_cfn` 的线上代码与仓库**逐字一致**(488 行),它的门禁是真在跑的。
+
+三次同族:
+1. **petsite**(09-26 查出):修复 09-05 合并,镜像构建时间比修复提交早 3 分 53 秒 → 22 天
+2. **statusupdater**(10-03 查出):线上有、主干没有 → 重新部署会静默回滚
+3. **etl_deepflow**(本次):源码有、线上没有 → 所有人以为已修好,实际没在跑
+
+**第 3 种比第 2 种更隐蔽** —— 查源码、查 PR、查 CI 全都显示「已修复」。
+
+#### 部署前置条件已全部核实(所以这不是一个「待调研」项)
+
+```
+① 字面断言值是否都在词表里
+   source: deepflow-etl / deepflow-l4        ✅ 都在
+   节点: Microservice(52处) / TopologyChange(2处)  ✅ 都在
+   边: Calls / DependsOn / AccessesData       ✅ 都在   ECRRepository ✅
+② 共享层是否有门禁模块
+   neptune-client-base:19 里有 graph_contract.py   ✅
+   （与 etl_cfn 是同一个层，而 etl_cfn 门禁是活的 —— 反证层可用）
+③ 导入的名字在层里是否都有
+   etl_deepflow 只导入 assert_edge_type / assert_node_type / assert_source
+   三者在层里签名**完全一致**                      ✅
+④ 层本身也落后仓库 35 行 —— 但差异是**纯新增**
+   （is_transitive_edge / physical_dependency_edge_labels，2026-09-07 加）
+   而 etl_deepflow **一处都没用到**                ✅ 不构成阻塞
+```
+
+**残留未知**:三处断言的参数是**运行时变量**
+(`assert_edge_type('AccessesData', None, infra_label)` 的 `infra_label`、
+`lbl`,以及 `assert_source(edge_source, ...)` 的 `edge_source`),
+取值只能在运行时判断。所以不能说「部署零风险」。
+
+而项目自己为这种情况设计了灰度:`GRAPH_CONTRACT_MODE=warn`
+(模块文档原话:「用于**灰度**:新接一个 ETL 或大改类型声明时先跑一轮 warn,
+把真实违约摸清再切 enforce」)。⚠️ **默认是 enforce 不是 warn** ——
+直接部署就是直接进 enforce。
+
+#### 两条处置路径的取舍(这是留给人定的部分)
+
+```
+A. aws lambda update-function-code + GRAPH_CONTRACT_MODE=warn
+   爆炸半径小（只动这一个函数），可立即回滚。
+   ⚠️ 但它本身又是一次「栈外改动」—— 正是本节在抱怨的那件事。
+B. cdk deploy NeptuneEtlStack
+   是干净的做法。⚠️ 但该栈自 2026-04-19 没更新过，
+   一次收敛 5.5 个月的漂移，爆炸半径大得多。
+```
+
+#### 检测器已常设
+
+`crons/lambda_drift.py:check`,每天 10:00(东京)。
+报告**先报方向 B 的覆盖面**(`SOURCE_MAP` 里有几个就是几个),
+并明说不在表里的函数没有被内容比对检查过 —— 不让人误以为全查过了。
+
+**判据上的一个坑**:不能用「逐字一致」做跨形态比较。statusupdater 线上跑的是
+esbuild 打包产物(含 `__commonJS` 包装与内联依赖),与未打包源码永远不可能
+逐字相同。只在**同形态**(都是未打包 .py)时才比字节 —— 所以 `SOURCE_MAP`
+里刻意只放 Python ETL,没放那个 Node Lambda。
+
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)
