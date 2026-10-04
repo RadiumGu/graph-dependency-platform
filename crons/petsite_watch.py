@@ -33,6 +33,31 @@ LOG_PREFIX = "petsite-443/"
 # 这三条是旁路规则（见 docs/audits/alb-443-rule-inventory.md）
 BYPASS_PRIORITIES = {"1", "2", "3"}
 
+# ── ALB 访问日志的字段下标 ────────────────────────────────────────────
+# ⚠️ 2026-10-03 订正：第一版用「锚定 chosen_cert_arn 再取下一个 token」
+#    的正则取优先级。那是**错的** —— 行形状一变就错位，实测把优先级解析成了
+#    ACM ARN 本身、密码套件名、"session-reused"，还凭空造出 prio=-1。
+#    那些怪值全是解析产物，不是 ALB 的真实值。
+#
+#    ALB 日志是**定长字段**（带引号的字段可含空格），所以正确做法是
+#    按格式分词再按下标取。下标依 AWS 文档的字段顺序。
+F_TYPE = 0
+F_CLIENT = 3
+F_STATUS = 8
+F_REQUEST = 12
+F_PRIORITY = 20
+F_ACTIONS = 22
+_MIN_FIELDS = 23
+
+# 把一行拆成字段：带引号的整体算一个（引号内可含空格），其余按空白拆。
+_TOKEN = re.compile(r'"((?:[^"\\]|\\.)*)"|(\S+)')
+
+
+def _tokenize(line: str):
+    """按 ALB 日志格式分词；字段数不足则返回 None（宁可报解析失败也不猜）。"""
+    out = [m.group(1) if m.group(1) is not None else m.group(2) for m in _TOKEN.finditer(line)]
+    return out if len(out) >= _MIN_FIELDS else None
+
 WATCHED_ALARMS = [
     "petadoptions-adoption-success-ratio-low",
     "petsite-frontdoor-no-healthy-target",
@@ -105,26 +130,34 @@ def bypass_survey(ctx):
     by_prio = collections.Counter()
     detail = collections.defaultdict(collections.Counter)
     total = 0
-
-    # matched_rule_priority 紧跟在 chosen_cert_arn 之后。
-    # 用正则锚定 ACM ARN，比按空格数数稳 —— user_agent 里可能含空格。
-    pat = re.compile(r'"arn:aws:acm:[^"]+"\s+(\S+)\s')
-    req = re.compile(r'"(?:GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH|-) (\S+) [^"]*"')
-    acts = re.compile(r'"((?:waf|authenticate|forward|redirect|fixed-response|,)+)"')
+    tls = 0
+    unparsed = 0
+    waf_blocked = 0
 
     for line in _iter_log_lines(hours):
         total += 1
-        m = pat.search(line)
-        if not m:
+        f = _tokenize(line)
+        if f is None:
+            unparsed += 1
             continue
-        prio = m.group(1)
+
+        # 只有 TLS 监听器（https / h2）才会命中 443 的规则。
+        # 明文 http:80 是另一个监听器，它**不可能**匹配 443 的旁路规则，
+        # 所以它既不该算进分母，也不该算成「检查过了」。
+        if f[F_TYPE] not in ("https", "h2"):
+            continue
+        tls += 1
+
+        prio = f[F_PRIORITY]
+        acts = f[F_ACTIONS]
         by_prio[prio] += 1
+        if acts == "waf":
+            waf_blocked += 1
+
         if prio in BYPASS_PRIORITIES:
-            u = req.search(line)
-            path = (u.group(1).split("?")[0] if u else "?")[:80]
-            src = line.split(" ")[3].split(":")[0] if len(line.split(" ")) > 3 else "?"
-            a = acts.search(line)
-            detail[prio][f"{path} | src={src} | actions={a.group(1) if a else '?'}"] += 1
+            path = f[F_REQUEST].split(" ")[1].split("?")[0][:80] if " " in f[F_REQUEST] else "?"
+            src = f[F_CLIENT].rsplit(":", 1)[0]
+            detail[prio][f"{path} | src={src} | actions={acts}"] += 1
 
     bypass_total = sum(n for p, n in by_prio.items() if p in BYPASS_PRIORITIES)
 
@@ -133,8 +166,16 @@ def bypass_survey(ctx):
     if total == 0:
         raise Skip("近 24 小时没有访问日志（ALB 可能刚开启日志或无流量）")
 
+    classified = sum(by_prio.values())
     lines = [
-        f"PetSite 443 旁路使用面调查（近 {hours} 小时，共 {total} 条请求）",
+        f"PetSite 443 旁路使用面调查（近 {hours} 小时）",
+        "",
+        "**覆盖率** —— 不报一个没检查过的分母：",
+        f"  日志总行数          {total}",
+        f"  其中 TLS（https/h2）{tls}   ← 只有这些才可能命中 443 规则",
+        f"  成功取到规则优先级   {classified}",
+        f"  解析失败            {unparsed}" + ("  ⚠️ 不为 0 则结论不完整" if unparsed else ""),
+        f"  明文 http:80        {total - tls - unparsed}   ← 另一个监听器，与旁路无关",
         "",
         f"走旁路规则（prio 1/2/3）的请求：**{bypass_total}** 条",
         "",
@@ -142,7 +183,9 @@ def bypass_survey(ctx):
     ]
     for p, n in sorted(by_prio.items(), key=lambda x: -x[1])[:8]:
         tag = "  ← 旁路" if p in BYPASS_PRIORITIES else ""
-        lines.append(f"  prio={p:>4}  {n:6} 条{tag}")
+        lines.append(f"  prio={p:>6}  {n:6} 条{tag}")
+    if waf_blocked:
+        lines += ["", f"WAF 单独拦掉（actions 只有 waf，未进认证）：{waf_blocked} 条"]
 
     if bypass_total:
         lines += ["", "旁路请求明细（收窄 prio 3 的判据）："]
@@ -159,8 +202,9 @@ def bypass_survey(ctx):
         lines += [
             "",
             "→ 近 24 小时**没有任何请求走旁路规则**。",
-            "  若连续几天都是 0，prio 3 可以直接删除而不是收窄 ——",
-            "  但删除前要确认不是因为消费者恰好停了。",
+            "  ⚠️ 删除 prio 3 之前必须先确认**旁路目标本身是活的** ——",
+            "  若 streamlit / neptune-ui 的目标组没有健康目标，",
+            "  「0 次使用」说明的是服务停了，不是规则没人用。",
         ]
 
     raise Report("\n".join(lines))
