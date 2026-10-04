@@ -134,3 +134,53 @@ class TestImageDriftConclusion:
 
     def test_health_check_direction_was_recorded_backwards(self, section: str):
         assert_contains(section, "方向记反了")
+
+
+class TestMainModuleCanHideDrift:
+    """gp-window-flush 这条刻意不比入口模块 —— 这是实测出来的判据。
+
+    2026-10-04 实测：gp-window-flush 线上包里 11 个业务模块有 10 个与仓库
+    逐字一致，**包括 Handler 配置指向的入口 window_flush_handler.py**；
+    唯一不一致的是 neptune/neptune_queries.py（PR #47 的 5 处 Pod active
+    过滤，差 181 字节）。
+
+    所以「比入口模块」这个看似自然的选择，在这个函数上会让漂移
+    **完全漏掉而报告一片绿**。本段守住这个选择不被「顺手改成一致」。
+    """
+
+    def test_gp_window_flush_is_covered(self, src: str):
+        """它必须在 SOURCE_MAP 里 —— 加入前它完全没被内容比对覆盖过。"""
+        assert '"gp-window-flush"' in src, (
+            "gp-window-flush 不在 SOURCE_MAP 里。它承载 RCA 的全部图查询，"
+            "且 2026-10-04 实测确认它漂移过（PR #47 合并后未部署）。"
+        )
+
+    def test_gp_window_flush_does_not_compare_entry_module(self, src: str):
+        """比的必须是 neptune_queries.py，不是入口 window_flush_handler.py。
+
+        改成入口模块不会报错、不会告警，只会让这个函数的漂移永远检测不到 ——
+        而那正是加它进来要解决的问题。
+        """
+        line = next(
+            (ln for ln in src.splitlines() if '"gp-window-flush"' in ln and "(" in ln),
+            "",
+        )
+        assert line, "找不到 gp-window-flush 的 SOURCE_MAP 条目"
+        assert "neptune_queries.py" in line, (
+            f"gp-window-flush 比的不是 neptune_queries.py：{line.strip()}\n"
+            "实测入口模块 window_flush_handler.py 线上与仓库逐字一致，"
+            "比它等于让这个函数永不报漂移。"
+        )
+        assert "window_flush_handler" not in line, (
+            f"gp-window-flush 比的是入口模块：{line.strip()}\n"
+            "入口模块一致掩盖了依赖模块的漂移 —— 这是 2026-10-04 实测到的，"
+            "见 crons/lambda_drift.py 里该条目的注释。"
+        )
+
+    def test_known_limitation_is_recorded(self, src: str):
+        """「一个函数只比一个模块」这个局限必须写在代码里。
+
+        不写的话，下一个人会以为 gp-window-flush 已被完整覆盖，而实际上
+        它其余 10 个模块的漂移仍然检测不到。
+        """
+        assert_contains(src, "一个函数只比一个模块")
