@@ -52,6 +52,37 @@ SOURCE_MAP = {
 }
 
 STALE_HOURS = 1.0
+
+# ── 已确认的发现（不每天重报）────────────────────────────────────────
+#
+# ⚠️ 为什么需要这一节：2026-10-04 这个检测器上线 20 分钟后第一次触发，
+#    报的就是我 20 分钟前刚人工核实并已升级给人决策的那一条。它会**每天
+#    报同一条**，直到有人部署那个门禁。
+#
+#    而「一条永远不会消失的告警会训练人忽略整个频道」正是 2026-10-02
+#    移除队列积压告警的理由（见 runbook 4.47）。差一点第二次踩同一个坑。
+#
+# **确认绑定在线上的 CodeSha256 上**，不是绑在函数名上 ——
+# 一旦有人部署了这个函数，sha 就变，确认自动失效并重新报告。
+# 这样「已升级待决策」不会变成噪声，而「情况变了」仍然会叫人。
+ACKNOWLEDGED = {
+    # 契约门禁 2026-09-22 合并进仓库，线上代码是 09-06 的 → 门禁没在跑。
+    # 前置条件已全部核实（词表/共享层/导入签名/层落后但纯新增），
+    # 残留未知只有三处运行时变量参数。两条处置路径的取舍已升级给人决策。
+    # 详见 docs/runbooks/deployment-record.md 的 4.50。
+    "neptune-etl-from-deepflow": (
+        "6Y5lJpi+4eO7I/kqBEKQgVueNXk3ywItZ/inm2/6CJQ=",
+        "契约门禁待部署，处置路径已升级给人决策（4.50）",
+    ),
+    # 守卫线上有、主干曾经没有 —— 已随 ood #8 合并进主干，源码与线上现在
+    # 语义一致。只剩 LastModified 的时间差这个历史痕迹。
+    # ⚠️ 它的线上代码是 esbuild 打包产物，**不能**用逐字比较，
+    #    所以刻意不进 SOURCE_MAP（见本文件顶部「判据的两个坑」）。
+    "ServicesEks2-statusupdaterservicelambdafn37242E00-0SHsIkrhwJ32": (
+        "9K35JaeStHGhn+iiyiNr9g9AKfJc7+f5Gv+ELihgcJE=",
+        "守卫已随 ood #8 进主干，仅剩时间差痕迹（4.49）",
+    ),
+}
 _http = urllib3.PoolManager()
 
 
@@ -80,9 +111,11 @@ def _deployed_module(lam, fn: str, member: str) -> bytes | None:
 
 
 def check(ctx):
-    out_of_band: list[str] = []
-    content_diff: list[str] = []
+    out_of_band: dict[str, str] = {}
+    content_diff: list[tuple[str, str]] = []   # (函数名, 描述)
+    acked: list[str] = []
     checked_b = 0
+    shas: dict[str, str] = {}
 
     for region in REGIONS:
         lam = boto3.client("lambda", region_name=region)
@@ -97,6 +130,7 @@ def check(ctx):
             for f in p["Functions"]:
                 fn = f["FunctionName"]
                 lm = dt.datetime.fromisoformat(f["LastModified"].replace("Z", "+00:00"))
+                shas[fn] = f.get("CodeSha256", "")
 
                 # 方向 A：函数比它所属的栈新 → 有人在栈外改过它
                 try:
@@ -107,9 +141,7 @@ def check(ctx):
                 if stack and stack in stacks:
                     gap = (lm - stacks[stack]).total_seconds() / 3600
                     if gap > STALE_HOURS:
-                        out_of_band.append(
-                            f"{fn[:52]} （栈 {stack}，函数比栈新 {gap:.0f} 小时）"
-                        )
+                        out_of_band[fn] = f"栈 {stack}，函数比栈新 {gap:.0f} 小时"
 
                 # 方向 B：线上主模块与仓库源码逐字比（仅同形态）
                 if region == "ap-northeast-1" and fn in SOURCE_MAP:
@@ -117,41 +149,70 @@ def check(ctx):
                     src = _repo_source(path)
                     live = _deployed_module(lam, fn, member)
                     if src is None or live is None:
-                        content_diff.append(f"{fn}: 取不到源码或线上代码，**未核实**")
+                        content_diff.append((fn, "取不到源码或线上代码，**未核实**"))
                         continue
                     checked_b += 1
                     if src != live:
                         sl, ll = src.count(b"\n"), live.count(b"\n")
                         which = "源码有、线上没有" if sl > ll else "线上有、源码没有"
                         content_diff.append(
-                            f"{fn}: **{which}** （仓库 {sl} 行 / 线上 {ll} 行，差 {abs(sl - ll)} 行）"
+                            (fn, f"**{which}** （仓库 {sl} 行 / 线上 {ll} 行，差 {abs(sl - ll)} 行）")
                         )
+
+    # 已确认的剔出去 —— 但**只在 CodeSha256 未变**时才算确认。
+    # 有人部署过 → sha 变 → 确认失效 → 重新报告。
+    fresh: list[str] = []
+    for fn, desc in content_diff:
+        ack = ACKNOWLEDGED.get(fn)
+        if ack and shas.get(fn) == ack[0]:
+            acked.append(f"{fn}: {ack[1]}")
+        else:
+            if ack:
+                desc += "  ⚠️ **该函数已被重新部署**（CodeSha256 与确认时不同），确认失效"
+            fresh.append(f"{fn}: {desc}")
+
+    # 方向 A 里**已被方向 B 逐字核实过**的，不再单独列 —— B 是权威。
+    # 只留下 B 没覆盖到的，并如实说它们未经内容核实。
+    uncovered = {
+        fn: d for fn, d in out_of_band.items()
+        if fn not in SOURCE_MAP
+        and not (ACKNOWLEDGED.get(fn) and shas.get(fn) == ACKNOWLEDGED[fn][0])
+    }
 
     from kiro_crew.cron_script import Report, Skip
 
-    if not content_diff and not out_of_band:
-        raise Skip("没有检出漂移")
+    if not fresh and not uncovered:
+        # 刻意不发无事通知，也不重报已确认项 —— 否则这个检测器自己会变成
+        # 「永远红着的告警」，而那正是 4.47 移除队列告警的理由。
+        raise Skip(f"没有新漂移（已确认 {len(acked)} 项，方向 B 核实 {checked_b}/{len(SOURCE_MAP)}）")
 
-    lines = ["Lambda 代码漂移检测", ""]
+    lines = ["Lambda 代码漂移检测 —— 有新发现", ""]
     lines.append(f"**方向 B 覆盖面**：{checked_b}/{len(SOURCE_MAP)} 个函数逐字核实过。")
     lines.append("不在 SOURCE_MAP 里的函数**没有被内容比对检查过** —— 别当成全查过了。")
+    if acked:
+        lines.append(f"已确认项 {len(acked)} 条不在下面重报（确认绑在 CodeSha256 上，重新部署即失效）。")
     lines.append("")
 
-    if content_diff:
+    if fresh:
         lines.append("### 线上与源码内容不一致（这一类才是真风险）")
-        for d in content_diff:
+        for d in fresh:
             lines.append(f"  ⚠️ {d}")
-        lines.append("")
-        lines.append("  「源码有、线上没有」= 所有人以为已修好，实际没在跑。")
-        lines.append("  「线上有、源码没有」= 任何重新部署都会静默回滚修复。")
-        lines.append("")
+        lines += [
+            "",
+            "  「源码有、线上没有」= 所有人以为已修好，实际没在跑。",
+            "  「线上有、源码没有」= 任何重新部署都会静默回滚修复。",
+            "",
+        ]
 
-    if out_of_band:
-        lines.append("### 函数比其所属栈新（栈外改过，**不一定**有风险）")
-        for d in out_of_band[:10]:
-            lines.append(f"  · {d}")
-        lines.append("")
-        lines.append("  若栈外改动恰好是把线上对齐到仓库，重新部署不会丢东西 ——")
-        lines.append("  所以这一节必须用上面的内容比对来核实，不能单独当结论。")
+    if uncovered:
+        lines.append("### 栈外改过、且**未经内容核实**的函数")
+        for fn, d in list(uncovered.items())[:10]:
+            lines.append(f"  · {fn[:56]} （{d}）")
+        lines += [
+            "",
+            "  它们不在 SOURCE_MAP 里，所以只知道「被栈外改过」，不知道内容是否有差。",
+            "  若栈外改动恰好是把线上对齐到仓库，重新部署不会丢东西 ——",
+            "  所以这一节单独看**不是**结论，要么加进 SOURCE_MAP，要么人工核一次。",
+        ]
 
     raise Report("\n".join(lines))
