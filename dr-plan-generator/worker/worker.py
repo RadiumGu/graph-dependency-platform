@@ -48,22 +48,11 @@ import signal
 from temporalio.client import Client
 from temporalio.worker import Worker
 
-from activities import (
-    fetch_plan_body,
-    promote_database,
-    put_plan_version,
-    scale_up_nodegroup,
-    verify_step,
-)
+from activities import load_plan_version, put_execution_record, put_plan_version
 from plan_workflow import DrPlanWorkflow
+from probes import ALL_PROBES
+from runbook_workflow import DrRunbookWorkflow
 from snapshot_workflow import ExportSnapshotWorkflow, export_graph_snapshot
-from workflows import (
-    DrFailoverWorkflow,
-    FetchPlanWorkflow,
-    PromoteDatabaseWorkflow,
-    ScaleNodegroupWorkflow,
-    VerifyWorkflow,
-)
 
 #: workflow 会 upsert 的自定义 Search Attributes → Temporal 的索引类型枚举。
 #:
@@ -177,25 +166,27 @@ async def main() -> None:
     worker = Worker(
         client,
         task_queue=TASK_QUEUE,
-        # 父 + 四个原子步骤子 workflow。**子 workflow 类型必须在这里注册**，
-        # 否则父起子时会一直等一个不存在的 handler —— 而那正是
-        # 「启动成功不等于在执行」那类静默卡死。
+        # **子 workflow 类型必须在这里注册**，否则父起子时会一直等一个不存在的
+        # handler —— 而那正是「启动成功不等于在执行」那类静默卡死。
+        #
+        # 2026-10-05：DrFailoverWorkflow 与四个步骤子 workflow 已退役，
+        # 换成 DrRunbookWorkflow（人执行、Temporal 核实）。
+        # ⚠️ 退役前已核实服务端没有任何 RUNNING 的执行 —— 否则删掉一个
+        #    还有在途执行的 workflow 类型，那些执行会在回放时永久卡住。
         workflows=[
-            # 计划评审生命周期。它会以子 workflow 的形式起 DrFailoverWorkflow，
+            # 计划评审生命周期。它以子 workflow 的形式起 DrRunbookWorkflow，
             # 所以两者必须注册在**同一个**队列上。
             DrPlanWorkflow,
-            DrFailoverWorkflow,
-            FetchPlanWorkflow,
-            ScaleNodegroupWorkflow,
-            PromoteDatabaseWorkflow,
-            VerifyWorkflow,
+            DrRunbookWorkflow,
         ],
         activities=[
-            fetch_plan_body,
             put_plan_version,
-            scale_up_nodegroup,
-            promote_database,
-            verify_step,
+            load_plan_version,
+            put_execution_record,
+            # 每个探针一个独立的 activity（probe.<name>）。注册在这个队列上，
+            # 所以既能被 DrRunbookWorkflow 当闸门调用，也能被人用
+            # client.start_activity 单独调用（standalone activity）。
+            *ALL_PROBES,
         ],
         # ── 2026-09-24：这两个数原来都是 1，那是个设计错误 ──────────────
         #

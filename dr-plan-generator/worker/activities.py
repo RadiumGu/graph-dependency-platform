@@ -1,19 +1,28 @@
 """
-activities.py — 切换步骤的 activity 实现。
+activities.py — 计划存取与共享的只读辅助函数。
 
-## 当前阶段:只有 dry_run 真正可用
+## 2026-10-05：变更类 activity 已退役
 
-写类 activity 里调 AWS 的那几行都在 `if not inp.dry_run:` 后面,而
-worker 的实例角色目前**只有 Describe 权限**(见
-`infra/dr-korea/02-temporal.yaml`)。所以 dry_run=False 现在会因为
-AccessDenied 而失败 —— **这是刻意的**:权限按步骤逐个放开,
-在步骤还没跑通之前给宽权限等于先开口子。
+这里原来有 `scale_up_nodegroup` / `promote_database` / `verify_step` /
+`fetch_plan_body` 四个切换步骤 activity，由 `DrFailoverWorkflow` 的四个子
+workflow 调用。它们已随那套编排一起移除，原因是模型变了：
 
-## 为什么不用 `moto` 之类做假
+    **人执行每个变更，Temporal 只负责核实。**
 
-因为本项目的教训是「测试环境与线上不一致会让错误路径当五个月实际路径」。
-dry_run 不假装调用成功,而是**如实报告「没有调用」**,并把将要执行的
-命令原文带出来 —— 那样人能看见它究竟打算做什么。
+那四个 activity 从来没真执行过（实例角色只有 Describe 权限，`dry_run=False`
+会 AccessDenied —— 那是刻意的），所以移除不损失任何线上能力；
+它们承担的「核实」职责搬进了 `probes.py`，每个探针一个独立 activity。
+
+留在这里的：
+  · `put_plan_version` —— 计划版本的不可覆盖写入（评审链的供给侧）
+  · `load_plan_version` —— 按版本取回正文，并**重新计算摘要**核对
+  · `put_execution_record` —— 把一次演练/执行的完整记录导出到 S3
+  · `count_ready_nodes` / `count_asg_by_lifecycle` —— 探针复用的只读辅助
+
+## 为什么执行记录要导出
+
+命名空间保留期 720h（30 天，2026-10-05 实测），归档刻意未开 —— 一次真实切换的
+history 30 天后就会被删掉，而灾备审计要的远不止 30 天。
 """
 from __future__ import annotations
 
@@ -22,14 +31,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from temporalio import activity
-
-
-@dataclass
-class ActivityInput:
-    plan_ref: str
-    dry_run: bool = True
-    #: 仅 promote_database 用:ordered / allow_data_loss。
-    decision: str | None = None
 
 
 @dataclass
@@ -219,61 +220,6 @@ def count_ready_nodes() -> tuple[int | None, str | None]:
     return ready, None
 
 
-# ── ① 取计划正文 ──────────────────────────────────────────────────────────
-
-
-@activity.defn
-async def fetch_plan_body(inp: ActivityInput) -> StepResult:
-    """从 S3 取计划正文。
-
-    计划正文不进 workflow 的 input/memo —— 保留期只有 86400s(实测),
-    而 payload 上限在本服务端拿不到(describe_namespace 没有 limits 字段)。
-    """
-    key = f"plans/{inp.plan_ref}.md"
-    cmd = f"aws s3 cp s3://{_PLAN_BUCKET or '<DR_PLAN_BUCKET 未设>'}/{key} -"
-
-    if not _PLAN_BUCKET:
-        return StepResult(
-            step="fetch_plan_body",
-            executed=False,
-            would_run=[cmd],
-            verified=None,
-            inconclusive_reason="DR_PLAN_BUCKET 未设置，无法确认计划正文是否存在",
-        )
-
-    if inp.dry_run:
-        # dry_run 也做一次**只读**的存在性检查 —— 这不改任何东西,
-        # 却能在真切换前发现「计划根本不在那儿」。
-        try:
-            s3 = _boto3().client("s3", region_name=_REGION)
-            head = s3.head_object(Bucket=_PLAN_BUCKET, Key=key)
-            return StepResult(
-                step="fetch_plan_body",
-                executed=False,
-                would_run=[cmd],
-                detail={"size": head["ContentLength"], "etag": head.get("ETag")},
-                verified=True,
-            )
-        except Exception as e:  # noqa: BLE001
-            return StepResult(
-                step="fetch_plan_body",
-                executed=False,
-                would_run=[cmd],
-                verified=False,
-                inconclusive_reason=f"计划正文不可读：{type(e).__name__}: {e}",
-            )
-
-    s3 = _boto3().client("s3", region_name=_REGION)
-    obj = s3.get_object(Bucket=_PLAN_BUCKET, Key=key)
-    body = obj["Body"].read().decode("utf-8")
-    return StepResult(
-        step="fetch_plan_body",
-        executed=True,
-        detail={"bytes": len(body), "lines": body.count("\n") + 1},
-        verified=True,
-    )
-
-
 # ── ①b 写入一版计划正文（计划评审生命周期用） ──────────────────────────────
 
 
@@ -293,8 +239,7 @@ async def put_plan_version(inp: PlanVersionInput) -> StepResult:
 
     ## 为什么必须拒绝覆盖
 
-    键是 `plans/<plan_id>/v<N>.md`，与 `fetch_plan_body` 的 `plans/<ref>.md`
-    规则一致（`plan_ref = "<plan_id>/v<N>"`），所以执行路径不用改。
+    键是 `plans/<plan_id>/v<N>.md`，与 `load_plan_version` 读的是同一个键。
 
     但**允许覆盖会直接毁掉审计**：审计链里记的是「v2 的 sha256 是 X」，
     如果 v2 这个键能被改写，那么"被批准并演练过的 v2"和"实际被执行的 v2"
@@ -312,7 +257,7 @@ async def put_plan_version(inp: PlanVersionInput) -> StepResult:
 
     if not _PLAN_BUCKET:
         # 没有桶时**不能**静默成功：计划评审链会以为正文已落盘，
-        # 而真执行时 fetch_plan_body 会取不到。
+        # 而演练/执行时 load_plan_version 会取不到。
         raise RuntimeError(
             "DR_PLAN_BUCKET 未设置，无法写入计划正文。"
             "这一步静默跳过的后果是：评审链显示计划已存在，而真切换时取不到正文。"
@@ -368,251 +313,98 @@ async def put_plan_version(inp: PlanVersionInput) -> StepResult:
         )
 
 
-# ── ② 拉起 EKS 节点组 ─────────────────────────────────────────────────────
+# ── ①c 按版本取回正文（演练/执行用） ─────────────────────────────────────
+
+
+@dataclass
+class LoadPlanInput:
+    plan_id: str
+    version: int
+    #: 评审链里记下的那一版的摘要。
+    sha256: str
+
+
+@dataclass
+class LoadedPlan:
+    plan_id: str
+    version: int
+    sha256: str
+    body: str
+    s3_key: str
 
 
 @activity.defn
-async def scale_up_nodegroup(inp: ActivityInput) -> StepResult:
-    """把守夜灯站点的节点组从 0 拉到 2。
+async def load_plan_version(inp: LoadPlanInput) -> LoadedPlan:
+    """取回 `plans/<plan_id>/v<N>.md`，并**按内容重新计算**摘要核对。
 
-    ⚠️ 核实**不看 update-nodegroup-config 的返回**,而是数真实节点数 ——
-    本项目已实测六次「命令成功但没生效」。
+    只看对象元数据里的 sha256 不够：元数据是写入方自报的，一个被覆盖的对象
+    完全可以带着旧元数据。所以这里对取回的**字节**重新算一遍 ——
+    「被批准并演练过的 v2」与「此刻要执行的 v2」必须是同一份内容。
+
+    不一致时抛不可重试的错误：重试一万次也不会让内容变对。
     """
-    ng = _NODEGROUP or "<DR_EKS_NODEGROUP 未设>"
-    cmd = (
-        f"aws eks update-nodegroup-config --region {_REGION} "
-        f"--cluster-name {_EKS_CLUSTER} --nodegroup-name {ng} "
-        f"--scaling-config minSize=2,desiredSize=2,maxSize=3"
-    )
+    import hashlib  # noqa: PLC0415
 
-    if inp.dry_run:
-        # 只读:把当前形态查出来,让人看见「从什么变到什么」。
-        detail: dict[str, Any] = {}
-        reason = None
-        try:
-            eks = _boto3().client("eks", region_name=_REGION)
-            if not _NODEGROUP:
-                names = eks.list_nodegroups(clusterName=_EKS_CLUSTER)["nodegroups"]
-                detail["nodegroups_found"] = names
-                reason = "DR_EKS_NODEGROUP 未设置，无法确定要拉起哪个节点组"
-            else:
-                d = eks.describe_nodegroup(
-                    clusterName=_EKS_CLUSTER, nodegroupName=_NODEGROUP
-                )["nodegroup"]
-                detail["current_scaling"] = d["scalingConfig"]
-                detail["status"] = d["status"]
-        except Exception as e:  # noqa: BLE001
-            reason = f"查当前节点组形态失败：{type(e).__name__}: {e}"
+    from temporalio.exceptions import ApplicationError  # noqa: PLC0415
 
-        return StepResult(
-            step="scale_up_nodegroup",
-            executed=False,
-            would_run=[cmd],
-            detail=detail,
-            verified=None if reason else True,
-            inconclusive_reason=reason,
+    if not _PLAN_BUCKET:
+        raise ApplicationError("DR_PLAN_BUCKET 未设置，取不到计划正文", non_retryable=True)
+    key = f"plans/{inp.plan_id}/v{inp.version}.md"
+    obj = _boto3().client("s3", region_name=_REGION).get_object(Bucket=_PLAN_BUCKET, Key=key)
+    data = obj["Body"].read()
+    digest = hashlib.sha256(data).hexdigest()
+    if digest != inp.sha256:
+        raise ApplicationError(
+            f"{key} 的内容摘要 {digest[:12]}… 与评审链记录的 {inp.sha256[:12]}… 不一致。"
+            "被批准的那一版与此刻取到的不是同一份文件 —— 拒绝据此演练或执行。",
+            non_retryable=True,
         )
-
-    import asyncio  # noqa: PLC0415
-
-    eks = _boto3().client("eks", region_name=_REGION)
-    eks.update_nodegroup_config(
-        clusterName=_EKS_CLUSTER,
-        nodegroupName=_NODEGROUP,
-        scalingConfig={"minSize": 2, "desiredSize": 2, "maxSize": 3},
-    )
-    activity.heartbeat("update_nodegroup_config 已提交，开始等节点真的起来")
-
-    # 核实用与执行不同的手段：数 EC2 实例，而不是看上面那个调用的返回。
-    ec2 = _boto3().client("ec2", region_name=_REGION)
-    filters = [
-        {"Name": "tag:eks:cluster-name", "Values": [_EKS_CLUSTER]},
-        {"Name": "instance-state-name", "Values": ["running"]},
-    ]
-    found = 0
-    for _ in range(40):  # 最多约 10 分钟
-        activity.heartbeat(f"已 running 的节点数：{found}")
-        resp = ec2.describe_instances(Filters=filters)
-        found = sum(len(r["Instances"]) for r in resp["Reservations"])
-        if found >= 2:
-            break
-        await asyncio.sleep(15)
-
-    # ── 核实升级：数 Ready 的 k8s 节点，不只数 EC2 ────────────────────
-    #
-    # 2026-09-24 演练时原来的判据是数 EC2 —— 那只证明 ASG 扩容成功，
-    # **不证明集群获得了可调度容量**。对切换来说差别极大：你可能有两台
-    # EC2 和零个可调度节点，而步骤会报 verified=True 继续往下走。
-    ready, ready_err = count_ready_nodes()
-    for _ in range(20):
-        if ready is not None and ready >= 2:
-            break
-        activity.heartbeat(f"Ready 的 k8s 节点数：{ready}")
-        await asyncio.sleep(15)
-        ready, ready_err = count_ready_nodes()
-
-    return StepResult(
-        step="scale_up_nodegroup",
-        executed=True,
-        detail={"running_nodes": found, "ready_k8s_nodes": ready},
-        # ⚠️ ready 为 None 表示**查不到**（不是「没有 Ready 节点」），
-        # 此时 verified 也必须是 None —— 未测量不能写成测量值。
-        verified=(None if ready is None else ready >= 2),
-        inconclusive_reason=(
-            ready_err
-            if ready is None
-            else (
-                None
-                if ready >= 2
-                else f"EC2 起了 {found} 台，但只有 {ready} 个 k8s 节点 Ready"
-            )
-        ),
-        detail_note=(
-            "running_nodes 数的是 EC2 实例，ready_k8s_nodes 数的是 Ready 的 "
-            "k8s 节点。前者只证明 ASG 扩了，后者才证明集群真有可调度容量。"
-        ),
+    return LoadedPlan(
+        plan_id=inp.plan_id, version=inp.version, sha256=digest,
+        body=data.decode("utf-8"), s3_key=key,
     )
 
 
-# ── ③ 提升数据库 ──────────────────────────────────────────────────────────
+# ── ①d 导出执行记录 ───────────────────────────────────────────────────────
+
+
+@dataclass
+class ExecutionRecordInput:
+    plan_id: str
+    #: 一次运行的唯一名（workflow id + run id 前缀）。
+    record_id: str
+    record: dict[str, Any]
 
 
 @activity.defn
-async def promote_database(inp: ActivityInput) -> StepResult:
-    """把韩国从集群提升为可写。
+async def put_execution_record(inp: ExecutionRecordInput) -> StepResult:
+    """把一次演练/执行的完整记录写到 `plans/<plan_id>/executions/<record_id>.json`。
 
-    ⚠️ 两个变体的差别是**会不会丢数据**,所以 decision 必须由上游的
-    signal 给,这里不设默认值、不做推断。
+    放在 `plans/` 前缀下是刻意的：实例角色的 `dr-plan-write` 只覆盖 `plans/*`，
+    不需要为此新开一条写权限。同样用条件写，记录一旦写下就不可覆盖。
     """
-    from workflows import DECISION_ALLOW_DATA_LOSS, DECISION_ORDERED  # noqa: PLC0415
+    import json  # noqa: PLC0415
 
-    if inp.decision not in (DECISION_ORDERED, DECISION_ALLOW_DATA_LOSS):
-        # 不猜。没有合法裁决就失败。
-        raise ValueError(
-            f"promote_database 需要明确裁决（{DECISION_ORDERED} 或 "
-            f"{DECISION_ALLOW_DATA_LOSS}），收到 {inp.decision!r}。"
-            "这一步不设默认值：两个变体的差别是会不会丢数据。"
-        )
-
-    ordered = inp.decision == DECISION_ORDERED
-    base = (
-        f"aws rds failover-global-cluster --region {_PRIMARY_REGION} "
-        f"--global-cluster-identifier {_GLOBAL_CLUSTER} "
-        f"--target-db-cluster-identifier {_SECONDARY_CLUSTER_ARN or '<未设>'}"
-    )
-    # 与真实调用保持一致:两边都显式带参数。
-    # 早先这里是 `base if ordered else …`(有序分支不带任何标志),
-    # 那会让 dry_run 打印的命令和真执行路径**不是同一条命令** ——
-    # 而 would_run 的全部价值就在于「照着它跑能复现」。
-    cmd = f"{base} --switchover" if ordered else f"{base} --allow-data-loss"
-
-    if inp.dry_run:
-        detail: dict[str, Any] = {"decision": inp.decision, "ordered": ordered}
-        reason = None
-        try:
-            rds = _boto3().client("rds", region_name=_PRIMARY_REGION)
-            gc = rds.describe_global_clusters(
-                GlobalClusterIdentifier=_GLOBAL_CLUSTER
-            )["GlobalClusters"][0]
-            detail["members"] = [
-                {"arn": m["DBClusterArn"], "is_writer": m["IsWriter"]}
-                for m in gc.get("GlobalClusterMembers", [])
-            ]
-        except Exception as e:  # noqa: BLE001
-            reason = f"查全局集群成员失败：{type(e).__name__}: {e}"
-
-        return StepResult(
-            step="promote_database",
-            executed=False,
-            would_run=[cmd],
-            detail=detail,
-            verified=None if reason else True,
-            inconclusive_reason=reason,
-        )
-
-    # ⚠️ 真执行路径。
-    rds = _boto3().client("rds", region_name=_PRIMARY_REGION)
-    kwargs: dict[str, Any] = {
-        "GlobalClusterIdentifier": _GLOBAL_CLUSTER,
-        "TargetDbClusterIdentifier": _SECONDARY_CLUSTER_ARN,
-    }
-    # ## 为什么两个分支都**显式**传参
-    #
-    # API 文档写着「If you don't specify AllowDataLoss, the global database
-    # cluster operation defaults to a switchover」—— 所以省略两个参数也能得到
-    # 有序切换。但这一步的整个设计前提是「有序 vs 丢数据」必须是一个
-    # **明确的裁决**,而依赖一个 API 默认值恰好违背这一点:
-    # 上游若哪天改了默认行为,这里会静默地变成另一种语义。
-    #
-    # AllowDataLoss 与 Switchover 是**互斥**的(API 约束:
-    # "Can't be specified together with the Switchover parameter"),
-    # 所以正好每个分支各传一个。
-    #
-    # 显式传参还有一个好处:CloudTrail 里能直接看出当时是哪种语义,
-    # 而不是「什么都没传,所以大概是 switchover」。
-    if ordered:
-        kwargs["Switchover"] = True
-    else:
-        kwargs["AllowDataLoss"] = True
-    rds.failover_global_cluster(**kwargs)
-    activity.heartbeat("failover_global_cluster 已提交")
-
-    return StepResult(
-        step="promote_database",
-        executed=True,
-        detail={"decision": inp.decision},
-        # 核实留给 ④ —— 提升是异步的，这里不假装已经完成。
-        verified=None,
-        inconclusive_reason="提升是异步的，由 verify_step 独立核实写入端点",
-    )
-
-
-# ── ④ 核实 ────────────────────────────────────────────────────────────────
-
-
-@activity.defn
-async def verify_step(inp: ActivityInput) -> StepResult:
-    """独立核实切换结果。
-
-    纪律:**核实必须用与执行不同的手段**。所以这里查的是
-    「全局集群里谁是 writer」,而不是重读上一步调用的返回。
-    """
-    detail: dict[str, Any] = {}
-    reason = None
-    verified: bool | None = None
-
+    if not _PLAN_BUCKET:
+        raise RuntimeError("DR_PLAN_BUCKET 未设置，执行记录无处可写")
+    key = f"plans/{inp.plan_id}/executions/{inp.record_id}.json"
+    data = json.dumps(inp.record, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+    s3 = _boto3().client("s3", region_name=_REGION)
     try:
-        rds = _boto3().client("rds", region_name=_PRIMARY_REGION)
-        gc = rds.describe_global_clusters(
-            GlobalClusterIdentifier=_GLOBAL_CLUSTER
-        )["GlobalClusters"][0]
-        members = [
-            {"arn": m["DBClusterArn"], "is_writer": m["IsWriter"]}
-            for m in gc.get("GlobalClusterMembers", [])
-        ]
-        detail["members"] = members
-        writers = [m for m in members if m["is_writer"]]
-
-        if inp.dry_run:
-            # dry_run 下什么都没改，所以「韩国还不是 writer」是预期的，
-            # 不是失败。如实说明，不给一个会被误读的 True/False。
-            verified = None
-            reason = "dry_run：未执行提升，writer 仍应是主 region —— 这不是失败"
-        elif len(writers) != 1:
-            verified = None
-            reason = f"writer 数量异常（{len(writers)} 个），无法判定切换是否完成"
-        else:
-            verified = _REGION in writers[0]["arn"]
-            if not verified:
-                reason = f"writer 仍在 {writers[0]['arn']}，未切到 {_REGION}"
+        s3.put_object(
+            Bucket=_PLAN_BUCKET, Key=key, Body=data,
+            ContentType="application/json; charset=utf-8", IfNoneMatch="*",
+        )
     except Exception as e:  # noqa: BLE001
-        verified = None
-        reason = f"核实查询失败，无法判断：{type(e).__name__}: {e}"
-
+        code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
+        if code not in ("PreconditionFailed", "ConditionalRequestConflict"):
+            raise
+        # 已存在：activity 重试时会走到这里。同一个 record_id 只对应一次运行。
+        return StepResult(
+            step="put_execution_record", executed=False, verified=True,
+            detail={"s3_key": key}, detail_note="记录已存在（判为本次写入的重试）",
+        )
     return StepResult(
-        step="verify_step",
-        executed=True,
-        detail=detail,
-        verified=verified,
-        inconclusive_reason=reason,
+        step="put_execution_record", executed=True, verified=True,
+        detail={"s3_key": key, "bytes": len(data)},
     )

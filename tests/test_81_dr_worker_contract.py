@@ -100,40 +100,46 @@ class TestWorkerUsesGrpcPort:
 
 
 class TestDecisionPointHasNoDefault:
-    """决策点不许有默认值：超时要失败。"""
+    """决策点不许有默认值：等不到人就停住，不替人选。
 
-    def test_timeout_raises_instead_of_choosing(self):
-        src = _src("workflows.py")
-        # 超时分支必须抛，而不是给 self._decision 赋一个值。
-        assert "ApplicationError" in src, "决策超时必须失败"
-        assert "non_retryable=True" in src, "决策超时不该无限重试"
-        # 最危险的默认值：自动选 allow_data_loss。
-        bad = re.search(
-            r"except\s+TimeoutError[\s\S]{0,400}?_decision\s*=\s*['\"]?allow", src
+    2026-10-05 起决策点在 DrRunbookWorkflow 的 decision 步骤里（原来在已退役的
+    DrFailoverWorkflow.database_decision）。行为由 test_129 在真实测试服务器上守；
+    这里守代码里不能消失的那几处。
+    """
+
+    def test_timeout_stalls_instead_of_choosing(self):
+        src = _src("runbook_workflow.py")
+        i = src.index("except asyncio.TimeoutError:")
+        seg = src[i : i + 700]
+        assert '"stalled"' in seg, "等人超时必须停住"
+        assert "没有替人做决定" in seg
+        # 最危险的默认值：超时后自动选一个裁决。
+        assert "allow" not in seg and "switchover" not in seg
+
+    def test_choice_must_be_one_of_the_declared_options(self):
+        src = _src("runbook_workflow.py")
+        assert 'if args.get("choice") not in options:' in src
+
+    def test_illegal_input_is_rejected_before_history(self):
+        """非法裁决由 Update validator 拒掉 —— 不再有没 validator 的 signal 通道。"""
+        src = _src("runbook_workflow.py")
+        assert "@decide.validator" in src
+        assert "@workflow.signal" not in src, (
+            "signal 没有 validator，非法值照样落进 history —— 执行工作流只走 Update"
         )
-        assert not bad, "超时后自动选 allow_data_loss 是最坏的默认值"
-
-    def test_promote_activity_refuses_without_decision(self):
-        src = _src("activities.py")
-        # promote_database 必须在没有合法裁决时抛，而不是挑一个。
-        assert "raise ValueError" in src
-        assert "不设默认值" in src
-
-    def test_illegal_signal_is_ignored_not_fatal(self):
-        src = _src("workflows.py")
-        # signal handler 里抛异常会让 handler 无限重试，把一次手滑变成卡死。
-        assert "已忽略" in src or "ignored" in src.lower()
 
 
 class TestVerifiedIsThreeState:
-    """verified 是三态：None 表示未核实，不许用 False 冒充。"""
+    """verified / verdict 是三态：不许用 False/FAIL 冒充「没测到」。"""
 
     def test_step_result_verified_allows_none(self):
         src = _src("activities.py")
         assert "verified: bool | None" in src, "verified 必须允许 None"
         assert "inconclusive_reason" in src, "无法判断时要写明原因"
 
-    def test_dry_run_verify_does_not_claim_false(self):
-        src = _src("activities.py")
-        # dry_run 下什么都没改，说「核实失败」会被误读成切换失败。
-        assert "这不是失败" in src
+    def test_probe_exceptions_become_unknown_not_fail(self):
+        src = _src("probes.py")
+        i = src.index("def _run(")
+        seg = src[i : i + 1600]
+        assert "except Exception" in seg and "verdict=UNKNOWN" in seg
+        assert "FAIL 必须是测到了一个不合格的值" in src

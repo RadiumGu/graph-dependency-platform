@@ -71,7 +71,14 @@ class TestNotYetGranted:
     # 「Resource 是三个具体 ARN 而不是 *」。
     # **把它留在这个清单里会让 test_83 恒红** —— 而恒红项的危害不是它本身，
     # 是它训练所有人忽略红色。
+    #
+    # ── 2026-10-05：两条已授予的写权限收回 ────────────────────────────
+    # 执行模型改为「人执行每个变更，Temporal 只核实」。worker 代码里已没有
+    # 写类调用，所以 eks:UpdateNodegroupConfig 与 rds:FailoverGlobalCluster
+    # 回到这个清单 —— 代码不调用不等于角色不能调用，收回权限才让它成为机制。
     FORBIDDEN = {
+        "eks:UpdateNodegroupConfig": "人执行扩容，worker 只核实（2026-10-05 收回）",
+        "rds:FailoverGlobalCluster": "人执行提升，worker 只核实（2026-10-05 收回）",
         "eks:UpdateNodegroupVersion": "会滚动替换节点，不是切换需要的动作",
         "eks:DeleteNodegroup": "不可逆",
         "eks:CreateNodegroup": "切换不需要建新节点组",
@@ -95,20 +102,18 @@ class TestNotYetGranted:
 class TestGrantedOnesAreNarrow:
     """已放开的权限要卡到最细。"""
 
-    def test_nodegroup_scaling_is_resource_scoped(self, doc: dict):
-        st = next(
-            s for s in _statements(doc) if s.get("Sid") == "ScaleUpPilotLightNodegroup"
-        )
-        acts = st["Action"]
-        acts = [acts] if isinstance(acts, str) else acts
-        assert acts == ["eks:UpdateNodegroupConfig"], (
-            f"这条只该有 UpdateNodegroupConfig，实际 {acts}"
-        )
-        res = st["Resource"]
-        assert res not in ("*", ["*"]), (
-            "节点组权限不许用 *。写成 * 意味着以后任何新节点组都自动落进"
-            "这个角色的能力范围 —— 那是在没有需求时先开口子。"
-        )
+    def test_probe_reads_are_resource_scoped(self, doc: dict):
+        """探针的三条只读要按资源收紧，不许用 *。"""
+        for sid in ("ProbeReadDynamoDbTable", "ProbeReadEcrImages", "ProbeReadLambdaConfig"):
+            st = next(s for s in _statements(doc) if s.get("Sid") == sid)
+            assert st["Resource"] not in ("*", ["*"]), sid
+
+    def test_no_write_actions_at_all(self, doc: dict):
+        """除了 S3 读，所有动作都必须是只读动词。"""
+        verbs = ("Describe", "Get", "List")
+        bad = [a for a in _all_actions(doc)
+               if not a.startswith("s3:") and not a.split(":", 1)[1].startswith(verbs)]
+        assert not bad, f"worker 策略里出现了非只读动作 {bad}"
 
     def test_s3_read_is_prefix_scoped(self, doc: dict):
         st = next(s for s in _statements(doc) if s.get("Sid") == "ReadDrPlanBodies")
@@ -132,15 +137,8 @@ class TestGrantedOnesAreNarrow:
         assert "404" in text and "403" in text, "ListBucket 的理由要留在模板里"
 
 
-class TestNodegroupArnIsPinned:
-    def test_arn_includes_uuid_segment(self, doc: dict):
-        default = doc["Parameters"]["NodegroupArn"]["Default"]
-        # EKS 的节点组 ARN 末段是它自己生成的 UUID；缺了它就等于 ARN 写错。
-        assert re.search(r"/[0-9a-f]{8}-[0-9a-f]{4}-", default), (
-            "节点组 ARN 少了 UUID 段。这个值只能从 describe-nodegroup 取，不能拼。"
-        )
-
-    def test_rebuild_hazard_is_documented(self, doc: dict):
-        desc = doc["Parameters"]["NodegroupArn"]["Description"]
-        # 节点组重建后 UUID 会变，权限静默失效且表现为 AccessDenied。
-        assert "AccessDenied" in desc or "重建" in desc
+class TestWriteGrantsStayRevoked:
+    def test_reason_is_recorded_in_template(self):
+        text = TPL.read_text(encoding="utf-8")
+        assert "两条写权限已收回" in text
+        assert "代码不调用\n          # 不等于角色不能调用" in text or "不等于角色不能调用" in text

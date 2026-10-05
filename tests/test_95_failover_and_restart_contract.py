@@ -54,80 +54,48 @@ _load_cfn = load_cfn
 
 
 class TestPromotionSemanticsAreExplicit:
-    def test_both_branches_pass_a_parameter(self, act: str):
-        """两个分支都要显式传参，不许依赖 API 默认值。"""
-        assert 'kwargs["Switchover"] = True' in act, (
-            "有序分支必须显式传 Switchover=True。"
-            "靠「不传 AllowDataLoss 就默认 switchover」等于把一个"
-            "**明确的裁决**落在 API 默认值上"
-        )
-        assert 'kwargs["AllowDataLoss"] = True' in act
+    """提升的两个变体都必须显式带标志，不许依赖 API 默认值。
 
-    def test_mutual_exclusivity_is_documented(self, act: str):
-        i = act.index('kwargs["Switchover"] = True')
-        seg = act[max(0, i - 1400) : i]
-        assert "互斥" in seg, "要写明这两个参数互斥（API 约束）"
+    2026-10-05 起提升由人执行：命令原文由 runbook_draft 生成、经人审核后写进
+    计划。判据从「activity 里的 kwargs」移到「给人的命令原文」—— 但要守的
+    东西没变：有序 vs 丢数据必须是一个**明确的裁决**，不能落在某个默认值上。
+    """
 
-    def test_would_run_matches_real_call(self, act: str):
-        """`would_run` 必须和真实调用是同一条命令。
-
-        早先有序分支的 would_run 不带任何标志，而真调用传 Switchover ——
-        dry_run 打印的命令照着跑**复现不出**真执行路径，
-        而 would_run 的全部价值就在于「照着它跑能复现」。
-        """
-        assert '--switchover" if ordered else' in act
-        assert "--allow-data-loss" in act
-
-    def test_no_default_decision(self, act: str):
-        """没有明确裁决就必须失败，不设默认值。"""
-        assert "这一步不设默认值" in act
-
-
-class TestFailoverPermissionScope:
     @pytest.fixture(scope="class")
-    def perm(self) -> dict:
-        return _load_cfn(PERM)
+    def draft(self) -> str:
+        return (ROOT / "dr-plan-generator" / "worker" / "runbook_draft.py").read_text(encoding="utf-8")
 
-    def _stmt(self, perm: dict, sid: str) -> dict:
-        for r in perm["Resources"].values():
-            doc = (r.get("Properties") or {}).get("PolicyDocument") or {}
-            for s in doc.get("Statement") or []:
-                if s.get("Sid") == sid:
-                    return s
-        pytest.fail(f"找不到 Sid={sid}")
+    def test_both_branches_pass_a_flag(self, draft: str):
+        assert "--switchover" in draft, "有序分支必须显式带 --switchover"
+        assert "--allow-data-loss" in draft
 
-    def test_action_is_only_failover(self, perm: dict):
-        st = self._stmt(perm, "PromoteSecondaryCluster")
-        acts = st["Action"]
-        acts = [acts] if isinstance(acts, str) else acts
-        assert acts == ["rds:FailoverGlobalCluster"], f"实际 {acts}"
+    def test_mutual_exclusivity_is_documented(self, draft: str):
+        i = draft.index('id="promote-aurora"')
+        assert "互斥" in draft[i : i + 2400], "要写明这两个参数互斥（API 约束）"
 
-    def test_resource_is_not_wildcard(self, perm: dict):
-        st = self._stmt(perm, "PromoteSecondaryCluster")
-        res = st["Resource"]
-        res = [res] if isinstance(res, str) else res
-        assert "*" not in [str(x).strip() for x in res], (
-            "这个 action **支持资源级权限**（官方样例策略就是限定的），"
-            "所以没有理由用 *"
-        )
+    def test_decision_precedes_promotion(self, draft: str):
+        assert draft.index('id="aurora-mode"') < draft.index('id="promote-aurora"')
 
-    def test_resource_has_three_arns(self, perm: dict):
-        """三个：全局集群 + **当前主集群** + 目标从集群。
+    def test_no_default_decision(self, draft: str):
+        i = draft.index('id="aurora-mode"')
+        seg = draft[i : i + 900]
+        assert 'kind="decision"' in seg and "abort" in seg
+        assert "default" not in seg.lower()
 
-        漏掉主集群会让调用被拒，而报错只说没权限，不会说少了哪个 ARN。
-        """
-        st = self._stmt(perm, "PromoteSecondaryCluster")
-        res = st["Resource"]
-        res = [res] if isinstance(res, str) else res
-        assert len(res) == 3, f"应当是 3 个 ARN，实际 {len(res)}"
 
-    def test_global_cluster_arn_has_no_region(self):
-        """全局集群的 ARN 没有 region 段 —— 两个冒号连着，不是笔误。"""
+class TestFailoverPermissionRevoked:
+    """2026-10-05：rds:FailoverGlobalCluster 已从 worker 角色收回。
+
+    原来这组守的是「只有那一个 action、Resource 是三个具体 ARN」。执行模型改为
+    人执行之后，正确的边界是 worker **根本没有**这条权限。三个 ARN 的教训
+    （官方样例要求带上当前主集群，漏掉只报没权限）记在 runbook_draft 的
+    命令旁边 —— 现在是人用自己的凭证执行，那条约束对人同样成立。
+    """
+
+    def test_action_absent_from_template(self):
         text = PERM.read_text(encoding="utf-8")
-        assert "arn:aws:rds::" in text, (
-            "全局集群 ARN 形如 arn:aws:rds::<acct>:global-cluster:<name>"
-        )
-        assert "没有 region 段" in text, "要写明这不是笔误"
+        assert "- rds:FailoverGlobalCluster" not in text
+        assert "- eks:UpdateNodegroupConfig" not in text
 
 
 class TestCodeChangeTriggersRestart:

@@ -113,7 +113,7 @@ def test_start_args_carry_the_fields_a_failover_cannot_omit():
     # 幂等:重试不能起出第二个切换流程。
     assert args["request_id"]
 
-    # ⚠️ 计划正文不许进 input —— 保留期 1 天,且 payload 上限拿不到。
+    # ⚠️ 计划正文不许进 input —— 权威正文在 S3 不可覆盖的版本键里（保留期 30 天后 history 会被清掉）。
     assert "plan_ref" in args["input"]
     body_like = [v for v in args["input"].values() if isinstance(v, str) and len(v) > 500]
     assert not body_like, "计划正文不该塞进 input,只放引用"
