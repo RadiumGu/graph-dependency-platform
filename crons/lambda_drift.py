@@ -41,106 +41,160 @@ import urllib3
 REGIONS = ("ap-northeast-1", "ap-northeast-2")
 REPO = "/home/ec2-user/works/graph-dependency-platform"
 
-# 方向 B 的覆盖面：{函数名: (仓库里的主模块路径, 包内文件名)}
-# ⚠️ 这个表就是覆盖面本身 —— 不在表里的函数**没有被方向 B 检查过**，
-#    报告必须把这一点说出来，不能让人误以为全查过了。
-SOURCE_MAP = {
-    # value 是**成员列表**而不是单个 (path, member)。改成多成员的理由见下
-    # 「为什么单成员会给出假绿」。
-    "neptune-etl-trigger": (
-        ("infra/lambda/etl_trigger/neptune_etl_trigger.py", "neptune_etl_trigger.py"),
-    ),
-    "neptune-etl-from-cfn": (
-        ("infra/lambda/etl_cfn/neptune_etl_cfn.py", "neptune_etl_cfn.py"),
-    ),
-    "neptune-etl-from-deepflow": (
-        ("infra/lambda/etl_deepflow/neptune_etl_deepflow.py", "neptune_etl_deepflow.py"),
-    ),
-    # etl_aws 是唯一模块化的 ETL（7 个文件）。2026-10-04 实测：只比
-    # neptune_client.py 会**报绿**，而同一个包里有两个模块真在漂移 ——
-    #     neptune_client.py        线上 ≡ 仓库     ← 原来只比这个
-    #     neptune_client_base.py   线上 ✗（-1014B）← dc144da 凭据 None 保护
-    #     business_layer.py        线上 ✗（-2096B）← 93e3120 清 6 条业务层假边
-    # 所以必须比全部 7 个。
-    "neptune-etl-from-aws": (
-        ("infra/lambda/etl_aws/handler.py", "handler.py"),
-        ("infra/lambda/etl_aws/neptune_client.py", "neptune_client.py"),
-        ("infra/lambda/etl_aws/neptune_client_base.py", "neptune_client_base.py"),
-        ("infra/lambda/etl_aws/business_layer.py", "business_layer.py"),
-        ("infra/lambda/etl_aws/cloudwatch.py", "cloudwatch.py"),
-        ("infra/lambda/etl_aws/config.py", "config.py"),
-        ("infra/lambda/etl_aws/graph_gc.py", "graph_gc.py"),
-    ),
-    # ── 2026-10-04 补：这四个函数此前**完全不在表里** ────────────────────
-    #
-    # 加它们的直接原因是一次全量核对：把线上 Lambda 列表与本表对照，发现
-    # 表里 5 个函数之外还有 4 个在写同一张图 / 读同一套查询，而它们**从未
-    # 被内容比对检查过**。逐个实测，**四个全在漂移**：
-    #
-    #     neptune-etl-from-xray          +10337 B  3a383d2 服务名走真源解析，
-    #                                              补出 GenAI 层与 12 条边
-    #     neptune-etl-from-appsignals      +310 B  0b0408c scope 由写入方就地写
-    #     neptune-etl-from-agentcore        -15 B  仅注释里的文档路径重命名
-    #     petsite-rca-engine               +181 B  PR #47 的 active 过滤
-    #                                              （与 gp-window-flush 同一份源）
-    #
-    # 命中率 4/4 不是巧合：**没有判据看着的地方，漂移不会自己停下**。
-    # 本表的覆盖面本身就是判据的一部分 —— 漏一个函数等于那个函数永远绿。
-    #
-    # 前三个是单文件 ETL（手工 `aws lambda create-function` 建的，无栈归属，
-    # 见 docs/lessons/tech-debt-etl-lambdas-outside-cfn.md），多成员对它们
-    # 没有额外价值；纳入表里拿到的是**广度**。
-    "neptune-etl-from-xray": (
-        ("infra/lambda/etl_xray/neptune_etl_xray.py", "neptune_etl_xray.py"),
-    ),
-    "neptune-etl-from-appsignals": (
-        ("infra/lambda/etl_appsignals/neptune_etl_appsignals.py", "neptune_etl_appsignals.py"),
-    ),
-    "neptune-etl-from-agentcore": (
-        ("infra/lambda/etl_agentcore/neptune_etl_agentcore.py", "neptune_etl_agentcore.py"),
-    ),
-    # petsite-rca-engine 与 gp-window-flush 打的是**同一份 rca/ 源码**，
-    # 所以同一个漂移会同时出现在两个函数上 —— PR #47 的 active 过滤实测
-    # 就是如此。两个都要比，漏一个就留一半。
-    "petsite-rca-engine": (
-        ("rca/neptune/neptune_queries.py", "neptune/neptune_queries.py"),
-        ("rca/handler.py", "handler.py"),
-        ("rca/core/rca_engine.py", "core/rca_engine.py"),
-        ("rca/config.py", "config.py"),
-    ),
-    # gp-window-flush 是第一个发现「主模块一致但函数仍在漂移」的实例
-    # （2026-10-04，PR #47 合并后未部署）：
-    #     window_flush_handler.py      线上 ≡ 仓库   ← Handler 指向它
-    #     handler.py / config.py / core/rca_engine.py  线上 ≡ 仓库
-    #     neptune/neptune_queries.py   线上 ✗（-181B）← PR #47 的 5 处 active 过滤
-    # 入口模块一致掩盖了依赖模块的漂移。现在两者都比。
-    "gp-window-flush": (
-        ("rca/neptune/neptune_queries.py", "neptune/neptune_queries.py"),
-        ("rca/window_flush_handler.py", "window_flush_handler.py"),
-        ("rca/handler.py", "handler.py"),
-        ("rca/core/rca_engine.py", "core/rca_engine.py"),
-        ("rca/config.py", "config.py"),
-    ),
+# ── 方向 B 的覆盖面 ─────────────────────────────────────────────────────
+#
+# `SOURCE_MAP` 的形状仍是 {函数名: ((仓库路径, 包内路径), ...)}，但成员
+# **不再手工列** —— 由 `_enumerate_members()` 从仓库目录与部署包求交得出。
+#
+# ## 为什么改掉手工列表（2026-10-05，这是同一个缺口的第三次）
+#
+# 手工维护成员列表的漏报，三次各不相同，而病因是一个：
+#
+#   ① 2026-10-04  单成员 → 只比一个主模块。实测两例「主模块一致而依赖
+#                  模块在漂移」（gp-window-flush 的 neptune_queries.py、
+#                  etl_aws 的 neptune_client_base.py + business_layer.py）。
+#                  处置：改成成员列表。
+#   ② 2026-10-04  表外函数 → 4 个写同一张图的函数根本不在表里，
+#                  实测**四个全在漂移**。处置：把它们加进表。
+#   ③ 2026-10-05  表内函数的成员列表仍不全 → etl_aws 有 14 个业务 .py，
+#                  表里手工列了 7 个，**整个 collectors/ 子目录从未被比对**。
+#                  实测 collectors/eks.py 漂移 629 B ——
+#                  dc144da「9 处签名路径都缺 None 保护」的修复分散在多个
+#                  文件，前一天只部署了 neptune_client_base.py，漏了这个，
+#                  于是那个修复**只上线了一部分**。
+#
+# 前两次的处置都是「把漏掉的加进去」。第三次证明那不是修复，是推迟 ——
+# 下一个新增的模块仍然不会自动被覆盖。
+#
+# 三次的命中率说明同一件事：**没有判据看着的地方，漂移不会自己停下。**
+# ② 的四个表外函数实测四个全在漂移；③ 的枚举刚上线就抓到
+# petsite-rca-engine 有 5 个模块漂移（整个 engines/ 子目录落后，
+# 含 b6a8058「删掉最后一个 direct 实现，迁移债务清零」—— 线上还跑着
+# 那个已被宣布删除的实现）。覆盖面本身就是判据的一部分。
+#
+# 同一个病在本仓已有定论：`infra/dr-korea/temporal-1.32/deploy-worker.sh`
+# 把「手工文件白名单 + curl」改成「git ls-tree 枚举 + git show」，
+# 理由逐字适用于这里 ——「清单由 git ls-tree 生成，目录里有什么就发什么，
+# 没有可漏的白名单」。
+#
+# ## 判据
+#
+# 成员 = (仓库 `<root>` 下被 git 跟踪的 .py) ∩ (部署包里的 .py)，再排除
+# vendored 第三方目录。求交而不是单取仓库侧，是因为：
+#
+#   · 包里有而仓库没有 → 第三方依赖，比它没有意义（gp-window-flush 的包
+#     有 2008 个条目，绝大多数是 strands/starlette/anyio）
+#   · 仓库有而包里没有 → 该函数不带这个模块，比了会误报「未核实」
+#
+# ⚠️ 这个交集**就是覆盖面本身**。不在 SOURCE_ROOTS 里的函数没有被方向 B
+#    检查过，报告必须把这一点说出来。
+
+#: 函数 → 其部署包对应的仓库根目录。
+#: gp-window-flush 与 petsite-rca-engine 共享 `rca/` —— 同一个漂移会同时
+#: 出现在两个函数上，所以两个都要在表里（2026-10-04 实测 PR #47 的
+#: active 过滤正是如此）。
+SOURCE_ROOTS = {
+    "neptune-etl-trigger":         "infra/lambda/etl_trigger",
+    "neptune-etl-from-cfn":        "infra/lambda/etl_cfn",
+    "neptune-etl-from-deepflow":   "infra/lambda/etl_deepflow",
+    "neptune-etl-from-aws":        "infra/lambda/etl_aws",
+    "neptune-etl-from-xray":       "infra/lambda/etl_xray",
+    "neptune-etl-from-appsignals": "infra/lambda/etl_appsignals",
+    "neptune-etl-from-agentcore":  "infra/lambda/etl_agentcore",
+    "gp-window-flush":             "rca",
+    "petsite-rca-engine":          "rca",
 }
-# ── 为什么单成员会给出假绿（2026-10-04 实测，两个独立实例）──────────────────
-#
-# 原设计是「一个函数比一个主模块」。实测两次证明这个判据会漏：
-#
-#   gp-window-flush        入口 window_flush_handler.py 一致，
-#                          而 neptune/neptune_queries.py 漂移 181 B
-#   neptune-etl-from-aws   表里的 neptune_client.py 一致，
-#                          而 neptune_client_base.py / business_layer.py
-#                          合计漂移 3110 B（含一条数据正确性修复）
-#
-# 两次都是「被检查的那个模块恰好一致」。主模块往往是最稳定的那个（入口
-# 签名很少改），而业务逻辑在依赖模块里 —— 所以单成员判据在结构上偏向漏报。
-#
-# `checked_b` 仍按**函数**计数（分母 len(SOURCE_MAP)），刻意不改成按模块：
-# #51 把「没有新漂移就 Skip」接在这个计数上，改语义会动那条刚修好的静默
-# 判据。报告里单独列出模块级覆盖面，不碰计数。
-#
-# 加成员的前提仍是**同形态**：只放未打包 .py（test_124 的
-# test_source_map_holds_only_python 钉着这条）。json / 打包产物不要进来。
+
+#: vendored 第三方依赖的顶层目录。
+#:
+#: 这些包在仓库里**也被 git 跟踪**（etl_aws / etl_deepflow / etl_cfn 把依赖
+#: vendored 进了各自目录），所以单靠「仓库里有」筛不掉它们：etl_aws 的 91 个
+#: 被跟踪 .py 里，77 个是 vendored，只有 14 个是业务代码。
+#:
+#: 比它们没有价值 —— 它们是 pip 产物，变化只会来自一次有意的版本升级，
+#: 而那种升级会同时改 requirements.txt（由别的门禁看着）。
+_VENDORED = frozenset({
+    "certifi", "charset_normalizer", "idna", "requests", "urllib3",
+    "yaml", "_yaml", "bin", "dateutil", "six.py",
+})
+
+
+def _git_tracked_py(root: str) -> set[str]:
+    """`<root>` 下被 git 跟踪的 .py，返回相对 root 的路径。
+
+    用 git 而不是扫目录：构建脚本（build.sh）会往这些目录里装依赖，
+    扫目录会把那些未跟踪文件也算进来。2026-10-04 实测过这个后果 ——
+    残留依赖让 test_53 的 test_m06 把 certifi.core 报成死代码。
+    """
+    try:
+        r = subprocess.run(
+            ["git", "ls-files", "-z", root],
+            cwd=REPO, capture_output=True, timeout=30,
+        )
+        if r.returncode != 0:
+            return set()
+        out: set[str] = set()
+        for p in r.stdout.decode().split("\0"):
+            if p.endswith(".py") and p.startswith(root + "/"):
+                out.add(p[len(root) + 1:])
+        return out
+    except Exception:
+        return set()
+
+
+def _enumerate_members(fn: str, blob: bytes) -> tuple[tuple[str, str], ...]:
+    """求交得出该函数要比对的成员。
+
+    返回 ((仓库路径, 包内路径), ...)，与手工表时代的形状一致。
+    """
+    root = SOURCE_ROOTS.get(fn)
+    if root is None:
+        return ()
+    repo = _git_tracked_py(root)
+    if not repo:
+        return ()
+    try:
+        with zipfile.ZipFile(io.BytesIO(blob)) as z:
+            pkg = {
+                n for n in z.namelist()
+                if n.endswith(".py") and "__pycache__" not in n
+            }
+    except Exception:
+        return ()
+    common = {
+        p for p in (repo & pkg)
+        if p.split("/")[0] not in _VENDORED
+    }
+    return tuple(sorted((f"{root}/{p}", p) for p in common))
+
+
+def _repo_side_members(fn: str) -> tuple[tuple[str, str], ...]:
+    """只看仓库侧的候选成员 —— 不需要部署包，供模块加载时构建 SOURCE_MAP。
+
+    与 `_enumerate_members` 的区别：这里是**候选上限**，运行时再与实际
+    部署包求交。分成两步是为了让 `SOURCE_MAP` 在 import 时就可读 ——
+    报告里的覆盖面、门禁对覆盖面的断言都依赖它。
+    """
+    root = SOURCE_ROOTS.get(fn)
+    if root is None:
+        return ()
+    return tuple(sorted(
+        (f"{root}/{p}", p)
+        for p in _git_tracked_py(root)
+        if p.split("/")[0] not in _VENDORED
+    ))
+
+
+#: 方向 B 的覆盖面。
+#:
+#: 形状与手工表时代一致 —— {函数名: ((仓库路径, 包内路径), ...)} —— 这样
+#: 既有的消费方与门禁都不用改。区别只在于**成员是枚举出来的**，
+#: 所以新增一个业务模块不需要有人记得来改这张表。
+#:
+#: 这里是候选上限（仓库侧）。运行时 `_enumerate_members()` 会与实际部署包
+#: 求交，包里没有的模块不会被当成「未核实」误报。
+SOURCE_MAP = {fn: _repo_side_members(fn) for fn in SOURCE_ROOTS}
+
 
 STALE_HOURS = 1.0
 
@@ -369,10 +423,18 @@ def check(ctx):
 
                 # 方向 B：线上模块与仓库源码逐字比（仅同形态）
                 if region == "ap-northeast-1" and fn in SOURCE_MAP:
-                    pairs = SOURCE_MAP[fn]
                     blob = _deployed_package(lam, fn)      # 整包只下一次
                     if blob is None:
                         content_diff.append((fn, "取不到线上部署包，**未核实**"))
+                        continue
+                    # 成员与**实际部署包**求交 —— 仓库有而包里没有的模块不算
+                    # 「未核实」，它只是说明这个函数不带那个模块。
+                    pairs = _enumerate_members(fn, blob)
+                    if not pairs:
+                        content_diff.append(
+                            (fn, "仓库与部署包的 .py 没有交集，**未核实** —— "
+                                 "要么 SOURCE_ROOTS 指错了目录，要么打包结构变了")
+                        )
                         continue
                     drifted: list[str] = []
                     unverified: list[str] = []
