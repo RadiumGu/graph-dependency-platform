@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+import os
+import pathlib
 import subprocess
 import zipfile
 
@@ -39,7 +41,23 @@ import boto3
 import urllib3
 
 REGIONS = ("ap-northeast-1", "ap-northeast-2")
-REPO = "/home/ec2-user/works/graph-dependency-platform"
+
+#: 仓库根。
+#:
+#: ⚠️ 2026-10-05 之前这里是一个硬编码的绝对路径。那在当时够用 ——
+#: 它只被 `_repo_source()` 的 `git show` 用到，而那是**运行时**行为，
+#: cron 就跑在那台机器上。
+#:
+#: 成员改成枚举之后，`git ls-files` 在**模块 import 时**就要跑，于是这个
+#: 硬编码立刻在 CI 上炸了：路径不存在 → git 失败 → 枚举返回空集 →
+#: `SOURCE_MAP` 全空，而本地一切正常。**一个判据在 CI 上静默变成空集，
+#: 比它失败更危险** —— 覆盖面报告会显示 0/9 却不报错。
+#:
+#: 从文件位置推断（crons/lambda_drift.py → 上一级就是仓库根），
+#: 并允许用环境变量覆盖，供非标准布局使用。
+REPO = os.environ.get("GDP_REPO") or str(
+    pathlib.Path(__file__).resolve().parents[1]
+)
 
 # ── 方向 B 的覆盖面 ─────────────────────────────────────────────────────
 #

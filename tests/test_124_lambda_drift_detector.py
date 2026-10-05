@@ -677,3 +677,53 @@ class TestMembersMustBeEnumeratedNotHandListed:
             "共享的 neptune_queries.py 必须在候选里 —— "
             "PR #47 的 active 过滤实测同时漂在两个函数上"
         )
+
+    def test_repo_root_is_not_hardcoded(self, src: str):
+        """仓库根不能是硬编码的绝对路径。
+
+        2026-10-05 CI 实测：原来 `REPO = "/home/ec2-user/works/..."`。
+        手工列表时代这没暴露 —— 它只被 `_repo_source()` 的 git show 用到，
+        那是**运行时**行为，cron 就跑在那台机器上。
+
+        成员改成枚举后 `git ls-files` 在 import 时就要跑，于是这个硬编码
+        立刻在 CI 上炸了：路径不存在 → git 失败 → 枚举返回空集 →
+        SOURCE_MAP 全空，而本地一切正常。
+        """
+        import ast
+
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Assign) and any(
+                getattr(t, "id", "") == "REPO" for t in node.targets
+            )):
+                continue
+            assert not (
+                isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+                and node.value.value.startswith("/")
+            ), (
+                "REPO 是硬编码的绝对路径。枚举在 import 时跑 git，"
+                "路径不对会让 SOURCE_MAP 静默变成空集 —— 本地正常、CI 全空。"
+            )
+            return
+        pytest.fail("找不到 REPO 的赋值")
+
+    def test_enumeration_never_silently_empty(self, mod):
+        """枚举失败必须是**可见的**失败，不能静默返回空集。
+
+        空集的后果比异常更坏：覆盖面报告会显示「0/9 个函数核实过」而
+        不报任何错，看起来只像「今天没查到东西」。
+
+        这条钉住两件事：每个函数都枚举出成员；且 _git_tracked_py 对一个
+        不存在的目录返回空集（而不是抛异常把整个 cron 带崩）。
+        """
+        for fn, pairs in mod.SOURCE_MAP.items():
+            assert pairs, (
+                f"{fn} 枚举出 0 个成员。2026-10-05 CI 实测过这个形态："
+                f"REPO 路径不对 → git ls-files 失败 → 全部函数空集，"
+                f"而覆盖面报告只会显示 0/9 不报错"
+            )
+        assert mod._git_tracked_py("no/such/dir/anywhere") == set(), (
+            "对不存在的目录应返回空集而不是抛异常 —— "
+            "抛异常会把整个 cron 带崩，而它只是一个目录配错了"
+        )
