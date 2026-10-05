@@ -23,6 +23,7 @@ import datetime as dt
 import gzip
 import io
 import re
+from pathlib import Path
 
 import boto3
 
@@ -68,6 +69,15 @@ WATCHED_ALARMS = [
 
 # 超过这个小时数仍在 ALARM，就当成「没人在处理」而再提醒一次。
 STALE_HOURS = 4
+
+# 旁路规则指向的目标组 —— 「0 次使用」只有在它们**健康**时才是真信号。
+# ⚠️ 第一版只在报告正文里写了一句「删除前必须确认目标是活的」，
+#    把这件事交给人。我每次都是手工查的 —— 那意味着这个前置条件
+#    **不在脚本的保证范围内**，换个人看报告就会漏掉。现在脚本自己查。
+BYPASS_TARGET_GROUPS = ("streamlit-demo-tg", "neptune-ui-tg")
+
+# 连续「0 次旁路」的天数记在这里，这样安静下来之后证据仍然可查。
+STREAK_FILE = Path.home() / ".kiro" / "crew" / "workspace" / "state" / "bypass-zero-streak"
 
 
 def alarm_watchdog(ctx):
@@ -122,6 +132,46 @@ def _iter_log_lines(hours_back: int):
             with gzip.GzipFile(fileobj=io.BytesIO(body)) as fh:
                 for raw in fh:
                     yield raw.decode("utf-8", "replace")
+
+
+def _unhealthy_bypass_targets() -> list[str]:
+    """返回没有任何健康目标的旁路目标组。
+
+    这是「0 次旁路请求」能不能当结论的**前置条件**：若 streamlit / neptune-ui
+    本身是停的，零使用说明的是服务停了，不是规则没人用。
+    """
+    elb = boto3.client("elbv2", region_name=REGION)
+    bad = []
+    for name in BYPASS_TARGET_GROUPS:
+        try:
+            tgs = elb.describe_target_groups(Names=[name])["TargetGroups"]
+            arn = tgs[0]["TargetGroupArn"]
+            states = [
+                d["TargetHealth"]["State"]
+                for d in elb.describe_target_health(TargetGroupArn=arn)[
+                    "TargetHealthDescriptions"
+                ]
+            ]
+            if not any(s == "healthy" for s in states):
+                bad.append(f"{name}（{states or '无目标'}）")
+        except Exception as e:          # 查不到也算前置条件不成立 —— 不默认它健康
+            bad.append(f"{name}（查询失败：{e}）")
+    return bad
+
+
+def _read_streak() -> int:
+    try:
+        return int(STREAK_FILE.read_text().strip())
+    except Exception:
+        return 0
+
+
+def _write_streak(n: int) -> None:
+    try:
+        STREAK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        STREAK_FILE.write_text(str(n))
+    except Exception:
+        pass
 
 
 def bypass_survey(ctx):
@@ -202,9 +252,44 @@ def bypass_survey(ctx):
         lines += [
             "",
             "→ 近 24 小时**没有任何请求走旁路规则**。",
-            "  ⚠️ 删除 prio 3 之前必须先确认**旁路目标本身是活的** ——",
-            "  若 streamlit / neptune-ui 的目标组没有健康目标，",
-            "  「0 次使用」说明的是服务停了，不是规则没人用。",
+        ]
+
+    # ── 前置条件由脚本自查，不交给人 ───────────────────────────────────
+    unhealthy = _unhealthy_bypass_targets()
+
+    # ── 什么时候该安静下来 ─────────────────────────────────────────────
+    #
+    # 这个调查的目的是为「收窄/删除 prio 3」取证，不是每天播报一次。
+    # 证据已经足够之后还天天报同一条，就会训练人忽略它 ——
+    # 那正是 2026-10-02 移除队列积压告警、以及 10-04 给漂移检测器加确认
+    # 机制的同一条教训（见 runbook 4.47 / 4.51）。
+    #
+    # 所以只在**情况变了**时说话：
+    #   · 有人真的用了旁路（这才是可处置事件）
+    #   · 旁路目标变得不健康（结论的前置条件不再成立）
+    #   · 有解析失败（结论不完整，数字不能用）
+    # 其余情况记下连续天数后静默。
+    changed = bool(bypass_total or unhealthy or unparsed)
+
+    if not changed:
+        streak = _read_streak() + 1
+        _write_streak(streak)
+        raise Skip(
+            f"旁路使用面无变化：连续 {streak} 次 0 条，"
+            f"目标组全部健康，解析失败 0（已核实 {tls} 条 TLS 请求）"
+        )
+
+    _write_streak(0)
+
+    if unhealthy:
+        lines += [
+            "",
+            "### ⚠️ 结论的前置条件不成立",
+            *[f"  · {b} 没有健康目标" for b in unhealthy],
+            "",
+            "  这些目标组是 prio 1/2 的转发对象。它们停着的时候，",
+            "  「0 次旁路使用」说明的是**服务停了**，不是规则没人用 ——",
+            "  **不能**拿这一轮的 0 当删除 prio 3 的依据。",
         ]
 
     raise Report("\n".join(lines))
