@@ -136,62 +136,65 @@ fi
 # ══ 发布模式 ═══════════════════════════════════════════════════════════
 if [ "$MODE" = publish ]; then
 
-say "1. 从 GitHub 取 worker 代码"
-# ⚠️ dr-worker.service 也必须随包下发。
-# provision-worker.sh 第 120 行读的是 $APP/dr-worker.service ——
-# 主机上那份是 2026-09-24 手工装的，而 `aws s3 sync` 不带 --delete，
-# 所以它一直躺在那里不被更新：改了仓库里的环境变量，主机上一点变化都没有。
-# 这是本工作线第三次同类缺陷（前两次是 provision-worker.sh 自己、
-# 以及 graph_mcp_client.py / probe_graph_mcp.py）。
+say "1. 从 git 对象库取 worker 代码（不走 HTTP）"
+
+# ## 为什么不再用手工白名单，也不再走 raw.githubusercontent
 #
-# provision-worker.sh 必须**随包下发**。
-# 它不在这个清单里会造成一个恰好最难看出来的故障：代码同步到了 S3，
-# 但没人把它从 S3 拉到 /opt/dr-worker/app，于是 worker 用旧代码重启 ——
-# 而「服务 active」「队列上有 poller」两个判据照样通过。
-FILES="worker.py workflows.py plan_workflow.py activities.py snapshot_workflow.py graph_mcp_client.py probe_graph_mcp.py requirements.txt provision-worker.sh dr-worker.service"
+# 这里原来是一行 `FILES="worker.py workflows.py …"` 的手工清单，
+# 加上 curl 从 raw.githubusercontent 取。两个问题，今天各自咬过：
+#
+# **① 白名单漏一项 = 改动静默不生效。** 三次同类：
+#    provision-worker.sh 自己、graph_mcp_client.py / probe_graph_mcp.py、
+#    dr-worker.service。每次的表现都一样 —— 部署报成功，而那个文件
+#    根本没到主机（`aws s3 sync` 不带 --delete，旧的就一直躺在那）。
+#
+# **② raw.githubusercontent 是 CDN 缓存的。** 推完提交立刻发布会取到旧版本，
+#    而后续每一步都报成功：语法检查过（旧代码语法当然对）、同步成功、
+#    provision 说「应用代码未变」（看起来像「已最新」，实则「没拿到新的」）。
+#    一次修复被完整地部署掉了，而线上一行都没变。
+#
+# 改成**从 git 对象库枚举并取出**，两个问题一起消失：
+#   · 清单由 `git ls-tree` 生成 —— 目录里有什么就发什么，没有可漏的白名单
+#   · 内容由 `git show` 取 —— 内容寻址，没有缓存层，不可能陈旧
+#
+# 代价：--publish 必须在仓库内运行。这不是限制，是本来就该如此 ——
+# 发布的是「某个提交的内容」，而提交只在仓库里有权威定义。
+REPO_ROOT=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null || true)
+[ -n "$REPO_ROOT" ] || {
+  echo "  --publish 必须在仓库内运行：清单与内容都取自 git 对象库。" >&2
+  echo "  （不在仓库里就只能猜该发哪些文件，而猜错的表现是「部署成功但改动没生效」）" >&2
+  exit 1; }
+
+# REF 可能是分支名，也可能是 commit SHA。分支名优先解析成 origin/<branch>：
+# 本地分支可能领先/落后远端，而发布该以远端为准。
+if git -C "$REPO_ROOT" rev-parse --verify --quiet "origin/${REF}^{commit}" >/dev/null; then
+  GITREF=$(git -C "$REPO_ROOT" rev-parse "origin/${REF}")
+  echo "  ref：${REF} -> origin/${REF} -> ${GITREF}"
+elif git -C "$REPO_ROOT" rev-parse --verify --quiet "${REF}^{commit}" >/dev/null; then
+  GITREF=$(git -C "$REPO_ROOT" rev-parse "${REF}")
+  echo "  ref：${REF} -> ${GITREF}"
+else
+  echo "  解析不了 ref「${REF}」。分支名要先 git fetch，SHA 要已在本地。" >&2
+  exit 1
+fi
+
+SRC_DIR=dr-plan-generator/worker
+FILES=$(git -C "$REPO_ROOT" ls-tree -r --name-only "$GITREF" "$SRC_DIR/" | sed "s|^$SRC_DIR/||")
+[ -n "$FILES" ] || { echo "  $SRC_DIR 在 $GITREF 下是空的？中止。" >&2; exit 1; }
 for f in $FILES; do
-  curl -fsSL -o "$STAGE/$f" "$RAW_BASE/$f"
-  printf '  %-24s %6s 字节\n' "$f" "$(stat -c%s "$STAGE/$f")"
+  git -C "$REPO_ROOT" show "$GITREF:$SRC_DIR/$f" > "$STAGE/$f"
+  printf '  %-26s %6s 字节\n' "$f" "$(stat -c%s "$STAGE/$f")"
 done
+ok "$(echo "$FILES" | wc -w) 个文件，取自 git 对象库（无白名单、无 CDN）"
+
 # 语法先过一遍再上传。上传一份语法错的代码，worker 会进重启循环，
 # 而那时错误只在 journal 里 —— 在这里失败便宜得多。
-for f in $STAGE/*.py; do
-  python3.12 -m py_compile "$f" || { echo "  $f 语法错误，中止" >&2; exit 1; }
+for f in "$STAGE"/*.py; do
+  python3.12 -m py_compile "$f" 2>/dev/null || python3 -m py_compile "$f" \
+    || { echo "  $f 语法错误，中止" >&2; exit 1; }
 done
 ok "$(ls "$STAGE"/*.py | wc -l) 个 .py 语法检查通过"
 
-# ⚠️ 校验取到的内容与仓库里已提交的一致。
-#
-# 2026-09-26 实测踩到：raw.githubusercontent.com 是 **CDN 缓存**的。
-# 推完提交立刻发布，取到的是缓存里的旧版本 —— 而后续每一步都报成功：
-#   · 语法检查通过        ✅（旧代码语法当然是对的）
-#   · 同步到 S3 成功      ✅
-#   · provision 说「应用代码未变」✅ ← 看起来是「已经最新」，其实是「没拿到新的」
-# 于是一次修复被完整地部署掉了，而线上一行都没变。
-#
-# 这里拿 git 里已提交的那份逐字节比 —— 只在仓库内运行时能比，
-# 比不了就明确说「跳过了这项校验」，不假装通过。
-if git -C "$(dirname "$0")/../../.." rev-parse --git-dir >/dev/null 2>&1; then
-  REPO_ROOT=$(git -C "$(dirname "$0")/../../.." rev-parse --show-toplevel)
-  DRIFT=0
-  for f in $FILES; do
-    if git -C "$REPO_ROOT" show "origin/${REF}:dr-plan-generator/worker/$f" \
-         > "$STAGE/.expected" 2>/dev/null; then
-      cmp -s "$STAGE/.expected" "$STAGE/$f" || { fail "$f 与 origin/${REF} 不一致（CDN 缓存？）"; DRIFT=1; }
-    fi
-  done
-  rm -f "$STAGE/.expected"
-  if [ "$DRIFT" = 1 ]; then
-    echo "  取到的内容与已提交的不一致 —— 多半是 raw.githubusercontent 的 CDN 还没刷新。" >&2
-    echo "  等一两分钟重试，或用 --ref <commit-sha>（SHA 是内容寻址，不会陈旧）。" >&2
-    exit 1
-  fi
-  ok "与 origin/${REF} 逐字节一致（已排除 CDN 陈旧）"
-else
-  unk "不在仓库内运行，**跳过了「与已提交内容一致」这项校验**"
-fi
-
-# ── 2. 上传并 provision ────────────────────────────────────────────────
 say "2. 同步到 S3（S3 是唯一代码来源，保持既有契约）"
 aws s3 sync "$STAGE/" "s3://$BUCKET/worker/" --only-show-errors \
   --exclude '__pycache__/*' --exclude '*.pyc'

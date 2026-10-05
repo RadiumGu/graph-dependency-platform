@@ -152,13 +152,29 @@ export class NeptuneEtlStack extends cdk.Stack {
     // =========================================================
     const neptuneClientLayer = new lambda.LayerVersion(this, 'NeptuneClientBaseLayer', {
       layerVersionName: 'neptune-client-base',
+      // ⚠️ fromAsset 打包这个目录的**当前内容**。部署前必须先跑
+      //     bash ../lambda/shared/build.sh
+      // 它把 requirements.txt 的依赖装进 python/。
+      //
+      // 不跑的后果（2026-10-05 用 cdk synth 实测）：asset 只有 10 个文件，
+      // 而线上 Layer 有 90 个条目 —— 其中 77 个是依赖文件。
+      // python/neptune_client_base.py 第一行就 `import requests, urllib3`，
+      // 它们不由 Lambda 运行时提供，所以那次 deploy 会让**挂载本 Layer 的
+      // 6 个 ETL 函数在 import 阶段全部挂掉**，而 cdk diff 只显示一行
+      // `[~] Content (requires replacement)`，与正常的内容更新无从区分。
+      //
+      // 同族故障 2026-10-04 在 gp-window-flush 上真实发生过一次，
+      // 见 docs/lessons/cdk-fromasset-packages-ungitted-deps.md。
+      // 判据由 tests/test_128_cdk_layer_asset_must_carry_deps.py 守着。
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/shared')),
       compatibleRuntimes: [lambda.Runtime.PYTHON_3_12],
-      // 本 layer 是纯 Python（仅 python/neptune_client_base.py，无任何编译产物），
-      // 因此架构无关。显式声明双架构：未声明时 AWS 视为仅 x86_64，
+      // 本 layer 的业务模块是纯 Python（5 个 graph_*/neptune_client_base），
+      // 随包下发的 5 个依赖（requests/urllib3/certifi/charset_normalizer/idna）
+      // 也都是纯 Python wheel，无编译产物，因此架构无关。
+      // 显式声明双架构：未声明时 AWS 视为仅 x86_64，
       // 会阻止 arm64 函数挂载该 layer。声明后可按函数逐个迁移，无需重建 layer。
       compatibleArchitectures: [lambda.Architecture.X86_64, lambda.Architecture.ARM_64],
-      description: 'Shared Neptune Gremlin client utilities (neptune_query, safe_str, extract_value)',
+      description: 'Shared Neptune Gremlin client + graph contract utilities (deps via build.sh)',
     });
 
     // =========================================================

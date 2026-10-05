@@ -1,0 +1,27 @@
+# neptune-client-base Layer 的运行时依赖
+#
+# ## 为什么版本是 pin 的，而本仓另外两份 requirements.txt 用 `>=`
+#
+# etl_aws / etl_deepflow 的依赖是 vendored 进各自目录、随函数包下发的，
+# 装一次就固定在仓库里，`>=` 的浮动只在重新 vendor 时发生一次。
+#
+# 这个 Layer 不同：它由 `cdk deploy` 从 infra/lambda/shared/ 打包，
+# **6 个 ETL 函数共享它**。用 `>=` 的话每次构建都可能装到新版本 →
+# Layer 内容变 → CDK 每次 deploy 都 replace Layer → 6 个函数的 Layer
+# 引用反复变动，而那种变动在 cdk diff 里和一次真实的内容更新长得一样。
+#
+# 版本取自 2026-10-05 线上 Layer 21 的实盘内容（与 etl_aws 目录里
+# vendored 的那批一致），升级时改这里并重跑 build.sh。
+#
+# ## requests 一行就够了吗
+#
+# 够。`pip install requests` 的依赖树正好是线上 Layer 里那 5 个包：
+# certifi · charset_normalizer · idna · requests · urllib3。
+# 其余四个仍然显式列出 —— 依赖树会随上游变化，而这个 Layer 的内容
+# 必须可复现：隐式传递依赖一旦变了，没人会注意到 Layer 少了一个包。
+
+requests==2.32.5
+urllib3==2.6.3
+certifi==2026.1.4
+charset-normalizer==3.4.4
+idna==3.11

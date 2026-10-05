@@ -71,6 +71,43 @@ SOURCE_MAP = {
         ("infra/lambda/etl_aws/config.py", "config.py"),
         ("infra/lambda/etl_aws/graph_gc.py", "graph_gc.py"),
     ),
+    # ── 2026-10-04 补：这四个函数此前**完全不在表里** ────────────────────
+    #
+    # 加它们的直接原因是一次全量核对：把线上 Lambda 列表与本表对照，发现
+    # 表里 5 个函数之外还有 4 个在写同一张图 / 读同一套查询，而它们**从未
+    # 被内容比对检查过**。逐个实测，**四个全在漂移**：
+    #
+    #     neptune-etl-from-xray          +10337 B  3a383d2 服务名走真源解析，
+    #                                              补出 GenAI 层与 12 条边
+    #     neptune-etl-from-appsignals      +310 B  0b0408c scope 由写入方就地写
+    #     neptune-etl-from-agentcore        -15 B  仅注释里的文档路径重命名
+    #     petsite-rca-engine               +181 B  PR #47 的 active 过滤
+    #                                              （与 gp-window-flush 同一份源）
+    #
+    # 命中率 4/4 不是巧合：**没有判据看着的地方，漂移不会自己停下**。
+    # 本表的覆盖面本身就是判据的一部分 —— 漏一个函数等于那个函数永远绿。
+    #
+    # 前三个是单文件 ETL（手工 `aws lambda create-function` 建的，无栈归属，
+    # 见 docs/lessons/tech-debt-etl-lambdas-outside-cfn.md），多成员对它们
+    # 没有额外价值；纳入表里拿到的是**广度**。
+    "neptune-etl-from-xray": (
+        ("infra/lambda/etl_xray/neptune_etl_xray.py", "neptune_etl_xray.py"),
+    ),
+    "neptune-etl-from-appsignals": (
+        ("infra/lambda/etl_appsignals/neptune_etl_appsignals.py", "neptune_etl_appsignals.py"),
+    ),
+    "neptune-etl-from-agentcore": (
+        ("infra/lambda/etl_agentcore/neptune_etl_agentcore.py", "neptune_etl_agentcore.py"),
+    ),
+    # petsite-rca-engine 与 gp-window-flush 打的是**同一份 rca/ 源码**，
+    # 所以同一个漂移会同时出现在两个函数上 —— PR #47 的 active 过滤实测
+    # 就是如此。两个都要比，漏一个就留一半。
+    "petsite-rca-engine": (
+        ("rca/neptune/neptune_queries.py", "neptune/neptune_queries.py"),
+        ("rca/handler.py", "handler.py"),
+        ("rca/core/rca_engine.py", "core/rca_engine.py"),
+        ("rca/config.py", "config.py"),
+    ),
     # gp-window-flush 是第一个发现「主模块一致但函数仍在漂移」的实例
     # （2026-10-04，PR #47 合并后未部署）：
     #     window_flush_handler.py      线上 ≡ 仓库   ← Handler 指向它
@@ -204,6 +241,99 @@ def _deployed_module(lam, fn: str, member: str) -> bytes | None:
     return _member_from_package(blob, member) if blob else None
 
 
+# ── 方向 C：包完整性 ────────────────────────────────────────────────────
+#
+# ## 为什么需要一个新维度（2026-10-04，我自己造成的故障）
+#
+# 用 `cdk deploy AlertBufferStack` 部署 gp-window-flush 时，
+# `Code.fromAsset('../lambda/rca_window_flush')` 打包的是那个目录的**当前
+# 内容** —— 而它的依赖是 `build.sh` 用 pip install 装进去的、被 .gitignore
+# 排除。在干净工作树上直接 deploy，等于部署了一个缺 urllib3 的包：
+#
+#     部署前   14.6 MB / 2008 条目   含 urllib3 · shared · strands · .so
+#     部署后   0.29 MB /   36 条目   只剩被 git 跟踪的业务文件
+#
+# **当时三个判据全部给了绿灯**：
+#
+#   · `cdk diff` 显示 `[~] Code .S3Key` 变化 —— 看起来完全正常，
+#     代码确实变了，只是少了 14 MB
+#   · CloudWatch 零调用、无告警 —— 不触发就不暴露
+#   · **方向 B 逐字比对 5 个模块全部「✓ 一致」** —— 业务代码确实逐字一致
+#
+# 最后一条是关键：方向 B 在结构上抓不到这个缺陷。它比的是**模块内容**，
+# 而这里缺的是**模块本身**。一个缺依赖必挂的函数会从方向 B 拿到满分。
+#
+# 这个缺陷只在「全量核对线上 Lambda 列表」时才被发现，距部署 50 分钟 ——
+# 期间它恰好零调用。换成有流量的时段就是一次 ModuleNotFoundError 故障。
+#
+# ## 为什么不复用 build.sh 的 completeness 校验
+#
+# `infra/lambda/rca_window_flush/build.sh` 自己有一段「Verifying package
+# completeness」，校验 6 项（window_flush_handler.py / core/rca_engine.py /
+# engines/factory.py / shared/__init__.py / profiles /
+# neptune/neptune_client.py）。两个原因不够：
+#
+#   ① **它校验构建目录，不校验线上包。** 不跑 build.sh 直接 deploy ——
+#      也就是我干的事 —— 这段校验根本不执行。
+#   ② **它的清单里没有 urllib3。** 恰好就是我那次缺的东西。
+#      它假定「跑过 pip install 所以第三方依赖必然在」，而这个假定在
+#      「不跑 build.sh」的路径上不成立。
+#
+# 所以方向 C 校验的是**线上包**，判据有两条且都来自实测：
+#
+#   · 条目数下限 —— 抓大规模丢失（36 vs 2008 这种）
+#   · 必需顶层项 —— 指名道姓说缺什么，比「包变小了」可处置
+#
+# 下限刻意留足余量（实测值的 ~75%），因为依赖版本升级会让条目数小幅波动，
+# 而这个检测的目标是抓**数量级**的丢失，不是守一个精确数字。
+# 一个会因为依赖升级而误报的门禁，很快就会被人忽略 —— 与 4.47 同理。
+#
+# 没有依赖的函数（trigger / xray / agentcore 都是单文件）**刻意不进本表**：
+# 给它们写下限等于守一个恒为真的判据，只会让人以为覆盖面比实际更广。
+PACKAGE_REQUIRED = {
+    # 函数名: (条目数下限, (必需顶层目录...))     ← 全部由 2026-10-04 实测得出
+    "neptune-etl-from-cfn":        (120,  ("requests", "urllib3", "certifi", "yaml")),
+    "neptune-etl-from-deepflow":   (100,  ("requests", "urllib3", "certifi")),
+    "neptune-etl-from-aws":        (110,  ("requests", "urllib3", "certifi")),
+    "neptune-etl-from-appsignals": (30,   ("yaml", "shared", "profiles")),
+    "gp-window-flush":             (1500, ("urllib3", "shared", "strands", "profiles", "neptune")),
+    "petsite-rca-engine":          (1500, ("urllib3", "shared", "strands", "profiles", "neptune")),
+}
+
+
+def _package_integrity(blob: bytes, fn: str) -> str | None:
+    """检查线上包是否完整。返回问题描述，没问题返回 None。
+
+    复用方向 B 已经下载好的 blob —— 不额外拉一次包。
+    """
+    spec = PACKAGE_REQUIRED.get(fn)
+    if spec is None:
+        return None
+    floor, required = spec
+    try:
+        with zipfile.ZipFile(io.BytesIO(blob)) as z:
+            names = [
+                n for n in z.namelist()
+                if "__pycache__" not in n and not n.endswith("/")
+            ]
+            tops = {n.split("/")[0] for n in names if "/" in n}
+    except Exception:
+        return None            # 取不到就不报 —— 方向 B 已经会说「未核实」
+    problems = []
+    missing = [r for r in required if r not in tops]
+    if missing:
+        problems.append(
+            "**缺运行时必需项** " + ", ".join(f"`{m}`" for m in missing)
+            + " —— 这个包一旦被调用就是 ModuleNotFoundError"
+        )
+    if len(names) < floor:
+        problems.append(
+            f"**包只有 {len(names)} 个条目**（下限 {floor}）"
+            f" —— 疑似部署了未装依赖的目录"
+        )
+    return "；".join(problems) if problems else None
+
+
 def check(ctx):
     out_of_band: dict[str, str] = {}
     content_diff: list[tuple[str, str]] = []   # (函数名, 描述)
@@ -247,6 +377,9 @@ def check(ctx):
                     drifted: list[str] = []
                     unverified: list[str] = []
                     verified_any = False
+                    # 方向 C 先跑 —— 包不完整时模块内容是否一致已经不是
+                    # 重点了（一个缺 urllib3 的包，业务代码再准也挂）。
+                    integrity = _package_integrity(blob, fn)
                     for path, member in pairs:
                         src = _repo_source(path)
                         live = _member_from_package(blob, member)
@@ -265,8 +398,12 @@ def check(ctx):
                     # 不让「全部成员都取不到」冒充已核实。
                     if verified_any:
                         checked_b += 1
-                    if drifted or unverified:
+                    if drifted or unverified or integrity:
                         parts = []
+                        # 完整性问题排在最前 —— 它比内容漂移紧急：
+                        # 内容漂移是「线上是旧的」，包不完整是「线上是坏的」。
+                        if integrity:
+                            parts.append("🔴 " + integrity)
                         if drifted:
                             parts.append(
                                 f"**{len(drifted)}/{len(pairs)} 个模块漂移** —— "

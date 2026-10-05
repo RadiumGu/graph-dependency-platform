@@ -314,3 +314,224 @@ class TestMemberMatchMustNotGuess:
             "没有「候选唯一才取」的判断 —— 多候选时猜一个会产生假漂移"
         )
         assert_contains(src, "而**不猜**")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 方向 C：包完整性
+#
+# 守的是 2026-10-04 我自己造成的那次故障：cdk deploy 把一个**没装依赖的
+# 目录**打包上线，gp-window-flush 从 14.6 MB / 2008 条目变成
+# 0.29 MB / 36 条目，缺 urllib3。
+#
+# 这一组存在的理由是：**当时三个判据全部给了绿灯**，其中包括这个检测器
+# 自己的方向 B —— 5 个模块逐字比对全部「✓ 一致」，因为业务代码确实一致，
+# 少的是 14 MB 依赖。方向 B 比的是模块内容，缺的是模块本身。
+#
+# 所以这不是「把方向 B 做得更细」能覆盖的，必须是一个独立维度。
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def _load_detector():
+    """直接 import 检测器 —— kiro_crew 只在 check() 内部 import，
+    所以模块级 import 不需要 cron 运行时在场。
+
+    这组用**行为测试**而非文本断言：方向 C 的价值全在它实际抓不抓到缺
+    依赖，而一个只检查注释存在的测试对此一无所知。
+    """
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location("_ld_under_test", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["_ld_under_test"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _zip_with(names: list[str]) -> bytes:
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        for n in names:
+            z.writestr(n, b"x")
+    return buf.getvalue()
+
+
+def _complete_package_for(mod, fn: str) -> list[str]:
+    """造一个刚好满足该函数判据的包。"""
+    floor, required = mod.PACKAGE_REQUIRED[fn]
+    names = [f"{r}/__init__.py" for r in required]
+    names += [f"{required[0]}/pad_{i}.py" for i in range(floor)]
+    return names
+
+
+class TestPackageIntegrityIsADistinctDimension:
+    @pytest.fixture(scope="class")
+    def mod(self):
+        return _load_detector()
+
+    def test_complete_package_reports_nothing(self, mod):
+        """完整的包不能报问题 —— 假阳性比漏报更快毁掉一个检测。"""
+        for fn in mod.PACKAGE_REQUIRED:
+            blob = _zip_with(_complete_package_for(mod, fn))
+            assert mod._package_integrity(blob, fn) is None, fn
+
+    def test_catches_missing_runtime_dependency(self, mod):
+        """缺一个必需顶层项就要报，并且要**指名**缺的是哪个。
+
+        这正是那次故障的形状：业务代码齐全，缺的是 urllib3。
+        """
+        fn = "gp-window-flush"
+        floor, required = mod.PACKAGE_REQUIRED[fn]
+        names = [
+            n for n in _complete_package_for(mod, fn)
+            if not n.startswith("urllib3/")
+        ]
+        names += [f"{required[1]}/pad_{i}.py" for i in range(floor)]
+        res = mod._package_integrity(_zip_with(names), fn)
+        assert res is not None, "缺 urllib3 却报了绿灯 —— 正是故障当天的情形"
+        assert "urllib3" in res, f"没指名缺什么，无法处置: {res}"
+
+    def test_catches_wholesale_dependency_loss(self, mod):
+        """36 条目 vs 2008 条目这种数量级丢失必须被抓到。用故障当天的真实数字。"""
+        fn = "gp-window-flush"
+        res = mod._package_integrity(
+            _zip_with([f"biz/mod_{i}.py" for i in range(36)]), fn
+        )
+        assert res is not None
+        assert "36" in res, f"没说清实际条目数: {res}"
+
+    def test_silent_for_functions_without_dependencies(self, mod):
+        """单文件函数刻意不在表里，必须返回 None 而不是报「条目太少」。"""
+        for fn in ("neptune-etl-trigger", "neptune-etl-from-xray",
+                   "neptune-etl-from-agentcore"):
+            assert fn not in mod.PACKAGE_REQUIRED, (
+                f"{fn} 是单文件函数，给它写下限等于守一个恒为真的判据"
+            )
+            assert mod._package_integrity(_zip_with(["a.py"]), fn) is None
+
+    def test_floors_leave_headroom(self, mod):
+        """下限必须留余量。
+
+        下限贴着实测值写，依赖一升级就误报；而周期性误报的门禁在这个仓库
+        已有结论 —— 4.47 因此移除了队列积压告警。
+        """
+        observed = {           # 2026-10-04 实测条目数
+            "neptune-etl-from-cfn": 144,
+            "neptune-etl-from-deepflow": 119,
+            "neptune-etl-from-aws": 133,
+            "neptune-etl-from-appsignals": 38,
+            "gp-window-flush": 2008,
+            "petsite-rca-engine": 1982,
+        }
+        for fn, (floor, _) in mod.PACKAGE_REQUIRED.items():
+            assert floor > 0, fn
+            assert floor < observed[fn], (
+                f"{fn} 下限 {floor} ≥ 实测 {observed[fn]} —— 一上线就误报"
+            )
+            assert floor >= observed[fn] * 0.5, (
+                f"{fn} 下限 {floor} 低于实测的一半，抓不到大规模丢失"
+            )
+
+    def test_reuses_the_already_downloaded_package(self, mod, src: str):
+        """方向 C 必须复用方向 B 下好的 blob，不许再下一次整包。"""
+        assert "_package_integrity(blob, fn)" in src, "方向 C 没有复用方向 B 的 blob"
+        for fn in mod.PACKAGE_REQUIRED:
+            assert fn in mod.SOURCE_MAP, (
+                f"{fn} 在 PACKAGE_REQUIRED 但不在 SOURCE_MAP —— "
+                f"方向 C 复用方向 B 的 blob，不在 SOURCE_MAP 就永远不会被检查"
+            )
+
+    def test_integrity_result_reaches_the_report(self, src: str):
+        """算出来必须报出去。
+
+        这个仓库里「写了但没人读」已有多例（失活 Pod 标记写了 1466 个但
+        7 个查询都不过滤；SOURCE_MAP 对 etl_aws 报绿而漏掉 2 个真漂移）。
+        一个算出完整性结论却不进报告的方向 C 就是下一例。
+        """
+        import ast
+
+        tree = ast.parse(src)
+        fn_check = next(
+            n for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "check"
+        )
+        used = {
+            n.id for n in ast.walk(fn_check)
+            if isinstance(n, ast.Name) and n.id == "integrity"
+        }
+        assert used, "check() 里根本没用到 integrity"
+        # integrity 必须**真的来自** _package_integrity ——
+        # 反向验证发现：只断言「integrity 出现在 if 里」时，把赋值退化成
+        # `integrity = None` 这条测试照样通过。那正是「算了但没人读」的
+        # 退化形态，必须钉住赋值的来源而不只是变量的使用。
+        assigned_from = [
+            n for n in ast.walk(fn_check)
+            if isinstance(n, ast.Assign)
+            and any(
+                isinstance(t, ast.Name) and t.id == "integrity" for t in n.targets
+            )
+            and isinstance(n.value, ast.Call)
+            and getattr(n.value.func, "id", "") == "_package_integrity"
+        ]
+        assert assigned_from, (
+            "integrity 不是由 _package_integrity() 赋值的 —— "
+            "被退化成常量的方向 C 会让这个检测静默失效"
+        )
+        conds = [
+            n for n in ast.walk(fn_check)
+            if isinstance(n, ast.If)
+            and any(
+                isinstance(x, ast.Name) and x.id == "integrity"
+                for x in ast.walk(n.test)
+            )
+        ]
+        assert conds, "integrity 算了但没有参与「是否报告」的判断"
+
+    def test_records_why_direction_b_cannot_catch_this(self, src: str):
+        """必须写下方向 B 结构上抓不到它 —— 否则下一个人会以为
+        「把方向 B 做细一点」就够了。"""
+        assert_contains(src, "方向 B")
+        assert_contains(src, "抓不到")
+        assert "2008" in src and "36" in src, "没有留下那次故障的实测数字"
+        assert "ModuleNotFoundError" in src
+
+
+class TestSourceMapCoversEveryGraphWriter:
+    """2026-10-04 全量核对：表外还有 4 个函数在写同一张图，**四个全在漂移**。
+
+    守的是覆盖面本身 —— 漏一个函数等于那个函数永远绿。
+    """
+
+    @pytest.fixture(scope="class")
+    def mod(self):
+        return _load_detector()
+
+    @pytest.mark.parametrize("fn", [
+        "neptune-etl-from-xray",
+        "neptune-etl-from-appsignals",
+        "neptune-etl-from-agentcore",
+        "petsite-rca-engine",
+    ])
+    def test_previously_missing_function_is_covered(self, mod, fn: str):
+        assert fn in mod.SOURCE_MAP, (
+            f"{fn} 实测漂移过，却不在 SOURCE_MAP 里 —— 它会永远报绿"
+        )
+
+    def test_shared_source_functions_both_covered(self, mod):
+        """petsite-rca-engine 与 gp-window-flush 打的是同一份 rca/ 源码，
+        同一个漂移会同时出现在两个函数上。只比一个就只修一半。"""
+        a = {m for _, m in mod.SOURCE_MAP["gp-window-flush"]}
+        b = {m for _, m in mod.SOURCE_MAP["petsite-rca-engine"]}
+        assert "neptune/neptune_queries.py" in (a & b), (
+            "两个函数共享的 neptune_queries.py 必须在两边都比 —— "
+            "PR #47 的 active 过滤实测同时漂在两个函数上"
+        )
+
+    def test_four_for_four_hit_rate_recorded(self, src: str):
+        """4/4 命中率要写下来 —— 它是「没有判据看着的地方漂移不会停」的
+        实测证据，不是一句口号。"""
+        assert "四个全在漂移" in src
+        assert "不会自己停下" in src

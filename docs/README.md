@@ -29,7 +29,7 @@
 docs/
 ├── README.md          ← 你在这里
 ├── design/     (12)   核心设计说明：为什么这样设计，新人必读
-├── lessons/    (26)   实测教训与踩坑记录：防止重犯，长期价值最高
+├── lessons/    (28)   实测教训与踩坑记录：防止重犯，长期价值最高
 ├── runbooks/    (6)   可照着执行的作业手册
 ├── migration/   (3)   Strands 迁移的时间线与 ADR（历史决策记录）
 └── (根目录)     (3)   dependency-definition / prd / tdd
@@ -76,6 +76,8 @@ JSON。新人不必读，但它们**不能随意删**——`scripts/emit_resilie
 - [`deepflow-noise-reduction.md`](lessons/deepflow-noise-reduction.md) — 自噪声从 73.2% 压到 4.6%，总采集量 −80%
 - [`cloudwatch-cost-findings.md`](lessons/cloudwatch-cost-findings.md) — 日志量与成本发现（跳变并非 addon 升级引起）
 - [`trafficgenerator-config-rootcause.md`](lessons/trafficgenerator-config-rootcause.md) — 流量生成器静默失效 95 天的根因
+- [`cdk-fromasset-packages-ungitted-deps.md`](lessons/cdk-fromasset-packages-ungitted-deps.md) — `Code.fromAsset` 打包目录当前内容；依赖不在 git 里时部署出空壳，而四个判据同时报绿
+- [`alarm-threshold-at-cliff-and-mixed-aggregates.md`](lessons/alarm-threshold-at-cliff-and-mixed-aggregates.md) — 阈值设在失败边界上等于不预警；聚合混合总体等于没观测。附一条缓解决策判据
 
 **架构与运维**
 - [`production-drift-audit.md`](lessons/production-drift-audit.md) — 「我测的代码不是在跑的代码」
