@@ -1,6 +1,29 @@
 # 灾备编排链交接文档
 
-状态截至 **2026-09-26 14:40 UTC**。本文只写**已验证**的事实，推测与未验证项单独标注。
+状态截至 **2026-10-05**（执行模型改版，见 §0）。本文只写**已验证**的事实，推测与未验证项单独标注。
+
+---
+
+## 0. 2026-10-05：执行模型改为「人执行，Temporal 核实」
+
+```
+生成器（半自动，draft_runbook.py）──> 计划正文 = 说明 + 一个 ```dr-runbook 块
+   人审核、修改（revise_plan，块不合法在进 history 前被拒）
+   approve_plan（块里还有 needs_human_input 就拒）
+   start_drill  ──> DrRunbookWorkflow(rehearsal)：每个探针真跑一次
+   authorize_execution ──> DrRunbookWorkflow(live)：
+       check     跑探针，全 PASS 才继续
+       decision  人 decide（没有默认值；选 abort 即停）
+       manual    前置探针 → **人执行命令** → 人 confirm_step → 后置探针
+       探针不全 PASS → 停下等人 resolve_gate：retry / override（必须写理由）/ abort
+   结束（含被取消）→ 完整记录导出到 plans/<plan_id>/executions/
+```
+
+- **Temporal 不调用任何写类 AWS API。** `test_128` 用 AST 扫描整个 worker 目录守着；worker 角色的 `eks:UpdateNodegroupConfig` / `rds:FailoverGlobalCluster` 已收回 —— 代码不调用不等于角色不能调用。
+- **每个探针是一个独立的 activity**（`probe.<name>`，目录在 `probe_catalog.py`）。同一份实现两种调用：执行工作流里当闸门（结果进那次执行的 history），或 `probe_cli.py run` 用 **standalone activity** 单独调用（不污染计划历史，按 `DRPlanRef` 可查回）。standalone activity 2026-10-05 在本机实测通过：启动取结果、错误如实抛回、按自定义属性 list/count、关闭后按 id describe。
+- 探针结论三态：PASS / FAIL / **UNKNOWN**。查不到一律 UNKNOWN；演练里出现任何 UNKNOWN，结论就是「无法判断」—— 它在真切换时同样测不到。
+- 已退役：`DrFailoverWorkflow` 与四个步骤子 workflow、`execute_steps` 按步骤放行（`authorize_execution` 带这个字段会被响亮拒绝）。退役前核实过服务端没有 RUNNING 的执行。
+
 
 ---
 
@@ -16,7 +39,7 @@
 DrPlanWorkflow：draft → approved → drilling → drilled → executing → executed
    ↑ 全部修改经 temporal-mcp 的 update_workflow（受 validator 保护）
    ↓
-DrFailoverWorkflow + 四个原子步骤子 workflow
+DrRunbookWorkflow（人执行、探针核实）+ 12 个探针 activity
 ```
 
 ### 已实测通过的
@@ -126,7 +149,9 @@ AgentCore 不透传身份，Temporal 的 `identity` 同样自报。
 | serverless worker | 三项前置：网络可达 ✓ 已核实；`sts:AssumeRole` 与 invocation role **不该现在做** —— 模板要求 `AgentRuntimeARNs` 指向一个 worker Runtime，而那样的 runtime 还不存在。填通配就是过宽授权 |
 | `pgdata.old-20260926-111554` | **先别删**。它是 EBS 快照 `snap-0566ddf3da1b75996` 之外唯一能就地回到 1.29.7 数据的东西 |
 | temporal-mcp 的写通道边界 | `signal_workflow` 没有 validator，今天就能让 agent 自己投递数据库提升裁决 —— 而那个决策点存在的全部理由是「必须由人裁决」。建议部署时配 `TEMPORAL_DENY_TOOLS` 挡掉 `signal_workflow` / `terminate_workflow` / `cancel_workflow` / `delete_schedule`，让裁决只走 `update_workflow` |
-| 真执行 | 从未真跑过。只跑过 `dry_run` 与冒烟 |
+| 真执行 | 从未真跑过。现在的形态下「真执行」= 人按 runbook 逐步操作，Temporal 只读 |
+| 前门切换 | 生成器推导不出前门怎么切（Route 53？CloudFront 源？），初稿里标 `needs_human_input`，**由人填写之前计划不能被批准** |
+| 取消请求的发起者 | 2026-10-05 04:35 一条计划被外部取消，`CancelRequested` 事件没有身份。执行工作流接住取消后仍会导出记录，但发起者仍查不到 —— 部署 temporal-mcp 时配 `TEMPORAL_DENY_TOOLS` 挡掉 cancel/terminate 才是根治 |
 
 ---
 
@@ -171,6 +196,17 @@ DR_CODE_BUCKET=dr-korea-agentcore-926093770964-ap-northeast-2 \
 
 # 部署（韩国 EC2，经 SSM）
 sudo bash deploy-worker.sh --provision
+
+# 生成初稿（操作者机器，读仓库清单 + 首尔事实）
+python3 dr-plan-generator/draft_runbook.py --out /tmp/body.md
+
+# 在首尔 worker 主机上（venv 里）
+P=/opt/dr-worker/venv/bin/python; A=/opt/dr-worker/app
+$P $A/probe_cli.py list                                     # 探针目录
+$P $A/probe_cli.py run aurora_writer_region expect_region=ap-northeast-1   # standalone activity
+$P $A/probe_cli.py start-plan --plan-id <id> --body-file body.md
+$P $A/probe_cli.py state plan-<id>                          # plan_state / runbook_state
+$P $A/probe_cli.py update <子执行 id> confirm_step '{"step_id":"scale-nodegroup","operator":"你的名字"}'
 
 # 验证图谱 MCP 那条路（在韩国 EC2 上跑才证明 worker 能走通）
 /opt/dr-worker/venv/bin/python /opt/dr-worker/app/probe_graph_mcp.py

@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: DR worker 的增量权限（独立成栈，刻意不改 02-temporal.yaml）
+Description: DR worker 的增量权限（独立成栈，刻意不改 02-temporal.yaml）—— 2026-10-05 起只读
 
 # DR worker 的增量权限 —— 独立成栈，刻意不改 02-temporal.yaml。
 #
@@ -43,33 +43,9 @@ Parameters:
     Default: dr-korea-agentcore-926093770964-ap-northeast-2
     Description: 计划正文所在的桶（与 temporal-mcp 代码包同桶，不同前缀）
 
-  GlobalClusterArn:
-    Type: String
-    Default: arn:aws:rds::926093770964:global-cluster:petsite-global
-    Description: >
-      Aurora 全局数据库的 ARN。⚠️ 注意没有 region 段（两个冒号连着）——
-      全局集群不属于任何 region，这不是笔误。
-
-  PrimaryClusterArn:
-    Type: String
-    Default: arn:aws:rds:ap-northeast-1:926093770964:cluster:serviceseks2-databaseb269d8bb-efjeyzicx2ak
-    Description: >
-      当前主集群（东京）。官方样例策略要求带上它 —— 漏掉会让调用被拒，
-      而报错只说没权限，不会说少了哪个 ARN。
-
-  SecondaryClusterArn:
-    Type: String
-    Default: arn:aws:rds:ap-northeast-2:926093770964:cluster:dr-korea-aurora-secondarycluster-5ctcqnmbkro4
-    Description: 要提升的韩国从集群
-
-  NodegroupArn:
-    Type: String
-    Default: arn:aws:eks:ap-northeast-2:926093770964:nodegroup/dr-korea-petsite/dr-korea-workers/4ad06992-7957-b47d-7adf-72656f7ffdf0
-    Description: >
-      守夜灯节点组的 ARN（实测取到的，含 EKS 自己生成的 UUID 段）。
-      ⚠️ 节点组重建后这个 UUID 会变，权限会静默失效 ——
-      那时的表现是 AccessDenied 而不是「找不到节点组」，
-      排查时容易误以为是策略写错。重建节点组后要重新取这个值。
+  # 2026-10-05：GlobalClusterArn / PrimaryClusterArn / SecondaryClusterArn /
+  # NodegroupArn 四个参数随两条写权限一起移除 —— 见下面「两条写权限已收回」。
+  # 探针按名字读首尔资源，不需要这些 ARN。
 
 Resources:
 
@@ -87,9 +63,9 @@ Resources:
 
           # ── 为什么计划正文在 S3 而不在 workflow 里 ──────────────────
           #
-          # 本服务端 workflowExecutionRetentionTtl = 86400s（实测）。
-          # 把正文塞进 workflow 的 input，一天后随历史一起被清掉，
-          # 而灾备计划要活几个月。而且 payload 上限拿不到 ——
+          # 本服务端 workflowExecutionRetentionTtl = 720h（2026-10-05 实测；
+          # 2026-09-26 重建前是 86400s）。即便 30 天，正文塞进 workflow 的
+          # input 也会随历史一起被清掉，而灾备计划要活几个月。而且 payload 上限拿不到 ——
           # describe_namespace 的 namespaceInfo 里没有 limits 字段
           # （实测推翻了「查 blobSizeLimitError」这个假设）。
           #
@@ -138,19 +114,6 @@ Resources:
                   - 'plans/*'
                   - 'worker/*'
 
-          # ── 2026-09-24：第一条写权限 ────────────────────────────────
-          #
-          # 「按步骤逐个放开」的第一步。给的是拉起节点组这一条，
-          # 因为它是切换里**最可逆**的动作：数错了把 desiredSize 改回去
-          # 就行，不像数据库提升那样一旦丢数据就没法回头。
-          #
-          # 限定到这一个节点组的 ARN，而不是整个集群 —— 主站的节点组在
-          # 另一个 region，但把 Resource 写成 * 意味着以后任何新节点组
-          # 都自动落进这个角色的能力范围，那是在没有需求时先开口子。
-          #
-          # 只给 UpdateNodegroupConfig，**不给** UpdateNodegroupVersion
-          # （那会滚动替换节点）、不给 DeleteNodegroup、不给 CreateNodegroup。
-          # 切换需要的只是改 scalingConfig。
           # ── ASG 生命周期读取 ────────────────────────────────────────────
           #
           # 为什么需要:缩容核实**不能看 EC2 的 State**。2026-09-24 实测:
@@ -170,57 +133,48 @@ Resources:
           #
           # 风险边界:它是 List 级、纯读,泄露的是本账号本 region 的 ASG 拓扑,
           # 不含凭据也不能改任何东西。
-          # ── 最后一条写权限:提升韩国从集群 ────────────────────────────
-          #
-          # ⚠️ 这是整套权限里**唯一会动数据库拓扑**的一条。放开它意味着
-          # worker 能把韩国从集群提升为主 —— 那会让东京主库从 writer 变成
-          # reader,是真正的切换动作。
-          #
-          # 所以 workflow 里把它做成**需要 signal 放行的决策点**:
-          # 没有明确裁决(ordered / allow_data_loss)就抛 non_retryable 错误,
-          # 超时也不放行。见 workflows.py 的 database_decision。
-          #
-          # ## Resource 为什么是三个 ARN
-          #
-          # 抄自官方样例(r53recovery/latest/dg/security_iam_region_switch_aurora.html
-          # 的 Aurora Global Database execution block sample policy):
-          # 除了全局集群和目标从集群,**还要带上当前主集群**。
-          # 我原本只想写两个 —— 漏掉主集群会让调用被拒,
-          # 而报错只会说没权限,不会说少了哪个 ARN。
-          #
-          # 另注:全局集群的 ARN **没有 region 段**
-          # (arn:aws:rds::<acct>:global-cluster:<name>,两个冒号连着),
-          # 那不是笔误 —— 全局集群不属于任何 region。
-          - Sid: PromoteSecondaryCluster
-            Effect: Allow
-            Action:
-              - rds:FailoverGlobalCluster
-            Resource:
-              - !Ref GlobalClusterArn
-              - !Ref PrimaryClusterArn
-              - !Ref SecondaryClusterArn
-
           - Sid: ReadAsgLifecycleState
             Effect: Allow
             Action:
               - autoscaling:DescribeAutoScalingGroups
             Resource: '*'
 
-          - Sid: ScaleUpPilotLightNodegroup
+          # ── 2026-10-05：探针需要的三条只读 ──────────────────────────────
+          #
+          # 探针（probes.py）在缺权限时如实返回 UNKNOWN，演练会因此判
+          # 「无法判断」—— 那是对的，但它会让演练永远过不了。这三条按资源收紧：
+          #   dynamodb_table_active   只有宠物表
+          #   ecr_image_present/tag   只有首尔的仓库
+          #   lambda_function_active  只有 dr-korea-* 函数，且只读配置（不读代码包）
+          - Sid: ProbeReadDynamoDbTable
             Effect: Allow
             Action:
-              - eks:UpdateNodegroupConfig
-            Resource: !Ref NodegroupArn
+              - dynamodb:DescribeTable
+            Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/ServicesEks2-ddbpetadoption*'
+          - Sid: ProbeReadEcrImages
+            Effect: Allow
+            Action:
+              - ecr:DescribeImages
+            Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/*'
+          - Sid: ProbeReadLambdaConfig
+            Effect: Allow
+            Action:
+              - lambda:GetFunctionConfiguration
+            Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:dr-korea-*'
 
-          # ⚠️ 仍然**没有**给的写权限，以及为什么：
+          # ── 2026-10-05：两条写权限已收回 ────────────────────────────────
           #
-          #   rds:FailoverGlobalCluster        会丢数据的那个变体必须由人裁决，
-          #                                    workflow 已把它做成 signal 放行点。
-          #                                    权限留到那条链路演练过再给。
-          #   elasticloadbalancing:*           建入口会改变暴露面，要先问。
-          #   route53:ChangeResourceRecordSets DNS 切换影响所有流量，最后给。
+          # 这里原来有 ScaleUpPilotLightNodegroup（eks:UpdateNodegroupConfig）
+          # 与 PromoteSecondaryCluster（rds:FailoverGlobalCluster）。
           #
-          # 这个顺序不是保守，而是「每放一条都要能单独演练并回滚」。
+          # 执行模型改成「人执行每个变更，Temporal 只核实」之后，worker 代码里
+          # 已经没有任何写类 AWS 调用（test_128 用 AST 扫描守着）。但**代码不调用
+          # 不等于角色不能调用** —— 一个仍持有 FailoverGlobalCluster 的角色，
+          # 只要有人往 worker 里加一行，就能在没有任何人确认的情况下提升数据库。
+          # 收回权限让「Temporal 不执行变更」从约定变成机制。
+          #
+          # 以后**不要**为了「方便」把它们加回来：要恢复自动执行，先回答谁来
+          # 裁决「挂了还是不可达」—— 那是这套设计里唯一不能交给程序的判断。
 
 Outputs:
   PolicyArn:

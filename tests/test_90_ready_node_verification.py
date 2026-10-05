@@ -39,15 +39,21 @@ class TestVerificationUsesReadyNodes:
         assert "def count_ready_nodes(" in act
 
     def test_scale_step_verifies_on_ready_not_ec2(self, act: str):
-        i = act.index('step="scale_up_nodegroup",\n        executed=True')
-        seg = act[i : i + 1200]
-        assert "ready_k8s_nodes" in seg, "detail 里要带 Ready 节点数"
-        assert "verified=(None if ready is None else ready >= 2)" in seg, (
-            "verified 必须基于 Ready 的 k8s 节点数，而不是 EC2 实例数 —— "
-            "数 EC2 只证明 ASG 扩了，不证明集群有可调度容量"
-        )
-        # 不许退回成只看 EC2。
-        assert "verified=found >= 2" not in seg
+        """拉起节点组的后置核实看 Ready 的 k8s 节点，不看 EC2 实例数。
+
+        2026-10-05 起这条判据在探针 eks_ready_nodes 里（原来在已退役的
+        scale_up_nodegroup activity 里），由人执行扩容、探针核实。
+        """
+        probes = (W / "probes.py").read_text(encoding="utf-8")
+        i = probes.index("def _eks_ready_nodes(")
+        seg = probes[i : i + 700]
+        assert "count_ready_nodes()" in seg
+        assert "if ready is None:" in seg and "UNKNOWN" in seg, "查不到必须是 UNKNOWN"
+        assert 'ready < p["min_ready"]' in seg
+        draft = (W / "runbook_draft.py").read_text(encoding="utf-8")
+        assert 'ProbeRef("eks_ready_nodes"' in draft, "生成器的扩容步骤必须带这个后置探针"
+        # 不许退回成只数 EC2。
+        assert "describe_instances" not in seg
 
     def test_unknown_is_none_not_zero(self, act: str):
         i = act.index("def count_ready_nodes(")

@@ -10,13 +10,14 @@ executor_temporal.py — 经 Temporal 执行 DR plan 的执行引擎(骨架)。
 `TemporalExecutor` 把执行**交给 Temporal**:本类只负责启动 workflow、
 把计划正文送进去、然后观察。真正执行步骤的是 worker。
 
-    本类(在哪跑都行)   ──启动/观察──>  Temporal (10.20.1.125:7243)
+    本类(在哪跑都行)   ──启动/观察──>  Temporal (10.20.1.10:7243，首尔)
                                              │
                                              │ 派单
                                              ▼
                                       worker(Temporal 同一台 EC2)
                                              │
-                                             └─> 真正调 AWS API
+                                             └─> 只读：探针核实终态
+                                                 （变更由人执行，2026-10-05 起）
 
 ## 为什么 worker 和 Temporal 同一台 EC2
 
@@ -58,40 +59,28 @@ logger = logging.getLogger(__name__)
 # ── 阶段 D 的两个未决问题,写在代码里而不是只写在 todo 里 ──────────────────
 
 _REQUIRED_WRITE_ACTIONS = """
-worker 需要的写权限边界 —— **尚未授予,故意的**。
+worker 的写权限 —— **2026-10-05 定案：不授予，也不再需要。**
 
-切换步骤真正要动的:
-    eks:UpdateNodegroupConfig      把节点组从 0 拉到 2
-    rds:FailoverGlobalCluster      提升韩国从集群为可写
-    elasticloadbalancing:*         建/改入口
-    route53:ChangeResourceRecordSets   DNS 切换
+切换步骤真正要动的（拉节点组 eks:UpdateNodegroupConfig、提升从集群
+rds:FailoverGlobalCluster、切 DNS route53:ChangeResourceRecordSets）
+现在全部是 dr-runbook 里的 `manual` 步骤：Temporal 把命令原文展示给人，
+**由人执行**，再用只读探针核实终态。所以 worker 角色永远只需要读。
 
-这些都是**不可逆或高影响**的动作。现在给宽权限等于在步骤还没定型时
-先开口子,所以 02-temporal.yaml 的实例角色目前只有 Describe/读。
-
-授予的前提是先回答:哪些步骤自动执行、哪些必须 signal 放行。
-特别是 rds:FailoverGlobalCluster 有两个变体:
-    有序切换(无数据丢失)          需要主集群还活着
-    --allow-data-loss             主集群已失联时才用
-**「用哪个」必须是需人工放行的决策点**,不能由 workflow 自己挑。
+「有序切换 vs --allow-data-loss」仍是需人裁决的点 —— 在 runbook 里是一个
+`decision` 步骤，没有默认值，等不到裁决就停住。
 """
 
 _RETENTION_PROBLEM = """
-计划的「保存」形态 —— **尚未定型**。
+计划的保存形态 —— **2026-10-05 定案。**
 
-实测约束:本服务端 workflowExecutionRetentionTtl = 86400s(1 天)。
-所以「把计划以 workflow 形式存在 Temporal 里」这条路走不通:
-一天后历史就被清掉,而灾备计划要活几个月。
+实测：default 命名空间 workflowExecutionRetentionTtl = 2592000s（720h / 30 天），
+2026-09-26 重建时从 24h 提上来（见 /opt/temporal/rebuild.sh 的 RETENTION）。
+此前代码注释里的「86400s（1 天）」是重建之前的状态，已过时。
 
-三个候选:
-    ① 提高保留期            改服务端配置,最直接,但历史体积会涨
-    ② 用 Schedule 承载      supportsSchedules=true 已实测确认;
-                            Schedule 不受 workflow 保留期约束
-    ③ 计划正文另存(S3/仓库),workflow 的 memo 只放引用
-实测:memo 可用且 describe 能回读(见 temporal-mcp 的实测记录)。
-
-倾向 ③ + ②:正文归档在能做版本管理的地方,Temporal 只管执行。
-但这要用户拍板,所以本骨架两条都没实现。
+归档刻意未开（filestore 指向单点 EC2 的 /tmp，比不开更糟），所以：
+  · 计划正文：S3 不可覆盖的 plans/<plan_id>/v<N>.md（put_plan_version）
+  · 执行记录：结束时（含被取消）导出到 plans/<plan_id>/executions/
+  · Temporal 只承载评审与执行的过程，30 天后过程会被清掉，结论不会
 """
 
 
@@ -155,7 +144,9 @@ class TemporalExecutor(ExecutorBase):
             # 现在不改，是因为「同一份计划不许重复触发」已覆盖误重试这个
             # 主要风险，而跨计划并发需要先定义「哪些计划互斥」。
             "workflow_id": f"dr-failover-{plan_ref}",
-            "workflow_type": "DrFailoverWorkflow",
+            # DrFailoverWorkflow 已于 2026-10-05 退役（未注册的类型会让执行
+            # 永远 RUNNING 而不报错）。入口现在是计划评审生命周期本身。
+            "workflow_type": "DrPlanWorkflow",
             "task_queue": self.task_queue,
             # 切换会改动生产基础设施 —— 没有超时,卡住了就永远挂着。
             "execution_timeout": os.environ.get("DR_TEMPORAL_EXEC_TIMEOUT", "7200s"),
@@ -165,9 +156,8 @@ class TemporalExecutor(ExecutorBase):
             "identity": f"dr-plan-generator@{os.environ.get('HOSTNAME', 'unknown')}",
             # 幂等:切换命令重试不能起出第二个切换流程。
             "request_id": str(uuid.uuid4()),
-            # ⚠️ 正文不进 input —— 保留期只有 1 天,且体积未知上限
-            #    (describe_namespace 拿不到 blobSizeLimitError,实测确认)。
-            #    这里只放引用,正文另存。
+            # ⚠️ 正文不进 memo —— 保留期 30 天后 history 会被清掉，
+            #    权威正文在 S3 的不可覆盖版本键里。这里只放引用。
             "memo": {
                 "plan_ref": plan_ref,
                 "dry_run": self.dry_run,
@@ -181,13 +171,16 @@ class TemporalExecutor(ExecutorBase):
     ) -> "RehearsalReport":
         """启动切换 workflow。
 
-        ⚠️ 骨架:尚未实现。抛异常而不是返回一个看起来成功的空报告 ——
-        本项目的教训是「静默降级会让错误路径变成实际路径长达五个月」
-        (见 executor_factory.py 里 direct 回退那段)。
+        ⚠️ 仍未实现，且**刻意**不实现成「一键切换」：执行由人在
+        DrRunbookWorkflow 上逐步推进，不是本进程能代劳的事。抛异常而不是返回
+        一个看起来成功的空报告 —— 本项目的教训是「静默降级会让错误路径变成
+        实际路径长达五个月」（见 executor_factory.py 里 direct 回退那段）。
         """
         raise NotImplementedError(
-            "TemporalExecutor 是骨架,尚未实现 execute()。\n"
-            "阻塞在两个需要定型的决定上:\n"
+            "TemporalExecutor.execute() 不实现：切换由人在 DrRunbookWorkflow 上逐步执行。\n"
+            "入口：在首尔 worker 主机上 `probe_cli.py start-plan` 起一条 DrPlanWorkflow，\n"
+            "经 revise_plan / approve_plan / start_drill / authorize_execution 推进。\n"
+            "两个曾经阻塞的决定已定案：\n"
             f"{_REQUIRED_WRITE_ACTIONS}\n{_RETENTION_PROBLEM}"
         )
 

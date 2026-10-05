@@ -6,7 +6,14 @@
 #     可能还要再一次修改」
 #
 # 这是一条**有状态、跨天、多次人工介入**的流程。它不是"执行一次切换"，
-# 所以不属于 DrFailoverWorkflow；它是那件事的**上游**。
+# 而是那件事的**上游**。演练与执行各起一条 DrRunbookWorkflow 子执行。
+#
+# ## 2026-10-05：执行模型改为「人执行，Temporal 核实」
+#
+# 原来的 DrFailoverWorkflow + 四个子 workflow（拉节点组 / 提升数据库 / …）
+# 已退役。现在计划正文里带一个结构化的 ```dr-runbook 块，执行时 Temporal
+# 把每条命令展示给人、等人确认已执行、再用独立的探针 activity 核实终态。
+# Temporal 不调用任何写类 API。见 runbook.py / runbook_workflow.py。
 #
 # ## 为什么用一条长命 workflow 承载它，而不是一张表 + 一个 API
 #
@@ -29,8 +36,7 @@
 #
 # Signal 给不了这两样：它没有 validator，非法值照样落进 history，
 # 且调用方拿不到结果。所以本文件**刻意不提供 signal 通道** ——
-# 与 DrFailoverWorkflow 不同，那里保留 signal 是因为「灾难时 worker 可能
-# 不在线，而裁决必须能投递」。计划评审不是灾难时动作，没有这个约束。
+# DrRunbookWorkflow 同样只走 Update（confirm_step / decide / resolve_gate）。
 #
 # temporal-mcp 已于本次补上 `update_workflow`（此前只有 signal_workflow），
 # 所以这条路对 agent 调用方也是通的。
@@ -71,9 +77,18 @@ from typing import Any
 from temporalio import workflow
 from temporalio.common import RetryPolicy, SearchAttributeKey
 
+from temporalio.workflow import ParentClosePolicy
+
 with workflow.unsafe.imports_passed_through():
-    from activities import StepResult, put_plan_version, PlanVersionInput
-    from workflows import DrFailoverWorkflow, FailoverInput, FailoverResult
+    from activities import put_plan_version, PlanVersionInput
+    from runbook import RunbookError, approval_problems, extract_runbook
+    from runbook_workflow import (
+        MODE_LIVE,
+        MODE_REHEARSAL,
+        DrRunbookWorkflow,
+        RunbookRunInput,
+        RunbookRunResult,
+    )
 
 
 # ── 可检索属性 ────────────────────────────────────────────────────────────
@@ -144,8 +159,14 @@ class DrillRecord:
     child_workflow_id: str
     #: None = 还没跑完 / 无法判断。不许用 False 表示"没测"。
     ok: bool | None = None
-    steps: list[StepResult] = field(default_factory=list)
+    #: DrRunbookWorkflow 的逐步记录（含每次探针结论）。
+    steps: list[dict[str, Any]] = field(default_factory=list)
     inconclusive: list[str] = field(default_factory=list)
+    #: live 模式下人确认执行过的 manual 步骤。
+    executed_steps: list[str] = field(default_factory=list)
+    overrides: list[dict[str, Any]] = field(default_factory=list)
+    status: str = ""
+    record_key: str | None = None
     at: str = ""
     failure: str | None = None
 
@@ -159,9 +180,14 @@ class PlanInput:
     body: str
     author: str = "dr-plan-generator"
     reason: str = "自动生成的初版"
-    #: 执行/演练用的任务队列。
+    #: 演练/执行子 workflow（DrRunbookWorkflow）用的任务队列。
+    #: 字段名沿用旧名，是为了不让已有的启动参数反序列化失败。
     failover_task_queue: str = "dr-plan-queue"
+    #: ⚠️ 已退役，忽略。保留字段只为兼容旧的启动参数 —— 提升哪个数据库
+    #: 现在写在 dr-runbook 块里，由人执行。
     promote_targets: list[str] = field(default_factory=lambda: ["aurora-global"])
+    #: 执行时每个人工等待点的上限（小时）。超时不放行。
+    human_wait_hours: float = 24
     #: 空闲多久后自动收口。默认与保留期对齐，避免僵尸 RUNNING 堆积。
     idle_timeout_hours: int = 720
 
@@ -228,6 +254,8 @@ class DrPlanWorkflow:
         self._cfg: PlanInput | None = None
         #: 修订是 async handler，需要防并发交错 —— 见 _validate_revise。
         self._revise_in_flight: bool = False
+        #: 当前这次演练/执行由谁发起 —— 传给子执行写进它的记录。
+        self._pending_by: str | None = None
 
     # ── 公共校验 ──────────────────────────────────────────────────────────
 
@@ -280,8 +308,8 @@ class DrPlanWorkflow:
         digest = _sha256(body)
 
         try:
-            # 写一个**版本化、不可覆盖**的 S3 键。执行路径（FetchPlanWorkflow）
-            # 仍按 plan_ref 从 S3 取正文，所以这一步是它的供给侧。
+            # 写一个**版本化、不可覆盖**的 S3 键。演练/执行时 DrRunbookWorkflow
+            # 用 load_plan_version 按版本取回并按内容重算摘要 —— 这一步是它的供给侧。
             put = await workflow.execute_activity(
                 put_plan_version,
                 PlanVersionInput(
@@ -351,6 +379,12 @@ class DrPlanWorkflow:
                 "过大的正文会把这条执行推向服务端的 history 大小限制，"
                 "而那个后果是执行被终止。请精简，或把大段附件另存并在正文里引用。"
             )
+        # dr-runbook 块存在就必须合法 —— 在修订进入 history 之前拒掉。
+        # 块缺失允许（草稿阶段），但 approve_plan 会要求它。
+        try:
+            extract_runbook(body)
+        except RunbookError as e:
+            raise ValueError(str(e)) from None
         if _sha256(body) == _sha256(self._body):
             raise ValueError(
                 f"正文与当前 v{self._version} 完全相同，拒绝记为新版本。"
@@ -424,6 +458,11 @@ class DrPlanWorkflow:
             )
         if self._approved_version == version:
             raise ValueError(f"v{version} 已被批准，不重复记录。")
+        problems = approval_problems(self._body)
+        if problems:
+            raise ValueError(
+                "这一版还不能批准：\n  - " + "\n  - ".join(problems)
+            )
 
     # ── ③ 演练 ────────────────────────────────────────────────────────────
 
@@ -445,8 +484,9 @@ class DrPlanWorkflow:
             "drilling_version": self._approved_version,
             "child_workflow_id": self._child_id("drill", self._approved_version),
             "note": (
-                "演练会走到数据库裁决那个决策点并**等人裁决** —— 这是刻意的，"
-                "审批环节本身也要被演练。裁决要发给上面那个子执行，不是发给本计划。"
+                "演练不等任何人：把 runbook 里每个探针真跑一次。"
+                "任何 UNKNOWN（测不到）都会让演练结论变成「无法判断」，"
+                "第一个人工步骤之前的 check 必须全 PASS。"
             ),
         }
 
@@ -472,33 +512,31 @@ class DrPlanWorkflow:
             "action": "execute",
             "version": self._approved_version,
             "authorized_by": args["authorized_by"].strip(),
-            "execute_steps": list(args["execute_steps"]),
         }
         return {
             "accepted": True,
             "executing_version": self._approved_version,
-            "execute_steps": self._pending["execute_steps"],
             "child_workflow_id": self._child_id("exec", self._approved_version),
-            "note": "裁决要发给上面那个子执行。未列入 execute_steps 的步骤仍走 dry_run。",
+            "note": (
+                "执行由人逐步推进：对上面那个子执行用 query runbook_state 看当前步骤，"
+                "执行命令后发 confirm_step；裁决发 decide；探针不过时发 resolve_gate。"
+            ),
         }
 
     @authorize_execution.validator
     def _validate_authorize(self, args: dict[str, Any]) -> None:
         self._reject_if_terminal("执行授权")
         self._reject_if_busy("执行授权")
-        for key in ("authorized_by", "execute_steps"):
-            if key not in args:
-                raise ValueError(
-                    f"缺少必填字段 {key!r}。必填：authorized_by / execute_steps。"
-                )
+        if "authorized_by" not in args:
+            raise ValueError("缺少必填字段 'authorized_by'。")
         self._require_text(args["authorized_by"], "authorized_by")
-
-        steps = args["execute_steps"]
-        if not isinstance(steps, list) or not steps:
+        if "execute_steps" in args:
+            # 响亮拒绝而不是静默忽略：调用方以为自己在「按步骤放行」，
+            # 而那个机制已经不存在了。
             raise ValueError(
-                "execute_steps 不能为空。放行是**按步骤逐个给**的："
-                "没写进来的步骤一律 dry_run。一个空列表意味着这次授权什么都不会真执行，"
-                "却留下一条「已授权执行」的审计记录 —— 那比拒绝更糟。"
+                "execute_steps 已于 2026-10-05 退役：Temporal 不再执行任何变更。"
+                "现在每个人工步骤由人在执行子 workflow 上逐个 confirm_step —— "
+                "那比按名字预先放行更细。去掉这个字段重发即可。"
             )
 
         # ★ 硬闸门：演练必须覆盖被批准的那一版，且它必须仍是当前版本。
@@ -590,15 +628,8 @@ class DrPlanWorkflow:
             "plan_id": self._plan_id,
             "revisions": [r.__dict__ for r in self._revisions],
             "approvals": [a.__dict__ for a in self._approvals],
-            "drills": [
-                {**d.__dict__, "steps": [s.__dict__ for s in d.steps]} for d in self._drills
-            ],
-            "execution": (
-                {**self._execution.__dict__,
-                 "steps": [s.__dict__ for s in self._execution.steps]}
-                if self._execution
-                else None
-            ),
+            "drills": [dict(d.__dict__) for d in self._drills],
+            "execution": dict(self._execution.__dict__) if self._execution else None,
         }
 
     @workflow.query(name="current_body")
@@ -628,10 +659,14 @@ class DrPlanWorkflow:
             ]
         )
 
-    async def _run_failover_child(
-        self, kind: str, version: int, *, dry_run: bool, execute_steps: list[str]
-    ) -> DrillRecord:
-        """跑一条 DrFailoverWorkflow 子执行并把结论记下来。"""
+    def _sha_of(self, version: int) -> str:
+        for r in self._revisions:
+            if r.version == version:
+                return r.sha256
+        raise ValueError(f"评审链里没有 v{version}")
+
+    async def _run_runbook_child(self, kind: str, version: int, *, mode: str) -> DrillRecord:
+        """跑一条 DrRunbookWorkflow 子执行并把结论记下来。"""
         assert self._cfg is not None
         child_id = self._child_id(kind, version)
         rec = DrillRecord(
@@ -639,34 +674,31 @@ class DrPlanWorkflow:
         )
         self._active_child = child_id
         try:
-            result: FailoverResult = await workflow.execute_child_workflow(
-                DrFailoverWorkflow.run,
-                FailoverInput(
-                    # 版本化、不可覆盖的引用 —— 执行路径取的正文与审计链里
-                    # 那一版的 sha256 对得上，不是"某个叫这个名字的对象"。
-                    plan_ref=f"{self._plan_id}/v{version}",
-                    dry_run=dry_run,
-                    promote_targets=list(self._cfg.promote_targets),
-                    execute_steps=list(execute_steps),
+            result: RunbookRunResult = await workflow.execute_child_workflow(
+                DrRunbookWorkflow.run,
+                RunbookRunInput(
+                    plan_id=self._plan_id,
+                    version=version,
+                    # 子执行按内容重算摘要核对 —— 被批准的那一版与被执行的那一版
+                    # 必须是同一份字节，不是「某个叫这个名字的对象」。
+                    sha256=self._sha_of(version),
+                    mode=mode,
+                    requested_by=self._pending_by or "",
+                    human_wait_hours=self._cfg.human_wait_hours,
                 ),
                 id=child_id,
                 task_queue=self._cfg.failover_task_queue,
+                # 本计划被关掉时，**请求取消**子执行而不是直接终止它 ——
+                # 子执行接住取消后会把记录导出到 S3。终止则什么都留不下。
+                parent_close_policy=ParentClosePolicy.REQUEST_CANCEL,
             )
+            rec.ok = result.ok
+            rec.status = result.status
             rec.steps = list(result.steps)
-            rec.inconclusive = [
-                f"{s.step}: {s.inconclusive_reason}"
-                for s in result.steps
-                if s.verified is None and s.inconclusive_reason
-            ]
-            # ok 是三态的：任何一步 verified is None 就是**无法判断**，
-            # 不是通过。把 inconclusive 记成 pass 是本项目反复踩过的坑。
-            if result.aborted:
-                rec.ok = False
-                rec.failure = f"裁决为 abort（{result.database_decision}）"
-            elif any(s.verified is None for s in result.steps):
-                rec.ok = None
-            else:
-                rec.ok = all(s.verified for s in result.steps)
+            rec.inconclusive = list(result.findings)
+            rec.executed_steps = [s["step"] for s in result.steps if s.get("confirmed")]
+            rec.overrides = list(result.overrides)
+            rec.record_key = result.record_key
         except Exception as e:  # noqa: BLE001 —— 子执行失败要落进审计链，不能吞掉
             rec.ok = False
             rec.failure = f"{type(e).__name__}: {e}"
@@ -733,9 +765,8 @@ class DrPlanWorkflow:
                 version = pending["version"]
                 self._state = STATE_DRILLING
                 self._tag()
-                rec = await self._run_failover_child(
-                    "drill", version, dry_run=True, execute_steps=[]
-                )
+                self._pending_by = pending.get("requested_by")
+                rec = await self._run_runbook_child("drill", version, mode=MODE_REHEARSAL)
                 self._drills.append(rec)
                 if rec.ok is True:
                     self._drilled_version = version
@@ -750,9 +781,9 @@ class DrPlanWorkflow:
                 version = pending["version"]
                 self._state = STATE_EXECUTING
                 self._tag()
-                self._execution = await self._run_failover_child(
-                    "exec", version, dry_run=False,
-                    execute_steps=pending["execute_steps"],
+                self._pending_by = pending.get("authorized_by")
+                self._execution = await self._run_runbook_child(
+                    "exec", version, mode=MODE_LIVE
                 )
                 self._state = STATE_EXECUTED
                 self._tag()
