@@ -176,3 +176,107 @@ PACKAGE_REQUIRED = {
 - `docs/lessons/tech-debt-etl-lambdas-outside-cfn.md` —— 同族的 IaC 绕过
 - `docs/runbooks/deployment-record.md` 4.47 —— 「永远红着的告警」的处置先例
 - `infra/lambda/rca_window_flush/build.sh` —— 它的注释预言了 `.so` 被删
+
+---
+
+# 第二例：同一个坑在共享 Layer 上，而且更深
+
+**日期**：2026-10-05
+**发现路径**：收敛 `neptune-client-base` Layer 时顺手查「CDK 怎么定义它」
+
+## 事实
+
+`infra/lib/neptune-etl-stack.ts` 用 `Code.fromAsset('../lambda/shared')`
+定义这个 Layer。`cdk synth` 实测它打出的 asset：
+
+```
+10 个文件，顶层只有 python/
+python/ 下: __pycache__ · graph_cleanup.py · graph_confidence.py
+            graph_contract.py · graph_contract_data.py · neptune_client_base.py
+```
+
+而线上 Layer 有 **90 个条目**，其中 77 个是依赖文件
+（`certifi` / `charset_normalizer` / `idna` / `requests` / `urllib3`）。
+
+`python/neptune_client_base.py` 的 import 行：
+
+```python
+import boto3, botocore, json, logging, os, requests, urllib3
+```
+
+`boto3` / `botocore` 由 Lambda 运行时提供，**`requests` 和 `urllib3` 不是**。
+
+所以 `cdk deploy NeptuneEtlStack` 会把 Layer 替换成一个缺这两个包的版本，
+**挂载它的 6 个 ETL 函数全部在 import 阶段挂掉**。
+
+## 为什么它比第一例更深
+
+| | gp-window-flush（10-04） | 共享 Layer（10-05） |
+|---|---|---|
+| 依赖怎么进去 | `build.sh` 的 pip install | **仓库里没有任何记录** |
+| 爆炸半径 | 1 个函数 | **6 个函数同时** |
+| 发现方式 | 记得部署前的包大小 | 查 CDK 定义时顺手 |
+
+第一例至少有 `build.sh` 说明依赖怎么装。这一例**连构建脚本都没有** ——
+线上那 77 个依赖文件是某次手工 `pip install` + 手工 `publish-layer-version`
+的产物，而仓库里对此一字未记。
+
+而且 CDK 的注释写着：
+
+```
+// 本 layer 是纯 Python（仅 python/neptune_client_base.py，无任何编译产物），
+```
+
+实盘是 5 个业务模块 + 77 个依赖文件。**注释与实盘脱节在这里不是风格问题** ——
+下一个读它的人会据此判断「这个 Layer 很简单，deploy 一下没事」。
+
+## 这也解释了 10-04 那条 cdk diff
+
+部署 `etl_deepflow` 时 `cdk diff NeptuneEtlStack` 报过：
+
+```
+[~] AWS::Lambda::LayerVersion NeptuneClientBaseLayer   replace
+ ├─ [+] CompatibleArchitectures (requires replacement)
+ └─ [~] Content (requires replacement)
+```
+
+当时的判断是「Layer replacement 超出用户授权范围，改用 update-function-code」。
+那个判断是对的，但**理由比当时想的严重** —— 它不只是「替换共享 Layer」，
+而是会发布一个必挂的 Layer。`[~] Content` 这一行底下藏的是 90 → 5 条目。
+
+## 处置
+
+1. `infra/lambda/shared/requirements.txt` —— 依赖显式声明，**版本 pin**。
+   本仓另两份用 `>=`，这里不行：Layer 由 6 个函数共享，`>=` 意味着每次构建
+   装到不同版本 → 每次 `cdk deploy` 都 replace Layer → 6 个函数的引用反复变动，
+   而那种变动在 `cdk diff` 里和一次真实更新长得一样。
+2. `infra/lambda/shared/build.sh` —— 装依赖 + 清 `__pycache__`
+   （CDK 的 `fromAsset` 不排除它，会一起打进 Layer）+ 完整性校验。
+3. 修 CDK 注释，写清「部署前必须先跑 build.sh」及不跑的后果。
+4. 门禁 `tests/test_128_cdk_layer_asset_must_carry_deps.py`：
+   **凡被 CDK `Code.fromAsset` 打成 Layer 的目录，其模块的第三方 import
+   必须在目录内可满足，或目录里有构建声明。** 判据是静态的，离线 CI 可跑。
+
+验证：`build.sh` 产物与已验证的 Layer 21 比对 ——
+**线上有而产物没有：无**（产物是超集，多的 34 个文件全是 `dist-info` 元数据）。
+
+## 本轮自己踩的两个
+
+**① 清理范围宽一格就误删。** 我在 build.sh 里写的清理命令是
+`git clean -fdx infra/lambda/shared/`，然后它把我刚新建的 `build.sh` 和
+`requirements.txt` 一起删了 —— 它们在首次提交前是未跟踪文件，而 `-x`
+不区分 ignored 与单纯未跟踪。改成 `.../shared/python/`。
+**这与本文要防的缺陷同源：清理范围也是个白名单。**
+
+**② 判据自己静默失效。** 门禁第一版用一条正则跨整个构造块：
+
+```
+new\s+lambda\.LayerVersion\s*\([^)]*?code:\s*lambda\.Code\.fromAsset\(
+```
+
+给那个构造加上说明注释之后，注释里的中文括号和 `import requests, urllib3`
+让 `[^)]*?` 跨不过去，于是判据**一个 Layer 都找不到**，静默变成「什么都没检查」。
+
+抓到它的是 `test_cdk_defines_at_least_one_layer_from_asset` —— 那条测试
+存在的全部理由就是这个。**一个找不到目标的门禁比没有门禁更坏**，
+因为它让人以为这一类问题有人看着。改成按行扫，注释怎么写都不影响定位。
