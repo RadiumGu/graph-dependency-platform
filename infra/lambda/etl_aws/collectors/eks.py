@@ -18,6 +18,14 @@ import boto3
 try:
     from aws_resilience import make_client
 except ImportError:  # pragma: no cover - Layer 未更新时的降级路径
+    # 降级本身是个必须说出来的状态 —— 静默降级会让人分不出
+    # 「护栏在起作用」和「护栏根本没加载」。前缀固定，便于告警。
+    import logging as _lg
+    _lg.getLogger(__name__).warning(
+        "AWS_RESILIENCE_UNAVAILABLE —— Layer 里没有 aws_resilience，"
+        "已降级为裸 boto3：无显式退避、无分页跑飞护栏，"
+        "graph_gc 的误删防护此时不生效。"
+    )
     make_client = boto3.client
 from botocore.auth import SigV4QueryAuth
 from botocore.awsrequest import AWSRequest

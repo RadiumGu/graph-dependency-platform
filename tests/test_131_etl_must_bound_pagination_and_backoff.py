@@ -313,3 +313,30 @@ def test_graph_gc_does_not_silently_swallow_inventory_errors():
         f"graph_gc.py 这些行的 except 块静默吞错（行号 {silent}）。"
         "清单类错误必须记日志并放弃该类的 GC，不能当作「资源不存在」。"
     )
+
+
+def test_resilience_fallback_is_not_silent():
+    """防御式 import 的降级分支必须说出来。
+
+    降级意味着「无退避、无分页护栏、graph_gc 误删防护不生效」。
+    静默降级会让人分不出「护栏在起作用」和「护栏根本没加载」——
+    那正是本仓第一条设计原则要防的：判据必须能区分「否」与「我不知道」。
+
+    2026-10-06：这个缺陷是我自己写出来的。第一版 shim 的 except 分支只有
+    `make_client = boto3.client`，部署后从 Lambda 日志里无法判断 Layer
+    到底带没带 aws_resilience。
+    """
+    offenders = []
+    for p in _etl_source_files():
+        src = p.read_text(errors="replace")
+        if "from aws_resilience import" not in src:
+            continue
+        # 取 except ImportError 之后、到下一个顶层语句之前的那一段
+        for m in re.finditer(r"except ImportError:[^\n]*\n((?:[ \t]+[^\n]*\n|\n)+)", src):
+            block = m.group(1)
+            if "AWS_RESILIENCE_UNAVAILABLE" not in block:
+                offenders.append(str(p.relative_to(REPO)))
+    assert not offenders, (
+        "这些文件的降级分支是静默的，必须记一条带 AWS_RESILIENCE_UNAVAILABLE "
+        "前缀的 warning：\n  " + "\n  ".join(sorted(set(offenders)))
+    )

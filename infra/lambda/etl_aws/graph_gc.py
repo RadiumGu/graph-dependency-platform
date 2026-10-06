@@ -29,6 +29,13 @@ import boto3
 try:
     from aws_resilience import paginate_all
 except ImportError:  # pragma: no cover - Layer 未更新时的降级路径
+    import logging as _lg
+    _lg.getLogger(__name__).warning(
+        "AWS_RESILIENCE_UNAVAILABLE —— Layer 里没有 aws_resilience，"
+        "paginate_all 降级为不分页（与改动前行为一致）。"
+        "清单可能少收，而少收会让 _gc_vertices 删掉真实存在的资源。"
+    )
+
     def paginate_all(client, operation_name, key, **kwargs):  # type: ignore[misc]
         return getattr(client, operation_name)(**kwargs).get(key, []) or []
 
