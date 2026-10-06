@@ -350,7 +350,8 @@ python3.11 -m pip install requests pyyaml strands-agents \
 >   否则 pydantic-core / _yaml 这类二进制扩展在运行时 ImportError。
 
 所以这不是「没人知道」的问题。Layer 的依赖是手工 `pip install` 装的，
-手工操作的人没去看那个脚本；而 **2026-10-05 我补写 `shared/build.sh` 时
+手工操作的人没去看那个脚本；而 **2026-10-05 我补写
+`infra/lambda/shared/build.sh` 时
 同样没去看，把同一个缺陷又写了一遍** —— 只写了 `--platform`，
 还漏了 `--python-version`。
 
