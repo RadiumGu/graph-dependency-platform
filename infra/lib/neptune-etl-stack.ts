@@ -470,6 +470,55 @@ export class NeptuneEtlStack extends cdk.Stack {
 
 
     // =========================================================
+    // 上面 3 个 ETL 的调度规则
+    // =========================================================
+    //
+    // 这 3 条规则与函数本身一样，2026-09-06 是手工 `aws events put-rule`
+    // 建的。2026-10-06 把函数 cdk import 进栈时它们进不来：CFN 的 IMPORT
+    // changeset 只能导入、不能创建，而 targets.LambdaFunction 必然附带一个
+    // AWS::Lambda::Permission —— CDK 把它标成 skipping，但它仍在模板里，
+    // 于是 CFN 报 `Cannot invoke "String.split(String)" because "pid" is null`。
+    //
+    // 所以这里换了条路：**删掉手工规则，让 CDK 新建**。代价是一段约 2-3 分钟
+    // 的调度空窗，而这几个 ETL 是按回溯窗口做幂等 upsert 的
+    // （appsignals lookback=86400s、xray 24h），漏掉一个 tick 会被下一次运行
+    // 完整补回；AccessesData 边的 expires_seconds 是 21600s，比空窗大两个数量级。
+    // 另一条路（先 import 无 target 的规则、再 deploy 补 target）步骤更多，
+    // 且中间有一段「栈认为规则没有 target」的**漂移**窗口 ——
+    // 用漂移窗口换停机窗口，方向是错的。
+    //
+    // description 一律 ASCII。线上那 3 条手工规则的 description 里有中文和 `→`，
+    // 而非 ASCII 在 CDK→CFN 路径上会被转成 `?`，造成永不收敛的脏 diff
+    // （本文件 Lambda description 已为此全部改成 `->`，见上）。
+    // 排期理由因此写在下面的注释里 —— 仓库本来也比 AWS 资源描述更适合存这个。
+
+    // 1 小时一轮：X-Ray 拓扑按部署节奏变化而非按秒，回看窗口本就 24h，
+    // 失效阈值 6h —— 每小时刷新留了 6 次余量。
+    new events.Rule(this, 'XrayEtlSchedule', {
+      ruleName: 'neptune-etl-xray-hourly',
+      description: 'Trigger neptune-etl-from-xray hourly (lookback 24h, edge TTL 6h)',
+      schedule: events.Schedule.rate(cdk.Duration.hours(1)),
+      targets: [new targets.LambdaFunction(xrayEtlFn)],
+    });
+
+    // 15 分钟一次：比 Calls 边的 1800s TTL 勤，
+    // 避免边被 graph_cleanup 误置 active=false。
+    new events.Rule(this, 'AppsignalsEtlSchedule', {
+      ruleName: 'neptune-etl-appsignals-every-15min',
+      description: 'Trigger neptune-etl-from-appsignals every 15 minutes (Calls edge TTL 1800s)',
+      schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
+      targets: [new targets.LambdaFunction(appsignalsEtlFn)],
+    });
+
+    // 15 分钟一次：span 回看 6h = 边 TTL 6h。
+    new events.Rule(this, 'AgentcoreEtlSchedule', {
+      ruleName: 'neptune-etl-agentcore-every-15min',
+      description: 'Trigger neptune-etl-from-agentcore every 15 minutes (span lookback 6h = edge TTL 6h)',
+      schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
+      targets: [new targets.LambdaFunction(agentcoreEtlFn)],
+    });
+
+    // =========================================================
     // CloudFormation Outputs
     // =========================================================
     new cdk.CfnOutput(this, 'DeepflowEtlFunctionArn', {

@@ -70,7 +70,10 @@ name_prefix_map:
 3 个函数用 `cdk import` 纳入 `NeptuneEtlStack`，`name_prefix_map` 已删除。
 验收：`scripts/label_node_scope.py` 下 8 个 `neptune-etl*` 节点**全部经
 CloudFormation 归属**判为 platform，unknown 维持 101 条（与删除前一致，无回归）。
-栈内 Lambda 从 4 个增至 7 个。
+
+**栈内资源：Lambda 4 → 7 个，另新增 3 条 EventBridge 规则 + 3 个
+Lambda Permission。`cdk diff` → `There were no differences`。
+这批资源在 AWS 上已不再有任何一件处于 IaC 之外。**
 
 过程中踩到四件事，都比纳入栈本身更值得记：
 
@@ -81,13 +84,28 @@ CloudFormation 归属**判为 platform，unknown 维持 101 条（与删除前�
 「Omitted 4 changes because they are likely mangled non-ASCII characters」，
 要 `--strict` 才看得见。已全部改 ASCII `->`。
 
-**② `AWS::Lambda::Permission` 不可导入，连带 3 条 EventBridge 规则也进不了栈。**
-CFN 的 IMPORT changeset 只能导入、不能创建，而 `targets.LambdaFunction`
-必然带一个 Permission 资源。CDK 会把它标成 `skipping`，但它仍在模板里，
+**② `AWS::Lambda::Permission` 不可导入,所以 3 条 EventBridge 规则只能换条路。**
+CFN 的 IMPORT changeset 只能导入、不能创建,而 `targets.LambdaFunction`
+必然带一个 Permission 资源。CDK 会把它标成 `skipping`,但它仍在模板里,
 于是 CFN 报 `Cannot invoke "String.split(String)" because "pid" is null`。
-**现状：3 个函数已在栈内，3 条规则与 3 个 Permission 仍在栈外（手工）。**
-规则继续正常触发（它们指向函数 ARN，import 不改 ARN）。
-这是本次遗留的、比原问题小一号的同类债。
+
+**走法:删掉 3 条手工规则,让 CDK 新建。** 代价是一段调度空窗,实测 **111 秒**。
+这个代价之所以可接受,不是「忍一下」,而是这几个 ETL 按回溯窗口做幂等 upsert
+(appsignals `lookback=86400s`、xray 24h),漏掉一个 tick 会被下一次运行
+**完整补回**;`AccessesData` 边的 `expires_seconds` 是 21600s,比空窗大两个数量级。
+
+另一条路(先 import 无 target 的规则、再 deploy 补 target 和 Permission)
+步骤更多,且中间有一段「栈认为规则没有 target」的**漂移**窗口 ——
+用漂移窗口换停机窗口,方向是错的。漂移恰恰是这整件事要消灭的东西。
+
+重建后顺带清掉了 3 条**冗余的手工 Permission**:新规则同名同 ARN,
+所以旧的手工条目与 CDK 新建的在 action / principal / SourceArn 上逐项等价,
+留着就是三条无人管的权限授予。删前已逐项核对等价性。
+
+**规则的 description 必须 ASCII。** 线上那 3 条手工规则的 description 里有
+中文和 `→`(手工用 CLI 建的,UTF-8 没问题),但经 CDK→CFN 会被转成 `?`,
+那就等于把坑 ① 在规则上重演一遍。排期理由因此写进了 CDK 的代码注释 ——
+仓库本来也比 AWS 资源描述更适合存这个知识。
 
 **③ import 之后 CFN 记录的 Code/Layer 是模板里的新值，而函数仍跑旧代码。**
 `cdk import` 不修改资源，但把模板属性记成了「当前状态」。于是
