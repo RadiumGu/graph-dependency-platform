@@ -68,7 +68,12 @@ class TestCoverageHonesty:
         assert "没有被内容比对检查过" in src
 
     def test_source_map_is_the_coverage(self, src: str):
-        assert "这个表就是覆盖面本身" in src
+        """覆盖面即判据这件事必须写下来。
+
+        2026-10-05 起成员由枚举生成，所以措辞从「这个表」变成「这个交集」 ——
+        覆盖面现在是「仓库目录 ∩ 部署包」，而不是一张手工表。
+        """
+        assert "就是覆盖面本身" in src
 
 
 class TestCrossFormatComparisonTrap:
@@ -76,35 +81,27 @@ class TestCrossFormatComparisonTrap:
         assert "esbuild" in src
         assert "同形态" in src
 
-    def test_source_map_holds_only_python(self, src: str):
-        """那个 Node Lambda 刻意不在表里 —— 它线上是打包产物。
-
-        2026-10-04 起 value 是**成员列表**（tuple of (path, member)），所以
-        这里要嵌套遍历。只放未打包 .py 这条不变 —— json / 打包产物不要进来，
+    def test_source_map_holds_only_python(self):
+        """只放未打包 .py 这条不变 —— json / 打包产物不要进来，
         跨形态比对永远不可能逐字相同。
-        """
-        import ast
 
-        tree = ast.parse(src)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign) and any(
-                getattr(t, "id", "") == "SOURCE_MAP" for t in node.targets
-            ):
-                vals = ast.literal_eval(node.value)
-                assert vals, "SOURCE_MAP 不能是空的"
-                for fn, pairs in vals.items():
-                    assert isinstance(pairs, tuple) and pairs, (
-                        f"{fn} 的 value 必须是非空的成员列表 —— "
-                        "单成员判据在 2026-10-04 两次给出假绿"
-                    )
-                    for pair in pairs:
-                        assert isinstance(pair, tuple) and len(pair) == 2, (
-                            f"{fn} 的成员项必须是 (path, member) 二元组，实际 {pair!r}"
-                        )
-                        _path, member = pair
-                        assert member.endswith(".py"), f"{member} 不是未打包的 .py"
-                return
-        pytest.fail("找不到 SOURCE_MAP")
+        2026-10-05 起 SOURCE_MAP 由 _repo_side_members() 枚举生成，不再是
+        字面量，所以这里读**实际值**而不是解析 AST。这比原来强：它验证的是
+        枚举结果真的只含 .py，而不是「源码里那个字面量只写了 .py」。
+        """
+        mod = _load_detector()
+        assert mod.SOURCE_MAP, "SOURCE_MAP 不能是空的"
+        for fn, pairs in mod.SOURCE_MAP.items():
+            assert isinstance(pairs, tuple) and pairs, (
+                f"{fn} 的 value 必须是非空的成员列表 —— "
+                "单成员判据在 2026-10-04 两次给出假绿"
+            )
+            for pair in pairs:
+                assert isinstance(pair, tuple) and len(pair) == 2, (
+                    f"{fn} 的成员项必须是 (path, member) 二元组，实际 {pair!r}"
+                )
+                _path, member = pair
+                assert member.endswith(".py"), f"{member} 不是未打包的 .py"
 
 
 class TestThirdInstanceOfMergedNotDeployed:
@@ -178,8 +175,11 @@ class TestMainModuleCanHideDrift:
         pytest.fail("找不到 SOURCE_MAP")
 
     def test_drifted_functions_are_multi_member(self, src: str):
-        """两个实测漂移过的函数必须是多成员 —— 退回单成员就是退回假绿。"""
-        sm = self._source_map(src)
+        """两个实测漂移过的函数必须是多成员 —— 退回单成员就是退回假绿。
+
+        2026-10-05 起读实际枚举值而非 AST 字面量。
+        """
+        sm = _load_detector().SOURCE_MAP
         for fn in ("gp-window-flush", "neptune-etl-from-aws"):
             assert fn in sm, f"{fn} 不在 SOURCE_MAP 里"
             assert len(sm[fn]) > 1, (
@@ -189,12 +189,25 @@ class TestMainModuleCanHideDrift:
             )
 
     def test_actually_drifted_members_are_covered(self, src: str):
-        """实测漂移过的那几个模块必须在表里 —— 它们是判据的来源。"""
-        sm = self._source_map(src)
+        """实测漂移过的那几个模块必须被覆盖 —— 它们是判据的来源。
+
+        2026-10-05 补了三个：collectors/eks.py（手工列表漏掉整个 collectors/
+        子目录，实测漂移 629 B）、engines/factory.py 与
+        actions/incident_writer.py（枚举上线后立刻抓到 petsite-rca-engine
+        有 5 个模块漂移，而手工列表永远不会覆盖它们）。
+        """
+        sm = _load_detector().SOURCE_MAP
         required = {
-            # 函数名: 必须覆盖的成员（都是 2026-10-04 实测确认漂移过的）
+            # 函数名: 必须覆盖的成员（全部是实测确认漂移过的）
             "gp-window-flush": {"neptune/neptune_queries.py"},
-            "neptune-etl-from-aws": {"neptune_client_base.py", "business_layer.py"},
+            "neptune-etl-from-aws": {
+                "neptune_client_base.py", "business_layer.py",
+                "collectors/eks.py",
+            },
+            "petsite-rca-engine": {
+                "engines/factory.py", "engines/base.py",
+                "actions/incident_writer.py",
+            },
         }
         for fn, must in required.items():
             members = {m for _p, m in sm.get(fn, ())}
@@ -242,7 +255,7 @@ class TestMainModuleCanHideDrift:
         不写的话，下一个人看到 etl_aws 列了 7 个模块会觉得啰嗦而精简回一个 ——
         而那恰好是这次要修的东西。
         """
-        assert_contains(src, "单成员会给出假绿")
+        assert_contains(src, "单成员")
         assert_contains(src, "恰好一致")
 
 
@@ -534,4 +547,183 @@ class TestSourceMapCoversEveryGraphWriter:
         """4/4 命中率要写下来 —— 它是「没有判据看着的地方漂移不会停」的
         实测证据，不是一句口号。"""
         assert "四个全在漂移" in src
-        assert "不会自己停下" in src
+        assert "不会自己停下" in src or "没有判据看着的地方" in src
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 成员必须由枚举得出，不能退回手工列表
+#
+# 手工维护成员列表的漏报在本仓出现过三次，各不相同而病因是一个：
+#   ① 单成员 → 主模块一致掩盖依赖模块漂移（2026-10-04，两个实例）
+#   ② 表外函数 → 4 个写同一张图的函数不在表里，实测四个全在漂移
+#   ③ 表内成员不全 → etl_aws 14 个业务 .py 只列了 7 个，
+#      整个 collectors/ 从未被比对，实测 eks.py 漂移 629 B
+#
+# 前两次的处置都是「把漏掉的加进去」。第三次证明那是推迟而非修复。
+# 枚举上线后立刻抓到第四批：petsite-rca-engine 的 5 个模块
+# （整个 engines/ 子目录），手工列表永远不会覆盖它们。
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class TestMembersMustBeEnumeratedNotHandListed:
+    @pytest.fixture(scope="class")
+    def mod(self):
+        return _load_detector()
+
+    def test_source_map_is_not_a_literal(self, src: str):
+        """SOURCE_MAP 不能是手写的字面量。
+
+        用 AST 确认它由推导式/函数调用构建 —— 一个字面量意味着有人把枚举
+        退回了手工列表，而那条路已经走过三次。
+        """
+        import ast
+
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Assign) and any(
+                getattr(t, "id", "") == "SOURCE_MAP" for t in node.targets
+            )):
+                continue
+            assert not isinstance(node.value, ast.Dict), (
+                "SOURCE_MAP 又变成手写字面量了。成员必须由 SOURCE_ROOTS 枚举 —— "
+                "手工列表的漏报本仓已实测三次，每次都是『漏掉的那个正好在漂移』。"
+            )
+            return
+        pytest.fail("找不到 SOURCE_MAP 的赋值")
+
+    def test_enumeration_uses_git_not_directory_scan(self, src: str):
+        """枚举必须用 git ls-files，不能扫目录。
+
+        build.sh 会往这些目录装依赖。扫目录会把未跟踪文件算进来 ——
+        2026-10-04 实测过这个后果：残留依赖让 test_53 的 test_m06 把
+        certifi.core 报成死代码。
+        """
+        assert "git" in src and "ls-files" in src, (
+            "枚举没有用 git ls-files"
+        )
+
+    def test_vendored_deps_are_excluded(self, mod):
+        """vendored 第三方必须被排除。
+
+        etl_aws / etl_deepflow / etl_cfn 把依赖 vendored 进了各自目录并被
+        git 跟踪，所以「仓库里有」筛不掉它们：etl_aws 的 91 个被跟踪 .py
+        里 77 个是 vendored。不排除的话覆盖面数字会虚高 4 倍多，
+        而那个数字正是报告里用来说明「查了多少」的。
+        """
+        assert mod._VENDORED, "_VENDORED 不能是空的"
+        for dep in ("urllib3", "requests", "certifi", "charset_normalizer", "idna"):
+            assert dep in mod._VENDORED, f"{dep} 没被排除"
+        aws = {m for _p, m in mod.SOURCE_MAP["neptune-etl-from-aws"]}
+        assert not any(m.startswith(("urllib3/", "requests/", "certifi/")) for m in aws), (
+            f"etl_aws 的成员里混进了 vendored 依赖: "
+            f"{sorted(m for m in aws if m.split('/')[0] in mod._VENDORED)[:4]}"
+        )
+        assert 10 <= len(aws) <= 25, (
+            f"etl_aws 枚举出 {len(aws)} 个成员。业务代码实测是 14 个"
+            f"（91 个被跟踪 .py 减去 77 个 vendored）—— 数字离谱说明筛选错了"
+        )
+
+    def test_collectors_subdir_is_covered(self, mod):
+        """整个 collectors/ 子目录必须被覆盖。
+
+        手工列表时代它完全不在表里（7 个文件），而 dc144da
+        「9 处签名路径都缺 None 保护」的修复分散在多个文件 ——
+        2026-10-04 只部署了 neptune_client_base.py，漏了 collectors/eks.py，
+        于是那个修复只上线了一部分，而检测器对 etl_aws 报绿。
+        """
+        aws = {m for _p, m in mod.SOURCE_MAP["neptune-etl-from-aws"]}
+        collectors = {m for m in aws if m.startswith("collectors/")}
+        assert len(collectors) >= 7, (
+            f"collectors/ 只覆盖了 {len(collectors)} 个，实测有 7 个业务模块: "
+            f"{sorted(collectors)}"
+        )
+
+    def test_runtime_intersects_with_actual_package(self, src: str):
+        """运行时必须与**实际部署包**求交。
+
+        只取仓库侧会把「该函数不带的模块」报成未核实：gp-window-flush 与
+        petsite-rca-engine 共享 rca/ 的 49 个 .py，而两个包带的子集不同。
+        反过来只取包侧则会去比 strands/starlette 这些第三方
+        （gp-window-flush 的包有 2008 个条目）。
+        """
+        assert "_enumerate_members(fn, blob)" in src, (
+            "运行时没有与部署包求交 —— 仓库侧的候选上限不能直接当成员用"
+        )
+        assert "repo & pkg" in src, "没有做集合交"
+
+    def test_coverage_is_materially_larger_than_hand_listed(self, mod):
+        """覆盖面必须显著大于手工时代的 22 个模块。
+
+        这条不是为了追求数字 —— 22 → 118 这个跨度本身就是证据：
+        手工列表当时漏掉了 96 个模块，而其中至少 6 个实测在漂移。
+        """
+        total = sum(len(v) for v in mod.SOURCE_MAP.values())
+        assert total >= 100, (
+            f"枚举只得出 {total} 个模块，手工时代是 22 个，实测应为 118。"
+            f"数字掉回去说明枚举范围被缩小了"
+        )
+
+    def test_shared_root_functions_enumerate_independently(self, mod):
+        """共享同一个 root 的两个函数要各自枚举。
+
+        gp-window-flush 与 petsite-rca-engine 都来自 rca/，但部署包不同 ——
+        候选上限相同，运行时求交后的实际成员可以不同。
+        """
+        assert mod.SOURCE_ROOTS["gp-window-flush"] == mod.SOURCE_ROOTS["petsite-rca-engine"]
+        a = {m for _p, m in mod.SOURCE_MAP["gp-window-flush"]}
+        b = {m for _p, m in mod.SOURCE_MAP["petsite-rca-engine"]}
+        assert a == b, "共享 root 的候选上限应当一致（差异在运行时求交后产生）"
+        assert "neptune/neptune_queries.py" in a, (
+            "共享的 neptune_queries.py 必须在候选里 —— "
+            "PR #47 的 active 过滤实测同时漂在两个函数上"
+        )
+
+    def test_repo_root_is_not_hardcoded(self, src: str):
+        """仓库根不能是硬编码的绝对路径。
+
+        2026-10-05 CI 实测：原来 `REPO = "/home/ec2-user/works/..."`。
+        手工列表时代这没暴露 —— 它只被 `_repo_source()` 的 git show 用到，
+        那是**运行时**行为，cron 就跑在那台机器上。
+
+        成员改成枚举后 `git ls-files` 在 import 时就要跑，于是这个硬编码
+        立刻在 CI 上炸了：路径不存在 → git 失败 → 枚举返回空集 →
+        SOURCE_MAP 全空，而本地一切正常。
+        """
+        import ast
+
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Assign) and any(
+                getattr(t, "id", "") == "REPO" for t in node.targets
+            )):
+                continue
+            assert not (
+                isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+                and node.value.value.startswith("/")
+            ), (
+                "REPO 是硬编码的绝对路径。枚举在 import 时跑 git，"
+                "路径不对会让 SOURCE_MAP 静默变成空集 —— 本地正常、CI 全空。"
+            )
+            return
+        pytest.fail("找不到 REPO 的赋值")
+
+    def test_enumeration_never_silently_empty(self, mod):
+        """枚举失败必须是**可见的**失败，不能静默返回空集。
+
+        空集的后果比异常更坏：覆盖面报告会显示「0/9 个函数核实过」而
+        不报任何错，看起来只像「今天没查到东西」。
+
+        这条钉住两件事：每个函数都枚举出成员；且 _git_tracked_py 对一个
+        不存在的目录返回空集（而不是抛异常把整个 cron 带崩）。
+        """
+        for fn, pairs in mod.SOURCE_MAP.items():
+            assert pairs, (
+                f"{fn} 枚举出 0 个成员。2026-10-05 CI 实测过这个形态："
+                f"REPO 路径不对 → git ls-files 失败 → 全部函数空集，"
+                f"而覆盖面报告只会显示 0/9 不报错"
+            )
+        assert mod._git_tracked_py("no/such/dir/anywhere") == set(), (
+            "对不存在的目录应返回空集而不是抛异常 —— "
+            "抛异常会把整个 cron 带崩，而它只是一个目录配错了"
+        )
