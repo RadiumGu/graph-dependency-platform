@@ -140,6 +140,9 @@ export class NeptuneEtlStack extends cdk.Stack {
     const clickhouseHost = this.node.tryGetContext('clickhouseHost') as string || 'YOUR_CLICKHOUSE_HOST';
     const eksClusterName = this.node.tryGetContext('eksClusterName') as string || 'YOUR_EKS_CLUSTER_NAME';
     const cfnStackNames = this.node.tryGetContext('cfnStackNames') as string || 'YOUR_CFN_STACK1,YOUR_CFN_STACK2';
+    // AgentCore 的 Nutrition 知识库 ID。值取自 2026-10-06 对
+    // neptune-etl-from-agentcore 的实测环境变量 —— cdk import 要求逐项一致。
+    const agentcoreNutritionKbId = this.node.tryGetContext('agentcoreNutritionKbId') as string || 'YOUR_AGENTCORE_KB_ID';
 
     // VPC 私有子网选择（通过已有 neptune-lambda-sg 所在子网，使用 subnetType=PRIVATE_WITH_EGRESS）
     // VPC.fromLookup 会在 synth 时从 context 读取，部署时从实际 VPC 读取私有子网
@@ -340,6 +343,131 @@ export class NeptuneEtlStack extends cdk.Stack {
       schedule: events.Schedule.cron({ hour: '18', minute: '0' }),
       targets: [new targets.LambdaFunction(cfnEtlFn)],
     });
+
+    // =========================================================
+    // Lambda 5-7: 原先手工创建的 3 个 ETL —— 2026-10-06 纳入本栈
+    // =========================================================
+    //
+    // 这三个函数是 2026-09-06 用 `aws lambda create-function` 手工建的，
+    // 不属于任何 CloudFormation 栈。立卡见
+    // docs/lessons/tech-debt-etl-lambdas-outside-cfn.md。它记录的后果：
+    //
+    //   1. 重建栈会漏掉它们 —— 从 NeptuneEtlStack 重建环境只会得到 4 个 ETL，
+    //      X-Ray 与 Application Signals 两个数据源静默缺失，图上少一批依赖边
+    //      而没有任何东西报错。
+    //   2. 配置漂移无人看管 —— 2026-09-06 实测 4 个函数在 Layer v19 而
+    //      appsignals 还在 v15，因为重指 Layer 的人手工逐个改、漏了一个。
+    //   3. 契约里的 node_scope.name_prefix_map 是为它们开的后门，
+    //      栈归属能判出来后那两条就该退场。
+    //
+    // 下面的属性全部取自 2026-10-06 对线上的实测（cdk import 要求逐项一致，
+    // 不一致会要求替换资源，而替换 Lambda 会让 EventBridge target 失联）：
+    //
+    //   三者共同: python3.12 / x86_64 / neptune-etl-lambda-role /
+    //            subnet-0f801fa79077eb277 + subnet-047a94f9c5ab6302a /
+    //            sg-078f24929b25f09cd
+    //   各自不同: handler、memorySize、timeout、各自的环境变量
+    //
+    // ⚠️ etl_appsignals 的包必须先跑 infra/lambda/etl_appsignals/build.sh ——
+    //    它仓库里只有 1 个被跟踪文件而线上包有 43 条，直接 fromAsset 会发布
+    //    一个缺依赖的空壳。见 docs/lessons/cdk-fromasset-packages-ungitted-deps.md。
+    //    etl_xray（2/2）与 etl_agentcore（1/1）仓库内容与线上一致，可直接打包。
+
+    const xrayEtlFn = new lambda.Function(this, 'NeptuneEtlFromXray', {
+      functionName: 'neptune-etl-from-xray',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'neptune_etl_xray.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/etl_xray'), {
+        exclude: ['**/__pycache__/**', '**/*.pyc'],
+      }),
+      timeout: cdk.Duration.seconds(180),
+      memorySize: 256,
+      role: lambdaRole,
+      vpc,
+      vpcSubnets,
+      securityGroups: [lambdaSg],
+      environment: {
+        NEPTUNE_ENDPOINT: neptuneEndpoint,
+        NEPTUNE_PORT: neptunePort,
+        REGION: awsRegion,
+        XRAY_LOOKBACK_HOURS: '24',
+        XRAY_STALE_SECONDS: '21600',
+      },
+      layers: [neptuneClientLayer],
+      description: 'ETL: X-Ray service graph -> Neptune (hourly)',
+    });
+
+
+    const appsignalsEtlFn = new lambda.Function(this, 'NeptuneEtlFromAppsignals', {
+      functionName: 'neptune-etl-from-appsignals',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'neptune_etl_appsignals.lambda_handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/etl_appsignals'), {
+        // build.sh / requirements.txt 是构建期文件，不该进运行时包。
+        // 2026-10-06 实测：线上包 38 个文件，本地资产目录跑完 build.sh 后是
+        // 40 个 —— 多出的正是这两个。排除后文件集与线上逐项一致。
+        exclude: ['**/__pycache__/**', '**/*.pyc', 'build.sh', 'requirements.txt'],
+      }),
+      timeout: cdk.Duration.seconds(300),
+      memorySize: 512,
+      role: lambdaRole,
+      vpc,
+      vpcSubnets,
+      securityGroups: [lambdaSg],
+      environment: {
+        NEPTUNE_ENDPOINT: neptuneEndpoint,
+        NEPTUNE_PORT: neptunePort,
+        REGION: awsRegion,
+        APPSIGNALS_LOOKBACK_SECONDS: '86400',
+      },
+      layers: [neptuneClientLayer],
+      description: 'ETL: Application Signals service map -> Neptune (every 15 min)',
+    });
+
+
+    // botocore-current：agentcore ETL 专用，不可省。
+    //
+    // 2026-10-06 我亲手踩了这个坑：把 3 个函数纳入栈后修复代码漂移时，我读的是
+    // `Layers[0].Arn`（单数），于是 `update-function-configuration --layers` 只
+    // 写回了一个层，**把 botocore-current:1 丢掉了**。
+    //
+    // 后果不是报错，而是 tests/test_75_no_phantom_gateway_targets 变红：
+    // Lambda 自带的 botocore 版本不认识 bedrock-agentcore 的
+    // targetConfiguration 这个 tagged union 的 `http` 成员，会**静默剥掉**它
+    // （日志里只有一句 "Received a tagged union response with member unknown
+    // to client: http"），于是 5 个 AGENTCORE_RUNTIME 类型的网关 target 被
+    // 建成了 AgentTool 节点而不是 RoutesToRuntime 边。
+    //
+    // 所以它必须写进声明 —— 否则下一次 cdk deploy 会再丢一次，
+    // 而症状是图上多了 5 个幻影节点，不是任何一次部署失败。
+    const botocoreCurrentLayer = lambda.LayerVersion.fromLayerVersionArn(
+      this, 'BotocoreCurrentLayer',
+      `arn:aws:lambda:${this.region}:${this.account}:layer:botocore-current:1`,
+    );
+
+    const agentcoreEtlFn = new lambda.Function(this, 'NeptuneEtlFromAgentcore', {
+      functionName: 'neptune-etl-from-agentcore',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'neptune_etl_agentcore.lambda_handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/etl_agentcore'), {
+        exclude: ['**/__pycache__/**', '**/*.pyc'],
+      }),
+      timeout: cdk.Duration.seconds(300),
+      memorySize: 512,
+      role: lambdaRole,
+      vpc,
+      vpcSubnets,
+      securityGroups: [lambdaSg],
+      environment: {
+        NEPTUNE_ENDPOINT: neptuneEndpoint,
+        NEPTUNE_PORT: neptunePort,
+        REGION: awsRegion,
+        AGENTCORE_NUTRITION_KB_ID: agentcoreNutritionKbId,
+      },
+      layers: [neptuneClientLayer, botocoreCurrentLayer],
+      description: 'ETL: Bedrock AgentCore runtimes/gateways -> Neptune (every 15 min)',
+    });
+
 
     // =========================================================
     // CloudFormation Outputs

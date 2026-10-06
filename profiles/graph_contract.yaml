@@ -898,9 +898,24 @@ node_scope:
   #
   # 业务资源**不要**加进来：它们的权威声明在 profiles/petsite.yaml，
   # 走 profile-declaration resolver，不要造第二个声明源。
-  name_prefix_map:
-    neptune-etl-from-: platform
-    neptune-etl-trigger: platform
+  #
+  # name_prefix_map 已于 2026-10-06 删除。
+  #
+  # 它原本是这样：
+  #     name_prefix_map:
+  #       neptune-etl-from-: platform
+  #       neptune-etl-trigger: platform
+  #
+  # 那两条是 2026-09-06 为 3 个手工创建、不属任何 CloudFormation 栈的 ETL
+  # Lambda 开的后门（docs/lessons/tech-debt-etl-lambdas-outside-cfn.md）。
+  # 立卡时就写明它是权宜之计而非设计：
+  #
+  #   「我在同一份契约里写着『业务资源不要加进来，它们的权威声明在 profile』，
+  #     而这条规则做的事正是给一批**本该由栈声明**的资源另开一个声明源。」
+  #
+  # 2026-10-06 把 neptune-etl-from-xray / -appsignals / -agentcore 三个函数
+  # 用 cdk import 纳入 NeptuneEtlStack 后，6 个 ETL 全部能由 CloudFormation
+  # 归属判出 platform，前缀规则随即退场 —— 这正是立卡时给出的完成标准。
   values:
   - observed
   - observability

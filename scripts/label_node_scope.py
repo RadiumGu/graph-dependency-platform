@@ -163,9 +163,28 @@ def load_stack_index(region: str) -> tuple[dict, dict]:
             for page in cfn.get_paginator('list_stack_resources').paginate(StackName=name):
                 for r in page['StackResourceSummaries']:
                     pid = r.get('PhysicalResourceId')
-                    if pid:
-                        # 首次写入优先：嵌套栈先于父栈列出时不被父栈覆盖
-                        phys.setdefault(pid, sc)
+                    if not pid:
+                        continue
+                    # 首次写入优先：嵌套栈先于父栈列出时不被父栈覆盖
+                    phys.setdefault(pid, sc)
+                    # 额外登记 URL 形态物理 ID 的尾段。
+                    #
+                    # 2026-10-06 实测：SQS 的 PhysicalResourceId 是队列 URL
+                    #   https://sqs.ap-northeast-1.amazonaws.com/926093770964/neptune-etl-trigger-queue
+                    # 而图里 SQSQueue 节点的 name 只是 `neptune-etl-trigger-queue`，
+                    # 所以 phys[name] 查不中 —— neptune-etl-trigger-queue 与
+                    # -dlq 两个**明明由 NeptuneEtlStack 声明**的队列判成了 unknown。
+                    #
+                    # 这件事此前被契约里的 `name_prefix_map: neptune-etl-trigger`
+                    # 顺带遮住了：那条规则本是为 3 个手工 ETL Lambda 开的后门
+                    # （docs/lessons/tech-debt-etl-lambdas-outside-cfn.md），
+                    # 却也一并兜住了这两个队列。把 3 个 Lambda 纳入栈、删掉前缀
+                    # 规则后，遮盖物消失，缺口才露出来 ——
+                    # **一个权宜之计同时掩盖了它要解决的问题和一个无关的问题。**
+                    if '://' in pid:
+                        tail = pid.rstrip('/').rsplit('/', 1)[-1]
+                        if tail:
+                            phys.setdefault(tail, sc)
         except Exception as e:  # pragma: no cover
             print(f"  ⚠️ 读栈 {name} 资源失败（跳过）：{e!r}", file=sys.stderr)
     return phys, stack_scope
