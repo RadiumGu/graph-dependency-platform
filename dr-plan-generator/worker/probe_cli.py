@@ -135,7 +135,12 @@ async def cmd_update(c: Client, a: argparse.Namespace) -> int:
     try:
         r = await h.execute_update(a.name, json.loads(a.payload))
     except Exception as e:  # noqa: BLE001 —— validator 的拒绝原因要原样给人看
-        print(f"被拒绝：{e}", file=sys.stderr)
+        # ⚠️ 原因在 e.cause 里，不在 e 本身。2026-10-06 实测：只打印 e 时人看到的是
+        #    「被拒绝：Workflow update failed」—— 一句不带任何信息的失败，而 validator
+        #    写好的「步骤 switch-front-door 仍标着 needs_human_input」被藏起来了。
+        #    validator 的全部价值在于告诉人**为什么**被拒。
+        cause = getattr(e, "cause", None)
+        print(f"被拒绝：{cause if cause else e}", file=sys.stderr)
         return 1
     print(json.dumps(r, ensure_ascii=False, indent=2, default=str))
     return 0
