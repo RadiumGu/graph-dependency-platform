@@ -1,0 +1,338 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  依赖图谱 6 个 ETL 的停摆告警（东京 ap-northeast-1）。
+  补的是 05-graph-platform-capacity-alarms.yaml 自己记下的缺口：
+  那条 Duration 告警只回答「ETL 是不是变慢了」，管不了「ETL 停了」。
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 为什么单独一个栈，而不是加进 05
+#
+# 05 的文件名声明了主题是 **capacity**（容量）。停摆是 liveness（存活），
+# 混进去会让那个名字说谎，而「命名/注释与实盘一致」在本仓是有判据守的 ——
+# 2026-10-06 刚因为 CDK 里一句「本 layer 无编译产物」与实盘不符而修过一次。
+#
+# 独立成栈还让爆炸半径更小：这 6 条告警可以单独 delete-stack 回滚，
+# 不碰已经在跑的两条容量告警。
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# 为什么需要这个栈：一次真实的、零调用掩盖掉的故障
+#
+# 2026-10-04 我用 cdk deploy 部署 gp-window-flush 时，Code.fromAsset 打包了
+# 一个**没装依赖的目录**，包从 14.6 MB / 2008 条目变成 0.29 MB / 36 条目，
+# 缺 urllib3 —— 那个包一旦被调用就是 ModuleNotFoundError。
+#
+# 它在部署后的 50 分钟里**零调用**，所以：
+#
+#   · Errors 指标没有数据点 → 任何盯 Errors 的告警都不会响
+#   · Duration 指标没有数据点 → 05 那条告警是 notBreaching，照样 OK
+#   · 最后是靠一次人工全量核对发现的，而发现它只因为我**刚好记得**
+#     部署前的包大小
+#
+# 换成有流量的时段就是一次故障。而「函数被部坏了却没人叫」与「EventBridge
+# 规则被误禁用」「Lambda 权限被改掉」「并发额度被别的函数吃光」
+# 在指标上是同一个形状：**Invocations 掉到 0**。
+#
+# 详见 docs/lessons/cdk-fromasset-packages-ungitted-deps.md
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# 判据：TreatMissingData 必须是 breaching
+#
+# 这是本栈与 05 最本质的区别，也是它能成立的全部原因。
+#
+# 停摆的表现**不是**「指标值为 0」，而是「指标没有数据点」—— Lambda 不被
+# 调用时 AWS/Lambda 的 Invocations 根本不发布数据。所以：
+#
+#   TreatMissingData: notBreaching  →  停摆时告警保持 OK（= 05 的缺陷）
+#   TreatMissingData: missing       →  停摆时保持上一状态，也是 OK
+#   TreatMissingData: breaching     →  停摆时进 ALARM  ✓
+#
+# 05 那条 Duration 告警用 notBreaching 是**对的** —— 它回答「是不是变慢了」，
+# 而没调用时问这个问题没有意义。两条告警的 TreatMissingData 相反，
+# 恰恰因为它们问的是不同的问题。
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# 阈值怎么定：全部来自 2026-10-06 的 7 天实测，不是按调度推算
+#
+#   函数                        调度              7 天每日 Invocations
+#   neptune-etl-from-deepflow   rate(5 minutes)   288 288 288 288 288 288 289
+#   neptune-etl-from-aws        rate(15 minutes)   96  96  96  96  98 103  98
+#   neptune-etl-from-appsignals rate(15 minutes)   96  96  96  96  96  97  97
+#   neptune-etl-from-agentcore  rate(15 minutes)   96  96  96  96  96  97  97
+#   neptune-etl-from-xray       rate(1 hour)       24  24  24  24  24  25  25
+#   neptune-etl-from-cfn        cron(0 18) daily    1   1   1   1   1   1   2
+#
+# 实测与调度完全吻合（288 = 1440/5，96 = 1440/15，24 = 1440/60），
+# 波动只有 ±1，来自 UTC 日界切分。所以「窗口内一次都没有」是一个
+# 非常干净的停摆信号 —— 不需要留统计余量。
+#
+# 窗口取**期望次数 ≥ 3** 的最短长度：单次调用偶发失败（节流、冷启动超时）
+# 不该立刻叫人，而连续 3 个周期都没有就不是偶发了。
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# 符合「告警必须可处置」纪律吗
+#
+# 符合。tests/test_121 立下的纪律是：**告警必须能回到 OK**。
+# 05 的注释记了反例 —— 边总数 > 50,000 单调上升，越线后永远红着，
+# 而一条永远红着的告警会训练人忽略整个频道。
+#
+# 停摆告警不是那种：ETL 恢复调用后 Invocations 立刻回到正常值，告警自动回 OK。
+# 处置路径也明确（见各条 AlarmDescription）。
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# 部署
+#
+#   aws cloudformation deploy --region ap-northeast-1 \
+#     --stack-name graph-platform-etl-liveness-alarms \
+#     --template-file infra/tokyo/06-graph-platform-etl-liveness-alarms.yaml \
+#     --no-fail-on-empty-changeset
+#
+# 不需要 NotifyEmail 参数：复用的 topic（petsite-ops-alerts）上的邮件订阅
+# 已由 05 建好并确认过，重复建会多一条订阅、收两份邮件。
+# ══════════════════════════════════════════════════════════════════════════════
+
+Parameters:
+
+  OpsTopicArn:
+    Type: String
+    Default: arn:aws:sns:ap-northeast-1:926093770964:petsite-ops-alerts
+    Description: >
+      既有运维告警 topic。已有 petsite-ops-slack-notifier Lambda 订阅 +
+      一个已确认的邮件订阅（由 05 栈建立）。本栈只往它发告警，
+      不创建 topic、也不加订阅。
+
+Resources:
+
+  # ── 5 分钟一次的 ────────────────────────────────────────────────────────
+  #
+  # deepflow 是频率最高的 ETL（288 次/天）。窗口 30 分钟 → 期望 6 次。
+  DeepflowNotInvoked:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: graph-platform-etl-deepflow-not-invoked
+      AlarmDescription: >
+        neptune-etl-from-deepflow 连续 30 分钟一次都没被调用。
+        实测基线 288 次/天（rate(5 minutes)），窗口内期望 6 次。
+
+        处置顺序（从最常见到最少见）：
+        ① aws events list-rules --name-prefix neptune-etl-every-5min
+           —— 看 State 是否被改成 DISABLED；
+        ② aws lambda get-function-configuration --function-name
+           neptune-etl-from-deepflow —— 看 LastUpdateStatus 是否卡在
+           InProgress/Failed（一次失败的部署会让函数不可调用）；
+        ③ 看 CloudWatch Logs 最后一条 REPORT 的时间，确认是「没被触发」
+           还是「触发了但挂在 init」—— 后者在日志里有 INIT_START 而无 START；
+        ④ 查并发额度：同账号别的函数吃光 unreserved concurrency 时，
+           EventBridge 的调用会被丢弃而 Lambda 侧只看到 Throttles。
+      Namespace: AWS/Lambda
+      MetricName: Invocations
+      Dimensions:
+        - Name: FunctionName
+          Value: neptune-etl-from-deepflow
+      Statistic: Sum
+      Period: 1800
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      # 停摆 = 指标无数据点，所以必须 breaching。见模板顶部「判据」一节。
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref OpsTopicArn
+      OKActions:
+        - !Ref OpsTopicArn
+
+  # ── 15 分钟一次的三个 ───────────────────────────────────────────────────
+  #
+  # 窗口 1 小时 → 期望 4 次。三条配置相同，只差函数名 ——
+  # 刻意不合并成一条复合告警：合并后只能说「有东西停了」，
+  # 而分开能指名道姓，这是「可处置」的前提。
+  AwsEtlNotInvoked:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: graph-platform-etl-aws-not-invoked
+      AlarmDescription: >
+        neptune-etl-from-aws 连续 1 小时一次都没被调用。
+        实测基线 96 次/天（rate(15 minutes)），窗口内期望 4 次。
+
+        这是写入量最大的 ETL（占全部写入时间的 93%），停摆意味着整张图的
+        AWS 资源侧停止刷新 —— 边会逐渐被 expiry 判为陈旧，而陈旧判定本身
+        依赖 ETL 在跑，所以停摆越久图越不可信。
+
+        处置：同 deepflow 那条，规则名是 neptune-etl-every-15min。
+        注意本函数 Duration 实测 80-84 秒，若 Invocations 为 0 同时
+        Duration 有数据点，说明是调用成功但没被计数（极少见，查指标延迟）。
+      Namespace: AWS/Lambda
+      MetricName: Invocations
+      Dimensions:
+        - Name: FunctionName
+          Value: neptune-etl-from-aws
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref OpsTopicArn
+      OKActions:
+        - !Ref OpsTopicArn
+
+  AppsignalsEtlNotInvoked:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: graph-platform-etl-appsignals-not-invoked
+      AlarmDescription: >
+        neptune-etl-from-appsignals 连续 1 小时一次都没被调用。
+        实测基线 96 次/天（rate(15 minutes)），窗口内期望 4 次。
+
+        停摆意味着 Application Signals 侧的服务依赖停止刷新。
+        处置：同 aws 那条，规则名 neptune-etl-appsignals-every-15min。
+
+        ⚠️ 本函数的部署包有 38 个文件，其中 37 项是依赖与共享目录
+        （PyYAML / profiles/ / shared/）。若停摆同时日志里有
+        ModuleNotFoundError，先看是不是某次部署只打包了那一个 .py ——
+        见 infra/lambda/etl_appsignals/build.sh 顶部注释。
+      Namespace: AWS/Lambda
+      MetricName: Invocations
+      Dimensions:
+        - Name: FunctionName
+          Value: neptune-etl-from-appsignals
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref OpsTopicArn
+      OKActions:
+        - !Ref OpsTopicArn
+
+  AgentcoreEtlNotInvoked:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: graph-platform-etl-agentcore-not-invoked
+      AlarmDescription: >
+        neptune-etl-from-agentcore 连续 1 小时一次都没被调用。
+        实测基线 96 次/天（rate(15 minutes)），窗口内期望 4 次。
+
+        停摆意味着 AgentCore 侧（AgentRuntime / AgentGateway / AgentMemory /
+        KnowledgeBase / Guardrail）停止刷新 —— 这部分节点没有别的来源，
+        停了就只剩逐渐陈旧的旧数据。
+
+        处置：同上，规则名 neptune-etl-agentcore-every-15min。
+      Namespace: AWS/Lambda
+      MetricName: Invocations
+      Dimensions:
+        - Name: FunctionName
+          Value: neptune-etl-from-agentcore
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref OpsTopicArn
+      OKActions:
+        - !Ref OpsTopicArn
+
+  # ── 1 小时一次的 ────────────────────────────────────────────────────────
+  #
+  # 窗口 3 小时 → 期望 3 次。不取 1 小时：单次失败（节流/冷启动超时）
+  # 不该立刻叫人，而连续 3 次都没有就不是偶发了。
+  XrayEtlNotInvoked:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: graph-platform-etl-xray-not-invoked
+      AlarmDescription: >
+        neptune-etl-from-xray 连续 3 小时一次都没被调用。
+        实测基线 24 次/天（rate(1 hour)），窗口内期望 3 次。
+
+        停摆意味着 X-Ray 侧的服务调用关系停止刷新。实测单次写入
+        41 个节点 / 38 条边，含 GenAI 层。
+
+        处置：同上，规则名 neptune-etl-xray-hourly。
+      Namespace: AWS/Lambda
+      MetricName: Invocations
+      Dimensions:
+        - Name: FunctionName
+          Value: neptune-etl-from-xray
+      Statistic: Sum
+      Period: 10800
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref OpsTopicArn
+      OKActions:
+        - !Ref OpsTopicArn
+
+  # ── 每天一次的 ──────────────────────────────────────────────────────────
+  #
+  # cfn 是唯一的低频 ETL（1-2 次/天：cron(0 18) 定时 + on-deploy 事件）。
+  #
+  # Period 86400 是 CloudWatch 的单周期上限，所以用 EvaluationPeriods=2
+  # 凑出 2 天窗口。期望次数 2，与上面「≥3」的规则不同 —— 低频函数做不到，
+  # 而把窗口拉到 3 天会让检测慢得没有意义。
+  #
+  # 代价要说清：**这条告警最慢要 2 天才叫人**。cfn 停摆的影响也相应较小
+  # （它刷的是 CloudFormation 栈归属，变化本来就慢）。
+  CfnEtlNotInvoked:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: graph-platform-etl-cfn-not-invoked
+      AlarmDescription: >
+        neptune-etl-from-cfn 连续 2 天一次都没被调用。
+        实测基线 1-2 次/天（cron(0 18) 定时 + neptune-etl-cfn-on-deploy 事件）。
+
+        ⚠️ 本条检测最慢要 2 天 —— Period 上限 86400，低频函数只能这样。
+        cfn 刷的是 CloudFormation 栈归属（变化本来就慢），所以这个延迟
+        可以接受；若将来它承担更实时的职责，窗口要重新定。
+
+        处置：规则名 neptune-etl-cfn-daily。注意它还有一条事件驱动规则
+        neptune-etl-cfn-on-deploy，所以 Invocations 为 0 说明**两条都没触发**。
+      Namespace: AWS/Lambda
+      MetricName: Invocations
+      Dimensions:
+        - Name: FunctionName
+          Value: neptune-etl-from-cfn
+      Statistic: Sum
+      Period: 86400
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !Ref OpsTopicArn
+      OKActions:
+        - !Ref OpsTopicArn
+
+Outputs:
+
+  AlarmsCreated:
+    Description: 本栈创建的 6 条停摆告警
+    Value: !Sub >
+      ${DeepflowNotInvoked}, ${AwsEtlNotInvoked}, ${AppsignalsEtlNotInvoked},
+      ${AgentcoreEtlNotInvoked}, ${XrayEtlNotInvoked}, ${CfnEtlNotInvoked}
+
+  WhyBreaching:
+    Description: 本栈与 05 栈 TreatMissingData 相反的理由
+    Value: >
+      停摆的表现是「指标没有数据点」而不是「指标值为 0」——
+      Lambda 不被调用时 Invocations 根本不发布数据。所以本栈全部用
+      breaching，而 05 的 Duration 告警用 notBreaching 是对的：
+      它回答「是不是变慢了」，没调用时问这个没有意义。
+      两条告警的 TreatMissingData 相反，恰恰因为它们问的是不同的问题。
+
+  NotCovered:
+    Description: 本栈刻意不覆盖的
+    Value: >
+      neptune-etl-trigger 不在本栈里 —— 它是纯事件驱动（SQS + 5 条资源
+      变更规则），没有定时调度，所以「窗口内零调用」是常态而非故障。
+      给它建停摆告警会产生一条经常性误报，而那违反「告警必须可处置」。
+      它的健康靠下游（etl_aws 等）的停摆告警间接覆盖。
+
+      gp-window-flush 与 petsite-rca-engine 也不在 —— 它们由告警事件驱动，
+      零调用意味着「没有告警要处理」，是好事。
