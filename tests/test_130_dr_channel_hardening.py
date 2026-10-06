@@ -136,3 +136,13 @@ class TestRecordedFindings:
 
     def test_stale_package_root_cause(self, section: str):
         assert_contains(section, "**两天前没重新打包的旧 zip**")
+
+
+class TestRejectionReasonReachesTheHuman:
+    def test_cli_prints_the_cause_not_the_wrapper(self):
+        """WorkflowUpdateFailedError 的 str 只是「Workflow update failed」，原因在 cause。"""
+        src = (ROOT / "dr-plan-generator" / "worker" / "probe_cli.py").read_text(encoding="utf-8")
+        i = src.index("async def cmd_update(")
+        seg = src[i : i + 1400]
+        assert 'getattr(e, "cause", None)' in seg
+        assert 'print(f"被拒绝：{cause if cause else e}"' in seg
