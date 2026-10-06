@@ -36,6 +36,24 @@ import logging
 import base64
 import boto3
 
+# make_client: boto3.client 的替代品，带显式 standard 重试退避 + 分页跑飞护栏。
+# 分页上限触发时**抛异常**而非静默截断 —— graph_gc 会把「这轮没收到」当成
+# 「资源已不存在」并真删节点，所以部分结果绝不能当完整结果用。
+# 防御式 import：Layer 未更新时降级为裸 boto3，使函数代码的部署不依赖
+# Layer 的部署顺序（2026-10-04 / 10-05 两次事故均属此类）。
+try:
+    from aws_resilience import make_client
+except ImportError:  # pragma: no cover - Layer 未更新时的降级路径
+    # 降级本身是个必须说出来的状态 —— 静默降级会让人分不出
+    # 「护栏在起作用」和「护栏根本没加载」。前缀固定，便于告警。
+    import logging as _lg
+    _lg.getLogger(__name__).warning(
+        "AWS_RESILIENCE_UNAVAILABLE —— Layer 里没有 aws_resilience，"
+        "已降级为裸 boto3：无显式退避、无分页跑飞护栏，"
+        "graph_gc 的误删防护此时不生效。"
+    )
+    make_client = boto3.client
+
 from neptune_client_base import neptune_query, extract_value, REGION  # noqa: F401
 
 # 契约门禁。**2026-09-22 补** —— 本 ETL 此前是**唯一写图却没有门禁的写入方**：
@@ -764,7 +782,7 @@ def fetch_xray_dependencies() -> dict:
     try:
         end = int(time.time())
         start = end - XRAY_WINDOW_SECONDS
-        xray = boto3.client('xray', region_name=REGION)
+        xray = make_client('xray', region_name=REGION)
         resp = xray.get_service_graph(
             StartTime=datetime.datetime.fromtimestamp(start, datetime.timezone.utc),
             EndTime=datetime.datetime.fromtimestamp(end, datetime.timezone.utc),
@@ -1087,7 +1105,7 @@ def _get_eks_k8s_session() -> tuple:
     """建立 EKS/K8s 连接，返回 (k8s_endpoint, token, ca_file)，失败返回 (None, None, None)"""
     try:
         session = get_aws_session()
-        eks_client = session.client('eks', region_name=REGION)
+        eks_client = make_client('eks', region_name=REGION, session=session)
         cluster_name = EKS_CLUSTER_ARN.split('/')[-1]
         cluster_info = eks_client.describe_cluster(name=cluster_name)
         k8s_endpoint = cluster_info['cluster']['endpoint']

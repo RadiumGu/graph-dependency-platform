@@ -21,6 +21,24 @@ import json
 import time
 import logging
 import boto3
+
+# make_client: boto3.client 的替代品，带显式 standard 重试退避 + 分页跑飞护栏。
+# 分页上限触发时**抛异常**而非静默截断 —— graph_gc 会把「这轮没收到」当成
+# 「资源已不存在」并真删节点，所以部分结果绝不能当完整结果用。
+# 防御式 import：Layer 未更新时降级为裸 boto3，使函数代码的部署不依赖
+# Layer 的部署顺序（2026-10-04 / 10-05 两次事故均属此类）。
+try:
+    from aws_resilience import make_client
+except ImportError:  # pragma: no cover - Layer 未更新时的降级路径
+    # 降级本身是个必须说出来的状态 —— 静默降级会让人分不出
+    # 「护栏在起作用」和「护栏根本没加载」。前缀固定，便于告警。
+    import logging as _lg
+    _lg.getLogger(__name__).warning(
+        "AWS_RESILIENCE_UNAVAILABLE —— Layer 里没有 aws_resilience，"
+        "已降级为裸 boto3：无显式退避、无分页跑飞护栏，"
+        "graph_gc 的误删防护此时不生效。"
+    )
+    make_client = boto3.client
 from typing import Optional
 
 from neptune_client_base import neptune_query, safe_str, extract_value, REGION  # noqa: F401
@@ -394,7 +412,7 @@ def run_etl(stack_names: list = None):
         stack_names = CFN_STACK_NAMES
 
     logger.info(f"=== neptune-etl-from-cfn 开始, stacks={stack_names} ===")
-    cfn_client = boto3.client('cloudformation', region_name=REGION)
+    cfn_client = make_client('cloudformation', region_name=REGION)
     total_deps = 0
 
     for stack_name in stack_names:

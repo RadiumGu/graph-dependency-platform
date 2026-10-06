@@ -70,6 +70,24 @@ import sys
 
 import boto3
 
+# make_client: boto3.client 的替代品，带显式 standard 重试退避 + 分页跑飞护栏。
+# 分页上限触发时**抛异常**而非静默截断 —— graph_gc 会把「这轮没收到」当成
+# 「资源已不存在」并真删节点，所以部分结果绝不能当完整结果用。
+# 防御式 import：Layer 未更新时降级为裸 boto3，使函数代码的部署不依赖
+# Layer 的部署顺序（2026-10-04 / 10-05 两次事故均属此类）。
+try:
+    from aws_resilience import make_client
+except ImportError:  # pragma: no cover - Layer 未更新时的降级路径
+    # 降级本身是个必须说出来的状态 —— 静默降级会让人分不出
+    # 「护栏在起作用」和「护栏根本没加载」。前缀固定，便于告警。
+    import logging as _lg
+    _lg.getLogger(__name__).warning(
+        "AWS_RESILIENCE_UNAVAILABLE —— Layer 里没有 aws_resilience，"
+        "已降级为裸 boto3：无显式退避、无分页跑飞护栏，"
+        "graph_gc 的误删防护此时不生效。"
+    )
+    make_client = boto3.client
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -415,7 +433,7 @@ def ensure_service_endpoints(writable: list, neptune_query,
 def collect(region: str = REGION, lookback: int = LOOKBACK_SECONDS) -> dict:
     """采集 Application Signals 的服务与依赖边，返回归一化后的结果。"""
     registry = _load_registry()
-    c = boto3.client('application-signals', region_name=region)
+    c = make_client('application-signals', region_name=region)
     end = datetime.datetime.now(datetime.timezone.utc)
     start = end - datetime.timedelta(seconds=lookback)
 
@@ -639,7 +657,7 @@ def merge_agentcore_observation(unresolved: list, neptune_query, lookback: int,
 
     # 用与 agentcore-etl 相同的 SSM 参数定 runtime 身份（单一真源）
     try:
-        ssm = boto3.client('ssm', region_name=REGION)
+        ssm = make_client('ssm', region_name=REGION)
         arn = ssm.get_parameter(
             Name='/petstore/agent/waggleairuntimearn')['Parameter']['Value']
         runtime_name = arn.rsplit('/', 1)[-1].rsplit('-', 1)[0]

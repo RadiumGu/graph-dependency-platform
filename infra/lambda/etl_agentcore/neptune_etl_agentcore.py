@@ -34,6 +34,24 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 import boto3
+
+# make_client: boto3.client 的替代品，带显式 standard 重试退避 + 分页跑飞护栏。
+# 分页上限触发时**抛异常**而非静默截断 —— graph_gc 会把「这轮没收到」当成
+# 「资源已不存在」并真删节点，所以部分结果绝不能当完整结果用。
+# 防御式 import：Layer 未更新时降级为裸 boto3，使函数代码的部署不依赖
+# Layer 的部署顺序（2026-10-04 / 10-05 两次事故均属此类）。
+try:
+    from aws_resilience import make_client
+except ImportError:  # pragma: no cover - Layer 未更新时的降级路径
+    # 降级本身是个必须说出来的状态 —— 静默降级会让人分不出
+    # 「护栏在起作用」和「护栏根本没加载」。前缀固定，便于告警。
+    import logging as _lg
+    _lg.getLogger(__name__).warning(
+        "AWS_RESILIENCE_UNAVAILABLE —— Layer 里没有 aws_resilience，"
+        "已降级为裸 boto3：无显式退避、无分页跑飞护栏，"
+        "graph_gc 的误删防护此时不生效。"
+    )
+    make_client = boto3.client
 from botocore.exceptions import ClientError
 
 sys.path.insert(0, '/opt/python')
@@ -254,9 +272,9 @@ def _enrich_gateways(acc, items: list) -> list:
 
 def collect_control_plane() -> dict:
     """返回 {kind: (status, items)}。"""
-    acc = boto3.client('bedrock-agentcore-control', region_name=REGION)
-    br = boto3.client('bedrock', region_name=REGION)
-    bra = boto3.client('bedrock-agent', region_name=REGION)
+    acc = make_client('bedrock-agentcore-control', region_name=REGION)
+    br = make_client('bedrock', region_name=REGION)
+    bra = make_client('bedrock-agent', region_name=REGION)
 
     return {
         'runtimes': _collect(
@@ -311,7 +329,7 @@ def collect_service_to_runtime_declarations() -> dict:
     与「throughput_only 通道不得判 hard」是同一条纪律。
     它改为写在 runtime **节点**上（见 `collect_runtime_activity`）。
     """
-    ssm = boto3.client('ssm', region_name=REGION)
+    ssm = make_client('ssm', region_name=REGION)
     out: dict = {}
     try:
         paginator = ssm.get_paginator('get_parameters_by_path')
@@ -358,7 +376,7 @@ def collect_runtime_activity(runtimes: list) -> dict:
     维度必须给全 `Resource`+`Operation`+`Name` 三个 —— 实测只给前两个返回
     **0 个数据点**（CloudWatch 维度精确匹配）。少给一个会让人误判「指标没数据」。
     """
-    cw = boto3.client('cloudwatch', region_name=REGION)
+    cw = make_client('cloudwatch', region_name=REGION)
     now = int(time.time())
     start = now - ACTIVITY_WINDOW_SECONDS
     out: dict = {}
@@ -403,7 +421,7 @@ def collect_gateway_targets(gateways: list) -> dict:
     靠 tool_key 的 owner 部分区分（Gateway 前置的 owner 是 gateway arn，
     进程内的 owner 是 runtime arn）。
     """
-    acc = boto3.client('bedrock-agentcore-control', region_name=REGION)
+    acc = make_client('bedrock-agentcore-control', region_name=REGION)
     out = {}
     for gw in gateways:
         gid = gw.get('gatewayId') or gw.get('gatewayIdentifier')
@@ -589,7 +607,7 @@ def collect_spans(runtime_count: int = 0) -> tuple:
     `runtime_count` 用于矛盾检测：控制面说有 N 个 runtime、日志组也在，
     span 却零命中 —— 那不是「空」，是查询本身有问题。
     """
-    logs = boto3.client('logs', region_name=REGION)
+    logs = make_client('logs', region_name=REGION)
     now = int(time.time())
     groups = _discover_span_log_groups(logs)
     if not groups:
@@ -1179,7 +1197,7 @@ def collect_gateway_spans() -> tuple:
     一个没有网关、或 agent 之间不互调的环境，这里本来就该是空的。
     把「结构上没有」当成「采集出错」，正是本项目反复记录的那个错误。
     """
-    logs = boto3.client('logs', region_name=REGION)
+    logs = make_client('logs', region_name=REGION)
     now = int(time.time())
     groups = _discover_span_log_groups(logs)
     if not groups:

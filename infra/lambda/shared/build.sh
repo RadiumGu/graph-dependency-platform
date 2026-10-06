@@ -137,7 +137,7 @@ for req in requests urllib3 certifi charset_normalizer idna; do
 done
 # 业务模块也要在 —— 它们是这个 Layer 存在的理由
 for req in neptune_client_base.py graph_contract.py graph_contract_data.py \
-           graph_confidence.py graph_cleanup.py; do
+           graph_confidence.py graph_cleanup.py aws_resilience.py; do
   [ -f "$PY_DIR/$req" ] || _missing="$_missing $req"
 done
 if [ -n "$_missing" ]; then
@@ -146,7 +146,7 @@ if [ -n "$_missing" ]; then
   echo "    import 阶段全部失败。"
   exit 1
 fi
-echo "  ✓ 必需项齐全（5 个依赖包 + 5 个业务模块）"
+echo "  ✓ 必需项齐全（5 个依赖包 + 6 个业务模块）"
 
 N=$(find "$PY_DIR" -type f | wc -l)
 echo ""

@@ -9,6 +9,24 @@ import urllib.request as _ureq
 import json as _json
 
 import boto3
+
+# make_client: boto3.client 的替代品，带显式 standard 重试退避 + 分页跑飞护栏。
+# 分页上限触发时**抛异常**而非静默截断 —— graph_gc 会把「这轮没收到」当成
+# 「资源已不存在」并真删节点，所以部分结果绝不能当完整结果用。
+# 防御式 import：Layer 未更新时降级为裸 boto3，使函数代码的部署不依赖
+# Layer 的部署顺序（2026-10-04 / 10-05 两次事故均属此类）。
+try:
+    from aws_resilience import make_client
+except ImportError:  # pragma: no cover - Layer 未更新时的降级路径
+    # 降级本身是个必须说出来的状态 —— 静默降级会让人分不出
+    # 「护栏在起作用」和「护栏根本没加载」。前缀固定，便于告警。
+    import logging as _lg
+    _lg.getLogger(__name__).warning(
+        "AWS_RESILIENCE_UNAVAILABLE —— Layer 里没有 aws_resilience，"
+        "已降级为裸 boto3：无显式退避、无分页跑飞护栏，"
+        "graph_gc 的误删防护此时不生效。"
+    )
+    make_client = boto3.client
 from botocore.auth import SigV4QueryAuth
 from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
@@ -90,7 +108,7 @@ def collect_eks_nodegroup_instances(eks_client, ec2_client) -> list:
                 for res in ng['nodegroup'].get('resources', {}).get('autoScalingGroups', [])
             ]
             if asg_names:
-                asg_client = boto3.client('autoscaling', region_name=REGION)
+                asg_client = make_client('autoscaling', region_name=REGION)
                 for asg_name in asg_names:
                     resp = asg_client.describe_auto_scaling_groups(
                         AutoScalingGroupNames=[asg_name]
