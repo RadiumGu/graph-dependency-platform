@@ -166,7 +166,22 @@ export class NeptuneEtlStack extends cdk.Stack {
       // 同族故障 2026-10-04 在 gp-window-flush 上真实发生过一次，
       // 见 docs/lessons/cdk-fromasset-packages-ungitted-deps.md。
       // 判据由 tests/test_128_cdk_layer_asset_must_carry_deps.py 守着。
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/shared')),
+      // exclude __pycache__：`fromAsset` 默认**不排除**它。
+      //
+      // 2026-10-06 实测：build.sh 构建完 Layer 之后，我在本机用
+      // `PYTHONPATH=infra/lambda/shared/python python3.11 -m pytest` 跑测试，
+      // 导入这些模块就在同目录生成了 __pycache__/*.cpython-311.pyc。
+      // 随后的 cdk deploy 把 **69 个 .pyc 打进了 Layer 23**。
+      //
+      // 这些 .pyc 是 3.11 的，而运行时是 3.12，解释器直接忽略它们 ——
+      // 所以不会坏，只是白占体积并让 Layer 内容不可复现。
+      //
+      // 根因在时序：build.sh 的 __pycache__ 清理发生在**构建时**，
+      // 而污染可以发生在构建之后、部署之前的任意时刻（跑一次测试即可）。
+      // 所以「记得先 clean 再 deploy」治不了根 —— 在 asset 层排除才行。
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/shared'), {
+        exclude: ['**/__pycache__/**', '**/*.pyc'],
+      }),
       compatibleRuntimes: [lambda.Runtime.PYTHON_3_12],
       // ⚠️ 架构：这个 Layer **不是**完全架构无关的。
       //
