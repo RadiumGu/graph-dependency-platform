@@ -168,11 +168,27 @@ export class NeptuneEtlStack extends cdk.Stack {
       // 判据由 tests/test_128_cdk_layer_asset_must_carry_deps.py 守着。
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/shared')),
       compatibleRuntimes: [lambda.Runtime.PYTHON_3_12],
-      // 本 layer 的业务模块是纯 Python（5 个 graph_*/neptune_client_base），
-      // 随包下发的 5 个依赖（requests/urllib3/certifi/charset_normalizer/idna）
-      // 也都是纯 Python wheel，无编译产物，因此架构无关。
-      // 显式声明双架构：未声明时 AWS 视为仅 x86_64，
-      // 会阻止 arm64 函数挂载该 layer。声明后可按函数逐个迁移，无需重建 layer。
+      // ⚠️ 架构：这个 Layer **不是**完全架构无关的。
+      //
+      // 5 个业务模块（graph_* / neptune_client_base）是纯 Python，
+      // 但依赖里 charset_normalizer 带 2 个预编译扩展：
+      //     python/charset_normalizer/md.cpython-312-<arch>-linux-gnu.so
+      //     python/charset_normalizer/md__mypyc.cpython-312-<arch>-linux-gnu.so
+      //
+      // 2026-10-06 实测：线上 Layer 20/21 里这两个是 **aarch64**，
+      // 而挂这个 Layer 的 6 个 ETL **全部是 x86_64** —— 也就是说
+      // charset_normalizer 的 C 加速在它们身上一直是失效的。
+      // 不报错是因为它有纯 Python 回退（PyYAML 同一机制：
+      // `try: from .cyaml import * except ImportError:` 吞掉架构不匹配）。
+      //
+      // 所以双架构声明在**功能上**成立（回退保证可用），代价是在不匹配的
+      // 那一侧失去 C 加速。这是一次静默降级，不是故障 —— 但它来自
+      // 「在 ARM 构建机上为 x86_64 函数构建」，而不是有意的取舍。
+      // build.sh 用 --platform 固定目标架构，判据由
+      // tests/test_128_cdk_layer_asset_must_carry_deps.py 守着。
+      //
+      // 未声明双架构时 AWS 视为仅 x86_64，会阻止 arm64 函数挂载 ——
+      // gp-window-flush 是本仓唯一的 arm64 函数，所以这个声明要留着。
       compatibleArchitectures: [lambda.Architecture.X86_64, lambda.Architecture.ARM_64],
       description: 'Shared Neptune Gremlin client + graph contract utilities (deps via build.sh)',
     });

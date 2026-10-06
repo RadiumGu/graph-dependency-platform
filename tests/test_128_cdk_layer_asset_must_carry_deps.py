@@ -245,3 +245,115 @@ class TestTheCommentMustNotLieAboutContents:
                 f"不写下来下一个人只能靠猜。"
             )
         assert hit, "没找到定义 NeptuneClientBaseLayer 的文件"
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# 构建脚本必须固定目标架构
+#
+# 2026-10-06 实测的静默降级：
+#
+#   Layer 20/21 里 charset_normalizer 的两个预编译扩展是 **aarch64**，
+#   而挂这个 Layer 的 6 个 ETL **全部是 x86_64**。
+#   etl_appsignals 的 PyYAML 同理 —— 本机裸 pip install 装出 aarch64 的
+#   `yaml/_yaml.cpython-312-aarch64-linux-gnu.so`，而函数是 x86_64。
+#
+# 后果不是故障而是**静默降级**：两个库对架构不匹配的扩展都是
+#
+#     try:    from .cyaml import *          # 或 md.so
+#     except ImportError:  <纯 Python 回退>
+#
+# 于是 import 成功、功能正常、只是慢。没有任何日志、指标或告警会提到它。
+#
+# 病因是「裸 pip install 用构建机的架构」，而构建机是 ARM、目标函数是
+# x86_64，没人检查过两者是否一致。
+# ─────────────────────────────────────────────────────────────────────────
+
+#: 本仓所有为 Lambda/Layer 装依赖的构建脚本。
+#: 新增一个就加进来 —— 这张表是覆盖面本身。
+_BUILD_SCRIPTS = (
+    "infra/lambda/shared/build.sh",
+    "infra/lambda/etl_appsignals/build.sh",
+    "infra/lambda/rca_window_flush/build.sh",
+)
+
+
+@pytest.mark.parametrize("rel", _BUILD_SCRIPTS)
+def test_build_script_exists(rel: str):
+    assert (ROOT / rel).is_file(), f"{rel} 不存在 —— 表里的脚本被删了？"
+
+
+@pytest.mark.parametrize("rel", _BUILD_SCRIPTS)
+def test_build_script_pins_target_platform(rel: str):
+    """装依赖的脚本必须显式固定目标平台。
+
+    不固定 = 用构建机的架构。本仓构建机是 aarch64，而 7 个 ETL 里
+    6 个是 x86_64 —— 实测这已经让两个库的 C 加速静默失效。
+
+    例外：目标函数本身就是 arm64 且构建机也是 arm64 时，不固定也能对 ——
+    但那是**碰巧对**，构建机一换就错，而错了不会有任何信号。
+    """
+    txt = (ROOT / rel).read_text(encoding="utf-8")
+    if "pip install" not in txt and "pip3 install" not in txt:
+        pytest.skip(f"{rel} 不装依赖")
+    assert "--platform" in txt, (
+        f"{rel} 的 pip install 没有 --platform。\n"
+        f"  不固定就是用构建机的架构（本机 aarch64），而目标函数多为 x86_64。\n"
+        f"  后果是静默降级：PyYAML / charset_normalizer 对架构不匹配的扩展\n"
+        f"  都有纯 Python 回退，所以 import 成功、功能正常、只是慢，\n"
+        f"  没有任何信号。2026-10-06 实测两处都已发生。"
+    )
+
+
+@pytest.mark.parametrize("rel", _BUILD_SCRIPTS)
+def test_build_script_forbids_source_fallback(rel: str):
+    """带了 --platform 就必须带 --only-binary=:all:。
+
+    没有它，pip 在找不到目标平台 wheel 时会**退回源码编译** ——
+    而那会编出构建机架构的产物，静默回到原问题。
+    `--platform` 单独使用时 pip 甚至会直接报错要求配合 --only-binary，
+    但那只在它真的需要选 wheel 时才触发，不能当保证。
+    """
+    txt = (ROOT / rel).read_text(encoding="utf-8")
+    if "--platform" not in txt:
+        pytest.skip(f"{rel} 没用 --platform")
+    assert "--only-binary" in txt, (
+        f"{rel} 用了 --platform 但没有 --only-binary=:all: —— "
+        f"pip 会在找不到目标 wheel 时退回源码编译，编出构建机架构的产物"
+    )
+
+
+@pytest.mark.parametrize("rel", _BUILD_SCRIPTS)
+def test_build_script_pins_python_version(rel: str):
+    """也要固定 --python-version。
+
+    `--platform` 只定架构，不定 ABI。装 cp312 的 wheel 到 py3.11 的构建
+    环境里不会报错，但 .so 的名字会是 cpython-311 —— Lambda 运行时是
+    python3.12，找不到它就静默回退。
+
+    rca_window_flush/build.sh 一开始就两个都固定了；2026-10-05 我补写
+    shared/build.sh 时只写了 --platform，漏了这个。
+    """
+    txt = (ROOT / rel).read_text(encoding="utf-8")
+    if "--platform" not in txt:
+        pytest.skip(f"{rel} 没用 --platform")
+    assert "--python-version" in txt, (
+        f"{rel} 固定了 --platform 但没固定 --python-version —— "
+        f"架构对了而 ABI 可能不对，表现同样是静默回退"
+    )
+
+
+@pytest.mark.parametrize("rel", _BUILD_SCRIPTS)
+def test_build_script_records_why_platform_is_pinned(rel: str):
+    """固定平台的理由必须写在脚本里。
+
+    不写的话，下一个人看到 `--platform manylinux2014_x86_64` 会觉得多余
+    而删掉它 —— 删了之后一切照常工作（有回退），要等到有人去量性能
+    才可能发现。一个无声的缺陷最需要注释解释它为什么在这里。
+    """
+    txt = (ROOT / rel).read_text(encoding="utf-8")
+    if "--platform" not in txt:
+        pytest.skip(f"{rel} 没用 --platform")
+    assert "静默降级" in txt or "回退" in txt, (
+        f"{rel} 没写清为什么要固定平台。删掉 --platform 后一切照常工作，"
+        f"所以必须留下「为什么」"
+    )

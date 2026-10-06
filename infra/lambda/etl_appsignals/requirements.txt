@@ -1,0 +1,25 @@
+# neptune-etl-from-appsignals 的运行时依赖
+#
+# 版本取自 2026-10-06 线上包的实测内容（包里是 `PyYAML-6.0.2.dist-info`）。
+#
+# ## 为什么只有 PyYAML
+#
+# `neptune_etl_appsignals.py` 的 import 里，第三方只有两个来源：
+#
+#     import yaml                                        ← 本文件管
+#     import boto3                                       ← Lambda 运行时自带
+#     from shared.service_registry import ServiceRegistry ← 仓库根 shared/，build.sh 复制
+#     from graph_contract import ...                      ← Layer neptune-client-base 提供
+#
+# `graph_contract` 刻意不打进函数包：它是 6 个 ETL 共享的契约实现，
+# 权威源在 `infra/lambda/shared/python/`，由 Layer 下发。
+# 打进函数包会制造第二个副本，而「改了权威源却漏了产物副本」在本仓
+# 已有记录（见 1683f3c，scope 修复打在了构建产物上）。
+#
+# ## 版本为什么 pin
+#
+# 与 infra/lambda/shared/requirements.txt 同理：浮动版本会让每次构建产出
+# 不同内容，于是每次 cdk deploy 都报一次「Code 变了」，而那种变动在
+# cdk diff 里和一次真实的代码更新长得一样。
+
+PyYAML==6.0.2

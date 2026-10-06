@@ -77,7 +77,44 @@ command -v $PIP >/dev/null || PIP=python3.11
 command -v $PIP >/dev/null || { echo "  ✗ 找不到 python3.12 / python3.11"; exit 1; }
 
 echo "  pip: $($PIP --version)"
+
+# ── 目标架构与 Python 版本必须显式固定 ──────────────────────────────────
+#
+# ⚠️ 这不是一个新发现的做法 —— `infra/lambda/rca_window_flush/build.sh`
+#    从一开始就这么做，注释里写得比这里更准：
+#
+#        · 平台定向 aarch64 + py3.12：与 Lambda 运行时一致，
+#          否则 pydantic-core / _yaml 这类二进制扩展在运行时 ImportError。
+#
+#    这个 Layer 一直没这么做，是因为它是**手工 pip install + 手工 publish**
+#    的产物（见 docs/lessons/tech-debt-etl-lambdas-outside-cfn.md），
+#    而手工操作的人没有去看那个已有脚本。2026-10-05 我补写这个 build.sh
+#    时同样没去看，于是把同一个缺陷又写了一遍 ——
+#    **一个正确做法只存在于一个文件里时，它等于不存在。**
+#
+# 实测后果（2026-10-06）：Layer 20/21 里 charset_normalizer 的两个预编译
+# 扩展是 **aarch64**，而挂这个 Layer 的 6 个 ETL **全部是 x86_64**。
+#
+# 这一处的表现比 rca 那边温和：charset_normalizer 对架构不匹配的扩展有
+# 纯 Python 回退，所以是**静默降级**而非 ImportError —— import 成功、
+# 功能正常、只是慢，没有任何日志或指标会提到它。
+# （pydantic-core 没有回退，所以 rca 那边会直接挂 —— 同一个病，
+#   严厉程度取决于库有没有写回退。）
+#
+# 固定 x86_64：挂这个 Layer 的 6 个 ETL 都是 x86_64。
+# gp-window-flush 是本仓唯一的 arm64 函数，但它**不挂这个 Layer**
+# （实测 Layers 为空），所以不构成冲突。
+#
+# --only-binary=:all: 是必须的：没有它 pip 会在找不到目标平台 wheel 时
+# 退回源码编译，而那又会编出构建机架构的产物 —— 静默回到原问题。
+TARGET_PLATFORM="${LAYER_TARGET_PLATFORM:-manylinux2014_x86_64}"
+TARGET_PY="${LAYER_TARGET_PY:-3.12}"
+echo "  目标: $TARGET_PLATFORM / py$TARGET_PY （构建机: $(uname -m)）"
+
 $PIP -m pip install -q --upgrade --target "$PY_DIR" \
+     --platform "$TARGET_PLATFORM" \
+     --python-version "$TARGET_PY" \
+     --only-binary=:all: \
      -r "$SCRIPT_DIR/requirements.txt"
 
 # ── 清理不必要文件 ──────────────────────────────────────────────────────
