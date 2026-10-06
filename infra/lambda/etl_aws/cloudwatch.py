@@ -7,6 +7,16 @@ import logging
 import os
 import time
 import boto3
+
+# make_client: boto3.client 的替代品，带显式 standard 重试退避 + 分页跑飞护栏。
+# 分页上限触发时**抛异常**而非静默截断 —— graph_gc 会把「这轮没收到」当成
+# 「资源已不存在」并真删节点，所以部分结果绝不能当完整结果用。
+# 防御式 import：Layer 未更新时降级为裸 boto3，使函数代码的部署不依赖
+# Layer 的部署顺序（2026-10-04 / 10-05 两次事故均属此类）。
+try:
+    from aws_resilience import make_client
+except ImportError:  # pragma: no cover - Layer 未更新时的降级路径
+    make_client = boto3.client
 from neptune_client import neptune_query, safe_str
 from config import REGION, EKS_CLUSTER_NAME
 
@@ -205,7 +215,7 @@ def fetch_nfm_ec2_metrics(cw_client) -> dict:
     """
     result = {}
     try:
-        nfm = boto3.client('networkflowmonitor', region_name=REGION)
+        nfm = make_client('networkflowmonitor', region_name=REGION)
         monitors = nfm.list_monitors().get('monitors', [])
         for m in monitors:
             monitor_arn = m.get('monitorArn', '')
@@ -309,7 +319,7 @@ def fetch_nfm_per_flow_metrics(window_minutes: int = NFM_FLOW_WINDOW_MINUTES) ->
     """
     per_inst = {}
     try:
-        nfm = boto3.client('networkflowmonitor', region_name=REGION)
+        nfm = make_client('networkflowmonitor', region_name=REGION)
         monitors = nfm.list_monitors().get('monitors', [])
         end = datetime.datetime.utcnow() - datetime.timedelta(minutes=5)
         start = end - datetime.timedelta(minutes=window_minutes)
@@ -449,7 +459,7 @@ def fetch_nfm_topology() -> dict:
     """
     out = {}
     try:
-        nfm = boto3.client('networkflowmonitor', region_name=REGION)
+        nfm = make_client('networkflowmonitor', region_name=REGION)
         monitors = nfm.list_monitors().get('monitors', [])
         end = datetime.datetime.utcnow() - datetime.timedelta(minutes=5)
         start = end - datetime.timedelta(minutes=NFM_FLOW_WINDOW_MINUTES)
@@ -664,7 +674,7 @@ def map_nfm_metrics_to_ec2(nfm_metrics: dict, ec2_instances: list) -> dict:
         return {}
     ec2_nfm = {}
     try:
-        nfm = boto3.client('networkflowmonitor', region_name=REGION)
+        nfm = make_client('networkflowmonitor', region_name=REGION)
         for monitor_arn, metrics in nfm_metrics.items():
             monitor_name = metrics.get('monitor_name', '')
             if not monitor_name:
@@ -697,7 +707,7 @@ def update_vpc_nfm_metrics(nfm_metrics: dict):
     """
     written = 0
     try:
-        nfm = boto3.client('networkflowmonitor', region_name=REGION)
+        nfm = make_client('networkflowmonitor', region_name=REGION)
         ts = int(time.time())
         for monitor_arn, metrics in (nfm_metrics or {}).items():
             monitor_name = metrics.get('monitor_name', '')

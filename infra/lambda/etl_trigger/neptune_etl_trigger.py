@@ -18,6 +18,16 @@ import os
 import json
 import time
 import boto3
+
+# make_client: boto3.client 的替代品，带显式 standard 重试退避 + 分页跑飞护栏。
+# 分页上限触发时**抛异常**而非静默截断 —— graph_gc 会把「这轮没收到」当成
+# 「资源已不存在」并真删节点，所以部分结果绝不能当完整结果用。
+# 防御式 import：Layer 未更新时降级为裸 boto3，使函数代码的部署不依赖
+# Layer 的部署顺序（2026-10-04 / 10-05 两次事故均属此类）。
+try:
+    from aws_resilience import make_client
+except ImportError:  # pragma: no cover - Layer 未更新时的降级路径
+    make_client = boto3.client
 import logging
 
 logger = logging.getLogger()
@@ -27,7 +37,7 @@ DELAY_SECONDS = int(os.environ.get('TRIGGER_DELAY_SECONDS', '30'))
 ETL_FUNCTION_NAME = os.environ.get('ETL_FUNCTION_NAME', 'neptune-etl-from-aws')
 REGION = os.environ.get('REGION', 'ap-northeast-1')
 
-lambda_client = boto3.client('lambda', region_name=REGION)
+lambda_client = make_client('lambda', region_name=REGION)
 
 
 def handler(event, context):

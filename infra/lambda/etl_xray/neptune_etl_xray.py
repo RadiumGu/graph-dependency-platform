@@ -69,6 +69,16 @@ from collections import defaultdict
 
 import boto3
 
+# make_client: boto3.client 的替代品，带显式 standard 重试退避 + 分页跑飞护栏。
+# 分页上限触发时**抛异常**而非静默截断 —— graph_gc 会把「这轮没收到」当成
+# 「资源已不存在」并真删节点，所以部分结果绝不能当完整结果用。
+# 防御式 import：Layer 未更新时降级为裸 boto3，使函数代码的部署不依赖
+# Layer 的部署顺序（2026-10-04 / 10-05 两次事故均属此类）。
+try:
+    from aws_resilience import make_client
+except ImportError:  # pragma: no cover - Layer 未更新时的降级路径
+    make_client = boto3.client
+
 # Lambda 运行时里 shared 层挂在 /opt/python，本地运行时由 --selftest 自行安排。
 # 与 query_catalog.py 同样的纪律：**import 时不改全局 sys.path**。
 from neptune_client_base import neptune_query, extract_value, REGION  # noqa: F401
@@ -368,7 +378,7 @@ def fetch_xray_service_graph(lookback_hours: int = None) -> dict:
       aws_service —— 只有粗粒度服务名（落 AWSServiceEndpoint）
     """
     hours = lookback_hours if lookback_hours is not None else XRAY_LOOKBACK_HOURS
-    xray = boto3.client('xray', region_name=REGION)
+    xray = make_client('xray', region_name=REGION)
 
     now = int(time.time())
     segments = []

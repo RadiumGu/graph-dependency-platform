@@ -10,6 +10,16 @@ import logging
 import time
 import boto3
 
+# make_client: boto3.client 的替代品，带显式 standard 重试退避 + 分页跑飞护栏。
+# 分页上限触发时**抛异常**而非静默截断 —— graph_gc 会把「这轮没收到」当成
+# 「资源已不存在」并真删节点，所以部分结果绝不能当完整结果用。
+# 防御式 import：Layer 未更新时降级为裸 boto3，使函数代码的部署不依赖
+# Layer 的部署顺序（2026-10-04 / 10-05 两次事故均属此类）。
+try:
+    from aws_resilience import make_client
+except ImportError:  # pragma: no cover - Layer 未更新时的降级路径
+    make_client = boto3.client
+
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -63,18 +73,18 @@ def run_etl():
     logger.info("=== neptune-etl-from-aws start ===")
 
     session = boto3.Session(region_name=REGION)
-    ec2_client = session.client('ec2', region_name=REGION)
-    eks_client = session.client('eks', region_name=REGION)
-    elb_client = session.client('elbv2', region_name=REGION)
-    lambda_client = session.client('lambda', region_name=REGION)
-    sfn_client = session.client('stepfunctions', region_name=REGION)
-    ddb_client = session.client('dynamodb', region_name=REGION)
-    cw_client = session.client('cloudwatch', region_name=REGION)
-    rds_client = session.client('rds', region_name=REGION)
-    sqs_client = session.client('sqs', region_name=REGION)
-    sns_client = session.client('sns', region_name=REGION)
-    s3_client = session.client('s3', region_name=REGION)
-    ecr_client = session.client('ecr', region_name=REGION)
+    ec2_client = make_client('ec2', region_name=REGION, session=session)
+    eks_client = make_client('eks', region_name=REGION, session=session)
+    elb_client = make_client('elbv2', region_name=REGION, session=session)
+    lambda_client = make_client('lambda', region_name=REGION, session=session)
+    sfn_client = make_client('stepfunctions', region_name=REGION, session=session)
+    ddb_client = make_client('dynamodb', region_name=REGION, session=session)
+    cw_client = make_client('cloudwatch', region_name=REGION, session=session)
+    rds_client = make_client('rds', region_name=REGION, session=session)
+    sqs_client = make_client('sqs', region_name=REGION, session=session)
+    sns_client = make_client('sns', region_name=REGION, session=session)
+    s3_client = make_client('s3', region_name=REGION, session=session)
+    ecr_client = make_client('ecr', region_name=REGION, session=session)
 
     stats = {'vertices': 0, 'edges': 0, 'cw_ec2': 0, 'cw_lambda': 0}
 
@@ -753,7 +763,7 @@ def run_etl():
             logger.debug(f"T10 ALB HasSG: {e2}")
 
         try:
-            neptune_b = boto3.client('neptune', region_name=REGION)
+            neptune_b = make_client('neptune', region_name=REGION)
             nc_resp = neptune_b.describe_db_clusters()
             for cluster in nc_resp.get('DBClusters', []):
                 if cluster.get('Engine') != 'neptune':
@@ -774,7 +784,7 @@ def run_etl():
             logger.debug(f"T10 NeptuneCluster HasSG: {_ne}")
 
         try:
-            rds_b = boto3.client('rds', region_name=REGION)
+            rds_b = make_client('rds', region_name=REGION)
             for page in rds_b.get_paginator('describe_db_clusters').paginate():
                 for cluster in page['DBClusters']:
                     rds_name = cluster['DBClusterIdentifier']

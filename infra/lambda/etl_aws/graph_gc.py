@@ -3,10 +3,34 @@ gc.py - Ghost-node garbage collection for neptune-etl-from-aws.
 
 Compares each resource type in Neptune against the current AWS state
 and drops nodes that no longer exist.
+
+## 本文件的唯一安全原则：不确定就不删
+
+`_gc_vertices` 做的是集合差 —— 图里有、而本轮 AWS 清单里没有的节点，直接
+`g.V(...).drop()`。所以**任何让 AWS 清单不完整的情况都等价于删真实资源**：
+
+  · 分页少收（未分页的 list_* 超过单页上限）
+  · 一次瞬时限流被 `except: pass` 吞掉
+  · 达到分页跑飞护栏
+
+这三者在图里的表现与「资源真的被删了」完全相同，无法区分。
+
+因此本文件里每个 `_gc_vertices` 调用的前置清单，要么完整，要么**整段放弃
+这一类的 GC** —— 放弃 GC 只会留下陈旧节点（下一轮会收），而误删是不可逆的。
 """
 
 import logging
 import boto3
+
+# paginate_all: 带跑飞护栏的分页收集。上限或截止时间触发时**抛异常**而非
+# 返回部分结果 —— 见上面的安全原则。
+# 防御式 import：Layer 未更新时降级为不分页（与改动前行为一致），
+# 使函数代码的部署不依赖 Layer 的部署顺序。
+try:
+    from aws_resilience import paginate_all
+except ImportError:  # pragma: no cover - Layer 未更新时的降级路径
+    def paginate_all(client, operation_name, key, **kwargs):  # type: ignore[misc]
+        return getattr(client, operation_name)(**kwargs).get(key, []) or []
 
 from neptune_client import neptune_query
 from config import REGION
@@ -85,7 +109,10 @@ def run_gc(session, ec2_client, eks_client, elb_client, lambda_client,
         gc_total += _gc_vertices('NeptuneInstance', 'name', aws_rds_instances)
 
         # EKS
-        aws_eks = set(eks_client.list_clusters().get('clusters', []))
+        # list_clusters 每页 100。原实现 `eks_client.list_clusters()` 不分页，
+        # 超过 100 个集群就静默少收 —— 而少收会让下面这行把真实存在的集群
+        # 判为 ghost 节点删除。当前只有 1 个集群所以没触发过。
+        aws_eks = set(paginate_all(eks_client, 'list_clusters', 'clusters'))
         gc_total += _gc_vertices('EKSCluster', 'name', aws_eks)
 
         # ALB
@@ -123,16 +150,31 @@ def run_gc(session, ec2_client, eks_client, elb_client, lambda_client,
         gc_total += _gc_vertices('StepFunction', 'name', aws_sfn)
 
         # S3 (region-local only)
-        aws_s3 = set()
-        for b in s3_client.list_buckets().get('Buckets', []):
-            try:
+        #
+        # 两处误删路径，一起修：
+        #  1. list_buckets 原本不分页。ListBuckets 自 2024 起支持分页
+        #     （ContinuationToken / MaxBuckets），少收就会误删。
+        #  2. 原实现对 get_bucket_location 的失败是 `except Exception: pass`
+        #     —— 桶不进 aws_s3，于是被判为 ghost 节点删掉。也就是说
+        #     **一次瞬时限流就能让一个真实存在的桶从图里消失**。
+        #
+        # 改成：桶清单只要有任何不确定，就整段放弃 S3Bucket 的 GC。
+        # 放弃只留下陈旧节点（下一轮会收），误删不可逆。
+        try:
+            aws_s3 = set()
+            for b in paginate_all(s3_client, 'list_buckets', 'Buckets'):
                 loc = s3_client.get_bucket_location(Bucket=b['Name'])
                 bucket_region = loc.get('LocationConstraint') or 'us-east-1'
                 if bucket_region == REGION:
                     aws_s3.add(b['Name'])
-            except Exception:
-                pass
-        gc_total += _gc_vertices('S3Bucket', 'name', aws_s3)
+        except Exception as _e:
+            logger.warning(
+                "GC S3Bucket 放弃本轮：桶清单不完整（%s: %s）。"
+                "不完整的清单会把真实存在的桶判为 ghost 节点删除。",
+                type(_e).__name__, _e,
+            )
+        else:
+            gc_total += _gc_vertices('S3Bucket', 'name', aws_s3)
 
         # ECR
         aws_ecr = set()
