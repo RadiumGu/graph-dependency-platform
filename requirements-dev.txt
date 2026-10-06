@@ -82,3 +82,10 @@ aws-opentelemetry-distro>=0.18
 # aws-cdk CLI —— tests/test_11_schema_consistency.py::test_s0_06_cdk_synth 需要。
 #   安装: npm install -g aws-cdk   (需 Node.js 18+)
 #   未安装时该测试 skip。
+
+# ── DR 编排的行为测试（test_129）────────────────────────────────────────
+# 钉死版本：与首尔 worker 主机上的 temporalio 一致（dr-plan-generator/worker/
+# requirements.txt）。不一致时测试测的是另一个 SDK 的行为。
+# CI 设 DR_REQUIRE_TEMPORAL=1：缺了它 test_129 直接红，而不是静默 skip。
+temporalio==1.33.0
+pytest-asyncio==0.24.0

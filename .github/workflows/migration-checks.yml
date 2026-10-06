@@ -93,7 +93,16 @@ jobs:
           #
           # 2026-09-21 实测离线通过 26 个，设 24 留一点波动余量。
           # **新增离线可跑的测试后请上调这个数**，否则它会越来越松。
-          GDP_OFFLINE_MIN_PASSED: "1040"
+          GDP_OFFLINE_MIN_PASSED: "1820"
+          # ⚠️ 2026-10-06：test_129（DR 编排的行为测试，跑在真实的 Temporal
+          # 本地服务器上）此前在这里**一直是静默 skip** —— requirements-dev 里
+          # 没有 temporalio，importorskip 把它变成了 skip，而 skip 是绿的。
+          # 这个变量让缺依赖变成**错误**而不是 skip。
+          #
+          # 下限同时从 1040 提到 1820：最近一次 main 实测 1810 passed，
+          # 加上 test_129 的 12 个。1040 已经落后实际通过数七百多 ——
+          # 那么松的下限挡不住「一大片测试悄悄变 skip」。
+          DR_REQUIRE_TEMPORAL: "1"
         run: python3 -m pytest tests/ -q
       - name: Remind that this is not full coverage
         if: always()

@@ -195,6 +195,19 @@ for f in "$STAGE"/*.py; do
 done
 ok "$(ls "$STAGE"/*.py | wc -l) 个 .py 语法检查通过"
 
+# ── 代码清单：本次发布**应当存在**的 .py ───────────────────────────────
+#
+# ⚠️ 2026-10-06 加。下面的 `aws s3 sync` 不带 --delete，所以**退役的模块永远
+# 留在 S3 和主机上**（实测：workflows.py 在 10-05 退役后仍躺在两处）。
+# 它被计入代码指纹、被 py_compile、被人看到时会以为还在用。
+#
+# 不能直接加 --delete：worker/ 前缀下还有 5 个不在 git 里的对象
+# （13-lbc-values.yaml / 15-korea-workloads.yaml / petsite-korea-drill.yaml 等），
+# --delete 会把它们一起删掉。所以发一份清单，让主机按清单清理**自己的**目录 ——
+# 只删本机 app 目录里的 .py，不碰 S3 上任何东西。
+( cd "$STAGE" && ls -1 *.py | sort ) > "$STAGE/MANIFEST"
+ok "代码清单 MANIFEST：$(wc -l < "$STAGE/MANIFEST") 个 .py（主机按它清理退役模块）"
+
 say "2. 同步到 S3（S3 是唯一代码来源，保持既有契约）"
 aws s3 sync "$STAGE/" "s3://$BUCKET/worker/" --only-show-errors \
   --exclude '__pycache__/*' --exclude '*.pyc'

@@ -80,6 +80,25 @@ CODE_FP_BEFORE="$(cat /opt/dr-worker/.code.sha256 2>/dev/null || true)"
 
 aws s3 sync "s3://${CODE_BUCKET}/${CODE_PREFIX}" "$APP/" --region "$REGION" --only-show-errors
 
+# ── 按代码清单清理退役模块 ──────────────────────────────────────────────
+#
+# sync 不带 --delete（S3 前缀下还有不归本流程管的对象），所以退役的 .py 会
+# 一直留在这里，并被算进下面的代码指纹。有清单就按清单删；**没有清单就不删**
+# —— 旧的发布不带清单，那时猜「哪些该删」会删错，而误删一个仍在用的模块的
+# 后果（worker 起不来）比留一个死文件严重得多。
+MANIFEST="$APP/MANIFEST"
+if [ -s "$MANIFEST" ]; then
+  for f in "$APP"/*.py; do
+    [ -e "$f" ] || continue
+    if ! grep -qxF "$(basename "$f")" "$MANIFEST"; then
+      log "移除已退役的模块 $(basename "$f")（不在本次发布的 MANIFEST 里）"
+      rm -f "$f" "$APP/__pycache__/$(basename "$f" .py)".*.pyc
+    fi
+  done
+else
+  log "⚠️ 没有 MANIFEST（旧的发布？）—— 不清理退役模块，宁可留死文件也不猜"
+fi
+
 # 指纹取所有 .py 的内容哈希（排序后拼接再哈希，与文件顺序无关）。
 # 不用目录 mtime：sync 会重写 mtime 而内容可能没变，那会导致无谓重启。
 CODE_FP_AFTER="$(find "$APP" -maxdepth 1 -name '*.py' -type f -print0 \

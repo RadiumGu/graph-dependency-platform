@@ -38,8 +38,12 @@
 # 且调用方拿不到结果。所以本文件**刻意不提供 signal 通道** ——
 # DrRunbookWorkflow 同样只走 Update（confirm_step / decide / resolve_gate）。
 #
-# temporal-mcp 已于本次补上 `update_workflow`（此前只有 signal_workflow），
-# 所以这条路对 agent 调用方也是通的。
+# ⚠️ 2026-10-06 订正：这里原来写「temporal-mcp 已补上 update_workflow，所以这条路
+# 对 agent 调用方也是通的」。**那句话在线上从未成立** —— 线上 MCP 跑的是 09-24
+# 的旧包，没有 update_workflow。现在新包已部署，但 update_workflow 在 agent 通道
+# 上被**刻意禁用**（06-agentcore-runtime.yaml 的 TemporalDenyTools）：经 MCP 发来的
+# update 只带自报的署名，agent 能替人 approve_plan / confirm_step。
+# 人的动作走 probe_cli.py（经 SSM，CloudTrail 里有真实 IAM 身份）。
 #
 # ## 唯一的硬闸门：演练必须覆盖被批准的那一版
 #
