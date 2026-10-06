@@ -41,6 +41,25 @@ Parameters:
       而 DR 计划可能要用 Schedule 承载；all 的 36 个里有四个在本服务端
       不适用（capabilities 缺 workflowPause / standaloneActivities）。
 
+  TemporalDenyTools:
+    Type: String
+    # ⚠️ 2026-10-06：这个 MCP 通道收成**只读**。
+    #
+    # 执行模型是「人执行每个变更，Temporal 只核实」，人的每个动作都经
+    # probe_cli.py 走 SSM —— 那条路在 CloudTrail 里留有真实的 IAM 身份。
+    # 而经这个 MCP 发来的 update/signal/cancel，Temporal 只能看到调用方**自报**
+    # 的 operator 字段：一个 agent 可以替「alice」confirm_step。所以 agent 通道
+    # 上不放任何能推进或打断执行的工具。
+    #
+    # 这一项**只有在部署了带拒绝列表的代码之后才有效**。2026-10-06 之前线上跑的
+    # 是 09-24 的旧包（dist-agentcore 没有重新打包就被上传了），里面
+    # TEMPORAL_DENY_TOOLS 出现 0 次 —— 只配环境变量就是假闸门。
+    # 单行：折叠标量会在行间插空格。服务端会 trim 每一项所以不致命，
+    # 但「看起来对、靠下游容错才对」不该出现在一个安全开关上。
+    Default: start_workflow,signal_workflow,signal_with_start_workflow,update_workflow,cancel_workflow,terminate_workflow,pause_workflow,unpause_workflow,create_schedule,delete_schedule
+    Description: >
+      逗号分隔的禁用工具名（在 tools/list 与调用入口两处都生效）。
+
 Resources:
 
   TemporalMcpRuntime:
@@ -89,6 +108,7 @@ Resources:
       EnvironmentVariables:
         TEMPORAL_ADDRESS: !Ref TemporalAddress
         TEMPORAL_TOOLS: !Ref TemporalTools
+        TEMPORAL_DENY_TOOLS: !Ref TemporalDenyTools
         AWS_DEFAULT_REGION: !Ref AWS::Region
         LOG_LEVEL: INFO
         # PORT 不设：传输层默认 8000，正是 AgentCore 的 MCP 契约要求的端口。

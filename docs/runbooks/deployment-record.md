@@ -5881,6 +5881,108 @@ SLO                38.1% → 41.55% → 50.0%（15 分钟窗口，回升中）
 ```
 
 
+---
+
+### 4.54 灾备编排收尾:agent 通道收成只读、live 必须走评审链、CI 真正跑行为测试
+
+**日期**:2026-10-06 00:55-02:30 UTC
+**承接**:4.53 之后的 PR #58(人执行、Temporal 核实;探针目录;退役四个变更子工作流)
+
+#### ① 04:35 那次取消是谁 —— 查清了,而且不是我以为的那条路
+
+```
+ALB 访问日志 2026-10-05
+  04:34:59  27.0.3.155  POST .../plan-real-20260926-1440/query/__temporal_workflow_metadata   ← 打开页面
+  04:35:12  27.0.3.155  POST .../plan-real-20260926-1440/cancel?execution.runId=01a0de26…    ← 点取消
+temporal_mcp 调用量    09-24: 11 / 09-25: 4 / 09-26: 8 / 之后 0
+```
+
+来自 **Temporal Web UI**(经 Cognito 的 prio 4),不是 agent。所以我原来提议的
+「配 TEMPORAL_DENY_TOOLS 挡掉取消」**挡不住这一次** —— MCP 那天零调用。
+
+UI 的写操作开关我用一个**临时 UI 容器**实测过是不是假闸门:
+
+```
+现网 UI（开关关）            带 CSRF 取消一个不存在的执行 → 404 workflow not found（请求到了服务端）
+临时 UI（DISABLE_WRITE=true） 同一请求                    → 405 Method Not Allowed（ui-server 拦下）
+临时 UI 的 GET                                            → 200
+```
+
+是服务端拦截,不只是藏按钮。但收成只读会拿掉人在 UI 上点取消的能力 ——
+**这个决定留给人**,本节没有改 UI。
+
+#### ② MCP 通道:第四次「合并 ≠ 部署」,而且这次是安全开关
+
+```
+temporal-mcp master（0adbb6c，09-26 09:29）  update_workflow + TEMPORAL_DENY_TOOLS
+线上包（S3 对象 09-26 15:03 上传）           两者都是 0 次 —— 包内文件时间是 09-24 12:13
+```
+
+`dist-agentcore/` 是打包脚本的产物目录,而 `npm run build` 只构建 `dist/`。09-26 上传的是
+**两天前没重新打包的旧 zip**。于是文档与 plan_workflow.py 里那句「agent 也能走
+update_workflow」在线上从未成立;更要紧的是:**只给运行时配 TEMPORAL_DENY_TOOLS 会是
+假闸门** —— 线上代码根本不读这个变量。
+
+处置:从 master 重新打包(48 项测试通过,新包里 TEMPORAL_DENY_TOOLS 出现 2 次)、
+上传到**带提交号的新键**(CFN 看得见变化;旧包留着可回滚)、经 06 栈变更集部署,
+拒绝列表收成只读:
+
+```
+禁用  start_workflow signal_workflow signal_with_start_workflow update_workflow
+      cancel_workflow terminate_workflow pause_workflow unpause_workflow
+      create_schedule delete_schedule
+保留  list/describe/query/count/history/schedule 读/activity 读/task-queue 读
+```
+
+**为什么连 update_workflow 也禁**:经 MCP 发来的 update 只带自报的 operator 字段,
+agent 可以替「alice」confirm_step 或 approve_plan。人的动作走 probe_cli.py,
+它经 SSM 执行 —— CloudTrail 里是**真实的 IAM 身份**,不是自报字符串。
+
+#### ③ 直接起 live 会绕过硬闸门 —— 补上
+
+「批准 + 演练覆盖被批准的那一版」这道闸门在 DrPlanWorkflow 里。直接 start 一条
+`mode=live` 的 DrRunbookWorkflow 就绕过了它,留下一份「人确认过每一步」的执行记录,
+而那份计划从没被批准过。
+
+判据用 `workflow.info().parent`:父执行信息由**服务端**写进 history,调用方伪造不了。
+再核对子执行 id 形如 `<父>-exec-v<N>`。rehearsal 只读、不留执行声明,不要求。
+
+反向验证时发现一个测试本身的缺陷:拆掉校验后用例**卡住而不是失败**(live 跑下去
+等人确认 24 小时)—— 在 CI 里就是一个跑到超时的 job。已把那条用例的等待上限设短。
+
+#### ④ test_129 在 CI 里一直是静默 skip
+
+requirements-dev 里没有 temporalio,`importorskip` 把整个文件变成 skip,而 skip 是绿的。
+本项目已经第三次遇到「测试没跑看起来像测试通过」(另两次:conftest 缺依赖导致
+通过数恒 0、`$KIROCREW_SCRATCH` 变化导致零收集)。
+
+```
+没有 temporalio，不设 DR_REQUIRE_TEMPORAL  →  1 skipped
+没有 temporalio，设 DR_REQUIRE_TEMPORAL=1   →  1 error
+```
+
+CI 设了 `DR_REQUIRE_TEMPORAL=1`;依赖钉到与首尔 worker 相同的 temporalio==1.33.0。
+离线下限从 1040 提到 1820(main 实测 1810 + 本次 12)—— 1040 已落后实际七百多,
+那么松的下限挡不住「一大片测试悄悄变 skip」。
+
+#### ⑤ 退役模块的残留:按清单清理,不删 S3
+
+`aws s3 sync` 不带 `--delete`,所以 workflows.py 退役后仍在 S3 与主机上。
+**不能直接加 --delete**:worker/ 前缀下还有 5 个不在 git 里的对象
+(13-lbc-values.yaml、15-korea-workloads.yaml、petsite-korea-drill.yaml 等),会被一起删掉。
+
+改成:发布时写一份 MANIFEST(本次应当存在的 .py),主机按它清理**自己的** app 目录;
+**没有 MANIFEST 就不删** —— 误删一个仍在用的模块(worker 起不来)比留一个死文件严重得多。
+S3 上的旧对象留着,它已经不会再落到主机上。
+
+#### 测试本身踩到的一处
+
+把测试用的父执行定义在测试文件里,worker 校验失败:Temporal 沙箱会重新导入定义
+workflow 的模块,而测试文件顶层有 `Path(__file__).resolve()`。挪到单独的
+`tests/_dr_live_parent.py`。没有用 UnsandboxedWorkflowRunner 绕过 —— 沙箱能在测试里
+抓出工作流的不确定性,关掉它就丢掉了这层保护。
+
+
 ## 六、待记录
 
 - [ ] `temporal-mcp` → ap-northeast-2 的 AgentCore(阶段 C)

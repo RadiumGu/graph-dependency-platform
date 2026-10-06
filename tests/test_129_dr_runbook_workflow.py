@@ -1,6 +1,8 @@
 """test_129_dr_runbook_workflow.py — 在真实的 Temporal 测试服务器上跑 DrRunbookWorkflow。
 
-需要 temporalio（离线 CI 里没有就跳过）。本地：
+需要 temporalio。CI 里设了 `DR_REQUIRE_TEMPORAL=1`：缺依赖时**直接失败而不是跳过** ——
+2026-10-06 之前它在 CI 里一直是静默 skip，看起来是绿的，实际一个都没跑。
+本地：
 
     <venv>/bin/python -m pytest tests/test_129_dr_runbook_workflow.py
 
@@ -17,6 +19,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -24,7 +27,11 @@ from typing import Any
 
 import pytest
 
-temporalio = pytest.importorskip("temporalio")
+if os.environ.get("DR_REQUIRE_TEMPORAL") == "1":
+    import temporalio  # noqa: F401 —— CI 里缺依赖必须是红的，不能是 skip
+else:
+    temporalio = pytest.importorskip("temporalio")
+pytest_asyncio = pytest.importorskip("pytest_asyncio")
 
 from temporalio import activity  # noqa: E402
 from temporalio.client import WorkflowUpdateFailedError  # noqa: E402
@@ -48,7 +55,15 @@ from probes import ProbeInput, ProbeResult  # noqa: E402
 from runbook import FORMAT, parse_runbook, render_block  # noqa: E402
 from runbook_workflow import DrRunbookWorkflow, RunbookRunInput  # noqa: E402
 
-pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+_T = Path(__file__).resolve().parent
+if str(_T) not in sys.path:
+    sys.path.insert(0, str(_T))
+from _dr_live_parent import TestLiveParent  # noqa: E402  —— 单独成模块才能进沙箱，见该文件
+
+pytestmark = [
+    pytest.mark.asyncio,
+    pytest.mark.filterwarnings("ignore::DeprecationWarning"),
+]
 
 from temporalio.common import SearchAttributeKey  # noqa: E402
 
@@ -126,7 +141,7 @@ PROMOTE = {"id": "promote", "kind": "manual", "title": "提升", "command": "aws
            "post": [{"probe": "aurora_writer_region", "params": {"expect_region": "ap-northeast-2"}}]}
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def env():
     BODIES.clear(); RECORDS.clear(); VERDICTS.clear(); CALLS.clear()
     # ⚠️ 不用 start_time_skipping()：那个精简服务器不实现 OperatorService，
@@ -136,7 +151,7 @@ async def env():
     e = await WorkflowEnvironment.start_local(search_attributes=_SEARCH_ATTRIBUTES)
     async with Worker(
         e.client, task_queue="tq",
-        workflows=[DrRunbookWorkflow, DrPlanWorkflow],
+        workflows=[DrRunbookWorkflow, DrPlanWorkflow, TestLiveParent],
         activities=[fake_put, fake_load, fake_record, *FAKE_PROBES],
     ):
         yield e
@@ -144,13 +159,22 @@ async def env():
 
 
 async def _start(env, steps, mode, **kw):
+    """rehearsal 直接起；live 经一个父执行起（live 要求有父执行）。返回子执行的 handle。"""
     pid = f"p-{uuid.uuid4().hex[:6]}"
     BODIES[(pid, 1)] = _body(steps)
-    return await env.client.start_workflow(
-        DrRunbookWorkflow.run,
-        RunbookRunInput(plan_id=pid, version=1, sha256="x", mode=mode, requested_by="t", **kw),
-        id=f"rb-{pid}", task_queue="tq",
-    )
+    inp = RunbookRunInput(plan_id=pid, version=1, sha256="x", mode=mode, requested_by="t", **kw)
+    if mode != "live":
+        return await env.client.start_workflow(
+            DrRunbookWorkflow.run, inp, id=f"rb-{pid}", task_queue="tq")
+    await env.client.start_workflow(TestLiveParent.run, inp, id=f"plan-{pid}", task_queue="tq")
+    child = env.client.get_workflow_handle_for(DrRunbookWorkflow.run, f"plan-{pid}-exec-v1")
+    for _ in range(100):
+        try:
+            await child.describe()
+            return child
+        except Exception:  # noqa: BLE001 —— 子执行还没被父执行起出来
+            await asyncio.sleep(0.05)
+    raise AssertionError("父执行没有起出子执行")
 
 
 async def _until(h, kind: str, step: str, tries: int = 200) -> dict:
@@ -274,6 +298,24 @@ class TestLive:
         r = await h.result()
         assert r.status == "stalled" and r.ok is None
         assert not any(s.get("confirmed") for s in r.steps), "超时绝不能被当成「已确认」"
+
+    async def test_live_without_parent_is_refused(self, env):
+        """直接起 live 会绕过「批准 + 演练」的硬闸门 —— 必须被拒，且一个探针都不跑。"""
+        pid = f"p-{uuid.uuid4().hex[:6]}"
+        BODIES[(pid, 1)] = _body([CHECK, SCALE])
+        h = await env.client.start_workflow(
+            DrRunbookWorkflow.run,
+            # human_wait_hours 设得很短：校验一旦失效，执行会走下去等人确认 ——
+            # 默认 24 小时会让这条用例**卡住而不是失败**（2026-10-06 反向验证时实测），
+            # 在 CI 里就是一个跑到超时的 job。设短之后失效时几秒内就 stalled → 断言失败。
+            RunbookRunInput(plan_id=pid, version=1, sha256="x", mode="live", requested_by="t",
+                            human_wait_hours=0.001),
+            id=f"plan-{pid}-exec-v1", task_queue="tq",   # 名字像，但没有父执行
+        )
+        r = await h.result()
+        assert r.status == "invalid" and r.ok is False
+        assert any("只能由 DrPlanWorkflow" in f for f in r.findings)
+        assert CALLS == [], "被拒的 live 不该跑任何探针"
 
     async def test_cancelled_run_still_exports_its_record(self, env):
         h = await _start(env, [SCALE, PROMOTE], "live")

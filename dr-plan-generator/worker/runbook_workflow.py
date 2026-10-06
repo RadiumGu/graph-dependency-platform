@@ -279,6 +279,28 @@ class DrRunbookWorkflow:
             self._status = "invalid"
             self._findings.append(f"未知模式 {args.mode!r}")
             return False
+        if args.mode == MODE_LIVE:
+            # ── live 必须由 DrPlanWorkflow 发起 ────────────────────────────
+            #
+            # 「批准 + 演练覆盖被批准的那一版」这道硬闸门在 DrPlanWorkflow 里。
+            # 直接 start 一条 mode=live 的 DrRunbookWorkflow 就绕过了它 ——
+            # 留下一份「人确认过每一步」的执行记录，而那份计划从没被批准过。
+            #
+            # 判据用 `workflow.info().parent`：父执行信息由**服务端**写进
+            # history，调用方伪造不了（与 author/approver 那种自报字段不同）。
+            # 再核对子执行 id 的形状，挡住「随便起一个父 workflow 当壳」。
+            # rehearsal 只读、不留执行声明，所以不要求。
+            parent = workflow.info().parent
+            expected = f"-exec-v{args.version}"
+            if parent is None or not workflow.info().workflow_id.endswith(expected) \
+                    or not workflow.info().workflow_id.startswith(parent.workflow_id):
+                self._status = "invalid"
+                self._findings.append(
+                    "live 模式只能由 DrPlanWorkflow 的 authorize_execution 发起 —— "
+                    f"本执行的父执行是 {parent.workflow_id if parent else '无'}。"
+                    "直接起 live 会绕过「批准 + 演练覆盖被批准版本」的硬闸门"
+                )
+                return False
         try:
             loaded: LoadedPlan = await workflow.execute_activity(
                 load_plan_version,
