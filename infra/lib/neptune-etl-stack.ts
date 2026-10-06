@@ -234,7 +234,7 @@ export class NeptuneEtlStack extends cdk.Stack {
         EKS_CLUSTER_ARN: `arn:aws:eks:${this.region}:${this.account}:cluster/${eksClusterName}`,
       },
       layers: [neptuneClientLayer],
-      description: 'ETL: ClickHouse L7 flow_log → Neptune Calls/HasMetrics edges + perf metrics (every 5min)',
+      description: 'ETL: ClickHouse L7 flow_log -> Neptune Calls/HasMetrics edges + perf metrics (every 5min)',
     });
 
     new events.Rule(this, 'DeepflowEtlSchedule', {
@@ -265,7 +265,7 @@ export class NeptuneEtlStack extends cdk.Stack {
         EKS_CLUSTER_NAME: eksClusterName,
       },
       layers: [neptuneClientLayer],
-      description: 'ETL: AWS API static topology → Neptune nodes/edges (every 15min)',
+      description: 'ETL: AWS API static topology -> Neptune nodes/edges (every 15min)',
     });
 
     new events.Rule(this, 'AwsEtlSchedule', {
@@ -311,7 +311,7 @@ export class NeptuneEtlStack extends cdk.Stack {
         CFN_STACK_NAMES: cfnStackNames,
       },
       layers: [neptuneClientLayer],
-      description: 'ETL: CFN template declared deps → Neptune DependsOn edges (on deploy + daily)',
+      description: 'ETL: CFN template declared deps -> Neptune DependsOn edges (on deploy + daily)',
     });
 
     // 触发方式1: CFN 部署完成后自动触发（ServicesEks2 或 Applications 更新/创建完成）
@@ -426,7 +426,7 @@ export class NeptuneEtlStack extends cdk.Stack {
         TRIGGER_DELAY_SECONDS: '30',
         REGION: awsRegion,
       },
-      description: 'Event-driven trigger: AWS infra change → 30s delay → neptune-etl-from-aws',
+      description: 'Event-driven trigger: AWS infra change -> 30s delay -> neptune-etl-from-aws',
     });
 
     // SQS → Lambda 事件源
