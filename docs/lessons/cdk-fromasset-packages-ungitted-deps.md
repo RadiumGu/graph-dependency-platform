@@ -280,3 +280,106 @@ new\s+lambda\.LayerVersion\s*\([^)]*?code:\s*lambda\.Code\.fromAsset\(
 抓到它的是 `test_cdk_defines_at_least_one_layer_from_asset` —— 那条测试
 存在的全部理由就是这个。**一个找不到目标的门禁比没有门禁更坏**，
 因为它让人以为这一类问题有人看着。改成按行扫，注释怎么写都不影响定位。
+
+---
+
+# 第三例：依赖装对了，但架构是构建机的
+
+**日期**：2026-10-06
+**发现路径**：给 `etl_appsignals` 补 build.sh（纳入 CFN 栈的前置）时，
+比对产物与线上包，发现同名 `.so` 的架构标记不同
+
+## 事实
+
+```
+线上包   yaml/_yaml.cpython-312-x86_64-linux-gnu.so
+新产物   yaml/_yaml.cpython-312-aarch64-linux-gnu.so     ← 构建机是 ARM
+```
+
+顺着查共享 Layer，同一个问题更早就存在：
+
+```
+Layer 20 / 21   python/charset_normalizer/md.cpython-312-aarch64-linux-gnu.so
+                python/charset_normalizer/md__mypyc.cpython-312-aarch64-linux-gnu.so
+
+而挂这个 Layer 的 6 个 ETL 全部是 x86_64
+```
+
+各函数架构实测：
+
+| 函数 | 架构 |
+|---|---|
+| 7 个 ETL（aws / cfn / deepflow / trigger / xray / appsignals / agentcore） | `x86_64` |
+| `gp-window-flush` | `arm64` |
+| 构建机 | `aarch64` |
+
+## 为什么它一直没有信号
+
+PyYAML 与 charset_normalizer 对架构不匹配的扩展都写了回退：
+
+```python
+try:
+    from .cyaml import *          # 或 md.so
+    __with_libyaml__ = True
+except ImportError:
+    __with_libyaml__ = False      # 纯 Python 实现
+```
+
+于是 **import 成功、功能正常、只是慢**。没有日志、没有指标、没有告警。
+这是一次静默降级，不是故障 —— 要靠量性能才可能发现，而没人在量。
+
+**严厉程度只取决于库有没有写回退。** `rca_window_flush/build.sh` 的注释
+点明了这一点：`pydantic-core` 没有回退，所以那边会直接
+`ImportError` 挂掉。同一个病，一边是性能损失，一边是冷启动失败。
+
+## 这条才是真正的教训：正确做法早就存在
+
+`infra/lambda/rca_window_flush/build.sh` **从一开始就做对了**：
+
+```bash
+python3.11 -m pip install requests pyyaml strands-agents \
+    --platform "${LAMBDA_ARCH:-manylinux2014_aarch64}" \
+    --python-version "${LAMBDA_PY:-3.12}" \
+    --only-binary=:all: \
+    -t "$DEST_DIR" -q
+```
+
+注释也写得比我后来写的更准：
+
+> · 平台定向 aarch64 + py3.12：与 Lambda 运行时一致，
+>   否则 pydantic-core / _yaml 这类二进制扩展在运行时 ImportError。
+
+所以这不是「没人知道」的问题。Layer 的依赖是手工 `pip install` 装的，
+手工操作的人没去看那个脚本；而 **2026-10-05 我补写 `shared/build.sh` 时
+同样没去看，把同一个缺陷又写了一遍** —— 只写了 `--platform`，
+还漏了 `--python-version`。
+
+**一个正确做法只存在于一个文件里时，它等于不存在。**
+
+这与本文前两例的「手工白名单」是同一类病的两面：前者是清单漏项，
+后者是做法不传播。两者的修法也相同 —— 把它变成一道判据，而不是
+一份需要有人记得的知识。
+
+## 处置
+
+- `infra/lambda/shared/build.sh` 与 `infra/lambda/etl_appsignals/build.sh`
+  都固定 `--platform manylinux2014_x86_64` + `--python-version 3.12`
+  + `--only-binary=:all:`（最后一项是必须的：没有它 pip 会在找不到目标
+  wheel 时退回源码编译，编出构建机架构的产物，静默回到原问题）
+- 修 CDK 里那段注释。它原来说这个 Layer「无编译产物，因此架构无关」——
+  **那是 2026-10-05 我写错的**，实盘有 2 个架构特定 `.so`。
+  双架构声明在功能上仍成立（靠回退），但理由不是「无编译产物」，
+  而是「不匹配的那一侧会降级」，这两件事对下一个读者的意义完全不同。
+- 门禁 `test_128` 增 4 条：本仓每个装依赖的构建脚本都必须固定
+  `--platform` 与 `--python-version`、必须带 `--only-binary`、
+  且必须写下固定的理由 —— 最后一条是因为删掉 `--platform` 之后
+  一切照常工作，不写「为什么」的话下一个人会当它多余而删掉。
+
+验证：两个脚本重跑后产物是 `cpython-312-x86_64`，
+且 `etl_appsignals` 的产物与线上包「线上有而产物没有：无」。
+
+## 遗留
+
+线上 Layer 21 里那两个 `.so` **仍是 aarch64**。没有立刻重建 Layer，
+因为这是性能降级而非故障，而重建要再动一次 6 个函数的 Layer 引用。
+下一次 `cdk deploy NeptuneEtlStack` 会自然带上架构正确的版本。
