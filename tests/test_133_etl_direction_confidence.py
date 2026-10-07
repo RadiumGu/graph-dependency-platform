@@ -134,15 +134,27 @@ def test_t133_06_parses_rows_without_direction_columns(mod):
 
 
 def test_t133_07_direction_semantics_documented(src: str):
-    """必须写明 255 的含义与为何 min/ratio 两个值都要。
+    """必须写明 255 的含义、为何两个属性都要、以及为什么这件事重要。
 
     这条守的是「注释与实盘一致」：一个 0–255 的裸数字，下游读不出
     255 是最好还是最差，也读不出为什么有两个属性。
+
+    粒度刻意是**文件级**而不是「首次出现位置附近」：
+    `direction_score` 在本文件出现在三处（取数的 SQL、解析、Gremlin 写入），
+    理由自然写在取数处，而首次出现的是写入处 —— 用「首次出现 ±N 字符」
+    的窗口去找理由,只会按代码顺序的偶然性决定测试成败。
+    （这一版就是这么翻过一次车的。）
     """
-    assert '255' in src and 'direction_score' in src, "没有说明 255 的含义"
-    seg_start = src.find('direction_score')
-    seg = src[max(0, seg_start - 2000): seg_start + 2000]
-    assert 'DR' in seg or '拓扑排序' in seg, (
-        "没有说明为什么方向置信度重要（方向反了比边缺失更危险，"
-        "会把 DR 恢复顺序排错）。"
+    assert '255' in src, "没有说明 255 的含义"
+    # 为什么重要：方向反了会把 DR 恢复顺序排错
+    assert ('DR' in src and '拓扑排序' in src), (
+        "没有说明为什么方向置信度重要 —— 方向反了比边缺失更危险，"
+        "会带着确信把 DR 恢复顺序排错。"
     )
+    # 为什么两个属性：min 与 low_ratio 各自回答什么
+    assert '双峰' in src or 'avg' in src, (
+        "没有说明为什么要两个属性。单看 min 分不清「混了 1 条噪音」与"
+        "「一半证据说方向相反」，而双峰分布下 avg 也分不出来。"
+    )
+    # 只记录不裁决这个取向
+    assert '只记录' in src, "没有写明「只记录不裁决」这个取向"

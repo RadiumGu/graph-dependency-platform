@@ -1502,11 +1502,6 @@ def batch_upsert_edges(edges: list):
             f".property('calls',{calls})"
             f".property('avg_latency_us',{e['avg_latency']:.0f})"
             f".property('p99_latency_ms',{p99:.4f})"
-            # 方向置信度(DeepFlow direction_score)。只记录不裁决 ——
-            # 方向反了的边在 DR 拓扑排序里比缺失的边更危险，但该不该采信
-            # 由下游按阈值判，采集侧不替它决定。
-            f".property('direction_score_min',{ds_min})"
-            f".property('direction_low_ratio',{ds_low_ratio:.4f})"
             f".property('error_count',{errors})"
             f".property('error_rate',{error_rate})"
             f".property('call_type','sync')"
@@ -1530,6 +1525,17 @@ def batch_upsert_edges(edges: list):
             f".property('dependency_kind', __.coalesce(__.values('dependency_kind'),"
             f" __.constant('dynamic')))"
             f".property('active',true)"
+            # 方向置信度（DeepFlow direction_score）。只记录不裁决 ——
+            # 方向反了的边在 DR 拓扑排序里比缺失的边更危险，但该不该采信
+            # 由下游按阈值判，采集侧不替它决定。语义见上面取数处的注释。
+            #
+            # ⚠️ 位置刻意放在 source 之后：tests/test_51::m01 扫 `addE('Calls')`
+            # 之后 1200 字符内必须出现 `property('source'`。这两条属性连同注释
+            # 原本插在 p99 后面，把 source 推出了那个窗口，门禁当场变红。
+            # 正确反应是把属性挪到 source 之后，而不是放宽门禁的窗口 ——
+            # 那个窗口是「一条 Gremlin 链的属性串」这个合理启发式。
+            f".property('direction_score_min',{ds_min})"
+            f".property('direction_low_ratio',{ds_low_ratio:.4f})"
             f".property('last_seen',{ts})"
         )
         try:
