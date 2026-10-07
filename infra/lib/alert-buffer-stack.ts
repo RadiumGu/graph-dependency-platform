@@ -163,7 +163,11 @@ export class AlertBufferStack extends cdk.Stack {
       // 而资产里的 .so 是 aarch64 编译产物，架构不符会静默退化成纯 Python 回退实现。
       architecture: lambda.Architecture.ARM_64,
       handler: 'window_flush_handler.window_flush_handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/rca_window_flush')),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/rca_window_flush'), {
+        // fromAsset 默认**不**排除 __pycache__，而 pytest 会在这里生成 .pyc。
+        // 不排的后果与门禁理由见 tests/test_136（PR #62 只修了 Layer，漏了函数资产）。
+        exclude: ['**/__pycache__/**', '**/*.pyc'],
+      }),
       // ⚠️ 2026-09-20 从 60s 提到 300s —— 实测依据而非估算。
       //
       // 线上切到 strands（Layer 2 Prober 走 ReAct 编排）后的一次真实执行：
