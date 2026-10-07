@@ -1,0 +1,113 @@
+# FIS 实验：Strands agent 工具结果被污染（WaggleAIOrchestrator）
+#
+# 取用 aws-samples/fis-template-library 的 `agentcore-strands-agent-faults`
+# 模板（2026-10-07，P4）。与同目录的 `-tool-cancel-` 实验配对：
+# 那个是 **pre-hook**（取消调用，工具根本不执行），这个是 **post-hook**
+# （工具正常执行，但结果在回到 agent 之前被污染）。
+#
+# ─── 为什么污染比取消更危险 ────────────────────────────────────────────────
+#
+# 取消工具调用时，agent 收到的是一个**明确的错误** —— 它有机会识别出
+# 「我拿不到这个结果」。
+#
+# 而结果被**污染**（截断字段、移除字段、篡改值）时，agent 收到的是一个
+# **结构上合法、内容上错误**的结果。它没有任何信号提示该结果不可信，
+# 于是极可能带着完全的确信给出错误答案。
+#
+# **这在成功率和延迟上一个字都看不出来。** 实验会全绿，agent 会很快地
+# 给出一个错的答案。这正是本仓反复追的那类缺陷在 agent 层最坏的形态。
+#
+# 这也意味着：**本实验的判定不能只靠指标。** success_rate / latency_p99
+# 对「答案是错的」完全不敏感。要真正判定它，需要业务 probe
+# （chaos/code/runner/business_probes.py 里 probe_waggle 那一类）去校验
+# 答案内容。当前 steady_state 的三个时机只能抓住「附带损害」
+# （未被注入的调用是否也受影响、是否超时失控），抓不住「答案错了」。
+# 这一条**如实记在这里，不假装覆盖到了**。
+#
+# ─── 工具名取自依赖图 ──────────────────────────────────────────────────────
+#
+# 2026-10-07 实测 g.E().hasLabel('InvokesTool')：
+#   WaggleAIOrchestrator -> nutrition_advisor
+#   WaggleAIOrchestrator -> concierge_chat
+#   WaggleAIOrchestrator -> adoption
+#   WaggleAIOrchestrator -> food_ordering
+#
+# 选 Orchestrator 是因为它是**唯一的多工具扇出点**（4 个工具），
+# 污染其中一个的结果最能检验它的取舍逻辑。
+# 上游模板默认的 `get_move` / `get_pokemon` 在我们这里一个都不存在 ——
+# 照搬会得到绿色的零注入实验（见 fault_catalog 里该类型的陷阱说明）。
+#
+# ─── 为什么 enabled: false ─────────────────────────────────────────────────
+#
+# 同 `-tool-cancel-` 实验：SSM 文档、三个 IAM 角色、
+# agent 构建里的 `strands_agentcore_chaos.py` 三件前置条件均未就绪。
+# 跑它只会静默零注入。
+
+name: fis-agentcore-tool-corrupt-orchestrator
+description: "污染 WaggleAIOrchestrator 的工具结果，验证它不会带着确信给出错误答案"
+backend: fis
+enabled: false        # 前置条件未就绪，见文件头
+
+target:
+  service: WaggleAIOrchestrator
+  namespace: default
+  tier: Tier0
+
+fault:
+  type: fis_agentcore_tool_chaos
+  mode: all
+  value: "30"
+  duration: "15m"
+  extra_params:
+    runtime_id: "WaggleAIOrchestrator"
+    # 只污染一个工具 —— 要看的是扇出点的取舍，不是全面瘫痪
+    tool_names: "nutrition_advisor"
+    effect_type: "truncate_fields"   # post-hook：工具执行了，结果被截断
+    max_length: 200
+    fault_rate: 0.3
+    ttl_seconds: 10
+    ssm_document_arn: "arn:aws:ssm:ap-northeast-1:926093770964:document/ChaosExperiment"
+    automation_assume_role: "arn:aws:iam::926093770964:role/ChaosExperiment-SSM-Automation-Role"
+
+steady_state:
+  before:
+    - metric: success_rate
+      threshold: ">= 99%"
+      window: "1m"
+
+  # 注入期间（P3 新能力）。
+  #
+  # ⚠️ 诚实标注这层的边界：污染型故障下 success_rate 很可能**一直是 100%**
+  # —— agent 收到被截断的结果后照样会返回一个答案，只是答案错了。
+  # 所以这里的 during 检查抓的是**附带损害**（未被注入的调用是否也受影响、
+  # 延迟是否失控），**不是**「答案是否正确」。
+  # 后者需要业务 probe 校验内容，当前不在本实验的判定范围内。
+  during:
+    - metric: success_rate
+      threshold: ">= 95%"            # 污染不该导致调用失败，失败即附带损害
+      window: "1m"
+    - metric: latency_p99
+      threshold: "< 15000ms"         # 截断可能让 agent 反复追问/重试
+      window: "1m"
+
+  after:
+    - metric: success_rate
+      threshold: ">= 99%"
+      window: "2m"
+
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 40%"
+    window: "60s"
+    action: abort
+    target: injection
+
+rca:
+  enabled: false
+
+graph_feedback:
+  enabled: false                     # 前置条件就绪前不写证据，避免落假数据
+
+options:
+  max_duration: "25m"
+  save_to_bedrock_kb: false

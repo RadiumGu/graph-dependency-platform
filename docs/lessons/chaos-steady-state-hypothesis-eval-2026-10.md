@@ -5,6 +5,60 @@
 
 ---
 
+## ⚠️ 实施后修正（2026-10-07，P3 落地时）
+
+落地时先读了本仓现状，结论要往回收三处。**本报告写于读代码之前，
+对「本仓缺什么」估计过头了。**
+
+### 修正 1：稳态判定不是缺口，缺的只有「期间」这一个时机
+
+`chaos/code/runner/experiment.py` 早就有 `SteadyStateCheck`，并且：
+
+| 时机 | 本仓现状 | 对应 Chaos Toolkit |
+|---|---|---|
+| 注入前 | `steady_state_before` → 不满足抛 `PreflightFailure`，实验不跑 | before-method **闸门**，语义一致 |
+| 注入后 | `steady_state_after` → 逐项记 passed/failed | after-method **偏差检测**，语义一致 |
+| 注入期间 | **缺** | `continuously` / `during-method-only` |
+
+所以真实缺口只有**一个**：注入期间不求值稳态。
+这个缺口确实值得补 —— **只在首尾看两眼，会漏掉故障窗口内的瞬时违反**；
+一次在故障结束前自行恢复的违反，现状是 before 通过、after 通过、
+判「无弱点」，而系统其实失稳过。已落地为 `steady_state_during`。
+
+### 修正 2：单边比较符本仓早就有，不需要从 Litmus 借
+
+本报告第五节说「CT 没有一等单边比较符，这是唯一值得从 Litmus 借鉴的东西」。
+实测：`experiment.py:72` 的 `parse_threshold()` **已支持
+`>=` `>` `<=` `<` `==` `!=`**，写法就是 `">= 99%"` / `"< 5000ms"`。
+这一借鉴**不必要**。
+
+### 修正 3：本仓的熔断层比 FIS 原生更强，报告低估了
+
+本报告区分了「FIS `stopConditions` 是熔断、不是稳态判定」—— 这点成立。
+但本仓的 `StopCondition` 还多一个 **`target`** 概念
+（`injection` / `any_observer` / `observer:<svc>`），用来区分
+「注入目标自己必然退化」与「附带损害（调用方崩了）」。
+它来自 2026-08-31 的一次真实事故：基于被注入方的护栏必然先触发，
+`_verify_edges` 永远跑不到，实验以 ERROR 收场、零判定。
+这个层次 FIS 和 Chaos Toolkit 都没有。
+
+### 修正 4：`chaoslib` 在本仓的测试环境装不了
+
+`chaostoolkit-lib` 1.45.x **要求 Python >= 3.12**。
+Lambda 跑 3.12 没问题，但本仓 pytest 约定用 **`python3.11`**，
+在 3.11 上最高只能装到 **1.44.0（2024-08-25）—— 正是沉寂期那个版本**。
+
+所以「采用 `chaoslib` 库」这条建议实际不可行。**最终做法是只采用
+`steady-state-hypothesis` 的概念模型，自己实现求值**，不引入任何
+chaostoolkit 包。这与报告原本的判断方向一致（probe 自写、不依赖
+chaosaws），只是连 `chaoslib` 也一并不要了。
+
+需要说明的是:**这不削弱「采用开放规范」这个理由** ——
+规范本身（before/during/after 三个时机 + tolerance 语义）仍然是我们
+对齐的对象，只是实现在我们这边。
+
+---
+
 ## 零、先纠正一处调研冲突
 
 两路调研在一点上给出了相反结论,这里按证据强度裁决:

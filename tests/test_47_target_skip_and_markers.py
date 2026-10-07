@@ -137,11 +137,15 @@ def test_t305b_01_matrix_comes_from_catalog_not_hardcoded(inj):
     m = inj.build_matrix()
     assert set(m) == {'chaosmesh', 'fis'}
     assert m['chaosmesh']['actions'] == 19
-    # 36 = 可注入动作数，**不是**目录条目总数（37，见 test_41 的 f04）。
+    # 37 = 可注入动作数，**不是**目录条目总数（38，见 test_41 的 f04）。
     # 差的那一条是 fis_wait（category: orchestration）—— 它不作用于任何资源，
     # build_matrix 刻意把 orchestration 滤掉：否则它的 requires 为空会命中
     # 「requires 空 ⇒ Pod 语义」那条推断，让一个空动作充当「FIS 能打到 Pod」的证据。
-    assert m['fis']['actions'] == 36
+    #
+    # 2026-10-07：36 → 37，加入 fis_agentcore_tool_chaos（P4）。
+    # 它的 requires 非空（runtime_id / tool_names / ssm_document_arn /
+    # automation_assume_role），所以不会命中上面那条 Pod 语义推断。
+    assert m['fis']['actions'] == 37
 
 
 def test_t305b_01b_orchestration_actions_excluded_from_matrix(inj):

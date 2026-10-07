@@ -429,6 +429,41 @@ class ExperimentRunner:
                 f"p99={snap.latency_p99_ms:.0f}ms total={snap.total_requests}"
             )
 
+            # ── 注入期间的稳态假设求值（P3）──────────────────────────────
+            # 复用上面刚采的 snap，不额外打指标源。
+            #
+            # 与下面 Stop Conditions 的分工：那个是**熔断**（出事就停），
+            # 这个是**判定**（期间是否仍健康）——触发只记录，绝不中断实验。
+            # 合并两者会毁掉边验证：拿稳态阈值去 abort，实验几乎必然在
+            # Phase 5 之前就被掐掉（2026-08-31 的事故就是这个形状）。
+            if exp.steady_state_during:
+                # ⚠️ 必须先看 snap.ok。`metrics.collect()` 在 ClickHouse 异常时
+                # fallback 成 success_rate=100.0 / total_requests=0，所以在无效
+                # 样本上求值会得到**假通过** —— 在压根没拿到的数据上宣告健康。
+                # 2026-08-31 的事故就是这个 fallback 把一条边误判成 confirmed。
+                if not snap.ok:
+                    result.steady_state_during_unavailable += 1
+                    logger.warning(
+                        f"  ⚠️ T+{elapsed:.0f}s 指标采集失败，本采样点不参与稳态判定"
+                        f"（不是「指标为 0」，也不是「健康」）"
+                    )
+                else:
+                    result.steady_state_during_samples += 1
+                    for check in exp.steady_state_during:
+                        if not check.is_satisfied(snap):
+                            v = {
+                                't_plus': int(elapsed),
+                                'metric': check.metric,
+                                'threshold': check.threshold,
+                                'value': snap.get(check.metric),
+                                'desc': check.describe(snap),
+                            }
+                            result.steady_state_during_violations.append(v)
+                            logger.warning(
+                                f"  ⚠️ T+{elapsed:.0f}s 期间稳态违反: {check.describe(snap)}"
+                                f"（只记录，不中断 —— 中断是 stop_condition 的职责）"
+                            )
+
             # Stop Conditions 检查（T-214b：按护栏对象分别求值）
             for cond, subject, subj_snap in self._stop_condition_subjects(exp, result, snap):
                 if cond.is_triggered(subj_snap):
