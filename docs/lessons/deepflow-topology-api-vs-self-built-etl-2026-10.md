@@ -67,6 +67,26 @@
 
 虽然替代不成立，但对照之下发现我们**没用上 DeepFlow 已经算好的东西**。
 
+> ### ⚠️ 2026-10-07 实测修正：三项里只有一项成立
+>
+> 本节最初基于子代理从 DeepFlow **源码与 metric 描述文件**得出的字段清单。
+> 实施 P2 时直接查了我们线上的 ClickHouse（`11.0.2.30:8123` 的 `system.columns`），
+> 结果推翻了其中两项 —— **换过去会倒退，不是改进**。
+>
+> 根因：描述文件（`db_descriptions/.../application_map.en`）描述的是
+> **querier 层暴露的指标与 tag**，不是 ClickHouse 的原始列。
+> 我们的 ETL 直连 ClickHouse，拿不到 querier 做的那层加工。
+>
+> | 原建议 | 实测 | 裁决 |
+> |---|---|---|
+> | 改用 `application_map` 预聚合边表 | 该表只有 `rrt_sum` / `rrt_count` / `rrt_max`，**没有任何百分位**。换过去会丢掉现在写在 `Calls` 边上的 `p99_latency_ms`；而原本的收益（省聚合成本）我们并不需要 —— 整轮 ETL 只跑 6.4 秒 | **不做。** 用 P99 去换一个我们并不缺的成本节省，是坏交易 |
+> | 改用 `auto_service_0/_1` 做身份 | **这两个不是 ClickHouse 列。** 实际只有 `auto_service_id_0/_1`（UInt32 数字 ID）与 `auto_service_type_0/_1` —— `auto_service` 是 querier 的虚拟 tag。而我们现有的 `build_ip_service_map` 走 K8s API，同时还产出 `ecr_dep_map` 与 `restart_map` | **不做。** 换成数字 ID + `flow_tag` 反查，会同时丢掉 namespace、ECR 依赖、重启计数 |
+> | 引入 `direction_score` | ✅ **`flow_log.l7_flow_log` 里就有**，零损失可取 | **已落地** |
+>
+> **教训:字段清单必须对着实盘的 `system.columns` 核,不能只看文档或描述文件**
+> —— 同一个名字在 querier 层和存储层含义不同。下面的改进 1 / 改进 2 两节
+> 保留原文作为推导记录,但结论以本框为准。
+
 ### 改进 1：我们在自己聚合原始流日志，而 DeepFlow 已有预聚合的边表
 
 现状（第 1849-1855 行）：查 `flow_log.l7_flow_log`，自己做 `count()`、`avg(response_duration)`、`quantile(0.99)(response_duration)`。
@@ -97,6 +117,37 @@ DeepFlow 的 querier 提供 `auto_service_0` / `auto_service_1`（服务级聚�
 本仓的第一条设计原则就是证据要分级（`edge_verification` 的六档状态：`untested` / `confirmed` / `refuted` / `inconclusive` / `modeling_artifact` / `bootstrap_only`）。一个现成的、来自采集层的方向置信度，正好能喂给这套体系 —— 比「观测到即写入」粗暴得多的做法好。
 
 **实测：我们代码里 `direction_score` 出现 0 次。**
+
+#### ✅ 已落地（2026-10-07，P2）
+
+实测确认它在 `flow_log.l7_flow_log` 里**直接可取**，不必换表。
+
+**为什么这一项值得单独做:在一张喂 DR 拓扑排序的依赖图里,方向搞反比边缺失更糟。**
+边缺了是漏排;方向反了是**带着确信把恢复顺序排错**。
+
+线上实测（近 10 分钟，与主查询同样的分组粒度）：
+
+| 方向置信度 | 边数 |
+|---|---|
+| 255（必然正确） | 91 |
+| 128–254（较确定） | 22 |
+| **< 128（可疑）** | **9** |
+| 合计 | 122 |
+
+**约 7.4% 的依赖边方向不可信，而此前我们对此一无所知。**
+
+落地方式（`infra/lambda/etl_deepflow/neptune_etl_deepflow.py`）：
+
+- 写**两个**属性而不是一个：`direction_score_min`（保守口径，组里最弱的证据说话）
+  与 `direction_low_ratio`（低置信记录占比）。单看 min 分不清
+  「1000 条里混了 1 条噪音」和「一半证据说方向相反」，
+  而这两种情况在双峰分布下 `avg` 也分不出来。
+- 缺省值是 **`-1` 而不是 `255`** —— 「没取到」必须与「方向必然正确」可区分，
+  默认成 255 等于伪造确信。
+- **只记录，不过滤**：不因为置信度低就丢掉边。丢边会损失真实依赖，
+  而本仓的原则是给出证据、让下游判定。
+- **不写 `verify_*`**：那组属性的 `authority` 是 `['chaos-runner']`，采集侧无权写。
+  这也是为什么新开了两个普通边属性而不是复用证据分级那套。
 
 ---
 

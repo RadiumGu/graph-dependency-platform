@@ -1475,6 +1475,10 @@ def batch_upsert_edges(edges: list):
         errors = e['errors']
         error_rate = round(errors / calls, 4) if calls > 0 else 0.0
         p99 = float(e.get('p99_latency_ms', -1))
+        # DeepFlow 的方向置信度。-1 = 本轮没取到，必须与 255(方向必然正确)
+        # 可区分 —— 缺省成 255 等于伪造确信。
+        ds_min = int(e.get('direction_score_min', -1))
+        ds_low_ratio = float(e.get('direction_low_ratio', -1.0))
         # 门禁：Calls 两端都是 Microservice，两端已知 → assert_edge_type 走 pairs
         # 强校验（只传 label 会退化成平铺白名单的笛卡尔积）。
         assert_edge_type('Calls', 'Microservice', 'Microservice')
@@ -1498,6 +1502,11 @@ def batch_upsert_edges(edges: list):
             f".property('calls',{calls})"
             f".property('avg_latency_us',{e['avg_latency']:.0f})"
             f".property('p99_latency_ms',{p99:.4f})"
+            # 方向置信度(DeepFlow direction_score)。只记录不裁决 ——
+            # 方向反了的边在 DR 拓扑排序里比缺失的边更危险，但该不该采信
+            # 由下游按阈值判，采集侧不替它决定。
+            f".property('direction_score_min',{ds_min})"
+            f".property('direction_low_ratio',{ds_low_ratio:.4f})"
             f".property('error_count',{errors})"
             f".property('error_rate',{error_rate})"
             f".property('call_type','sync')"
@@ -1945,12 +1954,33 @@ def run_etl():
     # 2026-10-07：原来这里是 `ORDER BY calls DESC LIMIT 100`，第 101 条边起
     # 无声丢掉。改走 ch_query_bounded —— 上限提到 CH_MAX_ROWS 且超限抛异常。
     # ORDER BY 保留只为让日志里靠前的是高频边，不再承担「截断」的职责。
+    # 2026-10-07：补 direction_score —— DeepFlow 自己给的「client→server 这个
+    # 方向判定有多可信」(0–255，255 = 方向必然正确)。
+    #
+    # 为什么值得专门取：在一张喂 DR 拓扑排序的依赖图里，**方向搞反比边缺失更糟**
+    # —— 边缺了是漏排，方向反了是带着确信把恢复顺序排错。
+    # 实测(2026-10-07，近 10 分钟、与本查询同样的分组粒度)：122 条边里
+    # 91 条 direction_score=255、22 条在 128–254、**9 条 < 128**。
+    # 也就是约 7.4% 的依赖边方向不可信，而此前我们对此一无所知。
+    #
+    # 取两个值而不是一个：
+    #   · min —— 保守口径。组里最弱的那条证据说话，与本仓
+    #     「宁可失败得吵」的取向一致。下游(DR / chaos)看这个做门槛。
+    #   · low_ratio —— 低置信记录的占比。单看 min 分不清「1000 条里混了 1 条噪音」
+    #     和「一半证据说方向相反」，这两种情况在双峰分布下 avg 也分不出来。
+    #
+    # 刻意**只记录、不过滤**：不因为 direction_score 低就丢掉边。
+    # 丢边会损失真实依赖，而本仓的原则是给出证据、让下游判定，
+    # 不在采集侧替下游做裁决(同理，这里也不能写 verify_* ——
+    # 那组属性的 authority 是 ['chaos-runner'])。
     sql = f"""
 SELECT IPv4NumToString(ip4_0) as src_ip, IPv4NumToString(ip4_1) as dst_ip,
     server_port, l7_protocol_str, count() as calls,
     avg(response_duration) as avg_latency_us,
     countIf(response_status = 3) as error_count,
-    quantile(0.99)(response_duration)/1000 AS p99_latency_ms
+    quantile(0.99)(response_duration)/1000 AS p99_latency_ms,
+    min(direction_score) AS direction_score_min,
+    countIf(direction_score < 128) / count() AS direction_low_ratio
 FROM flow_log.l7_flow_log
 WHERE ip4_0 != 0 AND ip4_1 != 0
     AND toUnixTimestamp(time) > toUnixTimestamp(now()) - {INTERVAL_MIN}*60
@@ -1982,6 +2012,16 @@ ORDER BY calls DESC
             continue
         src_ip, dst_ip, port, protocol, calls_s, avg_lat_s, errors_s = row[:7]
         p99_ms = float(row[7]) if len(row) > 7 else -1.0
+        # direction_score 两列：缺列时给 -1 而不是 255 ——
+        # 「没取到」必须与「方向必然正确」可区分，默认成 255 等于伪造确信。
+        try:
+            ds_min = int(row[8]) if len(row) > 8 and row[8] != '' else -1
+        except ValueError:
+            ds_min = -1
+        try:
+            ds_low_ratio = float(row[9]) if len(row) > 9 and row[9] != '' else -1.0
+        except ValueError:
+            ds_low_ratio = -1.0
         try:
             calls, avg_lat, errors = int(calls_s), float(avg_lat_s), int(errors_s)
         except ValueError:
@@ -2032,6 +2072,7 @@ ORDER BY calls DESC
             'src': src_name, 'dst': dst_name, 'protocol': protocol,
             'port': port, 'calls': calls, 'avg_latency': avg_lat,
             'errors': errors, 'p99_latency_ms': p99_ms,
+            'direction_score_min': ds_min, 'direction_low_ratio': ds_low_ratio,
         })
 
     # 5. 批量写入节点
