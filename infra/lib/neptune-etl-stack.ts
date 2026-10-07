@@ -218,7 +218,12 @@ export class NeptuneEtlStack extends cdk.Stack {
       functionName: 'neptune-etl-from-deepflow',
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'neptune_etl_deepflow.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/etl_deepflow')),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/etl_deepflow'), {
+        // fromAsset 默认**不**排除 __pycache__，而 pytest 会在这里生成 .pyc。
+        // 不排的三层后果与门禁理由见 tests/test_136
+        //（PR #62 只修了 Layer，漏了这 4 个函数资产）。
+        exclude: ['**/__pycache__/**', '**/*.pyc'],
+      }),
       timeout: cdk.Duration.minutes(4),
       memorySize: 256,
       role: lambdaRole,
@@ -254,7 +259,12 @@ export class NeptuneEtlStack extends cdk.Stack {
       functionName: 'neptune-etl-from-aws',
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'handler.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/etl_aws')),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/etl_aws'), {
+        // fromAsset 默认**不**排除 __pycache__，而 pytest 会在这里生成 .pyc。
+        // 不排的三层后果与门禁理由见 tests/test_136
+        //（PR #62 只修了 Layer，漏了这 4 个函数资产）。
+        exclude: ['**/__pycache__/**', '**/*.pyc'],
+      }),
       timeout: cdk.Duration.minutes(5),
       memorySize: 256,
       role: lambdaRole,
@@ -300,7 +310,12 @@ export class NeptuneEtlStack extends cdk.Stack {
       functionName: 'neptune-etl-from-cfn',
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'neptune_etl_cfn.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/etl_cfn')),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/etl_cfn'), {
+        // fromAsset 默认**不**排除 __pycache__，而 pytest 会在这里生成 .pyc。
+        // 不排的三层后果与门禁理由见 tests/test_136
+        //（PR #62 只修了 Layer，漏了这 4 个函数资产）。
+        exclude: ['**/__pycache__/**', '**/*.pyc'],
+      }),
       timeout: cdk.Duration.minutes(2),
       memorySize: 256,
       role: lambdaRole,
@@ -593,7 +608,12 @@ export class NeptuneEtlStack extends cdk.Stack {
       functionName: 'neptune-etl-trigger',
       runtime: lambda.Runtime.PYTHON_3_12,
       handler: 'neptune_etl_trigger.handler',
-      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/etl_trigger')),
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/etl_trigger'), {
+        // fromAsset 默认**不**排除 __pycache__，而 pytest 会在这里生成 .pyc。
+        // 不排的三层后果与门禁理由见 tests/test_136
+        //（PR #62 只修了 Layer，漏了这 4 个函数资产）。
+        exclude: ['**/__pycache__/**', '**/*.pyc'],
+      }),
       timeout: cdk.Duration.seconds(90),       // 30s 延迟 + invoke 开销
       memorySize: 128,
       role: etlTriggerRole,
