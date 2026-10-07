@@ -11,7 +11,7 @@ import logging
 
 import pytest
 
-from conftest import cleanup_incident, now_iso as _now_iso
+from conftest import cleanup_incident, now_iso as _now_iso, executed_cypher_text
 
 logger = logging.getLogger(__name__)
 
@@ -171,7 +171,9 @@ def test_e2e02_nl_query_10_questions(qid, question, expected_keywords, nl_engine
     assert 'cypher' in result, f"{qid}: 缺少 cypher"
     assert 'results' in result, f"{qid}: 缺少 results"
 
-    cypher = result.get('cypher', '')
+    # 关键词要在**执行过的全部** Cypher 上找,不是只看 result['cypher']
+    # （那是最后一条,见 conftest.executed_cyphers 的 docstring）。
+    cypher = executed_cypher_text(result)
 
     # 检查 Cypher 是否包含至少一个预期关键词
     found_keywords = [kw for kw in expected_keywords if kw in cypher]
@@ -192,7 +194,7 @@ def test_e2e02_pass_rate(nl_engine_e2e, neptune_rca):
             if result.get('error'):
                 failed.append((qid, question, f"error: {result['error']}"))
                 continue
-            cypher = result.get('cypher', '')
+            cypher = executed_cypher_text(result)
             if any(kw in cypher for kw in expected_keywords):
                 passed += 1
                 logger.info(f"PASS {qid}: {question}")
