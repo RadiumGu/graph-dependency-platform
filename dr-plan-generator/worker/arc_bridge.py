@@ -73,17 +73,45 @@ class ArcStartResult:
     deactivate_region: str = ""
 
 
+def idem_tag(token: str) -> str:
+    """写进 ARC 执行备注里的幂等标记。重试时按它找回已起的执行。"""
+    return f"[temporal {token}]"
+
+
+def find_existing(items: list[dict[str, Any]], token: str) -> dict[str, Any] | None:
+    tag = idem_tag(token)
+    for it in items:
+        if tag in (it.get("comment") or ""):
+            return it
+    return None
+
+
+def _input_members(client: Any, op: str) -> set[str]:
+    return set(client.meta.service_model.operation_model(op).input_shape.members)
+
+
 @activity.defn(name="arc.start_plan_execution")
 async def arc_start_plan_execution(inp: ArcStartInput) -> ArcStartResult:
-    r = await asyncio.to_thread(
-        _arc().start_plan_execution,
-        planArn=inp.plan_arn,
-        targetRegion=inp.target_region,
-        action=inp.action,
-        mode=inp.mode,
-        comment=inp.comment[:1024],
-        clientToken=inp.client_token[:128],
+    """起一个 ARC 执行，重试安全。
+
+    ⚠️ 2026-10-07 首次真跑时失败：worker 钉的 boto3==1.40.47 的 ARC 模型里**没有
+    clientToken**（本地 1.43 有，所以测试全绿）。幂等因此不能只靠 clientToken：
+      1. 先按备注里的幂等标记找已起的执行 —— 有就直接返回，不再起第二个
+      2. 运行时 SDK 支持 clientToken 才传
+    """
+    c = _arc()
+    existing = await asyncio.to_thread(c.list_plan_executions, planArn=inp.plan_arn)
+    hit = find_existing(existing.get("items", []), inp.client_token)
+    if hit:
+        return ArcStartResult(execution_id=hit["executionId"], plan_version=hit.get("version", ""))
+
+    kw: dict[str, Any] = dict(
+        planArn=inp.plan_arn, targetRegion=inp.target_region, action=inp.action,
+        mode=inp.mode, comment=inp.comment[:1024],
     )
+    if "clientToken" in _input_members(c, "StartPlanExecution"):
+        kw["clientToken"] = inp.client_token[:128]
+    r = await asyncio.to_thread(c.start_plan_execution, **kw)
     return ArcStartResult(
         execution_id=r["executionId"],
         plan_version=r.get("planVersion", ""),
@@ -310,17 +338,25 @@ class ArcPlanExecutionWorkflow:
         # ── 2. 起 ARC 执行（第一步就是人工审批，起执行本身不做任何变更）────
         self._phase = "starting"
         started_at = workflow.now()
-        res: ArcStartResult = await workflow.execute_activity(
-            arc_start_plan_execution,
-            ArcStartInput(
-                plan_arn=args.plan_arn, target_region=args.target_region,
-                action=args.action, mode=args.mode,
-                comment=f"[temporal {workflow.info().workflow_id}] {args.requested_by}: {args.comment}",
-                client_token=workflow.info().workflow_id,
-            ),
-            start_to_close_timeout=timedelta(seconds=60),
-            retry_policy=_START_RETRY,
-        )
+        wid = workflow.info().workflow_id
+        try:
+            res: ArcStartResult = await workflow.execute_activity(
+                arc_start_plan_execution,
+                ArcStartInput(
+                    plan_arn=args.plan_arn, target_region=args.target_region,
+                    action=args.action, mode=args.mode,
+                    # 幂等标记必须在备注**开头**：备注会被截到 1024 字符
+                    comment=f"{idem_tag(wid)} {args.requested_by}: {args.comment}",
+                    client_token=wid,
+                ),
+                start_to_close_timeout=timedelta(seconds=60),
+                retry_policy=_START_RETRY,
+            )
+        except ActivityError as e:
+            # 起不来是一个要人看的结论，不是 workflow 崩溃 —— 记录照样导出
+            self._phase, self._verdict = "done", "arc-start-failed"
+            self._mark("arc-start-failed", error=str(e.cause or e)[:500])
+            return self.arc_state()
         self._execution_id = res.execution_id
         self._mark("arc-started", execution_id=res.execution_id, plan_version=res.plan_version,
                    activate=res.activate_region, deactivate=res.deactivate_region)
