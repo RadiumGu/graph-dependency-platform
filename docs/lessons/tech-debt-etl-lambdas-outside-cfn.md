@@ -65,6 +65,70 @@ name_prefix_map:
 判断这件事已完成的标准：删掉 `name_prefix_map` 后跑
 `scripts/label_node_scope.py`，6 个 ETL 仍全部为 platform。
 
+## ✅ 已完成（2026-10-06）
+
+3 个函数用 `cdk import` 纳入 `NeptuneEtlStack`，`name_prefix_map` 已删除。
+验收：`scripts/label_node_scope.py` 下 8 个 `neptune-etl*` 节点**全部经
+CloudFormation 归属**判为 platform，unknown 维持 101 条（与删除前一致，无回归）。
+
+**栈内资源：Lambda 4 → 7 个，另新增 3 条 EventBridge 规则 + 3 个
+Lambda Permission。`cdk diff` → `There were no differences`。
+这批资源在 AWS 上已不再有任何一件处于 IaC 之外。**
+
+过程中踩到四件事，都比纳入栈本身更值得记：
+
+**① 非 ASCII 的 Description 造成永不收敛的脏 diff，永久阻塞 import。**
+4 个 Lambda 的 `description` 里写的是 `→`，而线上模板存的是字面 `?`。
+部署过 3 次都没收敛。而 `cdk import` 的前置条件是「没有待结算的资源更新」，
+所以它把 import 卡死了。`cdk diff` 默认还把这 4 条折叠成一行
+「Omitted 4 changes because they are likely mangled non-ASCII characters」，
+要 `--strict` 才看得见。已全部改 ASCII `->`。
+
+**② `AWS::Lambda::Permission` 不可导入,所以 3 条 EventBridge 规则只能换条路。**
+CFN 的 IMPORT changeset 只能导入、不能创建,而 `targets.LambdaFunction`
+必然带一个 Permission 资源。CDK 会把它标成 `skipping`,但它仍在模板里,
+于是 CFN 报 `Cannot invoke "String.split(String)" because "pid" is null`。
+
+**走法:删掉 3 条手工规则,让 CDK 新建。** 代价是一段调度空窗,实测 **111 秒**。
+这个代价之所以可接受,不是「忍一下」,而是这几个 ETL 按回溯窗口做幂等 upsert
+(appsignals `lookback=86400s`、xray 24h),漏掉一个 tick 会被下一次运行
+**完整补回**;`AccessesData` 边的 `expires_seconds` 是 21600s,比空窗大两个数量级。
+
+另一条路(先 import 无 target 的规则、再 deploy 补 target 和 Permission)
+步骤更多,且中间有一段「栈认为规则没有 target」的**漂移**窗口 ——
+用漂移窗口换停机窗口,方向是错的。漂移恰恰是这整件事要消灭的东西。
+
+重建后顺带清掉了 3 条**冗余的手工 Permission**:新规则同名同 ARN,
+所以旧的手工条目与 CDK 新建的在 action / principal / SourceArn 上逐项等价,
+留着就是三条无人管的权限授予。删前已逐项核对等价性。
+
+**规则的 description 必须 ASCII。** 线上那 3 条手工规则的 description 里有
+中文和 `→`(手工用 CLI 建的,UTF-8 没问题),但经 CDK→CFN 会被转成 `?`,
+那就等于把坑 ① 在规则上重演一遍。排期理由因此写进了 CDK 的代码注释 ——
+仓库本来也比 AWS 资源描述更适合存这个知识。
+
+**③ import 之后 CFN 记录的 Code/Layer 是模板里的新值，而函数仍跑旧代码。**
+`cdk import` 不修改资源，但把模板属性记成了「当前状态」。于是
+`cdk diff` 干净、`cdk deploy` 也不会推代码 —— 一个静默漂移。
+修法不是造个假改动，而是用 CFN 已记录的那个 S3 对象去
+`update-function-code`，让现实与记录一致。
+
+**④ 我自己把 `botocore-current` 层弄丢了。**
+修复 ③ 时我读的是 `Layers[0].Arn`（单数），`update-function-configuration
+--layers` 只写回一个层，`neptune-etl-from-agentcore` 的
+`botocore-current:1` 被丢掉。症状不是报错，而是 `test_75` 变红：
+Lambda 自带 botocore 不认 `targetConfiguration` 这个 tagged union 的
+`http` 成员，**静默剥掉**它，于是 5 个 AGENTCORE_RUNTIME 网关 target
+被建成 AgentTool 节点。已在 CDK 里显式声明该层（否则下次部署再丢一次），
+并用 `scripts/purge_phantom_gateway_targets.py` 清掉残留。
+
+**附带修好的一个缺口**：删掉前缀规则后 unknown 从 101 升到 103 ——
+多出来的是 `neptune-etl-trigger-queue` 与 `-dlq`。它们**本来就由本栈声明**，
+只是 SQS 的 `PhysicalResourceId` 是队列 URL 而图里的 `name` 是队列名，
+`load_stack_index` 查不中。已让索引额外登记 URL 形态物理 ID 的尾段。
+值得注意的是：那条前缀规则同时遮住了它要解决的问题**和这个无关的问题** ——
+权宜之计的遮盖范围往往比设立它的人以为的更宽。
+
 ## 相关
 
 - 选边器对 `unknown` 的处置是个未决问题：当前是「照选」。

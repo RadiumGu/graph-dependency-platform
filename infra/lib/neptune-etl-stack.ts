@@ -140,6 +140,9 @@ export class NeptuneEtlStack extends cdk.Stack {
     const clickhouseHost = this.node.tryGetContext('clickhouseHost') as string || 'YOUR_CLICKHOUSE_HOST';
     const eksClusterName = this.node.tryGetContext('eksClusterName') as string || 'YOUR_EKS_CLUSTER_NAME';
     const cfnStackNames = this.node.tryGetContext('cfnStackNames') as string || 'YOUR_CFN_STACK1,YOUR_CFN_STACK2';
+    // AgentCore 的 Nutrition 知识库 ID。值取自 2026-10-06 对
+    // neptune-etl-from-agentcore 的实测环境变量 —— cdk import 要求逐项一致。
+    const agentcoreNutritionKbId = this.node.tryGetContext('agentcoreNutritionKbId') as string || 'YOUR_AGENTCORE_KB_ID';
 
     // VPC 私有子网选择（通过已有 neptune-lambda-sg 所在子网，使用 subnetType=PRIVATE_WITH_EGRESS）
     // VPC.fromLookup 会在 synth 时从 context 读取，部署时从实际 VPC 读取私有子网
@@ -234,7 +237,7 @@ export class NeptuneEtlStack extends cdk.Stack {
         EKS_CLUSTER_ARN: `arn:aws:eks:${this.region}:${this.account}:cluster/${eksClusterName}`,
       },
       layers: [neptuneClientLayer],
-      description: 'ETL: ClickHouse L7 flow_log → Neptune Calls/HasMetrics edges + perf metrics (every 5min)',
+      description: 'ETL: ClickHouse L7 flow_log -> Neptune Calls/HasMetrics edges + perf metrics (every 5min)',
     });
 
     new events.Rule(this, 'DeepflowEtlSchedule', {
@@ -265,7 +268,7 @@ export class NeptuneEtlStack extends cdk.Stack {
         EKS_CLUSTER_NAME: eksClusterName,
       },
       layers: [neptuneClientLayer],
-      description: 'ETL: AWS API static topology → Neptune nodes/edges (every 15min)',
+      description: 'ETL: AWS API static topology -> Neptune nodes/edges (every 15min)',
     });
 
     new events.Rule(this, 'AwsEtlSchedule', {
@@ -311,7 +314,7 @@ export class NeptuneEtlStack extends cdk.Stack {
         CFN_STACK_NAMES: cfnStackNames,
       },
       layers: [neptuneClientLayer],
-      description: 'ETL: CFN template declared deps → Neptune DependsOn edges (on deploy + daily)',
+      description: 'ETL: CFN template declared deps -> Neptune DependsOn edges (on deploy + daily)',
     });
 
     // 触发方式1: CFN 部署完成后自动触发（ServicesEks2 或 Applications 更新/创建完成）
@@ -339,6 +342,180 @@ export class NeptuneEtlStack extends cdk.Stack {
       description: 'Trigger neptune-etl-from-cfn daily at 2:00 AM CST (UTC 18:00)',
       schedule: events.Schedule.cron({ hour: '18', minute: '0' }),
       targets: [new targets.LambdaFunction(cfnEtlFn)],
+    });
+
+    // =========================================================
+    // Lambda 5-7: 原先手工创建的 3 个 ETL —— 2026-10-06 纳入本栈
+    // =========================================================
+    //
+    // 这三个函数是 2026-09-06 用 `aws lambda create-function` 手工建的，
+    // 不属于任何 CloudFormation 栈。立卡见
+    // docs/lessons/tech-debt-etl-lambdas-outside-cfn.md。它记录的后果：
+    //
+    //   1. 重建栈会漏掉它们 —— 从 NeptuneEtlStack 重建环境只会得到 4 个 ETL，
+    //      X-Ray 与 Application Signals 两个数据源静默缺失，图上少一批依赖边
+    //      而没有任何东西报错。
+    //   2. 配置漂移无人看管 —— 2026-09-06 实测 4 个函数在 Layer v19 而
+    //      appsignals 还在 v15，因为重指 Layer 的人手工逐个改、漏了一个。
+    //   3. 契约里的 node_scope.name_prefix_map 是为它们开的后门，
+    //      栈归属能判出来后那两条就该退场。
+    //
+    // 下面的属性全部取自 2026-10-06 对线上的实测（cdk import 要求逐项一致，
+    // 不一致会要求替换资源，而替换 Lambda 会让 EventBridge target 失联）：
+    //
+    //   三者共同: python3.12 / x86_64 / neptune-etl-lambda-role /
+    //            subnet-0f801fa79077eb277 + subnet-047a94f9c5ab6302a /
+    //            sg-078f24929b25f09cd
+    //   各自不同: handler、memorySize、timeout、各自的环境变量
+    //
+    // ⚠️ etl_appsignals 的包必须先跑 infra/lambda/etl_appsignals/build.sh ——
+    //    它仓库里只有 1 个被跟踪文件而线上包有 43 条，直接 fromAsset 会发布
+    //    一个缺依赖的空壳。见 docs/lessons/cdk-fromasset-packages-ungitted-deps.md。
+    //    etl_xray（2/2）与 etl_agentcore（1/1）仓库内容与线上一致，可直接打包。
+
+    const xrayEtlFn = new lambda.Function(this, 'NeptuneEtlFromXray', {
+      functionName: 'neptune-etl-from-xray',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'neptune_etl_xray.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/etl_xray'), {
+        exclude: ['**/__pycache__/**', '**/*.pyc'],
+      }),
+      timeout: cdk.Duration.seconds(180),
+      memorySize: 256,
+      role: lambdaRole,
+      vpc,
+      vpcSubnets,
+      securityGroups: [lambdaSg],
+      environment: {
+        NEPTUNE_ENDPOINT: neptuneEndpoint,
+        NEPTUNE_PORT: neptunePort,
+        REGION: awsRegion,
+        XRAY_LOOKBACK_HOURS: '24',
+        XRAY_STALE_SECONDS: '21600',
+      },
+      layers: [neptuneClientLayer],
+      description: 'ETL: X-Ray service graph -> Neptune (hourly)',
+    });
+
+
+    const appsignalsEtlFn = new lambda.Function(this, 'NeptuneEtlFromAppsignals', {
+      functionName: 'neptune-etl-from-appsignals',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'neptune_etl_appsignals.lambda_handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/etl_appsignals'), {
+        // build.sh / requirements.txt 是构建期文件，不该进运行时包。
+        // 2026-10-06 实测：线上包 38 个文件，本地资产目录跑完 build.sh 后是
+        // 40 个 —— 多出的正是这两个。排除后文件集与线上逐项一致。
+        exclude: ['**/__pycache__/**', '**/*.pyc', 'build.sh', 'requirements.txt'],
+      }),
+      timeout: cdk.Duration.seconds(300),
+      memorySize: 512,
+      role: lambdaRole,
+      vpc,
+      vpcSubnets,
+      securityGroups: [lambdaSg],
+      environment: {
+        NEPTUNE_ENDPOINT: neptuneEndpoint,
+        NEPTUNE_PORT: neptunePort,
+        REGION: awsRegion,
+        APPSIGNALS_LOOKBACK_SECONDS: '86400',
+      },
+      layers: [neptuneClientLayer],
+      description: 'ETL: Application Signals service map -> Neptune (every 15 min)',
+    });
+
+
+    // botocore-current：agentcore ETL 专用，不可省。
+    //
+    // 2026-10-06 我亲手踩了这个坑：把 3 个函数纳入栈后修复代码漂移时，我读的是
+    // `Layers[0].Arn`（单数），于是 `update-function-configuration --layers` 只
+    // 写回了一个层，**把 botocore-current:1 丢掉了**。
+    //
+    // 后果不是报错，而是 tests/test_75_no_phantom_gateway_targets 变红：
+    // Lambda 自带的 botocore 版本不认识 bedrock-agentcore 的
+    // targetConfiguration 这个 tagged union 的 `http` 成员，会**静默剥掉**它
+    // （日志里只有一句 "Received a tagged union response with member unknown
+    // to client: http"），于是 5 个 AGENTCORE_RUNTIME 类型的网关 target 被
+    // 建成了 AgentTool 节点而不是 RoutesToRuntime 边。
+    //
+    // 所以它必须写进声明 —— 否则下一次 cdk deploy 会再丢一次，
+    // 而症状是图上多了 5 个幻影节点，不是任何一次部署失败。
+    const botocoreCurrentLayer = lambda.LayerVersion.fromLayerVersionArn(
+      this, 'BotocoreCurrentLayer',
+      `arn:aws:lambda:${this.region}:${this.account}:layer:botocore-current:1`,
+    );
+
+    const agentcoreEtlFn = new lambda.Function(this, 'NeptuneEtlFromAgentcore', {
+      functionName: 'neptune-etl-from-agentcore',
+      runtime: lambda.Runtime.PYTHON_3_12,
+      handler: 'neptune_etl_agentcore.lambda_handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda/etl_agentcore'), {
+        exclude: ['**/__pycache__/**', '**/*.pyc'],
+      }),
+      timeout: cdk.Duration.seconds(300),
+      memorySize: 512,
+      role: lambdaRole,
+      vpc,
+      vpcSubnets,
+      securityGroups: [lambdaSg],
+      environment: {
+        NEPTUNE_ENDPOINT: neptuneEndpoint,
+        NEPTUNE_PORT: neptunePort,
+        REGION: awsRegion,
+        AGENTCORE_NUTRITION_KB_ID: agentcoreNutritionKbId,
+      },
+      layers: [neptuneClientLayer, botocoreCurrentLayer],
+      description: 'ETL: Bedrock AgentCore runtimes/gateways -> Neptune (every 15 min)',
+    });
+
+
+    // =========================================================
+    // 上面 3 个 ETL 的调度规则
+    // =========================================================
+    //
+    // 这 3 条规则与函数本身一样，2026-09-06 是手工 `aws events put-rule`
+    // 建的。2026-10-06 把函数 cdk import 进栈时它们进不来：CFN 的 IMPORT
+    // changeset 只能导入、不能创建，而 targets.LambdaFunction 必然附带一个
+    // AWS::Lambda::Permission —— CDK 把它标成 skipping，但它仍在模板里，
+    // 于是 CFN 报 `Cannot invoke "String.split(String)" because "pid" is null`。
+    //
+    // 所以这里换了条路：**删掉手工规则，让 CDK 新建**。代价是一段约 2-3 分钟
+    // 的调度空窗，而这几个 ETL 是按回溯窗口做幂等 upsert 的
+    // （appsignals lookback=86400s、xray 24h），漏掉一个 tick 会被下一次运行
+    // 完整补回；AccessesData 边的 expires_seconds 是 21600s，比空窗大两个数量级。
+    // 另一条路（先 import 无 target 的规则、再 deploy 补 target）步骤更多，
+    // 且中间有一段「栈认为规则没有 target」的**漂移**窗口 ——
+    // 用漂移窗口换停机窗口，方向是错的。
+    //
+    // description 一律 ASCII。线上那 3 条手工规则的 description 里有中文和 `→`，
+    // 而非 ASCII 在 CDK→CFN 路径上会被转成 `?`，造成永不收敛的脏 diff
+    // （本文件 Lambda description 已为此全部改成 `->`，见上）。
+    // 排期理由因此写在下面的注释里 —— 仓库本来也比 AWS 资源描述更适合存这个。
+
+    // 1 小时一轮：X-Ray 拓扑按部署节奏变化而非按秒，回看窗口本就 24h，
+    // 失效阈值 6h —— 每小时刷新留了 6 次余量。
+    new events.Rule(this, 'XrayEtlSchedule', {
+      ruleName: 'neptune-etl-xray-hourly',
+      description: 'Trigger neptune-etl-from-xray hourly (lookback 24h, edge TTL 6h)',
+      schedule: events.Schedule.rate(cdk.Duration.hours(1)),
+      targets: [new targets.LambdaFunction(xrayEtlFn)],
+    });
+
+    // 15 分钟一次：比 Calls 边的 1800s TTL 勤，
+    // 避免边被 graph_cleanup 误置 active=false。
+    new events.Rule(this, 'AppsignalsEtlSchedule', {
+      ruleName: 'neptune-etl-appsignals-every-15min',
+      description: 'Trigger neptune-etl-from-appsignals every 15 minutes (Calls edge TTL 1800s)',
+      schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
+      targets: [new targets.LambdaFunction(appsignalsEtlFn)],
+    });
+
+    // 15 分钟一次：span 回看 6h = 边 TTL 6h。
+    new events.Rule(this, 'AgentcoreEtlSchedule', {
+      ruleName: 'neptune-etl-agentcore-every-15min',
+      description: 'Trigger neptune-etl-from-agentcore every 15 minutes (span lookback 6h = edge TTL 6h)',
+      schedule: events.Schedule.rate(cdk.Duration.minutes(15)),
+      targets: [new targets.LambdaFunction(agentcoreEtlFn)],
     });
 
     // =========================================================
@@ -426,7 +603,7 @@ export class NeptuneEtlStack extends cdk.Stack {
         TRIGGER_DELAY_SECONDS: '30',
         REGION: awsRegion,
       },
-      description: 'Event-driven trigger: AWS infra change → 30s delay → neptune-etl-from-aws',
+      description: 'Event-driven trigger: AWS infra change -> 30s delay -> neptune-etl-from-aws',
     });
 
     // SQS → Lambda 事件源

@@ -637,7 +637,6 @@ EDGE_VERIFICATION = {   'attrs': [   'verify_status',
 # 靶点选择 / 爆炸半径 / DR 计划只该看 primary_query_scope。
 NODE_SCOPE = {   'attr': 'scope',
     'authority': ['node-type-writer', 'scope-labeler'],
-    'name_prefix_map': {'neptune-etl-from-': 'platform', 'neptune-etl-trigger': 'platform'},
     'namespace_map': {   'amazon-cloudwatch': 'observability',
                          'amazon-guardduty': 'observability',
                          'amazon-network-flow-monitor': 'observability',
