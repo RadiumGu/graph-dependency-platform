@@ -1,0 +1,134 @@
+# FIS 实验：Strands agent 工具调用被取消（WaggleAINutrition）
+#
+# 取用 aws-samples/fis-template-library 的 `agentcore-strands-agent-faults`
+# 模板（2026-10-07，P4），按本仓格式重写，并补上上游模板缺的两样东西。
+#
+# ─── 为什么打这条边界 ────────────────────────────────────────────────────────
+#
+# 库里其它模板都是打 AWS 资源（EC2、SQS、Aurora）。这个打的是
+# **「AI agent 的推理」与「它调用的工具」之间那条边界**。
+#
+# 一个收到失败工具结果的 agent **不会崩**。它可能重试、降级、fail safe，
+# **也可能凭缺失的数据编一个看起来合理但是错的答案**。
+# 后者在成功率和延迟上完全看不出来 —— 这正是本仓反复追的那类缺陷
+# 在 agent 层的形态：系统报告成功，同时悄悄给出错误的结果。
+#
+# ─── 工具名从依赖图取，不是抄模板 ──────────────────────────────────────────
+#
+# ⚠️ 上游模板 README 的警告：`tool_names` 是**精确匹配**的，名字对不上
+# 就什么都不注入，而实验会**「成功」完成**。模板默认值
+# `get_move` / `get_pokemon` 是某个 demo agent 的工具名。
+#
+# 本文件的工具名来自我们自己的依赖图（2026-10-07 实测）：
+#
+#   g.E().hasLabel('InvokesTool')  →  WaggleAINutrition -> retrieve_nutrition_guidance
+#                                     WaggleAINutrition -> get_available_foods
+#
+# 「从依赖图推出该打哪条边」是本平台的差异点 ——
+# 这里恰好把它用在了一个上游模板留下的坑上。
+# tests/test_135 守着这些名字必须在图里存在。
+#
+# ─── 上游模板缺的两样，这里补上 ────────────────────────────────────────────
+#
+# 1. 上游模板写的是 `stopConditions: [{"source": "none"}]` —— **没有熔断**。
+#    README 只要求用户「自备 proper monitoring and stop conditions」。
+#    本文件给了真实的 stop_conditions。
+#
+# 2. 上游模板没有稳态假设判定（FIS 原生也没有 —— 它的 stopConditions
+#    是基于 CloudWatch 告警的**熔断**，不是 pass/fail verdict）。
+#    本文件用了 steady_state.before / during / after 三个时机，
+#    其中 `during` 是 2026-10-07 新加的能力（P3）。
+#
+#    **`during` 对这个实验尤其重要**：agent 编造答案是个**瞬时**行为 ——
+#    被注入的那一次 invocation 失稳，下一次可能就正常了。
+#    只在首尾各看一眼，这种违反会完全漏掉。
+#
+# ─── 为什么 enabled: false ─────────────────────────────────────────────────
+#
+# 三个前置条件尚未就绪（都需要改生产 agent 构建，不在本次范围）：
+#   1. SSM Automation 文档 `ChaosExperiment` 未部署
+#   2. 三个 IAM 角色未建（FIS 角色、SSM Automation 角色、
+#      运行时执行角色加 `ssm:GetParametersByPath` on `/chaos/*`）
+#   3. `strands_agentcore_chaos.py` 未 vendored 进 agent 构建
+#      （需接一行 `plugins=chaos_plugins()`）
+#
+# **在这三件完成之前跑它，会得到一个绿色的、零注入的实验** ——
+# 正是上面那个陷阱。所以显式关掉，而不是留着让人误以为有覆盖。
+
+name: fis-agentcore-tool-cancel-nutrition
+description: "取消 WaggleAINutrition 的工具调用，验证 agent fail safe 而非编造答案"
+backend: fis
+enabled: false        # 前置条件未就绪，见文件头。跑了只会静默零注入。
+
+target:
+  service: WaggleAINutrition
+  namespace: default
+  tier: Tier0
+  # 图谱节点名与注入选择器一致，无需 target_graph_node
+
+fault:
+  type: fis_agentcore_tool_chaos
+  mode: all
+  value: "50"                      # fault_rate 0.5 的百分比表示
+  duration: "15m"
+  extra_params:
+    runtime_id: "WaggleAINutrition"
+    # 精确匹配，取自依赖图的 InvokesTool 边
+    tool_names: "retrieve_nutrition_guidance,get_available_foods"
+    effect_type: "timeout"         # pre-hook：工具根本不执行，agent 收到错误结果
+    fault_rate: 0.5
+    ttl_seconds: 10                # 控制器缓存 SSM 配置的 TTL
+    ssm_document_arn: "arn:aws:ssm:ap-northeast-1:926093770964:document/ChaosExperiment"
+    automation_assume_role: "arn:aws:iam::926093770964:role/ChaosExperiment-SSM-Automation-Role"
+
+steady_state:
+  # 闸门：基线不健康就不注入
+  before:
+    - metric: success_rate
+      threshold: ">= 99%"
+      window: "1m"
+    - metric: latency_p99
+      threshold: "< 8000ms"        # agent 推理本身就慢，阈值比普通微服务宽
+      window: "1m"
+
+  # 注入期间（P3 新能力）。**这个实验最需要它**：
+  # agent 编造答案是瞬时行为 —— 被注入的那次 invocation 失稳，
+  # 下一次可能就正常了，只看首尾会完全漏掉。
+  #
+  # 阈值刻意比 before 宽：fault_rate=0.5 意味着一半 invocation 被注入，
+  # 预期会有可见降级。这里要抓的是**超出预期**的降级。
+  # 与 stop_conditions 分层：这里只记录，中断是熔断的职责。
+  during:
+    - metric: success_rate
+      threshold: ">= 50%"          # 一半被注入，低于一半说明未注入的也受影响
+      window: "1m"
+    - metric: latency_p99
+      threshold: "< 20000ms"       # timeout 效果会拉高延迟，但不该无界
+      window: "1m"
+
+  # 终局：故障移除后必须在 TTL 内回到稳态
+  after:
+    - metric: success_rate
+      threshold: ">= 99%"
+      window: "2m"
+    - metric: latency_p99
+      threshold: "< 8000ms"
+      window: "2m"
+
+# 上游模板写的是 source: none（无熔断）。这里给真实护栏。
+stop_conditions:
+  - metric: success_rate
+    threshold: "< 20%"             # 远低于 during 的 50%，只防注入手段本身失控
+    window: "60s"
+    action: abort
+    target: injection
+
+rca:
+  enabled: false
+
+graph_feedback:
+  enabled: false                   # 前置条件就绪后再开，避免写入零注入的假证据
+
+options:
+  max_duration: "25m"
+  save_to_bedrock_kb: false

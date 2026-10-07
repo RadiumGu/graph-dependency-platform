@@ -31,7 +31,7 @@
                                      │                      │  ┌─────────────────────────┐
                                      │                      │  │ chaos/                  │
                                      │                      │  │ AI 假设生成（图谱驱动）    │
-                                     │                      │=>│ 60 种故障 × 双后端        │
+                                     │                      │=>│ 61 种故障 × 双后端        │
                                      │                      │<=│ 闭环 LearningAgent       │
                                      │                      │  └─────────────────────────┘
                                      │                      │          │
@@ -307,7 +307,7 @@ RCA 报告自动分块 + 向量化（Bedrock Titan v2）+ 写入 S3 Vectors 索�
 | 后端 | 覆盖范围 | 故障类型 |
 |------|---------|---------|
 | **Chaos Mesh** | K8s 层 | 19 种已验证（Pod/网络/HTTP/DNS/IO/CPU/内存/时间/内核） |
-| **AWS FIS** | AWS 托管服务层 | 37 种（Lambda/RDS/EKS Node/EBS/VPC 网络） |
+| **AWS FIS** | AWS 托管服务层 | 38 种（Lambda/RDS/EKS Node/EBS/VPC 网络、Bedrock AgentCore 工具级） |
 
 📖 **详细文档**：[`chaos/code/README.md`](chaos/code/README.md) | [`chaos/README.md`](chaos/README.md)
 

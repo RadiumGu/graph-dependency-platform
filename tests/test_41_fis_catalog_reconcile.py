@@ -218,7 +218,14 @@ def test_f04_declared_counts_match_body(catalog):
     # 改成真 action 后又与 fis_network_disrupt 完全重复。
     # 2026-09-07 加入 fis_wait 后重回 37，但**与那次删除无关** ——
     # 别把这两件事的数字混为一谈。
-    assert len(catalog['fis']) == 37
+    #
+    # 2026-10-07 加入 fis_agentcore_tool_chaos → 38（P4）。
+    # 它是取用 aws-samples/fis-template-library 的
+    # `agentcore-strands-agent-faults` 模板，打的是「AI agent 的推理」与
+    # 「它调用的工具」之间那条边界（取消或污染工具结果），
+    # category: dependencies，是**可注入动作**，所以 test_47 的
+    # 可注入数也同步 36 → 37。
+    assert len(catalog['fis']) == 38
     assert len(catalog['fis_scenarios']) == 4
 
 

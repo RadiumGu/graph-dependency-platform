@@ -31,7 +31,7 @@ Built around [PetSite](https://github.com/aws-samples/one-observability-demo) �
                                      │                      │  ┌─────────────────────────┐
                                      │                      │  │ chaos/                  │
                                      │                      │  │ AI hypothesis (graph)   │
-                                     │                      │=>│ 60 fault types × 2 back │
+                                     │                      │=>│ 61 fault types × 2 back │
                                      │                      │<=│ LearningAgent loop      │
                                      │                      │  └─────────────────────────┘
                                      │                      │          │

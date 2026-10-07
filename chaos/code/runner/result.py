@@ -57,6 +57,31 @@ class ExperimentResult:
     # Phase5 稳态验证结果
     steady_state_after_checks: list = field(default_factory=list)
 
+    # ─── Phase3 注入期间的稳态违反（2026-10-07 加，P3）────────────────────
+    # 每条形如 {'t_plus': 45, 'metric': 'success_rate', 'desc': '...',
+    #           'value': 97.2, 'threshold': '>= 99%'}
+    #
+    # 为什么要单独记而不是塞进 steady_state_after_checks：那是「恢复后是否
+    # 回到稳态」的终局判定，而这里记的是**故障窗口内发生过什么**。
+    # 一次在故障结束前自行恢复的违反，在 after 里完全看不出来 ——
+    # before 通过、after 通过、实验判「无弱点」，而系统其实失稳过。
+    #
+    # 也不与 abort 混用：中断实验是 StopCondition（熔断）的职责，
+    # 这里只记录，不裁决。见 Experiment.steady_state_during 上方注释。
+    steady_state_during_violations: list = field(default_factory=list)
+    # 期间一共采了多少个**有效**样本点（snapshot.ok=True）。
+    # 没有它，「0 条违反」分不清「一直健康」与「压根没采到」——
+    # 后者是本仓反复出现的那类静默不完整。
+    steady_state_during_samples: int = 0
+    # 期间有多少个采样点**没拿到数据**（snapshot.ok=False）。
+    #
+    # 必须单独记而不是跳过了就算：`metrics.collect()` 在 ClickHouse 异常时
+    # fallback 成 `success_rate=100.0 / total_requests=0`，所以在无效样本上
+    # 求值稳态会得到**假通过** —— 在压根没拿到的数据上宣告系统健康。
+    # 2026-08-31 的事故就是这个 fallback 把一条边误判成 confirmed
+    # （见 MetricsSnapshot.ok 上方注释）。
+    steady_state_during_unavailable: int = 0
+
     # ─── 观测方数据（T-210）：key = 观测方 service 名 ───────────────────────
     # 验证边 A -[X]-> B 必须在 B 注入、观测 A。注入目标自己的指标回答的是
     # 「打断 B 之后 B 是否退化」，近乎恒真，不构成任何边的证据。

@@ -337,10 +337,67 @@ chaosmesh:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# AWS FIS 故障类型（37 种）
+# AWS FIS 故障类型（38 种）
 # ─────────────────────────────────────────────────────────────────────────────
 
 fis:
+
+  # ── Bedrock AgentCore / Strands：工具级故障 ─────────────────────────────────
+  #
+  # 2026-10-07 取用 aws-samples/fis-template-library 的
+  # `agentcore-strands-agent-faults` 模板（P4）。
+  #
+  # 它与库里其它模板不是一类：别的都是打 AWS 资源（EC2、SQS、Aurora），
+  # 这个打的是**「AI agent 的推理」与「它调用的工具」之间那条边界**。
+  #
+  # 为什么这条边界值得单独打：一个收到失败或被污染的工具结果的 agent
+  # **不会崩**。它可能重试、降级、fail safe，**也可能凭缺失的数据编一个
+  # 看起来合理但是错的答案**。后者在成功率和延迟上完全看不出来 ——
+  # 这正是本仓反复出现的那类缺陷在 agent 层的形态：
+  # 系统报告成功，同时悄悄给出错误的结果。
+  #
+  # ⚠️ 这个故障类型的最大陷阱（模板 README 自己警告的）：
+  # `tool_names` 是**精确匹配**的。名字对不上就什么都不注入，而实验会
+  # **「成功」完成**。上游模板的默认值 `get_move` / `get_pokemon` 是某个
+  # demo agent 的工具名，照搬跑在我们的 agent 上会得到一个绿色的、
+  # 零注入的实验。
+  #
+  # 本仓对此有解：工具名从**依赖图**取（`g.V().hasLabel('AgentTool')`，
+  # 以及 `InvokesTool` 边给出的 runtime→tool 映射），并由
+  # tests/test_135 守着实验 YAML 里的工具名必须在图里存在。
+  # 「从依赖图推出该打哪条边」正是本平台的差异点 ——
+  # 这里恰好把它用在了一个上游模板留下的坑上。
+  #
+  # 尚未就绪的前置条件（**不在本次改动范围内，需要改生产 agent 构建**）：
+  #   1. SSM Automation 文档 `ChaosExperiment` 部署到账号
+  #   2. 三个 IAM 角色：ChaosExperiment-FIS-Role、
+  #      ChaosExperiment-SSM-Automation-Role、以及运行时执行角色加
+  #      `ssm:GetParametersByPath` on `/chaos/*`
+  #   3. 把 `strands_agentcore_chaos.py` vendored 进 agent 构建并接一行
+  #      `plugins=chaos_plugins()`
+  # 在这三件完成之前，本类型的实验**跑不出任何注入**（会静默成功）。
+  # 所以对应的实验 YAML 一律 `enabled: false`。
+
+  - type: fis_agentcore_tool_chaos
+    backend: fis
+    category: dependencies
+    description: >-
+      对 Bedrock AgentCore 上的 Strands agent 注入**工具级**故障 ——
+      取消工具调用（timeout / network_error / execution_error /
+      validation_error）或污染工具结果（truncate_fields / remove_fields /
+      corrupt_values）。验证 agent 是否 fail safe（承认拿不到可信结果、
+      给出带说明的部分答案、或上报），而不是凭缺失数据编一个看起来合理
+      但是错的答案。经 SSM Parameter Store 按 invocation 开关，无需重新部署。
+    fis_action_id: "aws:ssm:start-automation-execution"
+    default_params:
+      duration: "15m"
+      fault_rate: 0.5            # 单次 invocation 被注入的概率 [0.0, 1.0]
+      effect_type: "timeout"
+      ttl_seconds: 10            # 控制器缓存 SSM 配置的 TTL；开关生效延迟
+    # tool_names 必须显式给，且必须在依赖图里存在 —— 见上方陷阱说明。
+    requires: [runtime_id, tool_names, ssm_document_arn, automation_assume_role]
+    tier: [Tier0, Tier1]
+    recommended_for: [ai-agent, bedrock-agentcore, strands]
 
   # ── Lambda ──────────────────────────────────────────────────────────────────
 

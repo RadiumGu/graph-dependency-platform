@@ -301,6 +301,32 @@ class Experiment:
     steady_state_before: list[SteadyStateCheck]
     steady_state_after: list[SteadyStateCheck]
     stop_conditions: list[StopCondition]
+    # 注入**期间**的稳态假设（2026-10-07 加，P3）。
+    #
+    # 位置必须在 stop_conditions **之后** —— 它带默认值，而 dataclass 不允许
+    # 无默认值字段跟在有默认值字段后面（实测 TypeError:
+    # non-default argument 'stop_conditions' follows default argument）。
+    #
+    # 此前只有 before / after 两个时机，等价于 Chaos Toolkit 的默认策略
+    # （method 前后各求值一次）。缺的是它的 `continuously` 策略。
+    #
+    # 为什么这是真实缺口而不是锦上添花：**只在首尾看两眼，会漏掉整个故障
+    # 窗口内的瞬时违反**。一次违反若在故障结束前自行恢复，现状的结果是
+    # before 通过、after 通过、实验判「无弱点」—— 而系统其实失稳过。
+    # 这正是本仓反复出现的那类缺陷：报告成功，同时悄悄给出不完整的图景。
+    #
+    # ⚠️ 与 stop_conditions 刻意分层，**不要合并**：
+    #   · StopCondition 是**熔断**（guardrail）——「出事了赶紧停，别把生产打崩」，
+    #     阈值定得很低（如 success_rate < 40%），触发即 abort。
+    #   · steady_state_during 是**判定**（verdict）——「系统在故障期间是否仍健康」，
+    #     阈值就是正常的稳态要求（如 success_rate >= 99%），
+    #     **触发只记录，不中断实验**。
+    #
+    # 合并会出两种坏结果：拿熔断阈值当稳态判定 → 判定失去意义；
+    # 拿稳态阈值当熔断 → 实验几乎必然在 Phase 5 之前就被 abort，
+    # 边验证永远跑不到（2026-08-31 的事故正是这个形状，
+    # 见 StopCondition.target 上方注释）。
+    steady_state_during: list[SteadyStateCheck] = field(default_factory=list)
     rca: RcaSpec = field(default_factory=RcaSpec)
     graph_feedback: GraphFeedbackSpec = field(default_factory=GraphFeedbackSpec)
     backend: str = "chaosmesh"        # "chaosmesh" | "fis" | "composite"
@@ -436,6 +462,11 @@ def load_experiment(path: str, duration_override: Optional[str] = None) -> "Expe
         steady_state_before=_parse_checks(ss.get('before', [])),
         steady_state_after=_parse_checks(ss.get('after', [])),
         stop_conditions=_parse_stops(d.get('stop_conditions', [])),
+        # steady_state.during 缺省为空 → 退化成旧行为（只在首尾各判一次）。
+        # 刻意**不**默认继承 before：during 的阈值常常要比 before 宽
+        # （故障期间允许一定降级），默认继承会让存量实验突然开始记一堆
+        # 本来预期之内的违反。
+        steady_state_during=_parse_checks(ss.get('during', [])),
         rca=RcaSpec(
             enabled=rca_d.get('enabled', False),
             trigger_after=rca_d.get('trigger_after', '30s'),
@@ -551,6 +582,11 @@ def _load_composite_experiment(
         steady_state_before=_parse_checks(ss.get('before', [])),
         steady_state_after=_parse_checks(ss.get('after', [])),
         stop_conditions=_parse_stops(d.get('stop_conditions', [])),
+        # steady_state.during 缺省为空 → 退化成旧行为（只在首尾各判一次）。
+        # 刻意**不**默认继承 before：during 的阈值常常要比 before 宽
+        # （故障期间允许一定降级），默认继承会让存量实验突然开始记一堆
+        # 本来预期之内的违反。
+        steady_state_during=_parse_checks(ss.get('during', [])),
         rca=RcaSpec(
             enabled=rca_d.get('enabled', False),
             trigger_after=rca_d.get('trigger_after', '30s'),
