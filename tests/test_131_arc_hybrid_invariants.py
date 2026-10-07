@@ -162,3 +162,33 @@ class TestBridgeDoesNotTrustArcAlone:
         src = BRIDGE.read_text(encoding="utf-8")
         assert "停在原地，不取消 ARC 执行" in src
 
+
+class TestStartIsIdempotentOnTheWorkerSdk:
+    """2026-10-07 首次真跑：worker 钉的 boto3==1.40.47 没有 clientToken，起执行直接失败。
+    本地 SDK 新，测试全绿 —— 幂等不能只靠一个运行时可能不存在的参数。"""
+
+    def test_client_token_only_if_the_runtime_sdk_has_it(self):
+        src = BRIDGE.read_text(encoding="utf-8")
+        assert 'if "clientToken" in _input_members(c, "StartPlanExecution"):' in src
+
+    def test_looks_for_an_existing_execution_first(self):
+        src = BRIDGE.read_text(encoding="utf-8")
+        i = src.index("async def arc_start_plan_execution")
+        seg = src[i: i + 1800]
+        assert seg.index("find_existing(") < seg.index("c.start_plan_execution"), "必须先找再起"
+
+    def test_comment_carries_the_tag_at_the_front(self):
+        assert 'comment=f"{idem_tag(wid)} ' in BRIDGE.read_text(encoding="utf-8")
+
+    def test_find_existing(self):
+        sys.path.insert(0, str(BRIDGE.parent))
+        tag_src = BRIDGE.read_text(encoding="utf-8")
+        ns: dict = {}
+        exec("from typing import Any\n" + tag_src[tag_src.index("def idem_tag"): tag_src.index("def _input_members")], ns)
+        items = [{"executionId": "a", "comment": "[temporal wf-1] x"}, {"executionId": "b", "comment": "[temporal wf-12] y"}]
+        assert ns["find_existing"](items, "wf-1")["executionId"] == "a"
+        assert ns["find_existing"](items, "wf-12")["executionId"] == "b"
+        assert ns["find_existing"](items, "wf-2") is None
+
+    def test_start_failure_is_a_verdict(self):
+        assert '"arc-start-failed"' in BRIDGE.read_text(encoding="utf-8")

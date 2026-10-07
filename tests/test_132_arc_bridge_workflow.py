@@ -71,8 +71,14 @@ def _steps(state: str) -> list[dict[str, Any]]:
     return [{"name": "approve-prepare", "status": "canceled"}]
 
 
+START_FAILS: list[str] = []
+
+
 @activity.defn(name="arc.start_plan_execution")
 async def fake_start(inp: ArcStartInput) -> ArcStartResult:
+    if START_FAILS:
+        from temporalio.exceptions import ApplicationError
+        raise ApplicationError(START_FAILS[0], non_retryable=True)
     STARTS.append(inp)
     return ArcStartResult(execution_id="exec-1", plan_version="v1",
                           activate_region=inp.target_region, deactivate_region="ap-northeast-1")
@@ -112,7 +118,7 @@ def _fake_probe(name: str):
 
 @pytest_asyncio.fixture
 async def env():
-    for x in (STARTS, ARC_STATES, RECORDS, APPROVERS):
+    for x in (STARTS, ARC_STATES, RECORDS, APPROVERS, START_FAILS):
         x.clear()
     VERDICTS.clear()
     e = await WorkflowEnvironment.start_local()
@@ -204,3 +210,70 @@ class TestBridge:
         assert r["verdict"] == "arc-canceled"
         assert r["approvers"][0]["approval"] == "decline"
         assert r["postchecks"] == [], "ARC 没成功就不该跑后置探针"
+
+    async def test_start_failure_is_a_verdict_and_still_exports(self, env):
+        START_FAILS.append('Unknown parameter in input: "clientToken"')
+        ARC_STATES.append("completed")
+        _, h = await _run(env, _inp())
+        r = await h.result()
+        assert r["verdict"] == "arc-start-failed"
+        assert RECORDS and RECORDS[-1]["verdict"] == "arc-start-failed"
+
+
+# ── activity 本身：在「旧 SDK 没有 clientToken」的条件下 ──────────────────
+
+
+class _Op:
+    def __init__(self, members):
+        self.input_shape = type("S", (), {"members": {m: None for m in members}})()
+
+
+class _StubArc:
+    """模拟 worker 上 boto3==1.40.47 的 ARC 客户端：StartPlanExecution 不认 clientToken。"""
+
+    def __init__(self, existing=None, with_token=False):
+        self.existing = existing or []
+        self.calls: list[dict] = []
+        ms = ["planArn", "targetRegion", "action", "mode", "comment", "latestVersion"]
+        if with_token:
+            ms.append("clientToken")
+        model = type("M", (), {"operation_model": lambda _s, op: _Op(ms)})()
+        self.meta = type("Meta", (), {"service_model": model})()
+        self._ms = set(ms)
+
+    def list_plan_executions(self, **kw):
+        return {"items": self.existing}
+
+    def start_plan_execution(self, **kw):
+        bad = set(kw) - self._ms
+        if bad:
+            raise ValueError(f"Unknown parameter in input: {sorted(bad)}")
+        self.calls.append(kw)
+        return {"executionId": "new-1", "planVersion": "v1"}
+
+
+class TestStartActivityOnOldSdk:
+    def _inp(self):
+        return ArcStartInput(plan_arn=PLAN, target_region="ap-northeast-2", action="activate",
+                             mode="graceful", comment="[temporal wf-9] x", client_token="wf-9")
+
+    async def test_old_sdk_does_not_get_client_token(self, monkeypatch):
+        import arc_bridge
+        stub = _StubArc(with_token=False)
+        monkeypatch.setattr(arc_bridge, "_arc", lambda: stub)
+        r = await arc_bridge.arc_start_plan_execution(self._inp())
+        assert r.execution_id == "new-1" and "clientToken" not in stub.calls[0]
+
+    async def test_new_sdk_gets_client_token(self, monkeypatch):
+        import arc_bridge
+        stub = _StubArc(with_token=True)
+        monkeypatch.setattr(arc_bridge, "_arc", lambda: stub)
+        await arc_bridge.arc_start_plan_execution(self._inp())
+        assert stub.calls[0]["clientToken"] == "wf-9"
+
+    async def test_retry_finds_the_existing_execution(self, monkeypatch):
+        import arc_bridge
+        stub = _StubArc(existing=[{"executionId": "old-1", "comment": "[temporal wf-9] x"}])
+        monkeypatch.setattr(arc_bridge, "_arc", lambda: stub)
+        r = await arc_bridge.arc_start_plan_execution(self._inp())
+        assert r.execution_id == "old-1" and stub.calls == [], "重试起了第二个执行"
