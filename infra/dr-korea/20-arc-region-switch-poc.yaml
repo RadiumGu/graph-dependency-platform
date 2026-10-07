@@ -1,0 +1,348 @@
+# ARC Region switch 小验证（2026-10-07）：ARC 执行可逆的准备步骤，Temporal 起执行并核实。
+#
+# ┌──────────── 分工 ────────────────────────────────────────────────────────┐
+# │ Temporal（首尔 worker）  前置探针 → StartPlanExecution → 轮询 → 后置探针   │
+# │ ARC Region switch        人工审批（MFA） → 扩缩首尔节点组（Lambda）        │
+# │ 人                       在 ARC 里批准 —— 必须带 MFA，agent 拿不到          │
+# └──────────────────────────────────────────────────────────────────────────┘
+#
+# 只放**可逆**步骤：首尔节点组扩到 N / 缩回 0。不碰 Aurora，不碰前门，东京不受影响。
+#
+# ⚠️ 不变量（test_131 守着）：
+#   1. 每个工作流的**第一步**都是 ManualApproval。这是 worker 被允许调用
+#      StartPlanExecution 的前提 —— 起一个执行不等于做了任何变更。
+#   2. 审批角色的信任策略要求 aws:MultiFactorAuthPresent。agent 用的长期凭据
+#      没有 MFA，所以它能起执行、看执行，但**批不了**。
+#   3. worker 角色（07）只有 Start/Get/List，没有 Approve/Cancel/Update。
+#
+# 依赖：先在 ap-northeast-1 部署 infra/tokyo/07-arc-region-switch-noop.yaml，
+# 把它的 NoopFnArn 传给本栈的 TokyoNoopFnArn。
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ARC Region switch PoC - ARC runs reversible prep steps, Temporal starts and verifies (2026-10-07)
+
+Parameters:
+  PlanName:
+    Type: String
+    Default: petsite-dr-poc
+    AllowedPattern: '[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,30}[a-zA-Z0-9])?'
+  ClusterName:
+    Type: String
+    Default: dr-korea-petsite
+  NodegroupName:
+    Type: String
+    Default: dr-korea-workers
+  ScaleUpDesired:
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 3
+    Description: 激活首尔时节点组扩到几台（小验证用 1；真切换按容量规划定）
+  ApproverPrincipalArn:
+    Type: String
+    Description: 允许（带 MFA）扮演审批角色的人。必须是人，不能是 agent 的角色。
+  TokyoNoopFnArn:
+    Type: String
+    AllowedPattern: 'arn:aws:lambda:ap-northeast-1:\d{12}:function:.+'
+
+Resources:
+
+  # ── 扩缩函数（只能动这一个节点组）────────────────────────────────────────
+  ScaleFnRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: scale-one-nodegroup
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: OnlyThisNodegroup
+                Effect: Allow
+                Action:
+                  - eks:DescribeNodegroup
+                  - eks:UpdateNodegroupConfig
+                Resource: !Sub 'arn:aws:eks:${AWS::Region}:${AWS::AccountId}:nodegroup/${ClusterName}/${NodegroupName}/*'
+              # 不支持资源级权限（同 07 里的说明），只读
+              - Sid: ReadAsgLifecycle
+                Effect: Allow
+                Action: autoscaling:DescribeAutoScalingGroups
+                Resource: '*'
+
+  ScaleUpFn:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: dr-korea-arc-scale-up
+      Description: ARC 激活首尔时把节点组扩到目标数，并等到 ASG 稳定
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: index.handler
+      Timeout: 900
+      Role: !GetAtt ScaleFnRole.Arn
+      Environment:
+        Variables:
+          CLUSTER: !Ref ClusterName
+          NODEGROUP: !Ref NodegroupName
+          TARGET_DESIRED: !Ref ScaleUpDesired
+      Code:
+        # CFN 不支持 YAML 别名，所以扩、缩两个函数各放一份相同的代码（test_131 守着两份一致）
+        ZipFile: |
+          """把节点组调到 TARGET_DESIRED，并等到 ASG 真的稳定在这个数。
+
+          幂等：已经是目标值就不改，只等稳定。ARC 失败重试时重复调用是安全的。
+          「成功」的判据是 ASG 的 InService 数 == 目标且没有在途实例，不是
+          UpdateNodegroupConfig 返回 200 —— 后者只说明请求被接受了。
+          k8s 节点 Ready 不在这里判断：那由 Temporal 的后置探针用 k8s API
+          独立核实（不同的数据源）。
+          """
+          import json, os, time
+          import boto3
+
+          CLUSTER = os.environ["CLUSTER"]
+          NG = os.environ["NODEGROUP"]
+          TARGET = int(os.environ["TARGET_DESIRED"])
+          eks = boto3.client("eks")
+          asg = boto3.client("autoscaling")
+
+          def _log(**kw):
+              print(json.dumps(kw, ensure_ascii=False, default=str))
+
+          def handler(event, context):
+              # ARC 传进来的事件格式文档里没写，记下来供设计文档引用
+              _log(arc_event=event)
+              ng = eks.describe_nodegroup(clusterName=CLUSTER, nodegroupName=NG)["nodegroup"]
+              sc = ng["scalingConfig"]
+              if sc["desiredSize"] != TARGET:
+                  if ng["status"] != "ACTIVE":
+                      raise RuntimeError(f"节点组状态 {ng['status']}，现在改会被拒；交给 ARC 重试")
+                  new = {"minSize": min(sc["minSize"], TARGET),
+                         "maxSize": max(sc["maxSize"], TARGET),
+                         "desiredSize": TARGET}
+                  eks.update_nodegroup_config(clusterName=CLUSTER, nodegroupName=NG, scalingConfig=new)
+                  _log(action="update_nodegroup_config", before=sc, after=new)
+              else:
+                  _log(action="none", why="desired 已是目标值，只等稳定", scaling=sc)
+
+              name = ng["resources"]["autoScalingGroups"][0]["name"]
+              deadline = time.time() + context.get_remaining_time_in_millis() / 1000 - 30
+              while time.time() < deadline:
+                  status = eks.describe_nodegroup(clusterName=CLUSTER, nodegroupName=NG)["nodegroup"]["status"]
+                  g = asg.describe_auto_scaling_groups(AutoScalingGroupNames=[name])["AutoScalingGroups"][0]
+                  states = [i["LifecycleState"] for i in g["Instances"]]
+                  in_service = states.count("InService")
+                  _log(check="settled?", nodegroup_status=status, asg_desired=g["DesiredCapacity"],
+                       in_service=in_service, lifecycle=states)
+                  if status == "ACTIVE" and in_service == TARGET and len(states) == TARGET:
+                      return {"ok": True, "target": TARGET, "in_service": in_service}
+                  time.sleep(15)
+              raise RuntimeError(f"等到超时仍未稳定在 {TARGET}；交给 ARC 重试")
+
+  ScaleDownFn:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: dr-korea-arc-scale-down
+      Description: 激活东京（回切）时把首尔节点组缩回 0，并等到 ASG 清空
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: index.handler
+      Timeout: 900
+      Role: !GetAtt ScaleFnRole.Arn
+      Environment:
+        Variables:
+          CLUSTER: !Ref ClusterName
+          NODEGROUP: !Ref NodegroupName
+          TARGET_DESIRED: '0'
+      Code:
+        ZipFile: |
+          """把节点组调到 TARGET_DESIRED，并等到 ASG 真的稳定在这个数。
+
+          幂等：已经是目标值就不改，只等稳定。ARC 失败重试时重复调用是安全的。
+          「成功」的判据是 ASG 的 InService 数 == 目标且没有在途实例，不是
+          UpdateNodegroupConfig 返回 200 —— 后者只说明请求被接受了。
+          k8s 节点 Ready 不在这里判断：那由 Temporal 的后置探针用 k8s API
+          独立核实（不同的数据源）。
+          """
+          import json, os, time
+          import boto3
+
+          CLUSTER = os.environ["CLUSTER"]
+          NG = os.environ["NODEGROUP"]
+          TARGET = int(os.environ["TARGET_DESIRED"])
+          eks = boto3.client("eks")
+          asg = boto3.client("autoscaling")
+
+          def _log(**kw):
+              print(json.dumps(kw, ensure_ascii=False, default=str))
+
+          def handler(event, context):
+              # ARC 传进来的事件格式文档里没写，记下来供设计文档引用
+              _log(arc_event=event)
+              ng = eks.describe_nodegroup(clusterName=CLUSTER, nodegroupName=NG)["nodegroup"]
+              sc = ng["scalingConfig"]
+              if sc["desiredSize"] != TARGET:
+                  if ng["status"] != "ACTIVE":
+                      raise RuntimeError(f"节点组状态 {ng['status']}，现在改会被拒；交给 ARC 重试")
+                  new = {"minSize": min(sc["minSize"], TARGET),
+                         "maxSize": max(sc["maxSize"], TARGET),
+                         "desiredSize": TARGET}
+                  eks.update_nodegroup_config(clusterName=CLUSTER, nodegroupName=NG, scalingConfig=new)
+                  _log(action="update_nodegroup_config", before=sc, after=new)
+              else:
+                  _log(action="none", why="desired 已是目标值，只等稳定", scaling=sc)
+
+              name = ng["resources"]["autoScalingGroups"][0]["name"]
+              deadline = time.time() + context.get_remaining_time_in_millis() / 1000 - 30
+              while time.time() < deadline:
+                  status = eks.describe_nodegroup(clusterName=CLUSTER, nodegroupName=NG)["nodegroup"]["status"]
+                  g = asg.describe_auto_scaling_groups(AutoScalingGroupNames=[name])["AutoScalingGroups"][0]
+                  states = [i["LifecycleState"] for i in g["Instances"]]
+                  in_service = states.count("InService")
+                  _log(check="settled?", nodegroup_status=status, asg_desired=g["DesiredCapacity"],
+                       in_service=in_service, lifecycle=states)
+                  if status == "ACTIVE" and in_service == TARGET and len(states) == TARGET:
+                      return {"ok": True, "target": TARGET, "in_service": in_service}
+                  time.sleep(15)
+              raise RuntimeError(f"等到超时仍未稳定在 {TARGET}；交给 ARC 重试")
+
+  ScaleUpLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/dr-korea-arc-scale-up
+      RetentionInDays: 30
+  ScaleDownLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/dr-korea-arc-scale-down
+      RetentionInDays: 30
+
+  # ── ARC 执行角色 ──────────────────────────────────────────────────────────
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: arc-region-switch.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonApplicationRecoveryControllerRegionSwitchPlanExecutionPolicy
+      Policies:
+        - PolicyName: invoke-and-approve
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: InvokeOnlyTheseFunctions
+                Effect: Allow
+                Action: [lambda:GetFunction, lambda:InvokeFunction]
+                Resource:
+                  - !GetAtt ScaleUpFn.Arn
+                  - !GetAtt ScaleDownFn.Arn
+                  - !Ref TokyoNoopFnArn
+              # 文档要求执行角色带上它，审批块才能通过计划评估
+              - Sid: ManualApprovalBlock
+                Effect: Allow
+                Action: arc-region-switch:ApprovePlanExecutionStep
+                Resource: !Sub 'arn:aws:arc-region-switch::${AWS::AccountId}:plan/${PlanName}*'
+
+  # ── 审批角色：只有带 MFA 的人能扮演 ──────────────────────────────────────
+  ApproverRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${PlanName}-approver'
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { AWS: !Ref ApproverPrincipalArn }
+            Action: sts:AssumeRole
+            Condition:
+              # agent 用的是长期访问密钥，没有 MFA 上下文 —— 这一条让它批不了
+              Bool: { aws:MultiFactorAuthPresent: 'true' }
+      Policies:
+        - PolicyName: approve-this-plan
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ApproveAndRead
+                Effect: Allow
+                Action:
+                  - arc-region-switch:ApprovePlanExecutionStep
+                  - arc-region-switch:GetPlanExecution
+                  - arc-region-switch:ListPlanExecutionEvents
+                  - arc-region-switch:ListPlanExecutions
+                  - arc-region-switch:GetPlanInRegion
+                  - arc-region-switch:GetPlan
+                Resource: !Sub 'arn:aws:arc-region-switch::${AWS::AccountId}:plan/${PlanName}*'
+              - Sid: ListForConsole
+                Effect: Allow
+                Action: [arc-region-switch:ListPlans, arc-region-switch:ListPlansInRegion]
+                Resource: '*'
+
+  # ── 计划 ──────────────────────────────────────────────────────────────────
+  Plan:
+    Type: AWS::ARCRegionSwitch::Plan
+    Properties:
+      Name: !Ref PlanName
+      Description: PetSite 东京→首尔 小验证：只含可逆的准备步骤
+      RecoveryApproach: activePassive
+      PrimaryRegion: ap-northeast-1
+      Regions: [ap-northeast-1, ap-northeast-2]
+      ExecutionRole: !GetAtt ExecutionRole.Arn
+      RecoveryTimeObjectiveMinutes: 30
+      Workflows:
+        # 一个激活工作流，两个方向共用：激活首尔 = 切过去，激活东京 = 回切。
+        # Lambda 块按执行时的区域挑函数，所以同一份步骤在两个方向上做相反的事。
+        - WorkflowTargetAction: activate
+          WorkflowDescription: 人批准 → 准备激活区域 → 收拾停用区域
+          Steps:
+            - Name: approve-prepare
+              Description: 人确认要准备激活区域（审批角色要求 MFA）
+              ExecutionBlockType: ManualApproval
+              ExecutionBlockConfiguration:
+                ExecutionApprovalConfig:
+                  ApprovalRole: !GetAtt ApproverRole.Arn
+                  TimeoutMinutes: 60
+            - Name: prepare-activating-region
+              Description: 激活首尔时扩首尔节点组；激活东京时空操作
+              ExecutionBlockType: CustomActionLambda
+              ExecutionBlockConfiguration:
+                CustomActionLambdaConfig:
+                  RegionToRun: activatingRegion
+                  TimeoutMinutes: 30
+                  RetryIntervalMinutes: 2
+                  Lambdas:
+                    - Arn: !Ref TokyoNoopFnArn
+                    - Arn: !GetAtt ScaleUpFn.Arn
+            - Name: tidy-deactivating-region
+              Description: 激活东京（回切）时把首尔缩回 0；激活首尔时在东京空操作
+              ExecutionBlockType: CustomActionLambda
+              ExecutionBlockConfiguration:
+                CustomActionLambdaConfig:
+                  # 依赖停用区域 —— 文档不推荐。真灾难时东京不可用，这一步应当跳过，
+                  # 所以 ungraceful 模式下配成 skip。
+                  RegionToRun: deactivatingRegion
+                  TimeoutMinutes: 30
+                  RetryIntervalMinutes: 2
+                  Ungraceful: { Behavior: skip }
+                  Lambdas:
+                    - Arn: !Ref TokyoNoopFnArn
+                    - Arn: !GetAtt ScaleDownFn.Arn
+      Tags:
+        Project: petsite-dr
+        Purpose: arc-temporal-poc
+
+Outputs:
+  PlanArn:
+    Value: !GetAtt Plan.Arn
+  ApproverRoleArn:
+    Value: !GetAtt ApproverRole.Arn
+  ExecutionRoleArn:
+    Value: !GetAtt ExecutionRole.Arn

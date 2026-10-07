@@ -125,7 +125,8 @@ async def cmd_start_plan(c: Client, a: argparse.Namespace) -> int:
 async def cmd_state(c: Client, a: argparse.Namespace) -> int:
     h = c.get_workflow_handle(a.workflow_id)
     d = await h.describe()
-    q = "runbook_state" if d.workflow_type == "DrRunbookWorkflow" else "plan_state"
+    q = {"DrRunbookWorkflow": "runbook_state", "ArcPlanExecutionWorkflow": "arc_state"}.get(
+        d.workflow_type, "plan_state")
     print(json.dumps(await h.query(q), ensure_ascii=False, indent=2, default=str))
     return 0
 
@@ -143,6 +144,21 @@ async def cmd_update(c: Client, a: argparse.Namespace) -> int:
         print(f"被拒绝：{cause if cause else e}", file=sys.stderr)
         return 1
     print(json.dumps(r, ensure_ascii=False, indent=2, default=str))
+    return 0
+
+
+async def cmd_arc_run(c: Client, a: argparse.Namespace) -> int:
+    """起一个 ArcPlanExecutionWorkflow。输入是 JSON 文件（ArcRunInput 的字段）。
+
+    起完就返回 —— ARC 第一步在等人批准，人用 infra/dr-korea/arc-approve.sh
+    （要 MFA）去批。进度用 `state <workflow_id>` 看。
+    """
+    spec = json.loads(Path(a.input_file).read_text(encoding="utf-8"))
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    plan = spec["plan_arn"].rsplit("/", 1)[-1].split(":")[0]
+    wid = f"arc-{plan}-{spec['target_region']}-{ts}"
+    h = await c.start_workflow("ArcPlanExecutionWorkflow", spec, id=wid, task_queue=QUEUE)
+    print(json.dumps({"workflow_id": wid, "run_id": h.result_run_id}, ensure_ascii=False))
     return 0
 
 
@@ -177,6 +193,8 @@ def main() -> int:
     u.add_argument("workflow_id")
     u.add_argument("name")
     u.add_argument("payload")
+    ar = sub.add_parser("arc-run")
+    ar.add_argument("input_file")
     a = ap.parse_args()
     if a.cmd == "list":
         return cmd_list()
@@ -185,7 +203,7 @@ def main() -> int:
         c = await Client.connect(TARGET, namespace=NAMESPACE)
         return await {
             "run": cmd_run, "history": cmd_history, "start-plan": cmd_start_plan,
-            "state": cmd_state, "update": cmd_update,
+            "state": cmd_state, "update": cmd_update, "arc-run": cmd_arc_run,
         }[a.cmd](c, a)
 
     return asyncio.run(go())

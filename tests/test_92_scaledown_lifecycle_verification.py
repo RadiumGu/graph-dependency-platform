@@ -132,7 +132,11 @@ class TestAsgReadPermissionIsJustified:
         for r in perm["Resources"].values():
             doc = (r.get("Properties") or {}).get("PolicyDocument") or {}
             for s in doc.get("Statement") or []:
-                if s.get("Sid") == "ReadAsgLifecycleState":
+                # 2026-10-07：CloudTrail LookupEvents 同样不支持资源级权限（只读）。
+                # 例外按 Sid 精确列出，不是通用许可。
+                if s.get("Sid") in ("ReadAsgLifecycleState", "WhoApprovedFromCloudTrail"):
+                    if s.get("Sid") == "WhoApprovedFromCloudTrail":
+                        assert s["Action"] == "cloudtrail:LookupEvents", s["Action"]
                     continue
                 res = s.get("Resource")
                 res = [res] if isinstance(res, str) else (res or [])

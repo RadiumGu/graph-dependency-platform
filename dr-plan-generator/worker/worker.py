@@ -49,6 +49,7 @@ from temporalio.client import Client
 from temporalio.worker import Worker
 
 from activities import load_plan_version, put_execution_record, put_plan_version
+from arc_bridge import ARC_ACTIVITIES, ArcPlanExecutionWorkflow
 from plan_workflow import DrPlanWorkflow
 from probes import ALL_PROBES
 from runbook_workflow import DrRunbookWorkflow
@@ -178,6 +179,9 @@ async def main() -> None:
             # 所以两者必须注册在**同一个**队列上。
             DrPlanWorkflow,
             DrRunbookWorkflow,
+            # 2026-10-07：ARC Region switch 小验证。Temporal 起 ARC 执行、轮询、
+            # 后置核实；ARC 第一步是要求 MFA 的人工审批（见 arc_bridge.py）。
+            ArcPlanExecutionWorkflow,
         ],
         activities=[
             put_plan_version,
@@ -187,6 +191,7 @@ async def main() -> None:
             # 所以既能被 DrRunbookWorkflow 当闸门调用，也能被人用
             # client.start_activity 单独调用（standalone activity）。
             *ALL_PROBES,
+            *ARC_ACTIVITIES,
         ],
         # ── 2026-09-24：这两个数原来都是 1，那是个设计错误 ──────────────
         #

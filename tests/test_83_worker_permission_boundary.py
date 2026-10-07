@@ -111,9 +111,23 @@ class TestGrantedOnesAreNarrow:
     def test_no_write_actions_at_all(self, doc: dict):
         """除了 S3 读，所有动作都必须是只读动词。"""
         verbs = ("Describe", "Get", "List")
+        # 2026-10-07 的两个例外（ARC Region switch 小验证）：
+        #   cloudtrail:LookupEvents       只读，只是动词不叫 Get/List
+        #   StartPlanExecution            唯一的写；起执行不做变更 —— 计划第一步是要求
+        #                                 MFA 的人工审批。只对 poc 计划，见下一条用例与 test_131
+        exceptions = {"cloudtrail:LookupEvents", "arc-region-switch:StartPlanExecution"}
         bad = [a for a in _all_actions(doc)
-               if not a.startswith("s3:") and not a.split(":", 1)[1].startswith(verbs)]
+               if not a.startswith("s3:") and a not in exceptions
+               and not a.split(":", 1)[1].startswith(verbs)]
         assert not bad, f"worker 策略里出现了非只读动作 {bad}"
+
+    def test_the_one_write_is_scoped_to_the_poc_plan(self, doc: dict):
+        sts = [s for s in _statements(doc)
+               if "arc-region-switch:StartPlanExecution" in (s["Action"] if isinstance(s["Action"], list) else [s["Action"]])]
+        assert len(sts) == 1
+        res = sts[0]["Resource"]
+        res = [res] if isinstance(res, str) else res
+        assert all("plan/petsite-dr-poc" in str(r) for r in res), res
 
     def test_s3_read_is_prefix_scoped(self, doc: dict):
         st = next(s for s in _statements(doc) if s.get("Sid") == "ReadDrPlanBodies")
