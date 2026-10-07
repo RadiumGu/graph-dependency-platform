@@ -166,8 +166,79 @@ def get_aws_session():
     return boto3.Session(region_name=REGION)
 
 # ===== ClickHouse 查询 =====
+#
+# 两条不变量,都是 2026-10-07 评估 DeepFlow 拓扑能力时发现的缺陷补的
+# (docs/lessons/deepflow-topology-api-vs-self-built-etl-2026-10.md):
+#
+# ① **结果集必须有上限,且超限抛异常而不是静默截断。**
+#    原来主调用图查询写死 `ORDER BY calls DESC LIMIT 100` —— 第 101 条边起
+#    无声丢掉,没有告警、没有日志,图里就是没有那条依赖。依赖图要喂 DR 的
+#    拓扑排序,少一条边可能把恢复顺序排错,**而且无从察觉**。
+#
+#    这与 shared/python/aws_resilience.py 要解决的是同一类缺陷,取向也照搬:
+#    「宁可失败得吵,也不要悄悄给出不完整的结果」。那个模块的护栏装在
+#    boto3 分页器上,**管不到这里手写的 SQL**,所以要在这一侧单独立一道。
+#
+# ② **采集失败必须在本轮留痕,且不得驱动失活判定。**
+#    原来 ch_query 失败一律 `except` 后 `return []` —— 于是「ClickHouse 挂了」
+#    和「这段时间真的没有依赖」在下游长得一模一样。而 reconcile_calls_edges
+#    会把「本轮没观测到」的边置 active=false:一次 ClickHouse 故障就能让
+#    一批健康依赖被标死。
+#
+#    aws_resilience 的原话是「部分结果不可用于陈旧判定」—— 这里执行同一条:
+#    本轮只要有采集失败或截断,就**跳过失活对账**,并把这件事写成一条
+#    TopologyChange 事件(该节点类型的契约 writer 就是 etl_deepflow,
+#    不需要改契约;也不能写 verify_* —— 那组属性的 authority 是
+#    ['chaos-runner'],采集侧无权写)。
 
-def ch_query(sql: str) -> list:
+# 结果集行数上限。取得很宽松,正常运行永远不该触发 —— 它要防的是
+# 「查询条件写错导致笛卡尔积」这类跑飞,以及无声截断。
+CH_MAX_ROWS = int(os.environ.get('CH_MAX_ROWS', '5000'))
+
+
+class ClickHouseResultTruncated(RuntimeError):
+    """ClickHouse 结果集达到行数上限。
+
+    刻意是异常而不是返回值,理由同 aws_resilience.PaginationTruncated:
+    调用方**不应该**吞掉它然后把已收到的部分当完整结果用,
+    尤其不能喂给任何「图里有而这轮没收到就删/标死」的逻辑。
+    """
+
+
+# 本轮采集健康状况。模块级而非参数透传 —— 7 个 fetch_* 函数都要记,
+# 逐个改签名会把 diff 摊得很大且容易漏。handler 每轮开头 reset。
+_collection_health: dict = {'failures': [], 'truncations': []}
+
+
+def reset_collection_health() -> None:
+    """每轮 ETL 开始时清空。Lambda 容器复用会跨轮残留,必须显式清。"""
+    _collection_health['failures'] = []
+    _collection_health['truncations'] = []
+
+
+def note_collection_failure(what: str, err: object) -> None:
+    """记一笔采集失败。不抛 —— 让本轮继续采其它源,但本轮会被判为不完整。"""
+    _collection_health['failures'].append({'what': what, 'error': repr(err)[:200]})
+
+
+def note_collection_truncation(what: str, limit: int) -> None:
+    _collection_health['truncations'].append({'what': what, 'limit': limit})
+
+
+def collection_is_complete() -> bool:
+    """本轮采集是否完整。只有完整时才允许做失活/删除判定。"""
+    return not _collection_health['failures'] and not _collection_health['truncations']
+
+
+def collection_health_summary() -> dict:
+    return {
+        'complete': collection_is_complete(),
+        'failures': list(_collection_health['failures']),
+        'truncations': list(_collection_health['truncations']),
+    }
+
+
+def ch_query(sql: str, what: str = 'clickhouse') -> list:
     import requests
     try:
         r = requests.post(f"http://{CH_HOST}:{CH_PORT}/", data=sql, timeout=30)
@@ -175,10 +246,36 @@ def ch_query(sql: str) -> list:
             raise Exception(f"ClickHouse error {r.status_code}: {r.text[:200]}")
         return [line.split('\t') for line in r.text.strip().split('\n') if line.strip()]
     except Exception as e:
-        logger.error(f"ClickHouse query failed: {e}")
+        logger.error(f"ClickHouse query failed [{what}]: {e}")
+        # 留痕:本轮判为不完整,失活对账会被跳过。见本节注释 ②。
+        note_collection_failure(what, e)
         return []
 
-def ch_query_json(sql: str) -> dict:
+
+def ch_query_bounded(sql_no_limit: str, what: str, max_rows: int = CH_MAX_ROWS) -> list:
+    """带上限的 ClickHouse 查询:超限抛 ClickHouseResultTruncated。
+
+    实现上用「LIMIT max_rows + 1 探测」而不是 OFFSET 翻页:
+      · 单次查询,不必为聚合查询重复付代价;
+      · 没有翻页期间数据变动导致的漂移 —— OFFSET 分页在
+        `GROUP BY ... ORDER BY count() DESC` 上尤其不稳。
+    拿到 max_rows + 1 行就说明上游还有更多,这时候宁可失败得吵。
+
+    `sql_no_limit` 不要自带 LIMIT / FORMAT,由本函数负责拼。
+    """
+    sql = f"{sql_no_limit.rstrip().rstrip(';')}\nLIMIT {max_rows + 1} FORMAT TSV"
+    rows = ch_query(sql, what=what)
+    if len(rows) > max_rows:
+        msg = (f"ClickHouse 结果集达到上限 {max_rows} 行 [{what}] —— 超出跑飞护栏。"
+               f"这是「我不知道还有多少」而不是「没有更多数据」,"
+               f"部分结果不可用于失活判定")
+        logger.error(msg)
+        note_collection_truncation(what, max_rows)
+        raise ClickHouseResultTruncated(msg)
+    return rows
+
+
+def ch_query_json(sql: str, what: str = 'clickhouse-json') -> dict:
     import requests
     try:
         r = requests.post(f"http://{CH_HOST}:{CH_PORT}/", data=sql + ' FORMAT JSON', timeout=30)
@@ -186,7 +283,8 @@ def ch_query_json(sql: str) -> dict:
             raise Exception(f"ClickHouse error {r.status_code}: {r.text[:200]}")
         return r.json()
     except Exception as e:
-        logger.error(f"ClickHouse JSON query failed: {e}")
+        logger.error(f"ClickHouse JSON query failed [{what}]: {e}")
+        note_collection_failure(what, e)
         return {}
 
 # ===== L7 性能指标 =====
@@ -207,7 +305,7 @@ GROUP BY server_ip
 """
     result = {}
     try:
-        data = ch_query_json(sql)
+        data = ch_query_json(sql, what='l7-metrics')
         for row in data.get('data', []):
             ip = row.get('server_ip', '')
             if ip:
@@ -280,7 +378,7 @@ GROUP BY pod_ip
     result = {}
     throttled_count = 0
     try:
-        data = ch_query_json(sql)
+        data = ch_query_json(sql, what='ena-throttling')
         for row in data.get('data', []):
             pod_ip = row.get('pod_ip', '')
             info = ip_map.get(pod_ip)
@@ -319,7 +417,7 @@ GROUP BY server_ip
 """
     result = {}
     try:
-        data = ch_query_json(sql)
+        data = ch_query_json(sql, what='active-connections')
         for row in data.get('data', []):
             ip = row.get('server_ip', '')
             if ip:
@@ -622,7 +720,7 @@ WHERE time > now() - INTERVAL 60 MINUTE
 GROUP BY server_ip, server_port, pod_group_id_0
 """
     try:
-        rows = ch_query_json(sql).get('data', []) or []
+        rows = ch_query_json(sql, what='datastore-flows').get('data', []) or []
     except Exception as exc:  # noqa: BLE001
         logger.warning("查数据存储流失败: %s", exc)
         return []
@@ -634,7 +732,7 @@ GROUP BY server_ip, server_port, pod_group_id_0
         try:
             gsql = (f"SELECT id, name FROM flow_tag.pod_group_map "
                     f"WHERE id IN ({','.join(gids)})")
-            for r in ch_query_json(gsql).get('data', []) or []:
+            for r in ch_query_json(gsql, what='pod-group-map').get('data', []) or []:
                 gname[str(r.get('id'))] = str(r.get('name') or '')
         except Exception as exc:  # noqa: BLE001
             logger.warning("查 pod_group_map 失败: %s", exc)
@@ -861,7 +959,7 @@ HAVING query_count >= 1
     result = {}
     try:
         import json as _json
-        data = ch_query_json(sql)
+        data = ch_query_json(sql, what='dns-connections')
         rows = data.get('data', [])
         if not rows:
             logger.info("DNS drift: no AWS DNS flows in last 5min")
@@ -1832,6 +1930,9 @@ def run_etl():
     logger.info("=== neptune-etl-from-deepflow 开始 (optimized) ===")
     t0 = time.time()
 
+    # Lambda 容器复用会让上一轮的采集失败残留到本轮，必须显式清。
+    reset_collection_health()
+
     # 1. 构建 IP→服务名映射
     ip_map, ecr_dep_map, restart_map = build_ip_service_map()
     if not ip_map:
@@ -1840,6 +1941,10 @@ def run_etl():
     # 2. 查询 ClickHouse - L7 流量关系
     # 注意：去掉 type=0 过滤（DeepFlow 中 type=2 是响应日志，占绝大多数有效数据）
     # server_ip 用 ip4_1，error 用 response_status=3（服务端异常）
+    #
+    # 2026-10-07：原来这里是 `ORDER BY calls DESC LIMIT 100`，第 101 条边起
+    # 无声丢掉。改走 ch_query_bounded —— 上限提到 CH_MAX_ROWS 且超限抛异常。
+    # ORDER BY 保留只为让日志里靠前的是高频边，不再承担「截断」的职责。
     sql = f"""
 SELECT IPv4NumToString(ip4_0) as src_ip, IPv4NumToString(ip4_1) as dst_ip,
     server_port, l7_protocol_str, count() as calls,
@@ -1852,9 +1957,9 @@ WHERE ip4_0 != 0 AND ip4_1 != 0
     AND ip4_0 != ip4_1
 GROUP BY src_ip, dst_ip, server_port, l7_protocol_str
 HAVING calls >= 2
-ORDER BY calls DESC LIMIT 100 FORMAT TSV
+ORDER BY calls DESC
 """
-    rows = ch_query(sql)
+    rows = ch_query_bounded(sql, what='l7-call-graph')
     logger.info(f"发现 {len(rows)} 条调用关系")
 
     # 3. L7 性能指标
@@ -1979,7 +2084,33 @@ ORDER BY calls DESC LIMIT 100 FORMAT TSV
 
     # 6.5 Calls 边失效对账 —— 必须紧跟 upsert，用同一个 round_ts 做分界：
     # 本轮刷新过的边 last_seen == round_ts，未刷新的严格小于它。
-    reconcile_stats = reconcile_calls_edges(round_ts)
+    #
+    # 2026-10-07 加的门禁：**采集不完整时绝不做失活判定。**
+    # 这个函数把「本轮没观测到」的边置 active=false，而在它上游，
+    # ch_query 失败时返回的是空列表 —— 于是一次 ClickHouse 故障就能让一批
+    # 健康依赖被集体标死，且图上看不出是故障还是真的断了。
+    # 照搬 aws_resilience 的那句判据：「部分结果不可用于陈旧判定」。
+    if collection_is_complete():
+        reconcile_stats = reconcile_calls_edges(round_ts)
+    else:
+        health = collection_health_summary()
+        logger.error(
+            f"本轮采集不完整，跳过 Calls 失活对账以免误标死健康依赖："
+            f"failures={len(health['failures'])} truncations={len(health['truncations'])}"
+        )
+        reconcile_stats = {'skipped_incomplete_collection': True, **health}
+        # 留痕：写一条 TopologyChange 事件。该节点类型的契约 writer 就是
+        # etl_deepflow，所以不需要改契约；也**不能**写 verify_* ——
+        # 那组属性的 authority 是 ['chaos-runner']，采集侧无权写。
+        _emit_topology_changes([{
+            'kind': 'collection_incomplete',
+            'subject': 'etl_deepflow',
+            'detail': (
+                f"采集不完整，已跳过失活对账。"
+                f"failures={[f['what'] for f in health['failures']]} "
+                f"truncations={[t['what'] for t in health['truncations']]}"
+            ),
+        }])
 
     # 7. 副本数 + resource limits
     replica_counts = fetch_replica_counts(ip_map)
@@ -2102,6 +2233,9 @@ ORDER BY calls DESC LIMIT 100 FORMAT TSV
             "dropped": reconcile_stats.get("dropped", 0),
             "datastore_edges_created": ds_stats.get("created", 0),
             "datastore_edges_corroborated": ds_stats.get("corroborated", 0),
+            # 采集完整性必须出现在返回值里：调用方（含人工 invoke 与告警）
+            # 要能一眼看出这一轮的数字是不是建立在完整采集之上。
+            "collection": collection_health_summary(),
             "duration_ms": duration}
 
 
