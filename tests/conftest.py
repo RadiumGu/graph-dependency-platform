@@ -178,6 +178,52 @@ def now_iso(offset_sec: int = 0) -> str:
     return t.strftime('%Y-%m-%dT%H:%M:%S.%f+00:00')
 
 
+def executed_cyphers(result: dict) -> list:
+    """返回 NL 引擎本轮**实际执行过的全部** Cypher 语句。
+
+    断言生成的 Cypher 时请用这个,**不要**用 ``result['cypher']`` ——
+    后者是「最后一条」而不是「全部」。
+
+    引擎 (``neptune/nl_query_strands.py``) 取的是
+    ``st_tools.last_rows()['cypher']``,而一个多跳问题下 Agent 通常会发
+    2~4 次 ``execute_cypher``(先查服务画像、再查上游、再查下游与布放),
+    ``cypher`` 字段只留下**最后成功的那一条**。哪条排在最后由 Agent 当轮的
+    规划决定,是**不确定**的。
+
+    2026-10-07 实测,问题「payforadoption 的完整上下游调用链和基础设施分布」
+    跑 18 次:
+
+    * trace 里 ``Calls`` / ``RunsOn`` / ``LocatedIn`` 三者**每次都出现**
+      —— 引擎行为在 trace 层面完全稳定,语句数稳定在 2~3 条;
+    * 但有 1 次 ``result['cypher']`` 恰好落在一条**不含任何边**的服务画像查询上
+      (``MATCH (s:Microservice {name:'payforadoption'}) RETURN s.name, ...``),
+      于是「cypher 里得有 Calls/RunsOn/LocatedIn」这条断言失败。
+
+    那次失败里 Agent 的回答是完整正确的(上游 petsite、13 条下游依赖、
+    16 个 Pod 跨 2 个 AZ)。所以旧写法**测的是结果字段的记账方式,
+    不是引擎的能力** —— 这是测试脆弱性,不是产品缺陷。
+
+    完整执行记录本来就在 ``result['trace']`` 里:``strands_tools`` 的 ``_calls``
+    在每次 ``execute_cypher`` 成功后都 append 一条带完整 ``cypher`` 的记录。
+    所以这里不需要改引擎,只需要读对地方。
+    """
+    stmts = [c['cypher'] for c in (result.get('trace') or [])
+             if c.get('tool') == 'execute_cypher' and c.get('cypher')]
+    # trace 为空时(被安全拦截,或换了个不记 trace 的引擎)退回单条,保持兼容。
+    if not stmts and result.get('cypher'):
+        stmts = [result['cypher']]
+    return stmts
+
+
+def executed_cypher_text(result: dict) -> str:
+    """把本轮执行过的全部 Cypher 拼成一段文本,供关键词断言使用。
+
+    见 :func:`executed_cyphers` 的 docstring —— 关键词断言落在单条
+    ``result['cypher']`` 上会随 Agent 的语句顺序偶发失败。
+    """
+    return "\n".join(executed_cyphers(result))
+
+
 # scope='module' 而非 'function':pytest **先实例化高作用域 fixture**,
 # 而 test_layer2_golden.py 的 `engine` 是 scope='module' 的 —— function 作用域的
 # 隔离会在它之后才跑,救不了它(实测 12 个 error 由此而来)。
