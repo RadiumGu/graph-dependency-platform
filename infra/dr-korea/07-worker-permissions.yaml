@@ -162,6 +162,29 @@ Resources:
               - lambda:GetFunctionConfiguration
             Resource: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:dr-korea-*'
 
+          # ── 2026-10-07：ARC Region switch 小验证 ─────────────────────────
+          #
+          # 唯一的写是 StartPlanExecution，而且只对 petsite-dr-poc 这一个计划。
+          # 起执行不等于做变更：计划每个工作流第一步都是 ManualApproval，
+          # 审批角色要求 MFA（20-arc-region-switch-poc.yaml，test_131 守着）。
+          # **刻意不给** Approve / Cancel / UpdatePlanExecution(Step)：
+          # 批准、取消、跳过失败步骤，都是人的决定。
+          - Sid: ArcStartAndWatchPocPlan
+            Effect: Allow
+            Action:
+              - arc-region-switch:StartPlanExecution
+              - arc-region-switch:GetPlanExecution
+              - arc-region-switch:ListPlanExecutionEvents
+              - arc-region-switch:ListPlanExecutions
+              - arc-region-switch:GetPlanInRegion
+            Resource: !Sub 'arn:aws:arc-region-switch::${AWS::AccountId}:plan/petsite-dr-poc*'
+          # 「谁批准的」从 CloudTrail 读（ARC 自己的事件里没有审批人）。
+          # LookupEvents 不支持资源级权限，只读。
+          - Sid: WhoApprovedFromCloudTrail
+            Effect: Allow
+            Action: cloudtrail:LookupEvents
+            Resource: '*'
+
           # ── 2026-10-05：两条写权限已收回 ────────────────────────────────
           #
           # 这里原来有 ScaleUpPilotLightNodegroup（eks:UpdateNodegroupConfig）

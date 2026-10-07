@@ -262,6 +262,10 @@ _MUTATING_PREFIXES = (
 )
 #: 唯一被允许的写：计划版本与执行记录写到自己的 S3 前缀。
 _ALLOWED = {"put_object"}
+#: 按文件放行的写（2026-10-07）。只有 arc_bridge.py 能起 ARC 执行 ——
+#: 起执行本身不做变更，因为计划的第一步是要求 MFA 的人工审批。这个前提由
+#: test_131 在计划模板上守着；两条门禁必须一起改。
+_ALLOWED_IN_FILE = {("arc_bridge.py", "start_plan_execution")}
 #: 不是 AWS 调用但名字碰巧以这些前缀开头的。
 _NOT_AWS = {
     "start_activity", "start_workflow", "start_time_skipping", "start_local",
@@ -269,6 +273,7 @@ _NOT_AWS = {
     "add_argument", "set_defaults", "setLevel", "setdefault", "start_to_close_timeout",
     "add_signal_handler", "set_result",
     "create_default_context",  # ssl —— count_ready_nodes 用集群 CA 校验 TLS
+    "failover_task_queue",     # plan_workflow 的字段名（子执行用哪个队列），不是 AWS 调用
 }
 
 
@@ -278,14 +283,19 @@ class TestTemporalNeverMutates:
         for f in sorted(W.glob("*.py")):
             tree = ast.parse(f.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
-                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                    out.append((f.name, node.func.attr))
+                # ⚠️ 2026-10-07：原来只看 `x.method(...)` 形式的调用。
+                #    `asyncio.to_thread(client.start_plan_execution, ...)` 把方法当参数传，
+                #    不是 Call 的 func —— 原扫描**看不见它**（写 arc_bridge.py 时实测）。
+                #    改为扫所有属性访问：凡是引用了写类方法名，都算。
+                if isinstance(node, ast.Attribute):
+                    out.append((f.name, node.attr))
         return out
 
     def test_no_mutating_aws_call_anywhere_in_worker(self):
         bad = [
             (f, m) for f, m in self._calls()
             if m.startswith(_MUTATING_PREFIXES) and m not in _ALLOWED and m not in _NOT_AWS
+            and (f, m) not in _ALLOWED_IN_FILE
         ]
         assert not bad, (
             f"worker 里出现了写类调用 {bad}。执行模型是「人执行、Temporal 核实」——"
@@ -294,7 +304,10 @@ class TestTemporalNeverMutates:
 
     def test_put_object_only_in_activities(self):
         files = {f for f, m in self._calls() if m == "put_object"}
-        assert files <= {"activities.py"}, files
+        # snapshot_workflow.py 把图快照写到 snapshots/ 前缀 —— 一直都有，但它用
+        # to_thread(s3.put_object, ...) 传方法引用，旧扫描看不见（2026-10-07 扩大扫描后发现）。
+        # 那是自己的快照桶，不是生产资源。
+        assert files <= {"activities.py", "snapshot_workflow.py"}, files
 
     def test_retired_modules_and_names_are_gone(self):
         assert not (W / "workflows.py").exists()

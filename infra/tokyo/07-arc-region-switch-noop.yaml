@@ -1,0 +1,51 @@
+# ARC Region switch 小验证 —— 东京侧的「空操作」Lambda（2026-10-07）。
+#
+# ARC 的自定义 Lambda 执行块要求**每个区域各一个函数**，按执行时的区域挑一个跑。
+# 东京在这套 demo 里始终在线，激活东京时没有要做的准备，所以这里只记录事件、
+# 返回成功。它存在的唯一理由是满足「两个区域各一个函数」的接口约束。
+#
+# 部署在 ap-northeast-1。首尔侧的计划与扩缩函数见
+# infra/dr-korea/08-arc-region-switch-poc.yaml。
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ARC Region switch PoC - Tokyo-side no-op Lambda (2026-10-07)
+
+Resources:
+  NoopRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  NoopFn:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: petsite-arc-noop
+      Description: ARC Region switch 东京侧空操作（只记录事件）
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: index.handler
+      Timeout: 30
+      Role: !GetAtt NoopRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          def handler(event, context):
+              # 记录 ARC 传进来的事件 —— 事件格式文档里没有写，靠这里实测
+              print(json.dumps({"arc_event": event}, ensure_ascii=False, default=str))
+              return {"ok": True, "action": "noop", "why": "东京始终在线，激活东京无需准备"}
+
+  NoopLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /aws/lambda/petsite-arc-noop
+      RetentionInDays: 30
+
+Outputs:
+  NoopFnArn:
+    Value: !GetAtt NoopFn.Arn
