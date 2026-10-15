@@ -203,3 +203,42 @@ def test_t58_11_gateway_span_query_does_not_filter_on_gen_ai(etl):
     assert 'aws.remote.service' in q and 'aws.remote.operation' in q
     # 不写死网关主机名：网关 id 是部署产物，重建后写死的匹配会静默失效。
     assert 'th4m2rp46p' not in q, '不要把具体网关 id 写进查询'
+
+
+# ── MCP_SERVER 型 target 指向 AgentCore Runtime（2026-10-15 补）────────────────
+#
+# 2026-10-10 新建的网关 migrationdesk-pricing-gw 把一个以 MCP 协议部署的
+# AgentCore Runtime 挂成了 MCP target。旧解析器只认 AGENTCORE_RUNTIME 型，
+# 于是它掉进 AgentTool 分支、造出幻影工具，tests/test_75 当场变红。
+# 真实形态（ListGatewayTargets 给 targetType，GetGatewayTarget 给 config）：
+
+MCP_RUNTIME_TARGET = {
+    'targetId': 'VDEZSKWSSA', 'name': 'pricing-runtime', 'targetType': 'MCP_SERVER',
+    'targetConfiguration': {'mcp': {'mcpServer': {'endpoint': (
+        'https://bedrock-agentcore.ap-northeast-1.amazonaws.com/runtimes/'
+        'arn%3Aaws%3Abedrock-agentcore%3Aap-northeast-1%3A926093770964%3A'
+        'runtime%2Fmigrationdesk_pricing-ty3OTH80x5/invocations?qualifier=DEFAULT')}}},
+}
+
+
+def test_t58_12_mcp_server_target_on_agentcore_runtime_resolves(etl):
+    """MCP_SERVER 型 target 若 endpoint 是 AgentCore invocations URL，必须解析出 runtime ARN。"""
+    assert etl._runtime_arn_from_target(MCP_RUNTIME_TARGET) == (
+        'arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:'
+        'runtime/migrationdesk_pricing-ty3OTH80x5')
+
+
+def test_t58_13_external_mcp_server_stays_a_tool(etl):
+    """外部 MCP server（非 AgentCore invocations URL）仍是真的 tool 端点，返回 None。
+
+    防反向过头修复：不能因为是 MCP 就当 runtime。
+    """
+    ext = {**MCP_RUNTIME_TARGET, 'targetConfiguration': {'mcp': {'mcpServer': {
+        'endpoint': 'https://mcp.example.com/mcp'}}}}
+    assert etl._runtime_arn_from_target(ext) is None
+
+
+def test_t58_14_mcp_server_degraded_without_config_returns_none(etl):
+    """GetGatewayTarget 降级（只有摘要、没有 config）时不得建一条指向 None 的边。"""
+    degraded = {k: v for k, v in MCP_RUNTIME_TARGET.items() if k != 'targetConfiguration'}
+    assert etl._runtime_arn_from_target(degraded) is None
