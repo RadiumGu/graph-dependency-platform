@@ -136,7 +136,8 @@ QUERY_CATALOG = {
     "q3_upstream_deps": {
         "mod": "queries", "fn": "q3_upstream_deps",
         "desc": ("根因候选：故障服务**依赖的**节点（出边），它们挂了它才会挂。"
-                 "建议 kind='live'。返回带 edge_type / dependency_kind / verify_status"),
+                 "RCA 时**不要传 kind**（live 会滤掉大多数数据层依赖，见 q1 同名说明）。"
+                 "返回带 edge_type / dependency_kind / verify_status"),
         "params": {"failed_service": "str，必填", "kind": "static|dynamic|live，可选"},
         "required": ["failed_service"],
     },
