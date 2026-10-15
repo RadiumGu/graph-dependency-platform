@@ -35,15 +35,23 @@ DEPENDENCY_BEARING = {
 USAGE_HINTS = {
     "q1_blast_radius": (
         "用于回答「X 挂了会连带影响什么」——查的是**谁依赖 X**（入边）。"
-        "kind='live' 取运行时观测到的依赖，'static' 取声明的依赖，"
-        "两者不一致本身就是有价值的信号。"
-        "返回的是一个对象（含 services 与 capabilities 两个集合），不是行列表。"
+        "返回的是一个对象（含 services 与 capabilities 两个集合），不是行列表。\n"
+        "⚠️ RCA 时**不要传 kind='live'**。live = dynamic AND active=true，"
+        "而数据层依赖（服务→DynamoDB/RDS/S3/SQS）大多是**声明边（static）**——"
+        "SDK 长连接与 VPC 端点不产生观测源能看到的流量。2026-10-15 实测："
+        "RDS 集群 serviceseks2-database… 的影响面 live=0、不带 kind=11；"
+        "ddbpetadoption live=4、不带 kind=21。用 live 查一次 RDS 故障会得到「无影响」。"
+        "不带 kind 查，再按每行的 dependency_kind（dynamic=运行时观测 / static=声明）权衡。"
+        "live 与 static 不一致本身就是有价值的信号。"
     ),
     "q3_upstream_deps": (
-        "根因排查的主力工具：**X 依赖谁**（出边）。它们挂了 X 才会挂。建议 kind='live'。"
+        "根因排查的主力工具：**X 依赖谁**（出边）。它们挂了 X 才会挂。"
         "注意方向 —— 依赖边一律从依赖方指向被依赖方，所以根因在出边、"
         "影响面在入边（那是 q1）。返回带 edge_type / dependency_kind / "
-        "verify_status，可据此判断每个候选站得住脚的程度。"
+        "verify_status，可据此判断每个候选站得住脚的程度。\n"
+        "⚠️ RCA 时**不要传 kind='live'**，理由同 q1：2026-10-15 实测 "
+        "petsearch 的数据层根因候选 live=0、不带 kind=2；payforadoption 1 vs 6；"
+        "petsite 2 vs 6。真实根因最常在数据层，live 恰好把它们滤掉。"
     ),
     "q16_single_point_of_failure": (
         "单点故障由图算法算出，不是推理得来的。可直接采信其拓扑结论。"

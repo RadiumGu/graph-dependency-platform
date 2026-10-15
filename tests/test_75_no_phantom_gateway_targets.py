@@ -97,10 +97,18 @@ def test_t75_02_routes_to_runtime_covers_gateway_targets():
         "所以「没有流量」不是它缺失的正当理由。"
         "\n最可能的原因同 t75_01：botocore 剥掉了 targetConfiguration.http。")
 
+    # 允许两种 target 类型 —— 两者都经控制面实测确认指向 AgentRuntime：
+    #   AGENTCORE_RUNTIME —— targetConfiguration.http.agentcoreRuntime.arn（2026-09-07，WaggleAI 5 个）
+    #   MCP_SERVER        —— targetConfiguration.mcp.mcpServer.endpoint 是 AgentCore
+    #                        invocations URL（2026-10-15，migrationdesk-pricing-gw）
+    # 这条断言的**意图**是防「真 tool 端点被误当成 runtime」，而不是钉死一个枚举。
+    # MCP_SERVER 型只有 endpoint 是 AgentCore invocations URL 时才会走到这里
+    # （外部 MCP server 仍走 AgentTool 分支，由 test_58_13 守着），所以意图不变。
+    _RUNTIME_TARGET_TYPES = {"AGENTCORE_RUNTIME", "MCP_SERVER"}
     bad_type = [r for r in rows
-                if (r.get("target_type") or "").upper() != "AGENTCORE_RUNTIME"]
+                if (r.get("target_type") or "").upper() not in _RUNTIME_TARGET_TYPES]
     assert not bad_type, (
-        f"这些 RoutesToRuntime 的 target_type 不是 AGENTCORE_RUNTIME: {bad_type}。"
+        f"这些 RoutesToRuntime 的 target_type 不在 {sorted(_RUNTIME_TARGET_TYPES)}: {bad_type}。"
         " 该边只应用于指向 runtime 的 target；其他类型的 target 是真 tool 端点。")
 
     # dependency_kind 必须是 static：控制面声明，与流量无关。

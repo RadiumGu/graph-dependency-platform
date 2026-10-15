@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sys
 import time
 from collections import defaultdict
@@ -994,6 +995,8 @@ def _runtime_arn_from_target(target: dict):
     只看 targetType 会在 GetGatewayTarget 降级（见 _paged_targets）时
     拿不到 arn 却以为能建边，结果建出一条指向 None 的边。
     """
+    if (target.get('targetType') or '').upper() == 'MCP_SERVER':
+        return _runtime_arn_from_mcp_endpoint(target)
     if (target.get('targetType') or '').upper() != 'AGENTCORE_RUNTIME':
         return None
     cfg = ((target.get('targetConfiguration') or {}).get('http') or {})
@@ -1001,6 +1004,46 @@ def _runtime_arn_from_target(target: dict):
     if not arn:
         return None
     # 剥离可能的 endpoint 后缀，只留 .../runtime/<id>
+    return arn.split('/runtime-endpoint/', 1)[0]
+
+
+# AgentCore Runtime 的 invocations URL：
+#   https://bedrock-agentcore.<region>.amazonaws.com/runtimes/<URL 编码的 runtime ARN>/invocations?...
+_RUNTIME_INVOCATIONS_RE = re.compile(
+    r'^https://bedrock-agentcore\.[a-z0-9-]+\.amazonaws\.com/runtimes/([^/?#]+)/invocations')
+
+
+def _runtime_arn_from_mcp_endpoint(target: dict):
+    """MCP_SERVER 型 target 若指向一个 AgentCore Runtime，返回其 ARN；否则 None。
+
+    ## 实测依据（2026-10-15）
+
+    2026-10-10 新建的网关 `migrationdesk-pricing-gw` 的 target `pricing-runtime`：
+
+        targetType = MCP_SERVER（来自 ListGatewayTargets；GetGatewayTarget 不返回这个键）
+        targetConfiguration.mcp.mcpServer.endpoint =
+          https://bedrock-agentcore.ap-northeast-1.amazonaws.com/runtimes/
+          arn%3Aaws%3Abedrock-agentcore%3A...%3Aruntime%2Fmigrationdesk_pricing-ty3OTH80x5
+          /invocations?qualifier=DEFAULT
+
+    即「把一个以 MCP 协议部署的 AgentCore Runtime 挂成网关的 MCP target」。
+    旧解析器只认 AGENTCORE_RUNTIME 型，于是它掉进 AgentTool 分支，
+    造出一个不存在的「工具」—— tests/test_75 当场变红。而它指向的
+    `AgentRuntime(migrationdesk_pricing)` **早已是图里的节点**，
+    按上面那条判据（「路由的另一端是否已经是图里的节点」）应当直接连过去。
+
+    **只认 AgentCore 的 invocations URL**：外部 MCP server（任意 https 端点）
+    仍然是真的 tool 端点，走 AgentTool 分支 —— 不能因为它是 MCP 就当 runtime。
+    """
+    from urllib.parse import unquote
+    ep = ((((target.get('targetConfiguration') or {}).get('mcp') or {})
+           .get('mcpServer') or {}).get('endpoint')) or ''
+    m = _RUNTIME_INVOCATIONS_RE.match(ep)
+    if not m:
+        return None
+    arn = unquote(m.group(1))
+    if ':runtime/' not in arn:
+        return None
     return arn.split('/runtime-endpoint/', 1)[0]
 
 

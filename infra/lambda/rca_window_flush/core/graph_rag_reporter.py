@@ -101,6 +101,11 @@ def _build_group_context(group, rca_result: dict) -> str:
     else:
         try:
             from neptune import neptune_queries as nq
+            # kind='live' 在这里是**刻意保留**的，与 RCA 根因查询不带 kind 不矛盾：
+            # 这一段判的是「传播方向是否被**实际观测到的**调用印证」。声明边
+            # （static）混进来会把「理论上可能传播」当成「实际传播了」。
+            # 而 rca/collectors/layer2_tools.py 与 MCP 的 q1/q3 用法提示里
+            # 不带 kind，是因为那里要的是**候选**——宁多勿漏（2026-10-15）。
             radius = nq.q1_blast_radius(earliest_svc, kind='live')
             downstream = {r.get('name') for r in (radius.get('services') or [])}
             explained = [s for s in later_svcs if s in downstream]

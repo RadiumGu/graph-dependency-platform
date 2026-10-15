@@ -180,17 +180,24 @@ def probe_neptune(affected_service: str) -> str:
 
     改用 rca 自有的 `neptune_queries`（本来就在部署包里）：
       · `q4_service_info` 给服务属性，其中 `priority` 就是 tier
-      · `q3_upstream_deps(kind="live")` 给「该服务依赖谁」——
-        按其 docstring，根因定位应当用 live（只看当前仍存在的观测依赖）
+      · `q3_upstream_deps()` 给「该服务依赖谁」—— 不带 kind，
+        理由见下方调用处（live 会滤掉大多数数据层依赖）
     """
     findings = {"topology": None, "error": None}
     try:
         from neptune import neptune_queries as nq  # type: ignore
 
         info = nq.q4_service_info(affected_service) or {}
-        # kind="live"：只看当前仍存在的观测依赖。q3 的 docstring 明确写了
-        # 「根因定位应该用这个」—— 不过滤会把已失效的历史依赖也算进来。
-        deps = nq.q3_upstream_deps(affected_service, kind="live") or []
+        # 2026-10-15：去掉 kind="live"。原注释的理由是「不过滤会把已失效的
+        # 历史依赖也算进来」—— 但 live = dynamic AND active=true，它滤掉的
+        # 不只是失效边，还有**全部声明边**，而数据层依赖（→ DynamoDB / RDS /
+        # S3 / SQS）大多正是声明边：SDK 长连接与 VPC 端点不产生观测源能看到
+        # 的流量。实测 petsearch 的数据层根因候选 live=0、不带 kind=2，
+        # payforadoption 1 vs 6。Layer2 用这份列表决定下一步去探哪些资源，
+        # 漏掉数据层就永远不会去看最常出问题的那一层。
+        # 真正陈旧（active=false）的边每个服务只有 0~3 条，多给几个候选
+        # 的代价远小于漏掉根因。
+        deps = nq.q3_upstream_deps(affected_service) or []
 
         findings["topology"] = {
             "service": affected_service,
