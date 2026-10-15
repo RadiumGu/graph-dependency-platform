@@ -59,9 +59,28 @@ for _p in (str(_ROOT), str(_ROOT / 'rca')):
         sys.path.insert(0, _p)
 
 NAMESPACE = 'GraphDependency/Coverage'
-SKILL_FILE = _ROOT / 'graph_mcp' / 'agent_skill' / 'dependency-verification-graph.md'
+# 2026-10-15：守卫的对象从 dependency-verification-graph 换成 dependency-graph-rca。
+# PR #73 上线了新 skill，并**刻意**把旧的设成 INACTIVE（见
+# docs/lessons/devops-agent-graph-mcp-rca-2026-10.md）。守卫还盯着旧名字，于是在
+# 停用后第一轮就跳闸 ——「skill 不是 ACTIVE」是真的，但那是计划内的替换，不是故障。
+# 新 skill 是多文件包（SKILL.md + references/），比对按包内每个文件做，见 _bundle_sha。
+SKILL_FILE = _ROOT / 'graph_mcp' / 'devops_agent_skill' / 'dependency-graph-rca' / 'SKILL.md'
+SKILL_DIR = SKILL_FILE.parent
 AGENT_SPACE = '60c2f48f-b6e3-4dce-a0a3-4144228b2051'
-SKILL_NAME = 'dependency-verification-graph'
+SKILL_NAME = 'dependency-graph-rca'
+
+
+def _bundle_sha(files: dict) -> str:
+    """{相对路径: bytes} → 一个哈希。顺序无关，目录条目（以 / 结尾）不计。"""
+    h = hashlib.sha256()
+    for name in sorted(n for n in files if not n.endswith('/')):
+        h.update(name.encode('utf-8') + b'\0' + files[name] + b'\0')
+    return h.hexdigest()[:16]
+
+
+def _local_bundle() -> dict:
+    return {str(f.relative_to(SKILL_DIR)): f.read_bytes()
+            for f in sorted(SKILL_DIR.rglob('*')) if f.is_file()}
 
 #: 与 chaos/code/runner/edge_verification.py 的 _OBSERVER_MARKERS 同源。
 #: 少一个标记就会把有观测的边算成可判伪，覆盖数字会偏大。
@@ -203,7 +222,11 @@ def skill_guard() -> dict:
     import boto3                                                 # noqa: E402
 
     local = SKILL_FILE.read_text(encoding='utf-8') if SKILL_FILE.exists() else ''
-    local_sha = hashlib.sha256(local.encode('utf-8')).hexdigest()[:16]
+    # SKILL_FILE 被测试临时指到别处时，SKILL_DIR 仍是原目录 —— 所以读包只在
+    # SKILL_FILE 真能读到时进行，并跟着 SKILL_FILE 走。
+    local_sha = (_bundle_sha({str(f.relative_to(SKILL_FILE.parent)): f.read_bytes()
+                              for f in sorted(SKILL_FILE.parent.rglob('*')) if f.is_file()})
+                 if local else hashlib.sha256(b'').hexdigest()[:16])
     out = {'local_readable': 1 if local else 0,
            'skill_present': None, 'skill_active': None,
            'skill_matches_repo': None, 'local_sha': local_sha}
@@ -232,6 +255,9 @@ def skill_guard() -> dict:
                            '自发查询率很可能已经掉回基线，需要重跑采样确认')
             return out
         meta = mine[0].get('metadata') or {}
+        # 把真实状态带出去：原来告警里写「（None）」，因为 out 里没有 status 键 ——
+        # 读告警的人分不清「状态为空」和「状态是 INACTIVE」。
+        out['status'] = meta.get('status')
         out['skill_active'] = 1 if meta.get('status') == 'ACTIVE' else 0
         out['asset_id'] = mine[0].get('assetId')
         out['asset_version'] = mine[0].get('version')
@@ -249,9 +275,8 @@ def skill_guard() -> dict:
             if hasattr(raw, 'read'):
                 raw = raw.read()
             z = zipfile.ZipFile(io.BytesIO(raw))
-            body = z.read(z.namelist()[0]).decode('utf-8')
-            out['remote_sha'] = hashlib.sha256(
-                body.encode('utf-8')).hexdigest()[:16]
+            # 多文件包：原来只取 namelist()[0]，对新 skill 会随机比到某一个文件
+            out['remote_sha'] = _bundle_sha({n: z.read(n) for n in z.namelist()})
             out['skill_matches_repo'] = 1 if out['remote_sha'] == local_sha else 0
             if not out['skill_matches_repo']:
                 out['note'] = ('远端 skill 内容与仓库不一致 —— '
