@@ -42,8 +42,10 @@ def q1_blast_radius(failed_node: str, kind: str = None) -> dict:
     """
     # 受影响的服务（最多 5 跳）
     # dependency_kind 过滤：见 q3_upstream_deps 的 docstring。
-    # 'live' = dynamic AND active=true，即「当前仍然存在的依赖」，
-    # 影响面分析应该用它 —— 已下线服务的历史调用边不构成现在的影响面。
+    # 'live' = dynamic AND active=true。**RCA 求影响面时不要用它**（2026-10-15 实测）：
+    # 它连全部 static 声明边一起滤掉，而数据层依赖大多只有声明边 ——
+    # RDS 集群影响面 live=0、不带 kind=11；ddbpetadoption live=4、不带=21。
+    # 只有在判「传播是否被实际观测印证」时才该用 live（见 core/graph_rag_reporter.py）。
     if kind == 'live':
         _kind_filter = (" AND all(_r IN _rels WHERE _r.dependency_kind = 'dynamic'"
                         " AND _r.active = true)")
@@ -104,7 +106,7 @@ def q3_upstream_deps(failed_service: str, kind: str = None) -> list:
             'static'   只看 AWS 配置 / CFN 模板「声明」的依赖
             'dynamic'  只看「观测到过」的依赖（含已失效的历史观测）
             'live'     只看「当前仍然存在」的依赖 = dynamic AND active=true
-                       —— **根因定位应该用这个**
+                       —— **根因定位不要用这个**，见下方「为什么 RCA 不传 kind」
 
     ## 方向（2026-09-06 修）
 
@@ -119,8 +121,17 @@ def q3_upstream_deps(failed_service: str, kind: str = None) -> list:
     它们在任何过滤下都不该出现在 petsite 的根因候选里。
     （`trafficgenerator → petsite` 更明显：一个压测流量源不可能是 petsite 的根因。）
 
-    `kind='live'` 仍然必要，理由不变：`dependency_kind` 只区分「声明 vs 观测」，
-    不区分「观测过 vs 现在还在」。已下线服务的历史边不构成现在的依赖。
+    ## 为什么 RCA 不传 kind（2026-10-15 改判）
+
+    这里原先写的是「`kind='live'` 仍然必要」—— 理由是 `dependency_kind` 只区分
+    「声明 vs 观测」，不区分「观测过 vs 现在还在」。那个区分是真的，结论却是错的：
+    live 不只滤掉「观测后静默」的边，还连**全部 static 声明边**一起滤掉，
+    而数据层依赖（DynamoDB / RDS / S3）大多只有声明边 —— SDK 长连接与 VPC 端点
+    不产生观测源能看见的流量。实测数据层根因候选（live / 不带 kind）：
+    petsearch 0/2、payforadoption 1/6、petsite 2/6。
+    真正陈旧的边（dynamic 且 active=false）每个服务只有 0–3 条，
+    多几个候选的代价远小于漏掉根因。MCP 工具描述、Layer2 探针、demo 证据链
+    都已按此口径改为不传 kind。
 
     ## ⚠️ 函数名里的 `upstream` 与本仓库 NL 层的术语相反
 
