@@ -133,9 +133,35 @@ def test_goldenreal_recommendations(case, engine):
     recs = rec_result.get("recommendations", [])
     rec_count = len(recs)
 
+    # ── 0 条时必须说清是哪种 0 ─────────────────────────────────────────
+    #
+    # 2026-10-11 l004 失败时，信息只有一句 `got 0 recs, expected >= 1`，
+    # 而那同一句覆盖三种完全不同的原因，处置方式也完全不同：
+    #
+    #   ① 调用失败（节流 / 超时）    → 重试或降并发，不是模型退化
+    #   ② 输出了但解析不出来         → 是解析缺陷，不是模型退化
+    #   ③ LLM 真的认为没有建议       → **这才是模型行为退化**
+    #
+    # golden 套件的全部价值在于发现 ③。把 ①② 混进来会让人把真退化
+    # 当成 flaky，也会让 flaky 被当成真退化 —— 两个方向都错。
+    why = ""
+    if rec_count == 0:
+        parts = []
+        if rec_result.get("error"):
+            parts.append(f"LLM 调用失败: {rec_result['error']}")
+        if rec_result.get("parse_error"):
+            parts.append(f"解析失败: {rec_result['parse_error']}")
+        if not parts:
+            parts.append(
+                f"LLM 正常返回且解析成功，但数组为空 —— "
+                f"**这是模型行为本身的变化**"
+                f"（原始文本 {rec_result.get('raw_text_len', '?')} 字符）"
+            )
+        why = "\n  原因: " + "；".join(parts)
+
     # Count constraint
     assert rec_count >= case["min_recommendations"], (
-        f"{case['id']}: got {rec_count} recs, expected >= {case['min_recommendations']}"
+        f"{case['id']}: got {rec_count} recs, expected >= {case['min_recommendations']}{why}"
     )
     assert rec_count <= case["max_recommendations"], (
         f"{case['id']}: got {rec_count} recs, expected <= {case['max_recommendations']}"
