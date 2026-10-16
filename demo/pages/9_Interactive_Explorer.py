@@ -153,13 +153,13 @@ def directed_rows(name: str, ets: tuple, limit: int, downstream: bool) -> list:
     return [r for r in rows if r.get(key) == name]
 
 
-# 关系类型筛选：契约把 29 种边分成 6 种依赖边与 23 种结构/包含边
-# （RunsOn / LocatedIn / BelongsTo / Contains…）。只画依赖边是本页的默认，
+# 关系类型筛选：契约用 `dependency: true` 把边分成依赖边与结构/包含边
+# （RunsOn / LocatedIn / BelongsTo / Contains…），数量现算，不写死。只画依赖边是本页的默认，
 # 因为把包含关系也画成箭头正是杂乱的主要来源；但允许操作者按类型再收窄，
 # 「只看 Calls」和「只看 AccessesData」是两个不同的排查问题。
 edge_types = st.multiselect(
     "关系类型", DEP_EDGES, default=DEP_EDGES,
-    help="只列依赖边（契约里 dependency: true 的那 6 种）。结构/包含边不画： "
+    help=f"只列依赖边（契约里 dependency: true 的那 {len(DEP_EDGES)} 种）。结构/包含边不画： "
          "把它们也画成箭头会让图的杂乱度翻倍，而它们回答的不是「谁依赖谁」。")
 if not edge_types:
     st.warning("至少选一种关系类型，否则没有边可画。")
@@ -572,8 +572,8 @@ with d1:
         st.caption("拿这个节点去跑预置查询：确定性 Cypher，不经过 AI。")
         for qname, why in (
             ("q22_edge_verification_verdicts", "这个服务的依赖边验证判定"),
-            ("q1_blast_radius", "它挂了会影响什么"),
-            ("q3_upstream_deps", "谁依赖它"),
+            ("q1_blast_radius", "谁依赖它 · 它挂了会影响什么（入边）"),
+            ("q3_upstream_deps", "它依赖谁 · 根因候选（出边）"),
         ):
             st.caption(f"　`{qname}` — {why}")
         C.page_link("pages/2_Query_Catalog.py", "→ 去查询库执行")

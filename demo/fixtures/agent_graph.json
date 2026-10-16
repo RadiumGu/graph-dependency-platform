@@ -6,6 +6,11 @@
       "arn": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/waggleaigateway-th4m2rp46p"
     },
     {
+      "label": "AgentGateway",
+      "name": "migrationdesk-pricing-gw",
+      "arn": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:gateway/migrationdesk-pricing-gw-fjtymkylhx"
+    },
+    {
       "label": "AgentMemory",
       "name": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:memory/WaggleAIMemory-HuA0HS92Yd",
       "arn": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:memory/WaggleAIMemory-HuA0HS92Yd"
@@ -44,6 +49,11 @@
       "label": "AgentRuntime",
       "name": "graph_dependency_mcp",
       "arn": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/graph_dependency_mcp-12Vg2Z9XXu"
+    },
+    {
+      "label": "AgentRuntime",
+      "name": "migrationdesk_pricing",
+      "arn": "arn:aws:bedrock-agentcore:ap-northeast-1:926093770964:runtime/migrationdesk_pricing-ty3OTH80x5"
     },
     {
       "label": "AgentTool",
@@ -333,6 +343,15 @@
     },
     {
       "source_label": "AgentGateway",
+      "source": "migrationdesk-pricing-gw",
+      "edge_type": "RoutesToRuntime",
+      "target_label": "AgentRuntime",
+      "target": "migrationdesk_pricing",
+      "verify_status": "untested",
+      "edge_source": "agentcore-etl"
+    },
+    {
+      "source_label": "AgentGateway",
       "source": "WaggleAIGateway",
       "edge_type": "RoutesToRuntime",
       "target_label": "AgentRuntime",
@@ -368,7 +387,7 @@
       "edge_source": "agentcore-etl"
     }
   ],
-  "node_total": 19,
-  "edge_total": 30,
-  "captured_at": "2026-09-20T10:43:07Z"
+  "node_total": 21,
+  "edge_total": 31,
+  "captured_at": "2026-10-16T07:37:43Z"
 }

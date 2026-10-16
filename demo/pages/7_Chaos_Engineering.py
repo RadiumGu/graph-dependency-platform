@@ -2,8 +2,8 @@
 7_Chaos_Engineering.py — 故障注入与实验历史。
 
 改造要点（2026-09-05）：
-- 原版硬编码 **73 条** 实验清单，而 fault_catalog.yaml 实际是 **59 条**
-  （chaosmesh 19 / fis 36 / fis_scenarios 4）→ 现在全部现算
+- 原版硬编码 **73 条** 实验清单，而 fault_catalog.yaml 当时实际是 **59 条**
+  （chaosmesh 19 / fis 36 / fis_scenarios 4；2026-10 已是 61 条）→ 现在全部现算
 - 原版的 `💥 执行实验` 按钮只隔一个 st.warning 就能 subprocess 打生产
   → 现在必须设 DEMO_ALLOW_INJECTION=1 才出现；线上刻意不设
 - 原版服务名清单里有 petstatusupdater / pethistory 不在 KNOWN_SERVICES，

@@ -94,10 +94,10 @@
     {
       "name": "trafficgenerator",
       "tier": null,
-      "az": "ap-northeast-1a",
+      "az": "ap-northeast-1c",
       "fault_boundary": "az",
       "recovery_priority": "Tier2"
     }
   ],
-  "captured_at": "2026-09-20T10:43:10Z"
+  "captured_at": "2026-10-16T07:37:46Z"
 }

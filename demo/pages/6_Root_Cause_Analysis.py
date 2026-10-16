@@ -18,10 +18,10 @@
    status chips。现在把它按 `(src, dst)` 连回候选列表：每个根因候选都带上它所依赖
    的那条边的判定，`refuted` 的候选划掉并给出理由。
 
-4. **`live` 过滤排除了什么，必须摆出来。** 实测 `petsite` 的 17 条依赖里只有 3 条
-   算 live，被排除的 14 条分三类（声明未观测 / 观测后静默 / 未对账）。
-   「RCA 该用哪些依赖、为什么不用另一些」正是这一页的核心内容，
-   而上一版只呈现了过滤后的结果，读者看不到代价。
+4. **出边分档必须摆出来。**（2026-10-15 改判）原先这一条的结论是「RCA 只用 live、
+   并展示被排除的代价」—— 那个结论是错的：数据层依赖大多只有声明边，用 live 查
+   RDS 集群影响面得到 0、不带 kind 是 11。现在证据链不按 kind 过滤，这一节改为
+   解释**为什么不过滤**，以及真正该降权的只有「观测后静默」一档。
 
 5. **覆盖率当置信度上限用。** `q23` 实测 `verified_ratio = 10.92%`。
    报告的置信度不该高于它所依赖的那些边的验证程度。
@@ -86,15 +86,16 @@ if not svc_names:
 
 @st.cache_data(show_spinner=False, ttl=600)
 def default_service_index(names: tuple) -> int:
-    """默认选中**真的有 live 依赖**的服务。
+    """默认选中**依赖出边最多**的服务。
 
     为什么需要这个：服务清单按图谱返回顺序排，首位实测是 `artillery` ——
     那是压测工具（DeepFlow 采到它的流量后图里就多出一个「微服务」），
     它的陈旧边已被清理，于是首屏是「0 个根因候选 / 0 影响面」。
     这一页要讲依赖如何参与推理，开局给一个空图是最差的第一印象。
 
-    做法是现查各服务的 live 出边数，取最多的那个 —— 数据驱动，
+    做法是现查各服务的依赖出边数，取最多的那个 —— 数据驱动，
     而不是硬编码一个服务名（硬编码会在图谱变化后静默失效）。
+    口径与证据链一致：不按 `kind='live'` 过滤（理由见 `_common.RCA_EVIDENCE_CHAIN`）。
     """
     if not ONLINE:
         return 0
@@ -104,7 +105,6 @@ def default_service_index(names: tuple) -> int:
         rows = nc.results(
             f"""MATCH (n)-[r]->(d)
                 WHERE n.name IN {list(names)} AND type(r) IN {labels}
-                  AND r.dependency_kind = 'dynamic' AND r.active = true
                 RETURN n.name AS name, count(*) AS n
                 ORDER BY n DESC LIMIT 1""")
         if rows and rows[0].get("name") in names:
@@ -221,16 +221,19 @@ def verdict_index(ev: dict) -> dict:
 
 @st.cache_data(show_spinner=False, ttl=300)
 def dependency_breakdown(service: str) -> dict:
-    """`live` 过滤排除了什么 —— 这是本页最该摆出来的差额。
+    """出向依赖边按 kind/active 分四档 —— 说明为什么 RCA **不**按 `live` 过滤。
 
-    `kind='live'` = `dependency_kind='dynamic' AND active=true`。实测 petsite 的
-    17 条出边里只有 3 条算 live。被排除的不是噪声，各有各的含义：
+    `kind='live'` = `dependency_kind='dynamic' AND active=true`。各档含义：
 
-        声明未观测 static      CFN/配置里写了，但运行时从没看到过流量
-        观测后静默 active=false 曾经观测到，现在不再出现（服务可能已下线）
-        未对账     active=None  没有任何源的 reconcile 碰过它
+        live       dynamic 且 active=true   运行时观测到，且现在仍在出现
+        声明未观测 static                   CFN/配置里写了，观测源从没看到过流量
+        观测后静默 dynamic 且 active=false  曾经观测到，现在不再出现
+        未对账     active=None              没有任何源的 reconcile 碰过它
 
-    RCA 只该用 live 那一档，但**读者有权知道代价**。
+    2026-10-15 之前本页的结论是「RCA 只该用 live 那一档」，那是错的：
+    数据层依赖大多落在「声明未观测」—— SDK 长连接与 VPC 端点不产生观测源能看到的
+    流量。用 live 查 RDS 集群的影响面得到 0，不带 kind 是 11。
+    所以证据链现在不过滤，真正需要降权的只有「观测后静默」那一档。
     """
     if not ONLINE:
         return {}
@@ -318,8 +321,8 @@ if svc_meta:
             help=f"该服务指向别人的依赖边共 {_brk.get('total', 0)} 条，"
                  f"其中 **live**（`dependency_kind=dynamic` 且 `active=true`）"
                  f"{len(_brk.get('live', []))} 条。"
-                 "RCA 只该用 live 那一档，但差额有意义："
-                 "声明未观测／观测后静默／未对账各自代表不同的问题。"
+                 "RCA 用的是全部出边，不只 live —— 数据层依赖大多是声明边，"
+                 "只按 live 会漏掉数据库、队列这类最常见的根因。"
                  "**根因在出边、影响面在入边。**")
     else:
         head[3].metric("依赖出边", "—", help="离线模式下无法实时查依赖边。")
@@ -366,7 +369,7 @@ with tab_dir:
         st.caption("`q3_upstream_deps` · 出边 · **它依赖谁**")
         st.caption("这些挂了，故障服务才会挂")
         if not cands:
-            st.info("0 个 live 依赖。见下方第 3 节：被 `live` 过滤排除了什么。")
+            st.info("0 个依赖出边。见下方第 3 节的出边分档。")
         else:
             show_table(cands)
     with wheel[1]:
@@ -380,7 +383,7 @@ with tab_dir:
         st.caption("`q1_blast_radius` · 入边 · **谁依赖它**")
         st.caption("故障服务挂了，这些跟着挂")
         if not b_svcs and not b_caps:
-            st.info("0 个 live 下游消费者。")
+            st.info("0 个下游消费者。")
         else:
             if b_svcs:
                 show_table(b_svcs)
@@ -399,7 +402,7 @@ with tab_dir:
     )
     vidx = verdict_index(ev)
     if not cands:
-        st.info("没有 live 候选可判定。")
+        st.info("没有根因候选可判定。")
     else:
         rows = []
         for c in cands:
@@ -435,37 +438,38 @@ with tab_dir:
                 "判定自身也会被推翻，这比「我们能证伪」更能说明它是可证伪的。"
             )
 
-    # ── 3　live 过滤排除了什么 ────────────────────────────────────────────────
+    # ── 3　出边分档：为什么不按 live 过滤 ─────────────────────────────────────
     st.markdown("---")
-    st.markdown("#### 3　`live` 过滤排除了什么")
+    st.markdown("#### 3　为什么根因候选**不**按 `live` 过滤")
     bd = dependency_breakdown(selected_service)
     if not bd:
         st.caption("离线模式下不展示该分解（需要现查活图谱）。")
     else:
         st.caption(
             f"`{selected_service}` 一共有 **{bd['total']}** 条出向依赖边，"
-            f"RCA 只用其中 **{len(bd['live'])}** 条。"
-            "被排除的不是噪声，各有各的含义 —— 读者有权知道代价。"
+            f"其中只有 **{len(bd['live'])}** 条算 `live`。上面的根因候选用的是**全部** —— "
+            "数据层依赖（DynamoDB / RDS / S3）大多只有声明边，SDK 长连接和 VPC 端点"
+            "不产生观测源看得见的流量。只按 live 查，根因候选里就**没有数据库**。"
+            "真正该降权的只有「观测后静默」那一档。"
         )
         b = st.columns(4)
         b[0].metric("✅ live", len(bd["live"]),
                     help="`dependency_kind=dynamic` 且 `active=true` —— "
-                         "运行时确实观测到、且现在仍在出现。RCA 只该用这一档。")
+                         "运行时确实观测到、且现在仍在出现。")
         b[1].metric("📄 声明未观测", len(bd["static"]),
-                    help="`dependency_kind=static` —— CFN/配置里写了，"
-                         "但运行时从没看到过流量。不等于不存在，只是没被观测到。")
+                    help="`dependency_kind=static` —— CFN/配置里声明了，观测源没看到过流量。"
+                         "**数据层依赖多在这一档**，RCA 必须保留。")
         b[2].metric("🔇 观测后静默", len(bd["silent"]),
                     help="`dependency_kind=dynamic` 且 `active=false` —— "
-                         "曾经观测到，现在不再出现。服务可能已下线，"
-                         "也可能只是不再被采集：「不再被采集」≠「不再存在」。")
+                         "曾经观测到，现在不再出现。这是唯一该降权的一档："
+                         "可能已下线，也可能只是暂时零流量。")
         b[3].metric("❔ 未对账", len(bd["unreconciled"]),
                     help="`active` 缺失 —— 没有任何源的 reconcile 碰过它。")
         for key, title, why in (
-            ("live", "✅ live —— RCA 实际使用的",
-             "运行时观测到、且当前仍然存在。"),
+            ("live", "✅ live", "运行时观测到、且当前仍然存在。"),
             ("static", "📄 声明未观测",
              "CFN / AWS 配置里声明了，但运行时从未观测到流量。"
-             "**不代表不存在** —— 可能只是这条路径当前没被走到。"),
+             "**不代表不存在** —— 数据层依赖大多在这里。"),
             ("silent", "🔇 观测后静默",
              "曾经观测到，现在不再出现。可能服务已下线，"
              "也可能只是暂时零流量 —— 零流量与健康在指标上无法区分。"),
@@ -732,10 +736,112 @@ with tab_report:
 # 图谱以 MCP server 形式关联，24 条只读查询）。全部记录在
 # demo/fixtures/agent_unaided_answer.json：逐字原文、executionId、耗时、复现命令。
 with tab_agent:
+    # ── A　接图谱 vs 不接图谱（主证据，2026-10-16）──────────────────────────────
+    #
+    # 下面 B 部分（2026-09）回答的是「agent 会不会去查图谱」。它回答不了观众真正
+    # 想问的：**查了图谱，RCA 结论会不会更好？** 这一节回答那个问题：
+    # 同一批 FIS 注入的已知根因故障，分别交给「接了图谱」和「没接」的两个独立
+    # Agent Space。数据见 demo/fixtures/agent_ab_mcp.json，由
+    # demo/fixtures/capture_agent_ab.py 从 API 取回；判定是人工对照真实注入写的，
+    # 依据逐条写在 fixture 里。所有数字从 fixture 现算，不写死。
+    ab = C.fixture("agent_ab_mcp")
+    ab_cases = ab.get("cases") or []
+    st.markdown("#### A　接图谱 vs 不接图谱：同一批真实故障")
+    if not ab_cases:
+        st.info("没有读到 A/B 对照记录（`demo/fixtures/agent_ab_mcp.json`）。")
+    else:
+        import statistics as _stats
+
+        st.caption(
+            "两个**新建**的 Agent Space，关联同一个 AWS 账号、同一个 IAM 角色。"
+            f"唯一变量：**接图谱**那一臂多了 {ab['arms']['mcp']}。"
+            "每次用 FIS 注入一个已知根因的故障，结束后在两边各开一个调查，"
+            "描述里只写用户看得到的症状。")
+
+        def _arm_stats(cases: list, arm: str) -> dict:
+            rows = [c[arm] for c in cases if c[arm].get("status") == "COMPLETED"]
+            v = [r.get("verdict") for r in rows]
+            return {
+                "n": len(rows),
+                "correct": v.count("correct"), "partial": v.count("partial"),
+                "wrong": v.count("wrong"), "none": v.count("none"),
+                "min": _stats.median(r["minutes"] for r in rows) if rows else None,
+                "tools": _stats.median(r["tools"] for r in rows) if rows else None,
+            }
+
+        r2 = [c for c in ab_cases if c["round"] == 2]
+        r1 = [c for c in ab_cases if c["round"] == 1]
+        s_m, s_b = _arm_stats(r2, "mcp"), _arm_stats(r2, "base")
+        st.markdown("##### 第二轮：agent 看不到故障注入记录")
+        st.caption(ab["rounds"]["2"] + "。这一轮的准确率才可比。")
+        mc = st.columns(3)
+        mc[0].metric("根因完整命中（接图谱 / 不接）",
+                     f"{s_m['correct']}/{s_m['n']}　vs　{s_b['correct']}/{s_b['n']}")
+        mc[1].metric("耗时中位数（分钟）", f"{s_m['min']:g}　vs　{s_b['min']:g}")
+        mc[2].metric("工具调用中位数", f"{s_m['tools']:g}　vs　{s_b['tools']:g}")
+
+        _VERD = {"correct": "✅ 命中", "partial": "🟡 部分", "wrong": "❌ 归因错误",
+                 "none": "⬜ 无结论"}
+
+        def _case_rows(cases: list) -> list:
+            return [{
+                "故障": c["fault"],
+                "接图谱": _VERD.get(c["mcp"].get("verdict"), "?"),
+                "不接": _VERD.get(c["base"].get("verdict"), "?"),
+                "耗时（分钟）": f"{c['mcp'].get('minutes')} / {c['base'].get('minutes')}",
+                "工具调用": f"{c['mcp'].get('tools')} / {c['base'].get('tools')}",
+                "判定依据": c.get("verdict_basis", ""),
+            } for c in cases]
+
+        show_table(_case_rows(r2))
+        st.caption(
+            "差距最典型的是 Aurora reader 重启那一行：没接图谱的一臂不知道"
+            "「过往领养」页面由哪个服务、哪个数据库支撑，于是什么都没查到；"
+            "接了图谱的一臂从拓扑直接走到 petlistadoptions 和它读取的那台 reader。"
+            "**自身故障**（内存压力）那一行两臂都没完全做对 —— 图谱帮不上忙的故障，"
+            "就不该期待它带来收益。")
+
+        s1m, s1b = _arm_stats(r1, "mcp"), _arm_stats(r1, "base")
+        with st.expander(
+                f"第一轮：agent 能看到 FIS 实验（命中 {s1m['correct']}/{s1m['n']} vs "
+                f"{s1b['correct']}/{s1b['n']}，准确率封顶，只能比效率）"):
+            st.caption(ab["rounds"]["1"] + "。")
+            show_table(_case_rows(r1))
+            st.caption(
+                f"耗时中位数 {s1m['min']:g} vs {s1b['min']:g} 分钟，"
+                f"工具调用中位数 {s1m['tools']:g} vs {s1b['tools']:g}。")
+
+        st.warning(
+            f"**怎么读这组数字。** 每轮只有 {s_m['n']} 对，能说明方向，不够统计显著。"
+            "「接图谱」一臂同时带了 MCP 和 skill，两者的贡献没有拆开。"
+            "第二轮仍有没堵住的提示（两臂相同，对比依然公平）："
+            + "；".join(ab.get("known_leaks_round2") or []) + "。", icon="⚖️")
+
+        with st.expander("🔬 核对这批数据"):
+            st.caption(
+                "每个调查都可以按 Space ID + task ID 用 "
+                "`aws devops-agent get-backlog-task` / `list-journal-records` 取回原文；"
+                "重跑抓取：`python3 demo/fixtures/capture_agent_ab.py`。")
+            st.code("\n".join(
+                f"R{c['round']} {c['label']:3s} mcp {c['mcp']['task_id']}  "
+                f"base {c['base']['task_id']}  FIS {c['fis_experiment']}"
+                for c in ab_cases), language="text")
+            st.caption("Space：" + "　".join(
+                f"R{k} 接图谱 `{v['mcp']}` / 不接 `{v['base']}`"
+                for k, v in (ab.get("spaces") or {}).items()))
+
+    st.markdown("---")
+    st.markdown("#### B　历史：工具可用 ≠ 工具会被用（2026-09）")
+    st.caption(
+        "下面是 A 部分之前的一组实验，回答的是另一个问题：**agent 会不会主动去查图谱**。"
+        "它是 skill 这个修复手段的来历，不是图谱价值的主证据。"
+        "当时用的 skill `dependency-verification-graph` 已于 2026-10-15 停用，"
+        "由 `graph_mcp/devops_agent_skill/dependency-graph-rca/` 取代（从 GitHub 导入）。")
+
     rec = C.fixture("agent_unaided_answer")
     runs = [r for r in (rec.get("runs") or []) if "error" not in r]
 
-    st.markdown("#### 1　这一屏在证明什么")
+    st.markdown("#### B1　这一屏在证明什么")
     st.caption(
         "**不是比谁聪明。** 任何 LLM 被问一个它没有事实依据的问题时都会给出答案，"
         "因为它不会说「我不知道」—— 包括本项目自己的引擎。"
@@ -757,7 +863,7 @@ with tab_agent:
         eg = sum(1 for r in expl if r.get("used_graph"))
         ag = sum(1 for r in after if r.get("used_graph"))
 
-        st.markdown("#### 2　同一个问题，问了 %d 次" % len(runs))
+        st.markdown("#### B2　同一个问题，问了 %d 次" % len(runs))
         st.caption(
             "同一个 agent space、同一段问题文本。三组的差别只有两处："
             "**问题里有没有点名要求查图谱**，以及"
@@ -820,7 +926,7 @@ with tab_agent:
                   help="而且每次结果相同。这个不对称本身就是论据。")
 
         # ── 判别方法：必须先说清楚，否则上面的比例只是我说了算 ──────────────
-        st.markdown("#### 3　怎么判断它到底查了没有")
+        st.markdown("#### B3　怎么判断它到底查了没有")
         st.caption(
             "这一步不能含糊：如果判别方法不可靠，上面那两个比例就只是自说自话。")
 
@@ -861,7 +967,7 @@ with tab_agent:
                 "而不是它常见的书写形式。**")
 
         # ── 两类回答对照 ──────────────────────────────────────────────────────
-        st.markdown("#### 4　两类回答长什么样")
+        st.markdown("#### B4　两类回答长什么样")
         g_run = next((r for r in runs if r.get("used_graph")), None)
         f_run = next((r for r in runs if not r.get("used_graph")), None)
 
@@ -907,7 +1013,7 @@ with tab_agent:
                 st.caption("本批样本里没有这一类。")
 
         # ── 图谱这一侧：实时查 ────────────────────────────────────────────────
-        st.markdown("#### 5　图谱这一侧（实时查询，不是快照）")
+        st.markdown("#### B5　图谱这一侧（实时查询，不是快照）")
         st.caption(
             f"上面 agent 的回答是**已抓取的记录**（非确定性、单次 45–205 秒）；"
             f"下面这张表是**现在查的**。这个不对称本身就是论据："
@@ -948,7 +1054,7 @@ with tab_agent:
                 "在线时它会显示当前服务逐条依赖边的判定与观测来源。")
 
         # ── 这对我们自己意味着什么 ────────────────────────────────────────────
-        st.markdown("#### 6　这个缺口是我们自己的，已经修了")
+        st.markdown("#### B6　这个缺口是我们自己的，已经修了")
         if after and plain:
             st.caption(
                 f"① 组那 {100 * pg / len(plain):.0f}% 的自发查询率"
@@ -957,16 +1063,18 @@ with tab_agent:
                 "与工具描述里，指望客户端交给模型 —— 两处都明确写着"
                 "「讨论任何依赖关系之前先调它」，比例仍然上不去。\n\n"
                 "**根因是纪律写错了层。** 这个 agent 每次调用都先 `load_skill`，"
-                "而 agent space 里原有的 7 个 skill 没有一个讲依赖图谱；"
+                "而当时 agent space 里原有的 7 个 skill 没有一个讲依赖图谱；"
                 "唯一提到 Neptune 的那条 memory 把它描述成**基础设施清单**"
                 "（集群、ETL Lambda、事件管道），完全没提验证判定。\n\n"
                 f"所以把规程做成一份 **skill 资产**注册进 agent space，"
                 f"再用**同一个问题**重跑：{100 * pg / len(plain):.0f}% → "
                 f"**{100 * ag / len(after):.0f}%**。"
-                "内容在 `mcp/agent_skill/dependency-verification-graph.md`，"
-                "七条规程：先查再说／判定四态含义／零退化≠依赖不成立／"
-                "不编造图谱没返回的数值／观测层与干预层不混用／单一观测源降权／"
-                "边方向。")
+                "当时那份 skill 是 `dependency-verification-graph`（七条规程：先查再说／"
+                "判定四态含义／零退化≠依赖不成立／不编造图谱没返回的数值／"
+                "观测层与干预层不混用／单一观测源降权／边方向）。"
+                "2026-10-15 它被 `graph_mcp/devops_agent_skill/dependency-graph-rca/` "
+                "取代：保留这七条，并把规程改成一条 RCA 流程（先根因候选、再查变更、"
+                "再影响面），还补上了 q1/q3 **不要传 `kind`** 这条。")
             st.caption(
                 "⚠️ 这件事的通用教训比这个数字重要:**把 agent 该遵守的纪律放在"
                 "协议字段里,不等于它会读到。** 得放进那个 agent 实际先读的那一层 —— "
@@ -1015,7 +1123,7 @@ with tab_agent:
     # 其余会拿 FIS 模板当依据编一个答案。放一个自由输入框，读者大概率看到的是后者，
     # 却没有办法分辨 —— 那等于在一页专门讲这件事的地方，再造一个同样的坑。
     st.markdown("---")
-    st.markdown("#### 6　自己按一次")
+    st.markdown("#### C　自己按一次")
 
     _space = rec.get("agent_space_id")
     _agent_ok, _agent_why = C.devops_agent_available()
@@ -1135,7 +1243,7 @@ with tab_agent:
     # 事实走 SendMessage 的 `context` 参数而不是拼进问题正文：那样能分清
     # 「我问了什么」和「我给了什么材料」，agent 侧也不会把材料当成提问的一部分。
     st.markdown("---")
-    st.markdown("#### 7　带着这一页的事实去追问")
+    st.markdown("#### D　带着这一页的事实去追问")
 
     if not _space:
         st.caption("同上，缺 `agent_space_id`，这一段不提供。")

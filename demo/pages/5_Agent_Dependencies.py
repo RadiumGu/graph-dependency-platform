@@ -1,7 +1,8 @@
 """
 5_Agent_Dependencies.py — GenAI Agent 的依赖也进同一张图。
 
-背景：2026-09-04 契约扩展到 agent 域（节点 33→39、边 26→29、数据源 11→12），
+背景：2026-09-04 契约扩展到 agent 域（当时节点 33→39、边 26→29、数据源 11→12；
+之后又有增补，页面上的数字一律现算），
 新增 etl_agentcore 从两条独立链路写入：
   ① 控制平面 list API → 资源节点（失败表现为「缺节点」）
   ② aws/spans 结构化日志 → 调用边（失败表现为「有节点没依赖」）
@@ -83,7 +84,8 @@ m[1].metric("相关边", len(edges),
 m[2].metric("契约声明节点类型", C.schema_counts()["node_types"],
             help="其中 agent 域 6 种。契约在 `profiles/graph_contract.yaml`。")
 m[3].metric("数据源", "agentcore-etl",
-            help="第 12 个合法源。源词表由契约定义，"
+            help=f"agent 域引入的数据源（契约现声明 {C.schema_counts().get('sources', '—')} 个合法源）。"
+                 "源词表由契约定义，"
                  "每条边都记录是哪个源写的 —— 这是溯源的基础。")
 
 # ── 节点分布 ──────────────────────────────────────────────────────────────────
@@ -173,6 +175,12 @@ EDGE_DESC = {
     "ProtectsAccess": "护栏约束 agent（结构边）。",
     "AccessesData": "agent 访问记忆或 AWS 服务端点。",
     "DependsOn": "工具依赖后端服务——**连回主图的那条桥**。",
+    "RoutesToRuntime": "网关 target 直接指向一个 AgentRuntime。由控制面派生（ListGatewayTargets + "
+                       "GetGatewayTarget），与流量和采样无关，所以是 `static`。"
+                       "AGENTCORE_RUNTIME 型和指向 AgentCore invocations URL 的 MCP_SERVER 型 target 都走这条。",
+    "RoutesVia": "agent 的出站调用经由网关（AgentRuntime → AgentGateway）。从运行时 span 观测得到，"
+                 "是 `dynamic`。网关承载全部 agent 间流量 —— 它失效，编排器到子 agent 全断，"
+                 "这条边补的正是这个单点。",
 }
 
 dep_labels = set(C.dependency_edge_labels())

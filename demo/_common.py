@@ -102,10 +102,17 @@ RCA_STAGE_TITLE = {
 RCA_EVIDENCE_CHAIN = [
     # ── 方向：RCA 的两半。契约里依赖边从依赖方指向被依赖方，所以
     #        根因在出边、影响面在入边。搞反会把受害者当成嫌疑人。
+    #
+    #        **不传 kind**（2026-10-15 改）。`live` = dynamic AND active=true，
+    #        会连同全部 static 声明边一起滤掉 —— 而数据层依赖（DynamoDB / RDS / S3）
+    #        大多只有声明边：SDK 长连接与 VPC 端点不产生观测源能看见的流量。
+    #        实测 RDS 集群影响面 live=0、不带 kind=11；ddbpetadoption live=4、不带=21。
+    #        真正陈旧的边（dynamic 且 active=false）每个服务只有 0–3 条，
+    #        多几个候选的代价远小于漏掉根因。与 MCP 工具描述、Layer2 探针同一口径。
     ("q3_upstream_deps", "根因候选 —— 故障服务**依赖谁**（出边）",
-     {"failed_service": None, "kind": "live"}, "direction"),
+     {"failed_service": None}, "direction"),
     ("q1_blast_radius", "影响面 —— **谁依赖**故障服务（入边）",
-     {"failed_node": None, "kind": "live"}, "direction"),
+     {"failed_node": None}, "direction"),
     # ── 依赖可信度 ──
     ("q22_edge_verification_verdicts", "每条依赖边的故障注入判定",
      {"service_name": None, "limit": 100}, "trust"),
