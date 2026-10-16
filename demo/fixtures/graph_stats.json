@@ -2,15 +2,15 @@
   "nodes_by_label": [
     {
       "label": "Pod",
-      "c": 1539
-    },
-    {
-      "label": "Incident",
-      "c": 135
+      "c": 1558
     },
     {
       "label": "TopologyChange",
-      "c": 93
+      "c": 357
+    },
+    {
+      "label": "Incident",
+      "c": 144
     },
     {
       "label": "ChaosExperiment",
@@ -18,31 +18,35 @@
     },
     {
       "label": "SecurityGroup",
-      "c": 60
+      "c": 62
     },
     {
       "label": "S3Bucket",
-      "c": 35
+      "c": 36
     },
     {
       "label": "LambdaFunction",
-      "c": 30
+      "c": 32
+    },
+    {
+      "label": "TargetGroup",
+      "c": 18
     },
     {
       "label": "Subnet",
       "c": 16
     },
     {
-      "label": "TargetGroup",
-      "c": 16
+      "label": "ECRRepository",
+      "c": 15
+    },
+    {
+      "label": "ListenerRule",
+      "c": 13
     },
     {
       "label": "AWSServiceEndpoint",
       "c": 12
-    },
-    {
-      "label": "ECRRepository",
-      "c": 11
     },
     {
       "label": "EC2Instance",
@@ -54,10 +58,6 @@
     },
     {
       "label": "Microservice",
-      "c": 8
-    },
-    {
-      "label": "ListenerRule",
       "c": 8
     },
     {
@@ -77,11 +77,11 @@
       "c": 7
     },
     {
-      "label": "DynamoDBTable",
-      "c": 6
+      "label": "AgentRuntime",
+      "c": 7
     },
     {
-      "label": "AgentRuntime",
+      "label": "DynamoDBTable",
       "c": 6
     },
     {
@@ -125,6 +125,10 @@
       "c": 2
     },
     {
+      "label": "AgentGateway",
+      "c": 2
+    },
+    {
       "label": "EKSCluster",
       "c": 1
     },
@@ -149,10 +153,6 @@
       "c": 1
     },
     {
-      "label": "AgentGateway",
-      "c": 1
-    },
-    {
       "label": "Guardrail",
       "c": 1
     }
@@ -160,27 +160,27 @@
   "edges_by_type": [
     {
       "t": "RunsOn",
-      "c": 1955
+      "c": 1990
     },
     {
       "t": "LocatedIn",
-      "c": 1617
+      "c": 1641
     },
     {
       "t": "BelongsTo",
-      "c": 1068
+      "c": 1084
     },
     {
       "t": "Manages",
-      "c": 1062
+      "c": 1078
     },
     {
       "t": "Routes",
-      "c": 1050
+      "c": 1066
     },
     {
       "t": "TriggeredBy",
-      "c": 136
+      "c": 145
     },
     {
       "t": "AccessesData",
@@ -192,7 +192,7 @@
     },
     {
       "t": "MentionsResource",
-      "c": 34
+      "c": 42
     },
     {
       "t": "AffectedService",
@@ -203,15 +203,23 @@
       "c": 20
     },
     {
+      "t": "ForwardsTo",
+      "c": 19
+    },
+    {
       "t": "RoutesTo",
-      "c": 16
+      "c": 18
+    },
+    {
+      "t": "DependsOn",
+      "c": 17
     },
     {
       "t": "Invokes",
       "c": 16
     },
     {
-      "t": "ForwardsTo",
+      "t": "Calls",
       "c": 14
     },
     {
@@ -223,28 +231,20 @@
       "c": 13
     },
     {
-      "t": "DependsOn",
+      "t": "HasRule",
       "c": 13
     },
     {
-      "t": "Calls",
-      "c": 12
-    },
-    {
       "t": "Involves",
-      "c": 8
+      "c": 9
     },
     {
       "t": "InvokesTool",
       "c": 8
     },
     {
-      "t": "HasRule",
-      "c": 8
-    },
-    {
       "t": "RoutesToRuntime",
-      "c": 5
+      "c": 6
     },
     {
       "t": "WritesTo",
@@ -283,9 +283,9 @@
       "c": 1
     }
   ],
-  "node_total": 2154,
-  "edge_total": 7246,
+  "node_total": 2464,
+  "edge_total": 7390,
   "node_label_count": 39,
   "edge_type_count": 31,
-  "captured_at": "2026-09-20T10:43:07Z"
+  "captured_at": "2026-10-16T07:37:43Z"
 }

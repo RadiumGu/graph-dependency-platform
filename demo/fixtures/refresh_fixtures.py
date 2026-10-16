@@ -39,8 +39,14 @@ if not os.environ.get("NEPTUNE_ENDPOINT"):
         "  NEPTUNE_ENDPOINT=<cluster-endpoint> python3 fixtures/refresh_fixtures.py"
     )
 
-# 依赖边类型来自契约，不硬编码
-DEP_LABELS = ["Calls", "AccessesData", "DependsOn", "Delegates", "InvokesTool", "Retrieves"]
+# 依赖边类型来自契约，不硬编码。
+#
+# 这里原来写着同一句注释，下面却是写死的 6 条 —— 漏了 Invokes / PublishesTo /
+# RoutesToRuntime / RoutesVia（契约现有 10 条依赖边）。在线路径用的是
+# `_common.dependency_edge_labels()`，于是离线快照的依赖边总数与各状态占比
+# 系统性偏低，和在线显示不是同一份数据。现在两边同一来源。
+import _common as _C  # noqa: E402  —— _DEMO_DIR 已在上方加入 sys.path
+DEP_LABELS = sorted(_C.dependency_edge_labels())
 AGENT_LABELS = [
     "AgentRuntime", "AgentTool", "AgentGateway",
     "AgentMemory", "KnowledgeBase", "Guardrail",

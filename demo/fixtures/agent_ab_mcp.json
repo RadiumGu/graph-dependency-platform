@@ -1,0 +1,345 @@
+{
+ "captured_at": "2026-10-16T07:45:38+00:00",
+ "region": "ap-northeast-1",
+ "spaces": {
+  "1": {
+   "mcp": "2cefe684-1005-4e9a-b95c-cd93dccc4fec",
+   "base": "1abde79a-8a29-48ae-967e-7796b5163731"
+  },
+  "2": {
+   "mcp": "eed65012-a3de-4b55-ba1a-15b6b3afec33",
+   "base": "05da450e-2628-4061-86c5-4af3cfc3a50b"
+  }
+ },
+ "rounds": {
+  "1": "agent 角色可见 FIS/CloudTrail，且调查标题与 FIS tag 相同 —— 准确率封顶，只比效率",
+  "2": "agent 角色显式 Deny fis:*、cloudtrail:*，标题中性、实验无 tag —— 准确率可比"
+ },
+ "arms": {
+  "mcp": "graph-dependency MCP（24 个只读工具）+ skill dependency-graph-rca",
+  "base": "只关联 AWS 账号"
+ },
+ "verdict_scale": {
+  "correct": "定位到真实注入的故障",
+  "partial": "提出了正确方向的假设但未定论",
+  "wrong": "归因到别的东西",
+  "none": "没有结论"
+ },
+ "known_leaks_round2": [
+  "AWS Health 仍能看到 FIS 事件（G1 的 mcp 臂由此确认）",
+  "角色名 NoFaultVisibility 本身是提示，多份结论写了 denied FIS",
+  "k8s 里 FIS 留下的 fiscontainer"
+ ],
+ "cases": [
+  {
+   "round": 1,
+   "label": "F1",
+   "fault": "两个私有子网到 DynamoDB 断连 3 分钟",
+   "fis_template": "EXT3DXsuAXqfsNJ4",
+   "fis_experiment": "EXPUgogrybgjvKLH3Q",
+   "window_utc": "2026-10-16 01:21–01:25",
+   "verdict_basis": "两臂均从 FIS/CloudTrail 直接查到实验（round 1 可见性未屏蔽）",
+   "mcp": {
+    "task_id": "5f5b6971-4525-457a-a138-ea7f34714c58",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-244524a3-5a51-402b-9aec-a58504cc51bb",
+    "minutes": 12.1,
+    "tools": 25,
+    "graph_calls": 17,
+    "skill_loaded": true,
+    "root_cause_headline": "AWS FIS network-disrupt experiment black-holed DynamoDB connectivity",
+    "verdict": "correct"
+   },
+   "base": {
+    "task_id": "5c104a43-9584-40ea-8653-6a86c6429117",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-7d715979-a260-4e1e-b192-5cec80b0d479",
+    "minutes": 19.8,
+    "tools": 62,
+    "graph_calls": 0,
+    "skill_loaded": false,
+    "root_cause_headline": "AWS FIS experiment severed DynamoDB connectivity from petsite subnets (01:21–01:25)",
+    "verdict": "correct"
+   }
+  },
+  {
+   "round": 1,
+   "label": "F2",
+   "fault": "payforadoption 一个 Pod 到 Aurora PG:5432 黑洞 5 分钟",
+   "fis_template": "EXTDcupv9cPwfAKqJ",
+   "fis_experiment": "EXPGauFb3CLYn6DpSn",
+   "window_utc": "2026-10-16 01:31–01:37",
+   "verdict_basis": "同上；base 把 petsearch/petfood 也列进影响面（过宽）",
+   "mcp": {
+    "task_id": "597f3338-ce1d-4ae6-ac04-c92e2db6048c",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-637b1d64-a49f-43d5-a753-e8bd634c8998",
+    "minutes": 11.7,
+    "tools": 28,
+    "graph_calls": 13,
+    "skill_loaded": true,
+    "root_cause_headline": "AWS FIS network-blackhole on pay-for-adoption → Aurora (port 5432)",
+    "verdict": "correct"
+   },
+   "base": {
+    "task_id": "8a9429cf-6fd0-479a-887f-03df547e02bb",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-a3fbbf16-24c0-42f2-bffc-f5955fcd79a7",
+    "minutes": 14.8,
+    "tools": 50,
+    "graph_calls": 0,
+    "skill_loaded": false,
+    "root_cause_headline": "FIS chaos experiment ab-F2 blackholed pay-for-adoption→Aurora egress (5432)",
+    "verdict": "correct"
+   }
+  },
+  {
+   "round": 1,
+   "label": "F3",
+   "fault": "Aurora writer 重启",
+   "fis_template": "EXTbxM1D5tMkJbJ",
+   "fis_experiment": "EXPAbVKua36ixubw8e",
+   "window_utc": "2026-10-16 01:45–01:47",
+   "verdict_basis": "同上；mcp 在查 FIS 之前先由图谱提出「两功能共用同一 Aurora 集群」",
+   "mcp": {
+    "task_id": "dea9ed59-0ce4-42a9-87ee-d71f17cb97a1",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-216a8215-9ab9-4c86-9b93-32f8f997a086",
+    "minutes": 8.1,
+    "tools": 14,
+    "graph_calls": 8,
+    "skill_loaded": true,
+    "root_cause_headline": "AWS FIS chaos experiment rebooted the shared Aurora writer",
+    "verdict": "correct"
+   },
+   "base": {
+    "task_id": "34557d03-37fa-44c2-810d-6093308351a6",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-87546472-b42b-4b03-af0d-02ad74d6b0a3",
+    "minutes": 14.9,
+    "tools": 58,
+    "graph_calls": 0,
+    "skill_loaded": false,
+    "root_cause_headline": "FIS chaos experiment rebooted the shared Aurora PostgreSQL writer",
+    "verdict": "correct"
+   }
+  },
+  {
+   "round": 1,
+   "label": "F4",
+   "fault": "payforadoption Pod 内存压力 80%（自身故障，对照）",
+   "fis_template": "EXT2bpJ9UgdcquKn",
+   "fis_experiment": "EXP8fHvzojrkNu7MH4",
+   "window_utc": "2026-10-16 01:53–01:59",
+   "verdict_basis": "同上",
+   "mcp": {
+    "task_id": "49dc274c-dd65-43c2-9b8f-1951cbd6107b",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-45e6e692-f902-41a3-a58a-17b9f1c20b66",
+    "minutes": 10.8,
+    "tools": 22,
+    "graph_calls": 13,
+    "skill_loaded": true,
+    "root_cause_headline": "FIS pod-memory-stress on pay-for-adoption (ab-F4)",
+    "verdict": "correct"
+   },
+   "base": {
+    "task_id": "00fcf2a3-2997-47d0-9b09-9c001e0d768f",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-6a7e2d5e-86b2-48ce-80cd-8b9d8e5f8fe2",
+    "minutes": 11.4,
+    "tools": 13,
+    "graph_calls": 0,
+    "skill_loaded": false,
+    "root_cause_headline": "AWS FIS chaos experiment (pod-memory-stress) on pay-for-adoption",
+    "verdict": "correct"
+   }
+  },
+  {
+   "round": 1,
+   "label": "F5",
+   "fault": "Aurora reader 重启",
+   "fis_template": "EXT3X5eDqkg57hzg",
+   "fis_experiment": "EXPLAmC1zk1fXfZJTU",
+   "window_utc": "2026-10-16 02:05–02:07",
+   "verdict_basis": "同上；mcp 点名了被重启的 reader 与读它的 petlistadoptions，base 只写「某个 Aurora 实例」",
+   "mcp": {
+    "task_id": "2edc0ec6-a1a3-41ba-81d8-5afa13b29447",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-2f0ac22c-6c5f-433b-9a0a-57c46ed3958d",
+    "minutes": 9.5,
+    "tools": 15,
+    "graph_calls": 9,
+    "skill_loaded": true,
+    "root_cause_headline": "FIS chaos experiment ab-F5 rebooted the Aurora reader",
+    "verdict": "correct"
+   },
+   "base": {
+    "task_id": "b82e587b-f434-4948-a8e3-f150673657f0",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-6d92e90f-ad3b-4b12-9bdb-600edfe76754",
+    "minutes": 17.7,
+    "tools": 34,
+    "graph_calls": 0,
+    "skill_loaded": false,
+    "root_cause_headline": "AWS FIS experiment ab-F5 (deliberate Aurora reboot) triggered the 02:05 event",
+    "verdict": "correct"
+   }
+  },
+  {
+   "round": 2,
+   "label": "G1",
+   "fault": "两个私有子网到 DynamoDB 断连",
+   "fis_template": "EXT3DXsuAXqfsNJ4",
+   "fis_experiment": "EXPnRSAi8PGGN8R45Y",
+   "window_utc": "2026-10-16 02:46–02:49",
+   "verdict_basis": "两臂都定位到 DynamoDB egress 被阻断；base 把注入方归为 chaos-mesh（机制对、来源错）",
+   "mcp": {
+    "task_id": "87373cc8-2f35-40fb-a8af-98673091e51f",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-7e78183e-7a13-4726-94b3-bee14998b6b1",
+    "minutes": 19.4,
+    "tools": 26,
+    "graph_calls": 14,
+    "skill_loaded": true,
+    "root_cause_headline": "AWS FIS chaos experiment injected a network blackhole on the DynamoDB egress path",
+    "verdict": "correct"
+   },
+   "base": {
+    "task_id": "d0d1f02f-d5f1-4004-b64c-666c31e87efb",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-9570ab79-a2a8-4c9e-8e85-3e5c4a14c7cd",
+    "minutes": 22.3,
+    "tools": 35,
+    "graph_calls": 0,
+    "skill_loaded": false,
+    "root_cause_headline": "chaos-mesh NetworkChaos 故障注入：petadoptions 命名空间到 DynamoDB 端点的 egress 被阻断",
+    "verdict": "correct"
+   }
+  },
+  {
+   "round": 2,
+   "label": "G2",
+   "fault": "两个私有子网到 S3 断连",
+   "fis_template": "EXT3LA9HE9NsGj9r",
+   "fis_experiment": "EXPMk759mG5VEvgYr6",
+   "window_utc": "2026-10-16 02:55–03:00",
+   "verdict_basis": "真实报错是 02:57–03:00 连 S3 桶超时（petsearch 日志）。mcp 首要假设仍是 DynamoDB（错，那是 G1 窗口残留的报错），但另列了「S3 访问失败」假设、未定论；base 只归因到 DynamoDB",
+   "mcp": {
+    "task_id": "bb8daf42-a26a-4098-b643-0ce40ad2b5e8",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-0716b421-200c-47b9-8cfc-d75755244de4",
+    "minutes": 13.4,
+    "tools": 24,
+    "graph_calls": 12,
+    "skill_loaded": true,
+    "root_cause_headline": "petsearch lost network connectivity to DynamoDB endpoint",
+    "verdict": "partial"
+   },
+   "base": {
+    "task_id": "2bf26a73-7b75-4cbf-b83a-bd55634798ce",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-f4d3d49c-f240-4bb7-b52a-b00bba1d8178",
+    "minutes": 25.1,
+    "tools": 32,
+    "graph_calls": 0,
+    "skill_loaded": false,
+    "root_cause_headline": "No DynamoDB Gateway VPC endpoint — structural contributor forcing reads over NAT/public internet",
+    "verdict": "wrong"
+   }
+  },
+  {
+   "round": 2,
+   "label": "G3",
+   "fault": "Aurora writer 重启",
+   "fis_template": "EXTbxM1D5tMkJbJ",
+   "fis_experiment": "EXPWFBPWPTCzpXRkn6",
+   "window_utc": "2026-10-16 03:06–03:08",
+   "verdict_basis": "RDS 事件：writer 03:07:08 shutdown / 03:07:19 restarted。mcp 定为根因并给出实例与时刻；base 停在假设",
+   "mcp": {
+    "task_id": "20b4ffd0-2309-45e1-88ad-547c6d8236ad",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-4719f6be-df13-4429-a5e6-9fcba6cc6175",
+    "minutes": 10.6,
+    "tools": 19,
+    "graph_calls": 13,
+    "skill_loaded": true,
+    "root_cause_headline": "Aurora writer instance reboot at 03:07:08–03:07:19 UTC",
+    "verdict": "correct"
+   },
+   "base": {
+    "task_id": "38df2783-26b4-49e5-af8d-35ecf3f8df2c",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-a292567a-f395-4657-96d6-9fc0984d64ae",
+    "minutes": 15.9,
+    "tools": 41,
+    "graph_calls": 0,
+    "skill_loaded": false,
+    "root_cause_headline": "Shared Aurora PostgreSQL backend degraded",
+    "verdict": "partial"
+   }
+  },
+  {
+   "round": 2,
+   "label": "G4",
+   "fault": "payforadoption Pod 内存压力（自身故障，对照）",
+   "fis_template": "EXT2bpJ9UgdcquKn",
+   "fis_experiment": "EXPiE9Qzb87JJpoYCi",
+   "window_utc": "2026-10-16 03:14–03:20",
+   "verdict_basis": "mcp 只到「namespace 内有 FIS 实验」，没找到内存机制；base 归因到窗口外 03:07 的 writer 重启",
+   "mcp": {
+    "task_id": "9a08791f-db32-4e1b-9980-d38526a32949",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-2ab86b4c-1ccb-4109-aa49-22c973c0e3a6",
+    "minutes": 12.6,
+    "tools": 23,
+    "graph_calls": 12,
+    "skill_loaded": true,
+    "root_cause_headline": "AWS FIS fault-injection experiment is the leading root cause of the checkout latency",
+    "verdict": "partial"
+   },
+   "base": {
+    "task_id": "9f767ca4-0182-49fe-bbe7-aca4dd1d231e",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-72f0097e-31e7-4219-8083-697f8cc299f9",
+    "minutes": 24.9,
+    "tools": 65,
+    "graph_calls": 0,
+    "skill_loaded": false,
+    "root_cause_headline": "Aurora checkout DB writer was restarted at 03:07 (chaos/FIS fault injection)",
+    "verdict": "wrong"
+   }
+  },
+  {
+   "round": 2,
+   "label": "G5",
+   "fault": "Aurora reader 重启",
+   "fis_template": "EXT3X5eDqkg57hzg",
+   "fis_experiment": "EXPL4NopnhbZXVTPZU",
+   "window_utc": "2026-10-16 03:26–03:28",
+   "verdict_basis": "RDS 事件：reader 03:26:40 shutdown / 03:26:56 restarted。mcp 点名该 reader；base 找不到「过往领养页面」由哪个服务/数据库支撑，No findings",
+   "mcp": {
+    "task_id": "0774d71a-4a1d-4fa1-ac2c-124a4de7ed78",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-1bf7e353-7a31-4eda-b2f1-92929b203511",
+    "minutes": 20.0,
+    "tools": 21,
+    "graph_calls": 12,
+    "skill_loaded": true,
+    "root_cause_headline": "FIS fault-injection reboot of the shared Aurora reader instance",
+    "verdict": "correct"
+   },
+   "base": {
+    "task_id": "7ec2172e-20c3-4c63-8404-a72cac9affce",
+    "status": "COMPLETED",
+    "execution_id": "exe-ops1-3b084664-e893-4e4a-a2ce-ebdb9d6b9f5b",
+    "minutes": 21.9,
+    "tools": 54,
+    "graph_calls": 0,
+    "skill_loaded": false,
+    "root_cause_headline": "No findings",
+    "verdict": "none"
+   }
+  }
+ ]
+}

@@ -81,8 +81,8 @@ _line = [
      [("pages/1_Edge_Verification.py", "🎯 逐条边的验证判定与证据权重"),
       ("pages/7_Chaos_Engineering.py", "💥 判定是怎么来的 · 故障注入目录")]),
     ("③ 它能帮你做什么",
-     "有了可信的图，下游才谈得上。RCA 那页有一屏是「同一个问题交给通用运维 "
-     "agent，接图谱与不接图谱」的实测对照 —— 20 次真实调用，带 executionId。",
+     "有了可信的图，下游才谈得上。RCA 那页有一屏是「同一批 FIS 注入的真实故障，"
+     "交给接图谱与不接图谱的两个通用运维 agent」的实测对照，每个调查都带可核对的 ID。",
      [("pages/6_Root_Cause_Analysis.py", "🔍 根因分析 · 含 Agent 对照"),
       ("pages/8_DR_Plan.py", "🛡️ DR 计划 · 区分「全停」与「降级」"),
       ("pages/5_Agent_Dependencies.py", "🤖 Agent 依赖 · 委派与工具调用")]),

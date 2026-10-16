@@ -73,6 +73,10 @@
       "name": "graph_dependency_mcp"
     },
     {
+      "label": "AgentRuntime",
+      "name": "migrationdesk_pricing"
+    },
+    {
       "label": "AgentTool",
       "name": "adoption"
     },
@@ -254,6 +258,14 @@
     },
     {
       "label": "LambdaFunction",
+      "name": "petadoptions-outcome-slo"
+    },
+    {
+      "label": "LambdaFunction",
+      "name": "petsite-arc-noop"
+    },
+    {
+      "label": "LambdaFunction",
       "name": "petsite-ops-slack-notifier"
     },
     {
@@ -347,6 +359,10 @@
     {
       "label": "S3Bucket",
       "name": "m2m-926093770964-ap-northeast-1"
+    },
+    {
+      "label": "S3Bucket",
+      "name": "migrationdesk-intel-926093770964-apne1"
     },
     {
       "label": "S3Bucket",
@@ -463,22 +479,6 @@
     {
       "label": "S3Bucket",
       "name": "yuanbao-data-2026"
-    },
-    {
-      "label": "SNSTopic",
-      "name": "ServicesEks2-topicpetadoption192CAB8F-Dn0iiU45RZ1g"
-    },
-    {
-      "label": "SNSTopic",
-      "name": "kronos-alarms"
-    },
-    {
-      "label": "SNSTopic",
-      "name": "petsite-ops-alerts"
-    },
-    {
-      "label": "SNSTopic",
-      "name": "petsite-rca-alerts"
     }
   ],
   "edges": [
@@ -1043,6 +1043,14 @@
       "verify_status": ""
     },
     {
+      "source": "Servic-PetSi-by0kpyBtxswj",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "dr-temporal-ui-tg",
+      "target_label": "TargetGroup",
+      "verify_status": ""
+    },
+    {
       "source": "StepFnStateMachine76D362E8-3jkn8j2OUpdQ",
       "source_label": "StepFunction",
       "edge_type": "Invokes",
@@ -1080,6 +1088,22 @@
       "edge_type": "AccessesData",
       "target": "ssm",
       "target_label": "AWSServiceEndpoint",
+      "verify_status": ""
+    },
+    {
+      "source": "trafficgenerator",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "petsite",
+      "target_label": "Microservice",
+      "verify_status": ""
+    },
+    {
+      "source": "openclaw-alb-v2",
+      "source_label": "LoadBalancer",
+      "edge_type": "RoutesTo",
+      "target": "msa-desk-tg",
+      "target_label": "TargetGroup",
       "verify_status": ""
     },
     {
@@ -1192,6 +1216,14 @@
       "edge_type": "InvokesTool",
       "target": "search_available_pets",
       "target_label": "AgentTool",
+      "verify_status": ""
+    },
+    {
+      "source": "trafficgenerator",
+      "source_label": "Microservice",
+      "edge_type": "Calls",
+      "target": "petsearch",
+      "target_label": "Microservice",
       "verify_status": ""
     },
     {
@@ -1643,5 +1675,5 @@
       "verify_status": ""
     }
   ],
-  "captured_at": "2026-09-20T10:43:07Z"
+  "captured_at": "2026-10-16T07:37:44Z"
 }
