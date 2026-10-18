@@ -28,7 +28,7 @@ from typing import Any
 from runbook import ProbeRef, Runbook, Step
 
 #: summary 上限是 200 **字节**，details 是 20K **字节**（见
-#: docs/lessons/temporal-execution-readability-2026-10.md §2，该文 10-18 时仍未入库）。中文一个字 3 字节，
+#: docs/lessons/temporal-execution-readability-2026-10.md §2）。中文一个字 3 字节，
 #: 按字符截会超限 —— 所以 clip 按 UTF-8 字节截。
 SUMMARY_MAX = 200
 DETAILS_MAX = 19_000

@@ -243,7 +243,7 @@ DrRunbookWorkflow（执行层，每个获批版本一条）
 
 - **Temporal vs Kestra**：核心选 Temporal（理由见 §2）。Kestra 2.0 是 Apache-2.0、自带 Pause/HumanTask 和甘特图，如果团队以运维为主、步骤基本线性、看重开箱 RBAC，它更合适。不建议两者同时用，那样就有两个状态来源。
 - **ARC 各功能**：Region switch 在用，并持续加功能；routing control 和 zonal shift 在用；**readiness check 自 2026-04-30 起不再接受新客户**，我们用自己的探针代替。
-- **开源界**：没有对口且还在维护的跨区域切换编排平台。最直接的参考是 `aws-samples/sample-multi-region-application-architecture` 里的 ARC 计划模板（审批步骤和自动步骤交错）。详见 10-07 另一次会话的调研文档《Temporal 执行可读性改造 + DR 编排引擎选型调研》第七节（截至 10-18 只在共享工作树里，尚未入库，所以这里不写路径）。
+- **开源界**：没有对口且还在维护的跨区域切换编排平台。最直接的参考是 `aws-samples/sample-multi-region-application-architecture` 里的 ARC 计划模板（审批步骤和自动步骤交错）。详见 [`docs/lessons/temporal-execution-readability-2026-10.md`](../lessons/temporal-execution-readability-2026-10.md) 第七节（10-07 的调研）。
 
 ## 附录 B：关键坐标
 
