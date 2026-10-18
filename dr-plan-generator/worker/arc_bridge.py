@@ -45,10 +45,24 @@ TERMINAL = {
 ARC_OK = {"completed", "completedMonitoringApplicationHealth"}
 
 
-def _arc():
+def _arc(region: str = ""):
+    """ARC 的**区域数据面**客户端。
+
+    ⚠️ 2026-10-18 回切时实测：激活某个区域的执行必须在**那个区域**的数据面上起 ——
+    在首尔起「激活东京」被拒（IllegalArgumentException: An activate flow should be
+    run on the target region）。执行 ID 也带区域前缀（`ap-northeast-2/…`），
+    查询要去同一个区域。原来所有调用都固定用 worker 所在区域，所以只有「激活首尔」
+    能跑通，回切永远起不来。
+    """
     import boto3  # noqa: PLC0415 —— 只在 activity 里导入，workflow 沙箱不碰它
 
-    return boto3.client("arc-region-switch", region_name=_REGION)
+    return boto3.client("arc-region-switch", region_name=region or _REGION)
+
+
+def region_of(execution_id: str) -> str:
+    """`ap-northeast-1/abc` → `ap-northeast-1`。没有前缀就回落到 worker 所在区域。"""
+    head, sep, _ = execution_id.partition("/")
+    return head if sep else _REGION
 
 
 # ── activities ────────────────────────────────────────────────────────────
@@ -99,7 +113,7 @@ async def arc_start_plan_execution(inp: ArcStartInput) -> ArcStartResult:
       1. 先按备注里的幂等标记找已起的执行 —— 有就直接返回，不再起第二个
       2. 运行时 SDK 支持 clientToken 才传
     """
-    c = _arc()
+    c = _arc(inp.target_region)
     existing = await asyncio.to_thread(c.list_plan_executions, planArn=inp.plan_arn)
     hit = find_existing(existing.get("items", []), inp.client_token)
     if hit:
@@ -137,7 +151,8 @@ class ArcExecutionView:
 @activity.defn(name="arc.get_plan_execution")
 async def arc_get_plan_execution(inp: ArcGetInput) -> ArcExecutionView:
     r = await asyncio.to_thread(
-        _arc().get_plan_execution, planArn=inp.plan_arn, executionId=inp.execution_id
+        _arc(region_of(inp.execution_id)).get_plan_execution,
+        planArn=inp.plan_arn, executionId=inp.execution_id
     )
     return ArcExecutionView(
         state=r["executionState"],
@@ -149,7 +164,7 @@ async def arc_get_plan_execution(inp: ArcGetInput) -> ArcExecutionView:
 
 @activity.defn(name="arc.list_execution_events")
 async def arc_list_execution_events(inp: ArcGetInput) -> list[dict[str, Any]]:
-    c = _arc()
+    c = _arc(region_of(inp.execution_id))
     out: list[dict[str, Any]] = []
     token = None
     while True:
@@ -186,7 +201,8 @@ async def arc_lookup_approver(inp: ApproverLookupInput) -> list[dict[str, Any]]:
 
     import boto3  # noqa: PLC0415
 
-    ct = boto3.client("cloudtrail", region_name=_REGION)
+    # 批准调用打在执行所在区域的数据面上，CloudTrail 事件也记在那个区域
+    ct = boto3.client("cloudtrail", region_name=region_of(inp.execution_id))
     start = datetime.fromisoformat(inp.since_iso)
     r = await asyncio.to_thread(
         ct.lookup_events,
@@ -405,11 +421,14 @@ class ArcPlanExecutionWorkflow:
                     ApproverLookupInput(res.execution_id, started_at.isoformat()),
                     start_to_close_timeout=timedelta(seconds=60), retry_policy=_READ_RETRY,
                 )
-                if self._approvers or i == tries - 1:
+                # ⚠️ 2026-10-18 实测：先查到的是一条**被拒**的尝试（AccessDenied），
+                # 循环就此停下，真正生效的那次批准还没投递 —— 记录里的「审批人」是
+                # 一个没批成的人。要等到一条成功的（没有 errorCode）才算找到。
+                if any(not a.get("error") for a in self._approvers) or i == tries - 1:
                     break
                 await workflow.sleep(timedelta(minutes=1))
-            if not self._approvers:
-                self._mark("approver-not-found", note="CloudTrail 在等待上限内没有投递审批事件（不是没人批）")
+            if not any(not a.get("error") for a in self._approvers):
+                self._mark("approver-not-found", note="CloudTrail 在等待上限内没有投递**成功的**审批事件（不是没人批）")
 
         if self._arc_state not in ARC_OK:
             self._phase, self._verdict = "done", f"arc-{self._arc_state}"
