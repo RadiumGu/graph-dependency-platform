@@ -274,6 +274,7 @@ _NOT_AWS = {
     "add_signal_handler", "set_result",
     "create_default_context",  # ssl —— count_ready_nodes 用集群 CA 校验 TLS
     "failover_task_queue",     # plan_workflow 的字段名（子执行用哪个队列），不是 AWS 调用
+    "set_current_details",     # Temporal UI 的展示元数据（ui_text.py），不是 AWS 调用
 }
 
 

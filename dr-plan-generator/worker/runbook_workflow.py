@@ -54,6 +54,7 @@ with workflow.unsafe.imports_passed_through():
         put_execution_record,
     )
     from probe_catalog import PASS, PROBES, UNKNOWN, activity_name
+    from ui_text import human_wait_summary, probe_summary, runbook_details
     from probes import ProbeInput, ProbeResult
     from runbook import ProbeRef, Runbook, RunbookError, Step, extract_runbook
 
@@ -323,6 +324,7 @@ class DrRunbookWorkflow:
             self._findings.append("正文里没有 dr-runbook 块")
             return False
         self._rb = rb
+        self._refresh_details()
         if rb.unresolved():
             self._status = "invalid"
             self._findings.append(f"仍有待人填写的步骤：{rb.unresolved()}")
@@ -341,6 +343,7 @@ class DrRunbookWorkflow:
         unknown = preflight_fail = False
         for i, s in enumerate(rb.steps):
             self._cursor = i
+            self._refresh_details()
             rec: dict[str, Any] = {"step": s.id, "kind": s.kind, "title": s.title, "probes": []}
             for phase, ref in s.all_probes():
                 r = await self._probe(s.id, phase, ref)
@@ -370,6 +373,7 @@ class DrRunbookWorkflow:
     async def _live(self, rb: Runbook, args: RunbookRunInput) -> bool | None:
         for i, s in enumerate(rb.steps):
             self._cursor = i
+            self._refresh_details()
             workflow.upsert_search_attributes([_SA_STEP_NAME.value_set(s.id)])
             rec: dict[str, Any] = {"step": s.id, "kind": s.kind, "title": s.title}
             self._steps.append(rec)
@@ -456,10 +460,12 @@ class DrRunbookWorkflow:
     ) -> dict[str, Any] | None:
         self._awaiting = awaiting
         self._reply = None
+        self._refresh_details()
         try:
             await workflow.wait_condition(
                 lambda: self._reply is not None,
                 timeout=timedelta(hours=args.human_wait_hours),
+                timeout_summary=human_wait_summary(self._rb, awaiting, args.human_wait_hours),
             )
         except asyncio.TimeoutError:
             # 超时**不放行**。停在原地，留下记录，交给人重新发起。
@@ -469,9 +475,22 @@ class DrRunbookWorkflow:
                 f"{args.human_wait_hours} 小时 —— 停在原地，没有替人做决定"
             )
             self._awaiting = None
+            self._refresh_details()
             return None
         reply, self._reply, self._awaiting = self._reply, None, None
+        self._refresh_details()
         return reply
+
+    def _refresh_details(self) -> None:
+        """UI「User Metadata」里的步骤进度表与「现在等你做什么」（见 ui_text.py）。不产生 command。"""
+        a = self._args
+        if a is None:
+            return
+        workflow.set_current_details(runbook_details(
+            wid=workflow.info().workflow_id, mode=a.mode, plan_id=a.plan_id, version=a.version,
+            rb=self._rb, status=self._status, cursor=self._cursor, awaiting=self._awaiting,
+            done_ids=set(self._executed), findings=self._findings,
+        ))
 
     async def _probe(self, step_id: str, phase: str, ref: ProbeRef) -> dict[str, Any]:
         assert self._args is not None
@@ -481,6 +500,8 @@ class DrRunbookWorkflow:
                 activity_name(ref.probe),
                 ProbeInput(params=dict(ref.params), plan_ref=f"{self._args.plan_id}/v{self._args.version}"),
                 result_type=ProbeResult,
+                # Timeline 上原来只显示 probe.eks_ready_nodes 这类类型名
+                summary=probe_summary(self._rb, step_id, phase, ref),
                 start_to_close_timeout=timedelta(seconds=spec.timeout_seconds),
                 retry_policy=_PROBE_RETRY,
             )
@@ -498,6 +519,7 @@ class DrRunbookWorkflow:
         return d
 
     async def _export(self, ok: bool | None) -> None:
+        self._refresh_details()   # 终态（completed / stalled / aborted …）也要在 UI 上看得到
         args = self._args
         if args is None or not args.export_record:
             return

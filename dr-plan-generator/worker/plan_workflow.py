@@ -86,6 +86,7 @@ from temporalio.workflow import ParentClosePolicy
 with workflow.unsafe.imports_passed_through():
     from activities import put_plan_version, PlanVersionInput
     from runbook import RunbookError, approval_problems, extract_runbook
+    from ui_text import plan_details, plan_wait_summary
     from runbook_workflow import (
         MODE_LIVE,
         MODE_REHEARSAL,
@@ -319,6 +320,7 @@ class DrPlanWorkflow:
                 PlanVersionInput(
                     plan_id=self._plan_id, version=self._version, body=body, sha256=digest
                 ),
+                summary=f"写入 v{self._version} 正文到 S3（{author}：{reason}）"[:200],
                 start_to_close_timeout=timedelta(minutes=2),
                 retry_policy=_WRITE_RETRY,
             )
@@ -654,7 +656,28 @@ class DrPlanWorkflow:
     def _child_id(self, kind: str, version: int | None) -> str:
         return f"{workflow.info().workflow_id}-{kind}-v{version}"
 
+    def _refresh_details(self) -> None:
+        """Temporal UI「User Metadata」里的步骤表（见 ui_text.py 头注释）。
+
+        只是展示元数据，不产生 command —— 在途执行回放不受影响（test_134 核对）。
+        """
+        rb, perr = None, None
+        try:
+            rb = extract_runbook(self._body) if self._body else None
+        except RunbookError as e:
+            perr = list(e.problems)
+        try:
+            blockers = approval_problems(self._body) if self._body else []
+        except Exception:  # noqa: BLE001 —— 展示不能让 workflow 失败
+            blockers = []
+        workflow.set_current_details(plan_details(
+            plan_id=self._plan_id, version=self._version, state=self._state,
+            sha256=_sha256(self._body) if self._body else "", rb=rb, parse_error=perr,
+            approval_blockers=blockers, active_child=self._active_child,
+        ))
+
     def _tag(self) -> None:
+        self._refresh_details()
         workflow.upsert_search_attributes(
             [
                 _SA_PLAN_ID.value_set(self._plan_id),
@@ -677,6 +700,7 @@ class DrPlanWorkflow:
             version=version, child_workflow_id=child_id, at=workflow.now().isoformat()
         )
         self._active_child = child_id
+        self._refresh_details()
         try:
             result: RunbookRunResult = await workflow.execute_child_workflow(
                 DrRunbookWorkflow.run,
@@ -692,6 +716,9 @@ class DrPlanWorkflow:
                 ),
                 id=child_id,
                 task_queue=self._cfg.failover_task_queue,
+                static_summary=(
+                    f"{'演练' if mode == MODE_REHEARSAL else '真执行'} {self._plan_id} v{version}"
+                ),
                 # 本计划被关掉时，**请求取消**子执行而不是直接终止它 ——
                 # 子执行接住取消后会把记录导出到 S3。终止则什么都留不下。
                 parent_close_policy=ParentClosePolicy.REQUEST_CANCEL,
@@ -709,6 +736,7 @@ class DrPlanWorkflow:
             workflow.logger.warning("%s v%d 子执行失败：%s", kind, version, rec.failure)
         finally:
             self._active_child = None
+            self._refresh_details()
         return rec
 
     # ── 主流程 ────────────────────────────────────────────────────────────
@@ -727,6 +755,7 @@ class DrPlanWorkflow:
             PlanVersionInput(
                 plan_id=self._plan_id, version=1, body=args.body, sha256=digest
             ),
+            summary="写入 v1 正文到 S3（生成器初稿）",
             start_to_close_timeout=timedelta(minutes=2),
             retry_policy=_WRITE_RETRY,
         )
@@ -749,7 +778,9 @@ class DrPlanWorkflow:
             # 等一个人工动作。空闲超时自动归档，避免僵尸 RUNNING 长期堆积。
             try:
                 await workflow.wait_condition(
-                    lambda: self._pending is not None, timeout=idle
+                    lambda: self._pending is not None, timeout=idle,
+                    # Timeline 上这根计时器原来只标「1 (30d)」
+                    timeout_summary=plan_wait_summary(self._state, args.idle_timeout_hours),
                 )
             except asyncio.TimeoutError:
                 self._state = STATE_CLOSED
