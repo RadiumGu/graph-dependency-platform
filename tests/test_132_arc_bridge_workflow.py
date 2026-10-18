@@ -95,8 +95,14 @@ async def fake_events(inp: ArcGetInput) -> list[dict[str, Any]]:
     return [{"type": "stepPendingApproval", "step": "approve-prepare"}]
 
 
+#: 若非空，每次查询依次返回其中一项（模拟 CloudTrail 逐步投递）；否则返回 APPROVERS
+APPROVER_SEQ: list[list[dict[str, Any]]] = []
+
+
 @activity.defn(name="arc.lookup_approver")
 async def fake_approver(inp: ApproverLookupInput) -> list[dict[str, Any]]:
+    if APPROVER_SEQ:
+        return APPROVER_SEQ.pop(0) if len(APPROVER_SEQ) > 1 else APPROVER_SEQ[0]
     return list(APPROVERS)
 
 
@@ -118,7 +124,7 @@ def _fake_probe(name: str):
 
 @pytest_asyncio.fixture
 async def env():
-    for x in (STARTS, ARC_STATES, RECORDS, APPROVERS, START_FAILS):
+    for x in (STARTS, ARC_STATES, RECORDS, APPROVERS, START_FAILS, APPROVER_SEQ):
         x.clear()
     VERDICTS.clear()
     e = await WorkflowEnvironment.start_local()
@@ -233,6 +239,7 @@ class _StubArc:
 
     def __init__(self, existing=None, with_token=False):
         self.existing = existing or []
+        self.regions: list[str] = []
         self.calls: list[dict] = []
         ms = ["planArn", "targetRegion", "action", "mode", "comment", "latestVersion"]
         if with_token:
@@ -240,6 +247,10 @@ class _StubArc:
         model = type("M", (), {"operation_model": lambda _s, op: _Op(ms)})()
         self.meta = type("Meta", (), {"service_model": model})()
         self._ms = set(ms)
+
+    def used(self, region):
+        self.regions.append(region)
+        return self
 
     def list_plan_executions(self, **kw):
         return {"items": self.existing}
@@ -253,27 +264,54 @@ class _StubArc:
 
 
 class TestStartActivityOnOldSdk:
-    def _inp(self):
-        return ArcStartInput(plan_arn=PLAN, target_region="ap-northeast-2", action="activate",
+    def _inp(self, region="ap-northeast-2"):
+        return ArcStartInput(plan_arn=PLAN, target_region=region, action="activate",
                              mode="graceful", comment="[temporal wf-9] x", client_token="wf-9")
 
     async def test_old_sdk_does_not_get_client_token(self, monkeypatch):
         import arc_bridge
         stub = _StubArc(with_token=False)
-        monkeypatch.setattr(arc_bridge, "_arc", lambda: stub)
+        monkeypatch.setattr(arc_bridge, "_arc", lambda region="": stub.used(region))
         r = await arc_bridge.arc_start_plan_execution(self._inp())
         assert r.execution_id == "new-1" and "clientToken" not in stub.calls[0]
 
     async def test_new_sdk_gets_client_token(self, monkeypatch):
         import arc_bridge
         stub = _StubArc(with_token=True)
-        monkeypatch.setattr(arc_bridge, "_arc", lambda: stub)
+        monkeypatch.setattr(arc_bridge, "_arc", lambda region="": stub.used(region))
         await arc_bridge.arc_start_plan_execution(self._inp())
         assert stub.calls[0]["clientToken"] == "wf-9"
 
     async def test_retry_finds_the_existing_execution(self, monkeypatch):
         import arc_bridge
         stub = _StubArc(existing=[{"executionId": "old-1", "comment": "[temporal wf-9] x"}])
-        monkeypatch.setattr(arc_bridge, "_arc", lambda: stub)
+        monkeypatch.setattr(arc_bridge, "_arc", lambda region="": stub.used(region))
         r = await arc_bridge.arc_start_plan_execution(self._inp())
         assert r.execution_id == "old-1" and stub.calls == [], "重试起了第二个执行"
+
+    async def test_start_goes_to_the_target_regions_data_plane(self, monkeypatch):
+        """2026-10-18：在首尔起「激活东京」被 ARC 拒绝 —— 必须在目标区域起。"""
+        import arc_bridge
+        stub = _StubArc()
+        monkeypatch.setattr(arc_bridge, "_arc", lambda region="": stub.used(region))
+        await arc_bridge.arc_start_plan_execution(self._inp(region="ap-northeast-1"))
+        assert stub.regions == ["ap-northeast-1"]
+
+
+def test_region_of_execution_id():
+    import arc_bridge
+    assert arc_bridge.region_of("ap-northeast-1/abc") == "ap-northeast-1"
+    assert arc_bridge.region_of("ap-northeast-2/de0a") == "ap-northeast-2"
+    assert arc_bridge.region_of("noprefix") == arc_bridge._REGION
+
+
+class TestApproverLookup:
+    async def test_a_denied_attempt_does_not_end_the_search(self, env):
+        """2026-10-18：先投递的是一条被拒的尝试，查找就停了，真正的批准没记上。"""
+        ARC_STATES.extend(["pendingManualApproval", "completed"])
+        denied = {"principal": "arn:aws:iam::1:user/x", "approval": "approve", "error": "AccessDenied"}
+        ok = {"principal": "arn:aws:sts::1:assumed-role/petsite-dr-poc-approver/s", "approval": "approve", "error": None}
+        APPROVER_SEQ.extend([[denied], [denied, ok]])
+        _, h = await _run(env, _inp(lookup_approver_minutes=3))
+        r = await h.result()
+        assert any(a["principal"].endswith("approver/s") for a in r["approvers"]), r["approvers"]
