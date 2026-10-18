@@ -70,11 +70,13 @@ class TestPromotionSemanticsAreExplicit:
         assert "--allow-data-loss" in draft
 
     def test_mutual_exclusivity_is_documented(self, draft: str):
-        i = draft.index('id="promote-aurora"')
-        assert "互斥" in draft[i : i + 2400], "要写明这两个参数互斥（API 约束）"
+        # 2026-10-18 起两个变体是两个条件步骤（when 按 aurora-mode 选定）
+        i = draft.index('("promote-aurora-switchover"')
+        assert "互斥" in draft[i - 400 : i], "要写明这两个参数互斥（API 约束）"
 
     def test_decision_precedes_promotion(self, draft: str):
-        assert draft.index('id="aurora-mode"') < draft.index('id="promote-aurora"')
+        assert draft.index('id="aurora-mode"') < draft.index('("promote-aurora-switchover"')
+        assert '"step": "aurora-mode"' in draft, "两个提升步骤必须以 aurora-mode 的裁决为条件"
 
     def test_no_default_decision(self, draft: str):
         i = draft.index('id="aurora-mode"')

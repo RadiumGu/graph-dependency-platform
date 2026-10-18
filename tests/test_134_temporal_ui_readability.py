@@ -47,17 +47,26 @@ BODY = "# 测试计划\n\n" + render_block(RB) + "\n"
 
 
 class TestRendering:
-    def test_one_row_per_step_with_the_action(self):
+    def test_one_row_per_step_in_the_overview(self):
         rows = [l for l in u.steps_table(RB).splitlines() if l.startswith("| ") and not l.startswith("| #")]
         assert len(rows) == len(STEPS)
-        assert "aws eks update-nodegroup-config" in rows[1]
+        assert "人执行 1 条命令" in rows[1]
         assert "switchover / failover-allow-data-loss / abort" in rows[2]
         assert "⛔ **不可逆**" in rows[3]
 
-    def test_pipe_in_command_does_not_break_the_table(self):
-        row = u.steps_table(RB).splitlines()[3]
-        assert "\\| tee x" in row
-        assert row.count(" | ") == u.steps_table(RB).splitlines()[0].count(" | ")
+    def test_every_probe_is_its_own_row_with_its_question(self):
+        """2026-10-18：原来一步的探针用逗号挤在一个单元格里。"""
+        from probe_catalog import PROBES
+        md = u.step_sections(RB)
+        for s in RB.steps:
+            for _, r in s.all_probes():
+                assert PROBES[r.probe].question.replace("|", "\\|") in md, r.probe
+        rows = [l for l in md.splitlines() if l.startswith("| ") and "`" in l]
+        assert len(rows) == sum(len(s.all_probes()) for s in RB.steps)
+
+    def test_pipe_in_command_does_not_break_the_overview(self):
+        t = u.steps_table(RB).splitlines()
+        assert all(l.count(" | ") == t[0].count(" | ") for l in t[2:])
 
     def test_full_commands_are_copyable(self):
         md = u.full_commands(RB)
@@ -94,6 +103,7 @@ class TestRendering:
                                awaiting={"type": "confirm", "step_id": "scale"},
                                done_ids=set(), findings=[])
         assert "现在等你" in md and "desiredSize=2 | tee x" in md
+        assert "要核实的事" in md and "🙋 等确认" in md
         assert "confirm_step" in md and '"step_id":"scale"' in md
 
     def test_draft_lists_what_blocks_approval(self):

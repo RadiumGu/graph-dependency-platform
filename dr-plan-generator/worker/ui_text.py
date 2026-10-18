@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from probe_catalog import PROBES
 from runbook import ProbeRef, Runbook, Step
 
 #: summary 上限是 200 **字节**，details 是 20K **字节**（见
@@ -64,19 +65,13 @@ def ref_text(ref: ProbeRef) -> str:
 
 
 def _verify_text(s: Step) -> str:
-    parts = []
-    if s.probes:
-        parts.append(", ".join(ref_text(r) for r in s.probes))
-    if s.pre:
-        parts.append("前：" + ", ".join(ref_text(r) for r in s.pre))
-    if s.post:
-        parts.append("后：" + ", ".join(ref_text(r) for r in s.post))
-    return " · ".join(parts) or "—"
+    n = len(s.all_probes())
+    return f"{n} 项（见下）" if n else "—"
 
 
 def _action_text(s: Step) -> str:
     if s.kind == "manual":
-        return f"`{_cell(s.command or '（未填）')}`" if s.command else "（未填）"
+        return "人执行 1 条命令（见下）" if s.command else "（未填）"
     if s.kind == "decision":
         return "选：" + " / ".join(s.options)
     return "只读核查"
@@ -85,15 +80,18 @@ def _action_text(s: Step) -> str:
 def _reversible_text(s: Step) -> str:
     if s.kind != "manual":
         return "—"
-    # 回滚命令在表下的「完整命令」里 —— 表格里只放结论，免得把表撑得无法阅读
     if s.reversible:
-        return "✅ 可逆" + ("（回滚命令见下）" if s.rollback else "（⚠️ 没写回滚）")
+        return "✅ 可逆" + ("" if s.rollback else "（⚠️ 没写回滚）")
     return "⛔ **不可逆**"
 
 
+def _cond_text(s: Step) -> str:
+    return f"（仅当 `{s.when['step']}` = {' / '.join(s.when['in'])}）" if s.when else ""
+
+
 def steps_table(rb: Runbook, status_of: dict[int, str] | None = None) -> str:
-    """一步一行。status_of 给出时多一列「状态」。"""
-    cols = ["#", "类型", "步骤", "要执行的动作", "核实（探针）", "可逆"]
+    """总览：一步一行，只放结论性的列；每步的命令与每个探针在下面的分节里。"""
+    cols = ["#", "阶段", "类型", "步骤", "动作", "核实", "可逆"]
     if status_of is not None:
         cols.insert(1, "状态")
     head = "| " + " | ".join(cols) + " |"
@@ -101,16 +99,74 @@ def steps_table(rb: Runbook, status_of: dict[int, str] | None = None) -> str:
     rows = [head, sep]
     for i, s in enumerate(rb.steps):
         flag = " ⚠️**待人填写**" if s.needs_human_input else ""
-        cells = [str(i + 1), _KIND.get(s.kind, s.kind), _cell(s.title) + flag,
-                 _action_text(s), _cell(_verify_text(s)), _reversible_text(s)]
+        cells = [str(i + 1), _cell(s.phase) or "—", _KIND.get(s.kind, s.kind),
+                 _cell(s.title) + _cond_text(s) + flag,
+                 _action_text(s), _verify_text(s), _reversible_text(s)]
         if status_of is not None:
             cells.insert(1, status_of.get(i, "· 未开始"))
         rows.append("| " + " | ".join(cells) + " |")
     return "\n".join(rows)
 
 
+_PHASE = {"check": "核查", "pre": "前置", "post": "后置"}
+_VERDICT = {"PASS": "✅ PASS", "FAIL": "❌ FAIL", "UNKNOWN": "❔ UNKNOWN"}
+
+
+def _latest_results(probe_log: list[dict[str, Any]] | None) -> dict[tuple, dict[str, Any]]:
+    out: dict[tuple, dict[str, Any]] = {}
+    for r in probe_log or []:
+        key = (r.get("step"), r.get("phase"), r.get("probe"),
+               tuple(sorted((r.get("params") or {}).items())))
+        out[key] = r            # 后来的覆盖先前的（retry 之后看最新一次）
+    return out
+
+
+def step_sections(rb: Runbook, *, statuses: dict[int, str] | None = None,
+                  probe_log: list[dict[str, Any]] | None = None) -> str:
+    """每步一节：动作（完整命令、回滚）+ 每个探针单独一行（问的是什么、参数、结论）。
+
+    2026-10-18：原来一步的全部探针用逗号挤在一个表格单元里，第 2 步 12 个探针一行。
+    """
+    res = _latest_results(probe_log)
+    out: list[str] = []
+    cur_phase = None
+    for i, s in enumerate(rb.steps):
+        if s.phase and s.phase != cur_phase:
+            out += [f"### {s.phase}", ""]
+            cur_phase = s.phase
+        st = f" · {statuses[i]}" if statuses and i in statuses else ""
+        flag = " ⚠️**待人填写**" if s.needs_human_input else ""
+        out.append(f"#### {i + 1}. {s.title}{flag}{st}")
+        meta = [_KIND.get(s.kind, s.kind), f"`{s.id}`"]
+        if s.kind == "manual":
+            meta.append("可逆" if s.reversible else "⛔ **不可逆**")
+            meta.append("**需人确认**")
+        out.append(" · ".join(meta) + (" " + _cond_text(s) if s.when else ""))
+        if s.kind == "manual":
+            out.append("```bash\n" + (s.command or "# 未填") + "\n```")
+            if s.rollback:
+                out.append("回滚：`" + " ".join(s.rollback.split()) + "`")
+            elif s.irreversible_note:
+                out.append("不可逆：" + clip(s.irreversible_note, 200))
+        elif s.kind == "decision":
+            out.append("选项：" + " / ".join(f"`{o}`" for o in s.options))
+        refs = s.all_probes()
+        if refs:
+            out += ["", "| 时机 | 要核实的事 | 探针与参数 | 结论 |", "|---|---|---|---|"]
+            for ph, r in refs:
+                q = PROBES[r.probe].question if r.probe in PROBES else r.probe
+                key = (s.id, ph, r.probe, tuple(sorted(r.params.items())))
+                got = res.get(key)
+                verdict = _VERDICT.get(got.get("verdict"), got.get("verdict")) if got else "·"
+                if got and got.get("verdict") != "PASS" and got.get("reason"):
+                    verdict += "：" + _cell(got["reason"])[:80]
+                out.append(f"| {_PHASE.get(ph, ph)} | {_cell(q)} | `{_cell(ref_text(r))}` | {verdict} |")
+        out.append("")
+    return "\n".join(out)
+
+
 def full_commands(rb: Runbook) -> str:
-    """人工步骤的完整命令与回滚命令 —— 表格里是截断的，这里可以直接复制。"""
+    """（保留给旧调用方）人工步骤的完整命令与回滚。"""
     out = []
     for i, s in enumerate(rb.steps):
         if s.kind != "manual":
@@ -167,10 +223,7 @@ def plan_details(
     n_irrev = sum(1 for s in rb.steps if s.kind == "manual" and not s.reversible)
     lines.append(f"{rb.source_region} → {rb.target_region} · {len(rb.steps)} 步"
                  f"（人工 {n_manual}，其中不可逆 {n_irrev}）")
-    lines += ["", "### 步骤", "", steps_table(rb)]
-    cmds = full_commands(rb)
-    if cmds:
-        lines += ["", "### 人工步骤的完整命令", "", cmds]
+    lines += ["", "### 总览", "", steps_table(rb), "", "## 每一步", "", step_sections(rb)]
     return _cap("\n".join(lines))
 
 
@@ -219,11 +272,13 @@ def _awaiting_block(s: Step, awaiting: dict[str, Any], wid: str) -> list[str]:
 
 
 def step_statuses(rb: Runbook, cursor: int | None, status: str, awaiting: dict[str, Any] | None,
-                  done_ids: set[str]) -> dict[int, str]:
+                  done_ids: set[str], skipped: set[str] | None = None) -> dict[int, str]:
     out: dict[int, str] = {}
     finished = status in ("completed",)
     for i, s in enumerate(rb.steps):
-        if s.id in done_ids or finished or (cursor is not None and i < cursor):
+        if skipped and s.id in skipped:
+            out[i] = "⏭ 跳过"
+        elif s.id in done_ids or finished or (cursor is not None and i < cursor):
             out[i] = "✅"
         elif cursor == i:
             if awaiting:
@@ -239,6 +294,7 @@ def step_statuses(rb: Runbook, cursor: int | None, status: str, awaiting: dict[s
 def runbook_details(
     *, wid: str, mode: str, plan_id: str, version: int, rb: Runbook | None, status: str,
     cursor: int | None, awaiting: dict[str, Any] | None, done_ids: set[str], findings: list[str],
+    probe_log: list[dict[str, Any]] | None = None, skipped: set[str] | None = None,
 ) -> str:
     title = "演练（只跑探针，不做任何变更）" if mode == "rehearsal" else "**真执行**（每个变更由人执行，Temporal 核实）"
     lines = [f"## {plan_id} v{version} · {title}", "", f"**状态**：{status}"]
@@ -252,8 +308,9 @@ def runbook_details(
             lines += [""] + _awaiting_block(s, awaiting, wid)
     if findings:
         lines += ["", "### 发现"] + [f"- {clip(f, 220)}" for f in findings[-10:]]
-    lines += ["", "### 步骤", "",
-              steps_table(rb, step_statuses(rb, cursor, status, awaiting, done_ids))]
+    sts = step_statuses(rb, cursor, status, awaiting, done_ids, skipped)
+    lines += ["", "### 总览", "", steps_table(rb, sts),
+              "", "## 每一步", "", step_sections(rb, statuses=sts, probe_log=probe_log)]
     return _cap("\n".join(lines))
 
 
@@ -299,6 +356,6 @@ def plan_static(plan_id: str, rb: Runbook | None) -> tuple[str, str]:
         f"## 启动时的 v1（{rb.source_region} → {rb.target_region}）", "",
         "每个变更由人执行；Temporal 展示命令原文、在你确认后用只读探针核实终态。",
         "实时进度与「现在等你做什么」在下面的 **Current Details**。", "",
-        steps_table(rb), "", "### 人工步骤的完整命令", "", full_commands(rb),
+        steps_table(rb), "", step_sections(rb),
     ]))
     return summary, details

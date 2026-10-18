@@ -126,6 +126,10 @@ class DrRunbookWorkflow:
         self._executed: list[str] = []
         self._probe_log: list[dict[str, Any]] = []
         self._record_key: str | None = None
+        #: decision 步骤 id → 选中的选项（条件步骤 when 据此判断）
+        self._decisions: dict[str, str] = {}
+        #: 因 when 不成立而跳过的步骤 id
+        self._skipped: list[str] = []
 
     # ── 人的三个动作 ──────────────────────────────────────────────────────
 
@@ -240,6 +244,8 @@ class DrRunbookWorkflow:
             ),
             "total_steps": len(self._rb.steps) if self._rb else None,
             "executed": list(self._executed),
+            "skipped": list(self._skipped),
+            "decisions": dict(self._decisions),
             "overrides": list(self._overrides),
             "findings": list(self._findings),
             "last_probes": self._probe_log[-8:],
@@ -378,6 +384,16 @@ class DrRunbookWorkflow:
             rec: dict[str, Any] = {"step": s.id, "kind": s.kind, "title": s.title}
             self._steps.append(rec)
 
+            # 条件步骤：裁决结果不在 when.in 里就跳过，并记下为什么跳过。
+            # 只有带 when 的步骤会走这里 —— 旧正文没有 when，command 序列与原来一致。
+            if s.when is not None:
+                chosen = self._decisions.get(s.when["step"])
+                if chosen not in s.when["in"]:
+                    rec["skipped"] = {"because": s.when["step"], "chosen": chosen,
+                                      "needed": list(s.when["in"])}
+                    self._skipped.append(s.id)
+                    continue
+
             if s.kind == "check":
                 if not await self._gate(s, "check", s.probes, rec, args):
                     return False if self._status == "aborted" else None
@@ -389,6 +405,7 @@ class DrRunbookWorkflow:
                 if reply is None:
                     return None
                 rec["decision"] = reply
+                self._decisions[s.id] = reply["choice"]
                 workflow.upsert_search_attributes([_SA_DECISION.value_set(reply["choice"])])
                 if reply["choice"] == DECISION_ABORT:
                     # abort 是保留的选项名：选了它就停在这里，不进入后面的任何步骤。
@@ -490,6 +507,7 @@ class DrRunbookWorkflow:
             wid=workflow.info().workflow_id, mode=a.mode, plan_id=a.plan_id, version=a.version,
             rb=self._rb, status=self._status, cursor=self._cursor, awaiting=self._awaiting,
             done_ids=set(self._executed), findings=self._findings,
+            probe_log=self._probe_log, skipped=set(self._skipped),
         ))
 
     async def _probe(self, step_id: str, phase: str, ref: ProbeRef) -> dict[str, Any]:
