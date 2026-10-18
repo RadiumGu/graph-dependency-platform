@@ -2,7 +2,7 @@
 
 背景：plan-20261006-tokyo-to-seoul 在 UI 上只有两根贯穿 12 天的长柱（workflow 本身和
 「1 (30d)」计时器），每步要做什么只能去 Input 里翻 12KB 原文。调研与 API 核实见
-docs/lessons/temporal-execution-readability-2026-10.md（10-07 另一次会话的调研，截至 10-18 仍未提交入库；本次照它落地）。
+docs/lessons/temporal-execution-readability-2026-10.md（10-07 另一次会话的调研，本次照它落地）。
 
 守三类东西：
 1. 渲染（离线）：步骤表一步一行、命令完整可复制、summary 按字节不超 200、details 不超 20K

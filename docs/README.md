@@ -29,7 +29,7 @@
 docs/
 ├── README.md          ← 你在这里
 ├── design/     (12)   核心设计说明：为什么这样设计，新人必读
-├── lessons/    (28)   实测教训与踩坑记录：防止重犯，长期价值最高
+├── lessons/    (32)   实测教训与踩坑记录：防止重犯，长期价值最高
 ├── runbooks/    (6)   可照着执行的作业手册
 ├── migration/   (3)   Strands 迁移的时间线与 ADR（历史决策记录）
 └── (根目录)     (3)   dependency-definition / prd / tdd
@@ -89,6 +89,7 @@ JSON。新人不必读，但它们**不能随意删**——`scripts/emit_resilie
 - [`petsite-traffic-coverage.md`](lessons/petsite-traffic-coverage.md) — 跨 VPC 流量是否覆盖集群内应用
 - [`tech-debt-etl-lambdas-outside-cfn.md`](lessons/tech-debt-etl-lambdas-outside-cfn.md) — 三个生产 ETL Lambda 不在任何 CFN 栈
 - [`tech-debt-service-name-single-source.md`](lessons/tech-debt-service-name-single-source.md) — 服务名解析应收敛到单一真源
+- [`temporal-execution-readability-2026-10.md`](lessons/temporal-execution-readability-2026-10.md) — Temporal 执行在 UI 上看不懂的根因与改法（按 SDK `1.33.0` tag 逐个核过签名）。**要点：runbook 正文放 Input 是错的，该放 `static_details`；三者里只有 Search Attribute 可查询，memo 与 user metadata 只是展示**。含一个会直接 `TypeError` 的版本陷阱（`event_groups` 在 1.34.0 才有）、不要为 Timeline 观感把长定时器改成轮询的量化代价、以及附录的 DR 编排引擎选型调研（ARC Region switch 的执行块清单 + 开源界为何无对口项目）
 
 **选型与业界调研**
 - [`research-lab-graphdb-necessity-FINDINGS.md`](lessons/research-lab-graphdb-necessity-FINDINGS.md) — 依赖管理是否必须用图 DB（按场景分档、带证据等级）
