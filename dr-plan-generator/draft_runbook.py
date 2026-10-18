@@ -89,7 +89,10 @@ def live_facts(f: DraftFacts) -> None:
         note("DynamoDB 表", e)
     try:
         fns = boto3.client("lambda", region_name=f.target_region).list_functions()["Functions"]
-        f.lambdas = sorted(x["FunctionName"] for x in fns if x["FunctionName"].startswith("dr-korea-"))
+        # dr-korea-arc-* 是切换工具自己（ARC 扩缩 Lambda），不是应用依赖，不核查
+        f.lambdas = sorted(x["FunctionName"] for x in fns
+                           if x["FunctionName"].startswith("dr-korea-")
+                           and not x["FunctionName"].startswith("dr-korea-arc-"))
     except Exception as e:  # noqa: BLE001
         note("Lambda", e)
     try:
@@ -118,6 +121,15 @@ def main() -> int:
     if not a.offline:
         live_facts(f)
 
+    # 每个清单各自负责哪些目标组：petsite 的入口在 drill 清单，其余后端在 workloads 清单。
+    drill = next((m for m in MANIFESTS if "drill" in m), None)
+    rest = [m for m in MANIFESTS if m != drill]
+    petsite_tgs = [t for t in f.target_groups if "petsite" in t]
+    other_tgs = [t for t in f.target_groups if t not in petsite_tgs]
+    if drill:
+        f.workloads.append((drill, "petsite 前端（" + drill.rsplit("/", 1)[-1] + "）", petsite_tgs))
+    for i, m in enumerate(rest):
+        f.workloads.append((m, "后端服务（" + m.rsplit("/", 1)[-1] + "）", other_tgs if i == len(rest) - 1 else []))
     rb = draft_tokyo_to_seoul(f)
     body = render_body(
         f, rb,

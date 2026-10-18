@@ -180,7 +180,8 @@ class TestGeneratorDoesNotInvent:
 
     def test_missing_fact_becomes_placeholder_not_guess(self):
         rb = draft_tokyo_to_seoul(_facts(secondary_cluster_arn=""))
-        assert "promote-aurora" in rb.unresolved()
+        # 2026-10-18 起 Aurora 提升拆成两个条件步骤，两者都缺这个事实
+        assert {"promote-aurora-switchover", "promote-aurora-failover"} <= set(rb.unresolved())
 
     def test_unresolved_plan_cannot_be_approved(self):
         f = _facts()
@@ -208,8 +209,10 @@ class TestGeneratorDoesNotInvent:
     def test_irreversible_step_comes_after_compute_is_proven(self):
         rb = draft_tokyo_to_seoul(_facts())
         ids = [s.id for s in rb.steps]
-        assert ids.index("apply-workloads") < ids.index("promote-aurora")
-        assert ids.index("aurora-mode") < ids.index("promote-aurora")
+        last_apply = max(i for i, x in enumerate(ids) if x.startswith("apply-workload-"))
+        for p in ("promote-aurora-switchover", "promote-aurora-failover"):
+            assert last_apply < ids.index(p)
+            assert ids.index("aurora-mode") < ids.index(p)
 
     def test_aurora_decision_has_no_default_and_offers_abort(self):
         rb = draft_tokyo_to_seoul(_facts())

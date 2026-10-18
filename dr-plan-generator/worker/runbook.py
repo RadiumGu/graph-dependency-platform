@@ -31,6 +31,12 @@
   没有核实手段。必须声明可逆性：可逆则写回滚，不可逆则写清楚为什么接受。
 - `decision`：人在几个选项里选一个（例如 Aurora 有序切换 vs 允许丢数据）。
   没有默认值，等不到裁决就停住，不替人选。
+- 任何步骤都可以 `phase`（所属阶段，只用于分组展示）和 `when`（条件步骤：
+  `{"step": "<前面某个 decision 的 id>", "in": ["<选项>", ...]}`，裁决不在其中就跳过）。
+  2026-10-18 加：原来「按上一步裁决二选一」把两条命令写在同一步里，判断留给了执行的人。
+- **原子步骤**（批准时要求）：一个 manual 步骤只能有**一条**命令 —— 一个动作、它自己的
+  前后置核实、它自己的回滚。两条命令就是两步。这条只在批准时检查、不在解析时检查：
+  解析结果决定 workflow 走哪些 command，旧正文的解析结果必须保持不变（回放）。
 - 任何步骤都可以 `needs_human_input: true` —— 生成器**不知道**的东西就标出来，
   而不是编一个。带这个标记的计划不能被批准。
 """
@@ -86,6 +92,10 @@ class Step:
     #: 生成器不知道、需要人填的地方。
     needs_human_input: bool = False
     note: str = ""
+    #: 所属阶段（展示分组用，不影响执行）。
+    phase: str = ""
+    #: 条件步骤：{"step": decision 的 id, "in": [选项...]}。裁决结果不在 in 里就跳过。
+    when: dict[str, Any] | None = None
 
     def all_probes(self) -> list[tuple[str, ProbeRef]]:
         """(阶段, 引用) 列表，阶段为 check / pre / post。"""
@@ -227,8 +237,11 @@ def parse_runbook(raw: Any) -> Runbook:
             options=s.get("options") or [],
             needs_human_input=bool(s.get("needs_human_input", False)),
             note=s.get("note") or "",
+            phase=s.get("phase") or "",
+            when=s.get("when"),
         )
         problems.extend(_check_step(step, where))
+        problems.extend(_check_when(step, where, steps))
         steps.append(step)
 
     if problems:
@@ -238,6 +251,39 @@ def parse_runbook(raw: Any) -> Runbook:
         target_region=raw["target_region"],
         steps=steps,
     )
+
+
+def _check_when(s: Step, where: str, earlier: list[Step]) -> list[str]:
+    """条件只能引用**前面**的 decision，选项必须存在，且不能以 abort 为条件（选 abort 就停了）。"""
+    if s.when is None:
+        return []
+    w = s.when
+    if not isinstance(w, dict) or set(w) != {"step", "in"} or not isinstance(w.get("in"), list) \
+            or not w["in"] or not all(isinstance(x, str) for x in w["in"]):
+        return [f'{where}：when 必须是 {{"step": 裁决步骤 id, "in": [选项, ...]}}']
+    dec = next((e for e in earlier if e.id == w["step"]), None)
+    if dec is None or dec.kind != "decision":
+        return [f"{where}：when 引用的 {w['step']!r} 必须是排在它前面的 decision 步骤"]
+    bad = [x for x in w["in"] if x not in dec.options]
+    if bad:
+        return [f"{where}：when 里的选项 {bad} 不在 {dec.id} 的选项 {dec.options} 里"]
+    if "abort" in w["in"]:
+        return [f"{where}：when 不能以 abort 为条件 —— 选 abort 时执行已经停止"]
+    return []
+
+
+def command_count(cmd: str | None) -> int:
+    """逻辑命令行数：以反斜杠结尾的续行不算新命令，空行与注释不算。"""
+    n, cont = 0, False
+    for line in (cmd or "").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            cont = False
+            continue
+        if not cont:
+            n += 1
+        cont = s.endswith("\\")
+    return n
 
 
 def _check_step(s: Step, where: str) -> list[str]:
@@ -293,13 +339,20 @@ def approval_problems(body: str) -> list[str]:
         return [
             "正文里没有 dr-runbook 块 —— 没有结构化步骤，演练和执行都无从核实。"
         ]
+    out: list[str] = []
     unresolved = rb.unresolved()
     if unresolved:
-        return [
+        out.append(
             f"步骤 {', '.join(unresolved)} 仍标着 needs_human_input —— "
             "生成器不知道的东西必须由人填上，才能批准"
-        ]
-    return []
+        )
+    for s in rb.steps:
+        if s.kind == "manual" and not s.needs_human_input and command_count(s.command) > 1:
+            out.append(
+                f"步骤 {s.id} 有 {command_count(s.command)} 条命令 —— 一步只能有一个动作"
+                "（各自核实、各自回滚、各自确认）。拆成多步；按裁决二选一的用 when"
+            )
+    return out
 
 
 # ── 渲染 ──────────────────────────────────────────────────────────────────
@@ -309,19 +362,36 @@ def render_block(rb: Runbook) -> str:
     return "```dr-runbook\n" + json.dumps(rb.to_dict(), ensure_ascii=False, indent=2) + "\n```"
 
 
+def _ref_line(phase: str, r: ProbeRef) -> str:
+    q = PROBES[r.probe].question if r.probe in PROBES else r.probe
+    ps = ", ".join(f"{k}={v}" for k, v in r.params.items())
+    tag = {"check": "核查", "pre": "前置", "post": "后置"}[phase]
+    return f"   - {tag}：{q}（`{r.probe}`{'：' + ps if ps else ''}）"
+
+
 def summarize(rb: Runbook) -> list[str]:
-    """给人看的一行一步。"""
-    out = []
+    """给人看的步骤一览：按阶段分组，每个探针单独一行写出它问的是什么。
+
+    2026-10-18 改：原来一步一行、探针名用逗号串起来（一步 12 个探针挤在一行里）。
+    """
+    out: list[str] = []
+    cur_phase = None
     for n, s in enumerate(rb.steps, 1):
+        if s.phase and s.phase != cur_phase:
+            out += ["", f"### {s.phase}", ""]
+            cur_phase = s.phase
         flag = " ⚠️ 待人填写" if s.needs_human_input else ""
+        cond = f"（仅当 {s.when['step']} = {' / '.join(s.when['in'])}）" if s.when else ""
         if s.kind == "manual":
             rev = "可逆" if s.reversible else "**不可逆**"
-            out.append(f"{n}. [人工·{rev}] {s.title}{flag}")
+            out.append(f"{n}. [人工·{rev}·需确认] {s.title}{cond}{flag}")
+            if s.command:
+                out.append(f"   - 命令：`{' '.join(s.command.split())}`")
         elif s.kind == "decision":
             out.append(f"{n}. [裁决] {s.title}：{' / '.join(s.options)}{flag}")
         else:
-            names = ", ".join(p.probe for p in s.probes)
-            out.append(f"{n}. [核查] {s.title}（{names}）{flag}")
+            out.append(f"{n}. [核查] {s.title}{cond}{flag}")
+        out += [_ref_line(ph, r) for ph, r in s.all_probes()]
     return out
 
 
