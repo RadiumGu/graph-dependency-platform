@@ -303,6 +303,28 @@ class ArcPlanExecutionWorkflow:
 
     def _mark(self, what: str, **kw: Any) -> None:
         self._timeline.append({"at": workflow.now().isoformat(), "what": what, **kw})
+        self._refresh_details()
+
+    def _refresh_details(self) -> None:
+        """UI「User Metadata」：ARC 执行现在走到哪、在等谁、核实结果。不产生 command。"""
+        a = self._args
+        if a is None:
+            return
+        lines = [f"## ARC 执行 · 激活 {a.target_region}（{a.action}/{a.mode}）", "",
+                 f"**阶段**：{self._phase}" + (f" · **结论**：{self._verdict}" if self._verdict else ""),
+                 f"**ARC 执行**：`{self._execution_id or '未起'}` · 状态 `{self._arc_state or '-'}`"]
+        if self._awaiting_step:
+            lines += ["", f"### 🙋 ARC 在等人批准 `{self._awaiting_step}`",
+                      "审批角色要求 MFA；Temporal 与 agent **批不了**：",
+                      "```bash\nbash infra/dr-korea/arc-approve.sh " + self._execution_id + " approve\n```"]
+        for title, rows in (("前置探针", self._pre), ("后置探针", self._post)):
+            if rows:
+                lines += ["", f"### {title}", "| 探针 | 结论 | 原因 |", "|---|---|---|"]
+                lines += [f"| {r.get('probe')} | {r.get('verdict')} | {str(r.get('reason') or '')[:120].replace('|', '/')} |" for r in rows]
+        if self._approvers:
+            lines += ["", "### 审批人（CloudTrail）"]
+            lines += [f"- {x.get('at')} `{x.get('principal')}` mfa={x.get('mfa')} {x.get('error') or ''}" for x in self._approvers]
+        workflow.set_current_details("\n".join(lines))
 
     async def _probe(self, ref: dict[str, Any]) -> dict[str, Any]:
         name = ref["probe"]
@@ -311,6 +333,8 @@ class ArcPlanExecutionWorkflow:
                 activity_name(name),
                 ProbeInput(params=dict(ref.get("params", {})), plan_ref="arc-bridge"),
                 result_type=ProbeResult,
+                summary=(f"{self._phase} {name} " + ", ".join(
+                    f"{k}={v}" for k, v in (ref.get("params") or {}).items()))[:200],
                 start_to_close_timeout=timedelta(seconds=PROBES[name].timeout_seconds),
                 retry_policy=_PROBE_RETRY,
             )
@@ -401,7 +425,11 @@ class ArcPlanExecutionWorkflow:
                 self._phase, self._verdict = "stalled", "arc-not-finished-in-time"
                 self._mark("stalled", arc_state=v.state, awaiting=self._awaiting_step)
                 return self.arc_state()
-            await workflow.sleep(timedelta(seconds=args.poll_seconds))
+            await workflow.sleep(
+                timedelta(seconds=args.poll_seconds),
+                summary=(f"等 ARC：{v.state}" + (f" · 等人批准 {self._awaiting_step}"
+                                                 if self._awaiting_step else ""))[:200],
+            )
 
         self._events = await workflow.execute_activity(
             arc_list_execution_events, ArcGetInput(args.plan_arn, res.execution_id),
@@ -426,7 +454,7 @@ class ArcPlanExecutionWorkflow:
                 # 一个没批成的人。要等到一条成功的（没有 errorCode）才算找到。
                 if any(not a.get("error") for a in self._approvers) or i == tries - 1:
                     break
-                await workflow.sleep(timedelta(minutes=1))
+                await workflow.sleep(timedelta(minutes=1), summary="等 CloudTrail 投递审批事件（查是谁批的）")
             if not any(not a.get("error") for a in self._approvers):
                 self._mark("approver-not-found", note="CloudTrail 在等待上限内没有投递**成功的**审批事件（不是没人批）")
 
@@ -441,7 +469,8 @@ class ArcPlanExecutionWorkflow:
             if all(p.get("verdict") == PASS for p in self._post):
                 break
             if attempt < args.postcheck_attempts:
-                await workflow.sleep(timedelta(seconds=args.postcheck_interval_seconds))
+                await workflow.sleep(timedelta(seconds=args.postcheck_interval_seconds),
+                                     summary=f"后置探针第 {attempt} 次未全过，等节点注册后重测")
         ok = all(p.get("verdict") == PASS for p in self._post)
         self._phase = "done"
         # 两种结论分开写：ARC 成功但核实失败，是这套设计要抓的那一类
@@ -450,6 +479,7 @@ class ArcPlanExecutionWorkflow:
         return self.arc_state()
 
     async def _export(self) -> None:
+        self._refresh_details()
         args = self._args
         if args is None or not args.export_record:
             return

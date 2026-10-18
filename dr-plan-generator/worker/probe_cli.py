@@ -112,11 +112,21 @@ async def cmd_history(c: Client, a: argparse.Namespace) -> int:
 async def cmd_start_plan(c: Client, a: argparse.Namespace) -> int:
     body = Path(a.body_file).read_text(encoding="utf-8")
     wid = f"plan-{a.plan_id}"
+    # 列表页一行 + 详情页 User Metadata 里的步骤表。原来正文只在 Input 里，UI 原样折行。
+    from runbook import RunbookError, extract_runbook  # noqa: PLC0415
+    from ui_text import plan_static  # noqa: PLC0415
+    try:
+        rb = extract_runbook(body)
+    except RunbookError:
+        rb = None
+    summary, details = plan_static(a.plan_id, rb)
     h = await c.start_workflow(
         "DrPlanWorkflow",
         {"plan_id": a.plan_id, "body": body, "author": a.author, "reason": a.reason},
         id=wid,
         task_queue=QUEUE,
+        static_summary=summary,
+        static_details=details or None,
     )
     print(json.dumps({"workflow_id": wid, "run_id": h.result_run_id}, ensure_ascii=False))
     return 0
