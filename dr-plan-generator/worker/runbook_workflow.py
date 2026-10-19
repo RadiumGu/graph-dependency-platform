@@ -79,6 +79,10 @@ GATE_ABORT = "abort"
 _GATE_ACTIONS = (GATE_RETRY, GATE_OVERRIDE, GATE_ABORT)
 
 #: 探针只读、幂等，重试是安全的；它自己不抛异常，所以重试只覆盖 worker 中途崩溃。
+#: 2026-10-18：执行模式下只读核查也要人逐条确认。用 patched 而不是直接改：
+#: 在这之前开始的执行，回放时不会多出一个「等人」，history 仍然对得上。
+PATCH_CHECK_CONFIRM = "check-steps-need-human-confirm"
+
 _PROBE_RETRY = RetryPolicy(initial_interval=timedelta(seconds=2), maximum_attempts=3)
 _READ_RETRY = RetryPolicy(initial_interval=timedelta(seconds=2), maximum_attempts=5)
 _RECORD_RETRY = RetryPolicy(initial_interval=timedelta(seconds=5), maximum_attempts=5)
@@ -130,6 +134,8 @@ class DrRunbookWorkflow:
         self._decisions: dict[str, str] = {}
         #: 因 when 不成立而跳过的步骤 id
         self._skipped: list[str] = []
+        #: 执行模式下由人确认过结果的只读核查步骤 id
+        self._acknowledged: list[str] = []
 
     # ── 人的三个动作 ──────────────────────────────────────────────────────
 
@@ -142,6 +148,8 @@ class DrRunbookWorkflow:
             "note": (args.get("note") or "").strip(),
             "at": workflow.now().isoformat(),
         }
+        if self._awaiting and self._awaiting.get("check"):
+            return {"accepted": True, "next": "核查结果已确认，进入下一步"}
         return {"accepted": True, "next": "后置探针开始运行；全 PASS 才会进入下一步"}
 
     @confirm_step.validator
@@ -245,6 +253,7 @@ class DrRunbookWorkflow:
             "total_steps": len(self._rb.steps) if self._rb else None,
             "executed": list(self._executed),
             "skipped": list(self._skipped),
+            "acknowledged": list(self._acknowledged),
             "decisions": dict(self._decisions),
             "overrides": list(self._overrides),
             "findings": list(self._findings),
@@ -397,6 +406,19 @@ class DrRunbookWorkflow:
             if s.kind == "check":
                 if not await self._gate(s, "check", s.probes, rec, args):
                     return False if self._status == "aborted" else None
+                # 负责人要求：只读核查也逐条由人确认 —— 人看过结论才放行到下一步。
+                if workflow.patched(PATCH_CHECK_CONFIRM):
+                    last = (rec.get("check_attempts") or [[]])[-1]
+                    reply = await self._await_human({
+                        "type": "confirm", "step_id": s.id, "check": True,
+                        "results": [{"probe": r.get("probe"), "verdict": r.get("verdict"),
+                                     "observed": r.get("observed"), "params": r.get("params")}
+                                    for r in last],
+                    }, args)
+                    if reply is None:
+                        return None
+                    rec["acknowledged"] = reply
+                    self._acknowledged.append(s.id)
 
             elif s.kind == "decision":
                 reply = await self._await_human(

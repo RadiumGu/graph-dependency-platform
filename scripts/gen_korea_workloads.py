@@ -605,6 +605,12 @@ def main() -> int:
         for o in objs
     )
     Path(args.out).write_text(header + "---\n" + body, encoding="utf-8")
+    # 2026-10-18：切换计划按服务一步，用的是 infra/dr-korea/workloads/ 下的拆分文件。
+    # 写的是权威路径时顺手重拆，免得两边漂移（漏了也会被 test_137 / --check 抓到）。
+    if Path(args.out).resolve() == (Path(__file__).resolve().parents[1]
+                                    / "infra" / "dr-korea" / "15-korea-workloads.yaml"):
+        import subprocess  # noqa: PLC0415
+        subprocess.run([sys.executable, str(Path(__file__).with_name("split_korea_workloads.py"))], check=True)
 
     kinds: dict[str, int] = {}
     for o in objs:

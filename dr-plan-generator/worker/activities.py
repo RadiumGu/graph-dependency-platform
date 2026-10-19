@@ -134,6 +134,50 @@ def _boto3():
     return boto3
 
 
+def k8s_get(path: str) -> tuple[dict | None, str | None]:
+    """以 worker 的身份 GET 首尔集群的 k8s API。返回 (JSON 体, 无法判断的原因)。
+
+    2026-10-18 从 count_ready_nodes 抽出来，给 Deployment 探针共用。前置条件（访问条目、
+    控制面 443、RBAC）见 count_ready_nodes 的说明。403 原样带出，调用方据此报 UNKNOWN。
+    """
+    import json as _json  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+    import urllib.request  # noqa: PLC0415
+    import ssl  # noqa: PLC0415
+    import base64 as _b64  # noqa: PLC0415
+
+    try:
+        eks = _boto3().client("eks", region_name=_REGION)
+        c = eks.describe_cluster(name=_EKS_CLUSTER)["cluster"]
+        endpoint = c["endpoint"]
+        ca_pem = _b64.b64decode(c["certificateAuthority"]["data"])
+    except Exception as e:  # noqa: BLE001
+        return None, f"查集群 endpoint/CA 失败：{type(e).__name__}: {e}"
+    try:
+        # aws eks get-token 是它的正规用途：把 SigV4 预签名 URL 包成
+        # k8s-aws-v1.<base64url> 形式的 bearer token。自己实现容易出错。
+        out = subprocess.run(
+            ["aws", "eks", "get-token", "--region", _REGION,
+             "--cluster-name", _EKS_CLUSTER, "--output", "json"],
+            capture_output=True, text=True, timeout=30, check=True,
+        )
+        token = _json.loads(out.stdout)["status"]["token"]
+    except Exception as e:  # noqa: BLE001
+        return None, f"取 k8s token 失败：{type(e).__name__}: {e}"
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".crt", delete=False) as f:
+            f.write(ca_pem)
+            ca_path = f.name
+        # TLS 用集群自己的 CA 校验，不跳过校验。
+        ctx = ssl.create_default_context(cafile=ca_path)
+        req = urllib.request.Request(f"{endpoint}{path}", headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
+            return _json.loads(resp.read()), None
+    except Exception as e:  # noqa: BLE001
+        return None, f"{type(e).__name__}: {e}"
+
+
 def count_ready_nodes() -> tuple[int | None, str | None]:
     """数集群里 Ready 的 k8s 节点。返回 (数量, 无法判断的原因)。
 
@@ -163,48 +207,11 @@ def count_ready_nodes() -> tuple[int | None, str | None]:
     `aws eks get-token` 出 bearer token + `urllib` 直连即可,少一个依赖。
     TLS 用集群自己的 CA 校验,不跳过校验。
     """
-    import json as _json  # noqa: PLC0415
-    import subprocess  # noqa: PLC0415
-    import tempfile  # noqa: PLC0415
-    import urllib.request  # noqa: PLC0415
-    import ssl  # noqa: PLC0415
-    import base64 as _b64  # noqa: PLC0415
-
-    try:
-        eks = _boto3().client("eks", region_name=_REGION)
-        c = eks.describe_cluster(name=_EKS_CLUSTER)["cluster"]
-        endpoint = c["endpoint"]
-        ca_pem = _b64.b64decode(c["certificateAuthority"]["data"])
-    except Exception as e:  # noqa: BLE001
-        return None, f"查集群 endpoint/CA 失败：{type(e).__name__}: {e}"
-
-    try:
-        # aws eks get-token 是它的正规用途：把 SigV4 预签名 URL 包成
-        # k8s-aws-v1.<base64url> 形式的 bearer token。自己实现容易出错。
-        out = subprocess.run(
-            ["aws", "eks", "get-token", "--region", _REGION,
-             "--cluster-name", _EKS_CLUSTER, "--output", "json"],
-            capture_output=True, text=True, timeout=30, check=True,
-        )
-        token = _json.loads(out.stdout)["status"]["token"]
-    except Exception as e:  # noqa: BLE001
-        return None, f"取 k8s token 失败：{type(e).__name__}: {e}"
-
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".crt", delete=False) as f:
-            f.write(ca_pem)
-            ca_path = f.name
-        ctx = ssl.create_default_context(cafile=ca_path)
-        req = urllib.request.Request(
-            f"{endpoint}/api/v1/nodes",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        with urllib.request.urlopen(req, timeout=30, context=ctx) as resp:
-            body = _json.loads(resp.read())
-    except Exception as e:  # noqa: BLE001
+    body, why = k8s_get("/api/v1/nodes")
+    if body is None:
         # ⚠️ 返回 None 而不是 0。查不到不等于「没有 Ready 节点」——
         # 把「没测到」写成「测到 0 个」是本项目已犯四次的缺陷。
-        return None, f"查 k8s 节点失败：{type(e).__name__}: {e}"
+        return None, f"查 k8s 节点失败：{why}"
 
     items = body.get("items")
     if items is None:

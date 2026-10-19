@@ -1,0 +1,137 @@
+# 服务 list-adoptions —— 由 scripts/split_korea_workloads.py 从 15-korea-workloads.yaml **逐字**切出。
+# ⚠️ 不要手改：改 15 号文件（它本身由 scripts/gen_korea_workloads.py 生成），然后重跑拆分脚本。
+# 切换计划里每个服务一步：单独 apply、单独核实、单独 delete 回滚。
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: list-adoptions-sa
+  namespace: petadoptions
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::926093770964:role/ServicesEks2-listadoptionsServiceAccountRole9A4594D-amvOjoW5dHjk
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: list-adoptions
+  namespace: petadoptions
+  labels:
+    app: list-adoptions
+    aws.cdk.eks/prune-c87562bde4b3471556913c7ee5fd362508066fd739: ''
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: list-adoptions
+  template:
+    metadata:
+      name: list-adoptions
+      namespace: petadoptions
+      labels:
+        app: list-adoptions
+      annotations:
+        cloudwatch.aws.amazon.com/auto-annotate-dotnet: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-java: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-nodejs: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-python: 'true'
+        instrumentation.opentelemetry.io/inject-dotnet: 'true'
+        instrumentation.opentelemetry.io/inject-java: 'true'
+        instrumentation.opentelemetry.io/inject-nodejs: 'true'
+        instrumentation.opentelemetry.io/inject-python: 'true'
+    spec:
+      containers:
+      - name: list-adoptions
+        image: 926093770964.dkr.ecr.ap-northeast-2.amazonaws.com/cdk-hnb659fds-container-assets-926093770964-ap-northeast-1:198a0b7e84d04de30668462f7c61f6f35797b6d874b048eaefe20c9bb410d47c
+        ports:
+        - containerPort: 80
+          protocol: TCP
+        env:
+        - name: AWS_REGION
+          value: ap-northeast-2
+        resources:
+          limits:
+            cpu: 512m
+            memory: 1Gi
+          requests:
+            cpu: 48m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /health/status
+            port: 80
+            scheme: HTTP
+          initialDelaySeconds: 30
+          timeoutSeconds: 1
+          periodSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health/status
+            port: 80
+            scheme: HTTP
+          initialDelaySeconds: 5
+          timeoutSeconds: 1
+          periodSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: Always
+      - name: aws-otel-collector
+        image: public.ecr.aws/aws-observability/aws-otel-collector:v0.47.0
+        env:
+        - name: AOT_CONFIG_CONTENT
+          value: "receivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n      http:\n        endpoint: 0.0.0.0:4318\nprocessors:\n  batch/traces:\n    timeout: 1s\n    send_batch_size:\
+            \ 50\nexporters:\n  awsxray:\n    region: ap-northeast-1\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [batch/traces]\n      exporters: [awsxray]"
+        resources:
+          limits:
+            cpu: 256m
+            memory: 256Mi
+          requests:
+            cpu: 32m
+            memory: 256Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      serviceAccountName: list-adoptions-sa
+      securityContext: {}
+      schedulerName: default-scheduler
+      enableServiceLinks: false
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: list-adoptions
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: list-adoptions
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: list-adoptions
+  namespace: petadoptions
+  labels:
+    aws.cdk.eks/prune-c8c548db9315f9ff7a8f8c347f5919d340d965d041: ''
+  annotations:
+    service.kubernetes.io/topology-mode: auto
+spec:
+  type: ClusterIP
+  selector:
+    app: list-adoptions
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 80
+

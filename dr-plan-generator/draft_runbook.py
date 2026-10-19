@@ -29,10 +29,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "worker"))
 from runbook import extract_runbook  # noqa: E402
 from runbook_draft import DraftFacts, draft_tokyo_to_seoul, render_body  # noqa: E402
 
-MANIFESTS = [
-    "infra/dr-korea/petsite-korea-drill.yaml",
-    "infra/dr-korea/15-korea-workloads.yaml",
-]
+# 2026-10-18：按服务拆开（scripts/split_korea_workloads.py 从 15 号文件逐字切出）。
+# 顺序就是切换时的部署顺序：共享对象（含 petsite-sa）先于 petsite 与各后端。
+_WL = "infra/dr-korea/workloads"
+MANIFESTS = (
+    [f"{_WL}/00-shared.yaml", "infra/dr-korea/petsite-korea-drill.yaml"]
+    + sorted(f"{_WL}/{p.name}" for p in (ROOT / _WL).glob("*.yaml") if p.name != "00-shared.yaml")
+)
 _IMG = re.compile(
     r"image:\s*\d{12}\.dkr\.ecr\.(?P<region>[a-z0-9-]+)\.amazonaws\.com/"
     r"(?P<repo>[a-z0-9._/-]+?)(?:@(?P<digest>sha256:[0-9a-f]{64})|:(?P<tag>[A-Za-z0-9._-]+))\s*$",
@@ -63,6 +66,30 @@ def images_from_manifests(target_region: str) -> tuple[list, list, list[str]]:
                         "不能证明是哪一版。建议钉 digest"
                     )
     return sorted(by_digest), sorted(by_tag), notes
+
+
+#: 有 TargetGroupBinding 的服务（14-petsite-korea-ingress.yaml）→ 首尔目标组。
+#: 其余服务没有绑定任何目标组（waggle-*-tg 没有任何东西往里注册 Pod，不能拿来核实）。
+_TG_OF = {"petsite-deployment": "dr-korea-petsite-tg", "pethistory-deployment": "dr-korea-pethistory-tg"}
+
+
+def workloads_from_manifests(target_groups: list[str]) -> list[tuple[str, str, list[str], list[str]]]:
+    """(清单, 展示名, 要核实的目标组, 要核实的 Deployment) —— 一个清单一步。"""
+    import yaml  # noqa: PLC0415
+
+    out = []
+    for rel in MANIFESTS:
+        p = ROOT / rel
+        if not p.exists():
+            continue
+        deps = [d["metadata"]["name"] for d in yaml.safe_load_all(p.read_text(encoding="utf-8"))
+                if d and d.get("kind") == "Deployment"]
+        tgs = [_TG_OF[d] for d in deps if d in _TG_OF and _TG_OF[d] in target_groups]
+        name = p.stem
+        label = ("共享对象（ServiceAccount / ConfigMap）" if name == "00-shared"
+                 else "petsite 前端" if "drill" in name else f"服务 {name}")
+        out.append((rel, label, tgs, deps))
+    return out
 
 
 def live_facts(f: DraftFacts) -> None:
@@ -121,15 +148,7 @@ def main() -> int:
     if not a.offline:
         live_facts(f)
 
-    # 每个清单各自负责哪些目标组：petsite 的入口在 drill 清单，其余后端在 workloads 清单。
-    drill = next((m for m in MANIFESTS if "drill" in m), None)
-    rest = [m for m in MANIFESTS if m != drill]
-    petsite_tgs = [t for t in f.target_groups if "petsite" in t]
-    other_tgs = [t for t in f.target_groups if t not in petsite_tgs]
-    if drill:
-        f.workloads.append((drill, "petsite 前端（" + drill.rsplit("/", 1)[-1] + "）", petsite_tgs))
-    for i, m in enumerate(rest):
-        f.workloads.append((m, "后端服务（" + m.rsplit("/", 1)[-1] + "）", other_tgs if i == len(rest) - 1 else []))
+    f.workloads = workloads_from_manifests(f.target_groups)
     rb = draft_tokyo_to_seoul(f)
     body = render_body(
         f, rb,

@@ -31,7 +31,7 @@
 
 | 层 | 负责 | 明确不负责 |
 |---|---|---|
-| **Temporal**（首尔自托管） | 根据依赖图生成计划初稿；计划版本、批准、「演练必须覆盖被批准的那一版」硬闸门；12 类只读探针（每类一个独立 activity，一份计划实测 27 次探测）；发起并监视 ARC 执行；用**与 ARC 不同的数据源**核实结果；从 CloudTrail 查审批人；执行记录写 S3 | 直接改生产资源（worker 角色里没有写权限，test_128 用 AST 扫描守着）；替人批准 |
+| **Temporal**（首尔自托管） | 根据依赖图生成计划初稿；计划版本、批准、「演练必须覆盖被批准的那一版」硬闸门；13 类只读探针（每类一个独立 activity，一份计划实测 27 次探测）；发起并监视 ARC 执行；用**与 ARC 不同的数据源**核实结果；从 CloudTrail 查审批人；执行记录写 S3 | 直接改生产资源（worker 角色里没有写权限，test_128 用 AST 扫描守着）；替人批准 |
 | **ARC Region switch** | 执行 AWS 动作（扩缩容、Aurora、前门 Lambda）；带 IAM 身份的人工审批步骤；每个区域独立的数据面；每 30 分钟评估一次计划配置与权限 | 判断切换后业务是否真的恢复（执行块只报告自己做没做完） |
 | **人** | 四个决策点（§3）；在 ARC 里批准；执行被标为「人执行」的单向门 | 手工敲可逆的准备命令 |
 
@@ -82,10 +82,10 @@ DrRunbookWorkflow（执行层，每个获批版本一条）
 
 | 类别 | 步骤 | 执行者 | ARC 执行块 | 前置 → 后置探针 | 回滚 | ungraceful 时 |
 |---|---|---|---|---|---|---|
-| 只读 | 数据层核查 | Temporal | — | aurora_global_membership、aurora_writer_region、aurora_replication_lag、dynamodb_table_active | — | 照跑 |
-| 只读 | 制品核查 | Temporal | — | ecr_image_present、lambda_function_active、eks_nodegroup_status | — | 照跑 |
+| 只读 | 数据层核查（每个断言一步，执行时逐条由人确认结果） | Temporal 跑、人确认 | — | aurora_global_membership、aurora_writer_region、aurora_replication_lag、dynamodb_table_active | — | 照跑 |
+| 只读 | 制品核查（同上） | Temporal 跑、人确认 | — | ecr_image_present、lambda_function_active、eks_nodegroup_status | — | 照跑 |
 | 可逆 | 首尔节点组 0 → N | ARC | CustomActionLambda（`dr-korea-arc-scale-up`）| desired=0 → eks_ready_nodes ≥ N、asg_lifecycle_settled | 同计划激活东京 | 照跑 |
-| 可逆 | 部署首尔工作负载 | 人（待迁 ARC） | EKSResourceScaling 或 Lambda | — → alb_target_health | kubectl delete | 照跑 |
+| 可逆 | 部署首尔工作负载（**每服务一步**，`infra/dr-korea/workloads/`） | 人（待迁 ARC） | EKSResourceScaling 或 Lambda | — → k8s_deployment_available（+ 有目标组的再核 alb_target_health） | kubectl delete | 照跑 |
 | 可逆 | 回切时首尔缩回 0 | ARC | CustomActionLambda，`deactivatingRegion` | desired=N → desired=0、ASG 清空 | 再激活首尔 | **跳过**（东京不可用时不依赖它） |
 | 单向门 | Aurora switchover / failover | 人（D1 之后） | 将来：AuroraGlobalDatabase | aurora_global_membership → aurora_writer_region=首尔 | 另一次计划内切换 | failover 才允许 |
 | 可逆 | 前门切到首尔 | ARC | CustomActionLambda（§5）| 首尔后置全 PASS → 外部 http_get | 同 Lambda 指回东京 | 照跑（在激活区域运行） |

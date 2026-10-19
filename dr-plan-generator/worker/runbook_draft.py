@@ -51,18 +51,18 @@ class DraftFacts:
     #: 首尔内部 ALB 上可直接访问的健康检查 URL。
     health_urls: list[str] = field(default_factory=list)
     workload_manifests: list[str] = field(default_factory=list)
-    #: (清单, 展示名, 该清单负责的目标组)。一个清单部署一步，各自核实自己的目标组。
-    workloads: list[tuple[str, str, list[str]]] = field(default_factory=list)
+    #: (清单, 展示名, 目标组, Deployment)。一个清单部署一步，核实它自己的 Deployment 与目标组。
+    workloads: list[tuple[str, str, list[str], list[str]]] = field(default_factory=list)
     #: 生成器读事实时发现的问题 —— 写进正文给审核的人看。
     notes: list[str] = field(default_factory=list)
 
 
-PH_A = "A 前置核查（只读，自动）"
+PH_A = "A 前置核查（只读，逐条人确认）"
 PH_B = "B 计算就绪（可逆，人确认）"
 PH_C = "C 工作负载（可逆，人确认）"
 PH_D = "D 数据层切换（裁决 + 不可逆）"
 PH_E = "E 前门（可逆，人确认）"
-PH_F = "F 终态核查（只读，自动）"
+PH_F = "F 终态核查（只读，逐条人确认）"
 
 
 def _chk(sid: str, phase: str, title: str, ref: ProbeRef, note: str = "") -> Step:
@@ -123,23 +123,26 @@ def draft_tokyo_to_seoul(f: DraftFacts) -> Runbook:
         note="核实看 Ready 的 k8s 节点，不看 EC2 实例数 —— 实例起来了不等于集群有可调度容量。",
     ))
 
-    # ── C 工作负载：一个清单一步 ─────────────────────────────────────────
-    workloads = f.workloads or [(m, m.rsplit("/", 1)[-1], list(f.target_groups)
-                                 if i == len(f.workload_manifests) - 1 else [])
-                                for i, m in enumerate(f.workload_manifests)]
-    if not workloads:
-        workloads = [("<清单路径>", "工作负载", [])]
-    for k, (manifest, label, tgs) in enumerate(workloads, 1):
+    # ── C 工作负载：一个服务一步（infra/dr-korea/workloads/ 按服务拆分）────
+    workloads = list(f.workloads) or [
+        (m, m.rsplit("/", 1)[-1], [], []) for m in f.workload_manifests] or [
+        ("<清单路径>", "工作负载", [], [])]
+    for k, (manifest, label, tgs, deps) in enumerate(workloads, 1):
+        post = [ProbeRef("k8s_deployment_available", {"name": d, "min_available": 1}) for d in deps]
+        post += [ProbeRef("alb_target_health", {"target_group": tg, "min_healthy": 1}) for tg in tgs]
+        if deps:
+            note = ("先看 Deployment 可用副本（控制器视角），有目标组的再看目标组健康（ALB 视角）。"
+                    "ALB 在全部不健康时会 fail-open 继续转发 —— 能访问不等于健康。")
+        else:
+            # 共享对象没有可单独探测的「起来了没」；它缺了，后面每个服务的 Deployment 探针会 FAIL
+            post = [ProbeRef("eks_ready_nodes", {"min_ready": f.nodes_desired})]
+            note = "共享对象（ServiceAccount / ConfigMap）没有专门的探针；缺了会在后面各服务的核实里暴露。"
         steps.append(Step(
-            id=f"apply-workload-{k}", kind="manual", phase=PH_C,
-            title=f"部署 {label}",
+            id=f"apply-workload-{k}", kind="manual", phase=PH_C, title=f"部署 {label}",
             command=f"kubectl --context <首尔集群> apply -f {manifest}",
             needs_human_input=manifest.startswith("<"),
             reversible=True, rollback=f"kubectl --context <首尔集群> delete -f {manifest}",
-            post=[ProbeRef("alb_target_health", {"target_group": tg, "min_healthy": 1}) for tg in tgs]
-            or [ProbeRef("eks_ready_nodes", {"min_ready": f.nodes_desired})],
-            note=("ALB 在全部不健康时会 fail-open 继续转发 —— 能访问不等于健康，所以看的是目标组。"
-                  if tgs else "这个清单没有对应的目标组；后置只能核实集群容量仍在，Pod 是否就绪需人看一眼。"),
+            post=post, note=note,
         ))
 
     # ── D 数据层：裁决 → 两个互斥的条件步骤 ─────────────────────────────
@@ -205,7 +208,8 @@ def render_body(f: DraftFacts, rb: Runbook, *, generated_at: str, generator: str
         "",
         "每个变更由人执行、**每一步单独确认**。Temporal 只做两件事：把命令原文展示给你、",
         "在你确认执行后用独立的只读探针核实终态。探针不全 PASS 时停下等你决定 retry / override / abort。",
-        "只读核查自动跑，不过才停下等人；按裁决二选一的步骤由工作流按裁决选定，另一条跳过。",
+        "只读核查也**逐条由人确认**：探针跑完、你看过结论再放行（演练时不等人）。",
+        "按裁决二选一的步骤由工作流按裁决选定，另一条跳过。",
         "",
         "## 步骤一览（由下面的 dr-runbook 块渲染，块是唯一权威）",
         "",

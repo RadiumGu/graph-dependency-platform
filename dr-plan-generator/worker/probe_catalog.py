@@ -137,6 +137,17 @@ PROBES: dict[str, ProbeSpec] = {
         permissions=("eks:DescribeCluster", "k8s: nodes get/list（dr-node-readers）"),
         timeout_seconds=90,
     ),
+    "k8s_deployment_available": ProbeSpec(
+        question="首尔集群里这个 Deployment 的可用副本数是否达到要求（且控制器已处理最新版本）？",
+        means="k8s API apps/v1 deployments 的 status.availableReplicas 与 observedGeneration（不是 Pod 列表）",
+        params={
+            "name": Param("str", required=True, doc="Deployment 名"),
+            "namespace": Param("str", default="petadoptions", doc="命名空间"),
+            "min_available": Param("int", default=1, doc="至少多少个可用副本"),
+        },
+        permissions=("eks:DescribeCluster", "k8s: deployments get（dr-workload-reader，仅 petadoptions）"),
+        timeout_seconds=90,
+    ),
     "asg_lifecycle_settled": ProbeSpec(
         question="节点组 ASG 是否稳定在期望的 InService 数，且没有 Pending/Terminating？",
         means="autoscaling:DescribeAutoScalingGroups 的 LifecycleState（不是 EC2 State）",

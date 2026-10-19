@@ -31,7 +31,7 @@ from typing import Any, Callable
 
 from temporalio import activity
 
-from activities import _boto3, count_asg_by_lifecycle, count_ready_nodes
+from activities import _boto3, count_asg_by_lifecycle, count_ready_nodes, k8s_get
 from probe_catalog import FAIL, PASS, PROBES, UNKNOWN, activity_name, check_params, resolved_params
 
 _REGION = os.environ.get("DR_TARGET_REGION", "ap-northeast-2")
@@ -300,6 +300,30 @@ def _eks_ready_nodes(p: dict[str, Any]) -> Outcome:
     return PASS, observed, expected, ""
 
 
+def _k8s_deployment_available(p: dict[str, Any]) -> Outcome:
+    ns, name, need = p["namespace"], p["name"], p["min_available"]
+    expected = {"available_replicas": f">= {need}", "observed_generation": ">= generation"}
+    body, why = k8s_get(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    if body is None:
+        if "404" in (why or ""):
+            # 测到了：这个 Deployment 不存在 —— 是 FAIL，不是 UNKNOWN
+            return FAIL, {"exists": False}, expected, f"{ns}/{name} 不存在"
+        hint = "（缺 RBAC：见 k8s-node-reader-rbac.yaml 的 dr-workload-reader）" if "403" in (why or "") else ""
+        return UNKNOWN, {}, expected, f"查 Deployment 失败：{why}{hint}"
+    st = body.get("status") or {}
+    gen = (body.get("metadata") or {}).get("generation")
+    seen = st.get("observedGeneration")
+    avail = st.get("availableReplicas") or 0
+    observed = {"available_replicas": avail, "replicas": st.get("replicas"),
+                "generation": gen, "observed_generation": seen}
+    if gen is not None and (seen is None or seen < gen):
+        # 控制器还没处理最新的 spec：此刻的 available 说的是旧版本
+        return FAIL, observed, expected, f"控制器尚未处理第 {gen} 版（observedGeneration={seen}）"
+    if avail < need:
+        return FAIL, observed, expected, f"只有 {avail} 个可用副本"
+    return PASS, observed, expected, ""
+
+
 def _asg_lifecycle_settled(p: dict[str, Any]) -> Outcome:
     counts, why = count_asg_by_lifecycle()
     expected = {"InService": p["expect_in_service"], "others": 0}
@@ -388,6 +412,7 @@ _IMPL: dict[str, Callable[[dict[str, Any]], Outcome]] = {
     "eks_nodegroup_status": _eks_nodegroup_status,
     "eks_ready_nodes": _eks_ready_nodes,
     "asg_lifecycle_settled": _asg_lifecycle_settled,
+    "k8s_deployment_available": _k8s_deployment_available,
     "alb_target_health": _alb_target_health,
     "http_get": _http_get,
 }

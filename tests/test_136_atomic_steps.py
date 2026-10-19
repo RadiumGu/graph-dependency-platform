@@ -90,8 +90,9 @@ def _facts(**kw):
         lambdas=["dr-korea-f1", "dr-korea-f2"], target_groups=["dr-korea-petsite-tg", "dr-korea-x-tg"],
         health_urls=["http://h/health"],
         workload_manifests=["infra/dr-korea/petsite-korea-drill.yaml", "infra/dr-korea/15-korea-workloads.yaml"],
-        workloads=[("infra/dr-korea/petsite-korea-drill.yaml", "petsite", ["dr-korea-petsite-tg"]),
-                   ("infra/dr-korea/15-korea-workloads.yaml", "后端", ["dr-korea-x-tg"])],
+        workloads=[("infra/dr-korea/workloads/00-shared.yaml", "共享", [], []),
+                   ("infra/dr-korea/petsite-korea-drill.yaml", "petsite", ["dr-korea-petsite-tg"], ["petsite-deployment"]),
+                   ("infra/dr-korea/workloads/petfood.yaml", "petfood", [], ["petfood"])],
     )
     for k, v in kw.items():
         setattr(f, k, v)
@@ -109,11 +110,13 @@ class TestGeneratorIsAtomic:
             if s.kind == "manual" and s.command:
                 assert command_count(s.command) == 1, s.id
 
-    def test_one_step_per_manifest_each_checking_its_own_target_group(self):
+    def test_one_step_per_service_each_checking_its_own_deployment(self):
         steps = [s for s in draft_tokyo_to_seoul(_facts()).steps if s.id.startswith("apply-workload-")]
-        assert len(steps) == 2
-        assert [p.params["target_group"] for p in steps[0].post] == ["dr-korea-petsite-tg"]
-        assert [p.params["target_group"] for p in steps[1].post] == ["dr-korea-x-tg"]
+        assert len(steps) == 3
+        assert steps[0].command.endswith("00-shared.yaml"), "共享对象必须最先部署"
+        assert [(p.probe, p.params.get("name") or p.params.get("target_group")) for p in steps[1].post] == [
+            ("k8s_deployment_available", "petsite-deployment"), ("alb_target_health", "dr-korea-petsite-tg")]
+        assert [(p.probe, p.params.get("name")) for p in steps[2].post] == [("k8s_deployment_available", "petfood")]
 
     def test_aurora_branches_are_two_conditional_steps(self):
         rb = draft_tokyo_to_seoul(_facts())

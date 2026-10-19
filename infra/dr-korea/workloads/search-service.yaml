@@ -1,0 +1,168 @@
+# 服务 search-service —— 由 scripts/split_korea_workloads.py 从 15-korea-workloads.yaml **逐字**切出。
+# ⚠️ 不要手改：改 15 号文件（它本身由 scripts/gen_korea_workloads.py 生成），然后重跑拆分脚本。
+# 切换计划里每个服务一步：单独 apply、单独核实、单独 delete 回滚。
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: search-service-sa
+  namespace: petadoptions
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::926093770964:role/ServicesEks2-searchserviceServiceAccountRole588AF64-Sulrl6FvKO5F
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: search-service
+  namespace: petadoptions
+  labels:
+    app: search-service
+    aws.cdk.eks/prune-c82a73239e22ac84bbae35433843e3e99570bbeb39: ''
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: search-service
+  template:
+    metadata:
+      name: search-service
+      namespace: petadoptions
+      labels:
+        app: search-service
+      annotations:
+        cloudwatch.aws.amazon.com/auto-annotate-dotnet: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-java: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-nodejs: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-python: 'true'
+        instrumentation.opentelemetry.io/inject-dotnet: 'true'
+        instrumentation.opentelemetry.io/inject-java: 'true'
+        instrumentation.opentelemetry.io/inject-nodejs: 'true'
+        instrumentation.opentelemetry.io/inject-python: 'true'
+        kubectl.kubernetes.io/restartedAt: '2026-09-17T07:18:33Z'
+    spec:
+      containers:
+      - name: search-service
+        # ⚠️ 2026-09-27 换成热修镜像（按 digest 钉死，不用 tag）。
+        #
+        # 原来这里是 CDK asset 的 :012a95fb34e6…（digest sha256:2983db73…），
+        # 那**正是东京换掉之前的那一份**，不含「残缺记录容错」修复
+        # （mapToPet 读到缺属性的行会 NPE → /api/search 整个 500 → 全部记录一起消失）。
+        #
+        # 这个防御**不是冗余的**：首尔的 statusupdater 现在有 attribute_exists(petid)，
+        # 但那张表是 DynamoDB **全局表** —— 一条从东京侧任何路径写进去的残缺行
+        # 都会复制到首尔。少了这个容错，首尔会重演 2026-09-15 与 09-26 那两次故障。
+        #
+        # 东京同一 digest 已在线上（2026-09-26 12:00 起）；
+        # 首尔这份由 09-ecr-replication 的 petsearch-java-hotfix 前缀复制而来，
+        # 两侧 digest 逐字相同（已核实）。
+        image: 926093770964.dkr.ecr.ap-northeast-2.amazonaws.com/petsearch-java-hotfix@sha256:309a9797ed509683ec06920d7eca9cd247e973a4a6849143d0f1f24cb8b18b10
+        ports:
+        - containerPort: 80
+          protocol: TCP
+        env:
+        - name: AWS_REGION
+          value: ap-northeast-2
+        resources:
+          limits:
+            cpu: 512m
+            memory: 1Gi
+          requests:
+            cpu: 256m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /health/status
+            port: 80
+            scheme: HTTP
+          timeoutSeconds: 5
+          periodSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health/status
+            port: 80
+            scheme: HTTP
+          initialDelaySeconds: 5
+          timeoutSeconds: 5
+          periodSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /health/status
+            port: 80
+            scheme: HTTP
+          timeoutSeconds: 5
+          periodSeconds: 5
+          successThreshold: 1
+          failureThreshold: 30
+        lifecycle:
+          preStop:
+            exec:
+              command:
+              - sh
+              - -c
+              - sleep 45
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: Always
+      - name: aws-otel-collector
+        image: public.ecr.aws/aws-observability/aws-otel-collector:v0.47.0
+        env:
+        - name: AOT_CONFIG_CONTENT
+          value: "receivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n      http:\n        endpoint: 0.0.0.0:4318\nprocessors:\n  batch/traces:\n    timeout: 1s\n    send_batch_size:\
+            \ 50\nexporters:\n  awsxray:\n    region: ap-northeast-1\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [batch/traces]\n      exporters: [awsxray]"
+        resources:
+          limits:
+            cpu: 256m
+            memory: 256Mi
+          requests:
+            cpu: 32m
+            memory: 256Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 90
+      dnsPolicy: ClusterFirst
+      serviceAccountName: search-service-sa
+      securityContext: {}
+      schedulerName: default-scheduler
+      enableServiceLinks: false
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: search-service
+        nodeAffinityPolicy: Honor
+        nodeTaintsPolicy: Honor
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: search-service
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: search-service
+  namespace: petadoptions
+  labels:
+    aws.cdk.eks/prune-c8cec422671b4cc0ce78c73acb6f70d3087e587437: ''
+  annotations:
+    service.kubernetes.io/topology-mode: auto
+spec:
+  type: ClusterIP
+  selector:
+    app: search-service
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 80
+
