@@ -221,6 +221,11 @@ class TestRehearsal:
 class TestLive:
     async def test_happy_path_requires_a_human_at_every_change(self, env):
         h = await _start(env, [CHECK, SCALE, DECIDE, PROMOTE], "live")
+        # 2026-10-18：只读核查也要人确认 —— 探针先跑完，人看过结论才放行
+        st = await _until(h, "confirm", "pre")
+        assert st["awaiting"].get("check") is True and st["awaiting"]["results"]
+        assert "eks_nodegroup_status" not in CALLS, "人确认核查之前不该进入下一步"
+        await h.execute_update("confirm_step", {"step_id": "pre", "operator": "alice"})
         await _until(h, "confirm", "scale")
         assert "eks_ready_nodes" not in CALLS, "后置探针不该在人确认之前跑"
 
@@ -247,6 +252,7 @@ class TestLive:
         assert r.ok is True and r.status == "completed"
         assert [s["step"] for s in r.steps if s.get("confirmed")] == ["scale", "promote"]
         assert RECORDS[-1]["executed_manual_steps"] == ["scale", "promote"]
+        assert (await h.query("runbook_state"))["acknowledged"] == ["pre"]
 
     async def test_failed_post_probe_stops_and_override_needs_reason(self, env):
         VERDICTS["eks_ready_nodes"] = [FAIL]

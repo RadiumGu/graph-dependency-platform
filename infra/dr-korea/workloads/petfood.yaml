@@ -1,0 +1,149 @@
+# 服务 petfood —— 由 scripts/split_korea_workloads.py 从 15-korea-workloads.yaml **逐字**切出。
+# ⚠️ 不要手改：改 15 号文件（它本身由 scripts/gen_korea_workloads.py 生成），然后重跑拆分脚本。
+# 切换计划里每个服务一步：单独 apply、单独核实、单独 delete 回滚。
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: petfood-sa
+  namespace: petadoptions
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::926093770964:role/ServicesEks2-petfoodServiceAccountRole25957383-tECVCVv0ZjpT
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: petfood
+  namespace: petadoptions
+  labels:
+    app: petfood
+    aws.cdk.eks/prune-c8d5548b506dbebe496de120325dd05fb2c061acae: ''
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: petfood
+  template:
+    metadata:
+      name: petfood
+      namespace: petadoptions
+      labels:
+        app: petfood
+      annotations:
+        cloudwatch.aws.amazon.com/auto-annotate-dotnet: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-java: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-nodejs: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-python: 'true'
+        instrumentation.opentelemetry.io/inject-dotnet: 'true'
+        instrumentation.opentelemetry.io/inject-java: 'true'
+        instrumentation.opentelemetry.io/inject-nodejs: 'true'
+        instrumentation.opentelemetry.io/inject-python: 'true'
+    spec:
+      containers:
+      - name: petfood
+        image: 926093770964.dkr.ecr.ap-northeast-2.amazonaws.com/cdk-hnb659fds-container-assets-926093770964-ap-northeast-1:8a7bac33f6f09df995b3cbe27d8f7e164188fcd5a842c17eaa98e0b83b23f506
+        ports:
+        - containerPort: 8080
+          protocol: TCP
+        env:
+        - name: AWS_REGION
+          value: ap-northeast-2
+        - name: PETFOOD_FOODS_TABLE_NAME
+          value: ServicesEks2-ddbpetfoodfoods00C5D62B-4FH25BBOAEWX
+        - name: PETFOOD_CARTS_TABLE_NAME
+          value: ServicesEks2-ddbpetfoodcarts77F2B0EA-1HSU365TM7EXJ
+        - name: PETFOOD_EVENT_BUS_NAME
+          value: dr-korea-petfood-eventbus
+        - name: PETFOOD_REGION
+          value: ap-northeast-2
+        - name: PETFOOD_ENABLE_JSON_LOGGING
+          value: 'true'
+        - name: PETFOOD_EVENTS_ENABLED
+          value: 'true'
+        resources:
+          limits:
+            cpu: 512m
+            memory: 1Gi
+          requests:
+            cpu: 64m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health/status
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 30
+          timeoutSeconds: 1
+          periodSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health/status
+            port: 8080
+            scheme: HTTP
+          initialDelaySeconds: 5
+          timeoutSeconds: 1
+          periodSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: IfNotPresent
+      - name: aws-otel-collector
+        image: public.ecr.aws/aws-observability/aws-otel-collector:v0.47.0
+        env:
+        - name: AOT_CONFIG_CONTENT
+          value: "receivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n      http:\n        endpoint: 0.0.0.0:4318\nprocessors:\n  batch/traces:\n    timeout: 1s\n    send_batch_size:\
+            \ 50\nexporters:\n  awsxray:\n    region: ap-northeast-1\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [batch/traces]\n      exporters: [awsxray]"
+        resources:
+          limits:
+            cpu: 256m
+            memory: 256Mi
+          requests:
+            cpu: 32m
+            memory: 256Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      serviceAccountName: petfood-sa
+      securityContext: {}
+      schedulerName: default-scheduler
+      enableServiceLinks: false
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: petfood
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: petfood
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: petfood
+  namespace: petadoptions
+  labels:
+    aws.cdk.eks/prune-c8978a5f59b2d2fd66e21a426735873eb9a444a69c: ''
+  annotations:
+    service.kubernetes.io/topology-mode: auto
+spec:
+  type: ClusterIP
+  selector:
+    app: petfood
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 8080
+

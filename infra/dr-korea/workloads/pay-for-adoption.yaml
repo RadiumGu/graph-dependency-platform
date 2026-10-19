@@ -1,0 +1,152 @@
+# 服务 pay-for-adoption —— 由 scripts/split_korea_workloads.py 从 15-korea-workloads.yaml **逐字**切出。
+# ⚠️ 不要手改：改 15 号文件（它本身由 scripts/gen_korea_workloads.py 生成），然后重跑拆分脚本。
+# 切换计划里每个服务一步：单独 apply、单独核实、单独 delete 回滚。
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pay-for-adoption-sa
+  namespace: petadoptions
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::926093770964:role/ServicesEks2-payforadoptionServiceAccountRole40AF89-oEilVHOTwr8m
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pay-for-adoption
+  namespace: petadoptions
+  labels:
+    app: pay-for-adoption
+    aws.cdk.eks/prune-c84f906ff0b8344bcc26296e190e04bd5629b20a72: ''
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pay-for-adoption
+  template:
+    metadata:
+      name: pay-for-adoption
+      namespace: petadoptions
+      labels:
+        app: pay-for-adoption
+      annotations:
+        cloudwatch.aws.amazon.com/auto-annotate-dotnet: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-java: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-nodejs: 'true'
+        cloudwatch.aws.amazon.com/auto-annotate-python: 'true'
+        instrumentation.opentelemetry.io/inject-dotnet: 'true'
+        instrumentation.opentelemetry.io/inject-java: 'true'
+        instrumentation.opentelemetry.io/inject-nodejs: 'true'
+        instrumentation.opentelemetry.io/inject-python: 'true'
+        kubectl.kubernetes.io/restartedAt: '2026-09-13T22:05:27Z'
+    spec:
+      containers:
+      - name: pay-for-adoption
+        image: 926093770964.dkr.ecr.ap-northeast-2.amazonaws.com/cdk-hnb659fds-container-assets-926093770964-ap-northeast-1:a8ac82bfb06e3cce9e668419facbab19b81193f63042a515e0f40bc73f4119f1
+        ports:
+        - containerPort: 80
+          protocol: TCP
+        env:
+        - name: AWS_REGION
+          value: ap-northeast-2
+        - name: PETSTORE_PARAM_PREFIX
+          value: /petstore
+        - name: UPDATE_ADOPTIONS_STATUS_URL_PARAMETER_NAME
+          value: updateadoptionstatusurl
+        - name: RDS_SECRET_ARN_NAME
+          value: rdssecretarn
+        - name: S3_BUCKET_PARAMETER_NAME
+          value: s3bucketname
+        - name: DYNAMODB_TABLE_PARAMETER_NAME
+          value: dynamodbtablename
+        - name: SQS_QUEUE_URL_PARAMETER_NAME
+          value: queueurl
+        - name: PETSEARCH_URL_PARAMETER_NAME
+          value: searchapiurl
+        resources:
+          limits:
+            cpu: 512m
+            memory: 1Gi
+          requests:
+            cpu: 32m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /health/status
+            port: 80
+            scheme: HTTP
+          initialDelaySeconds: 30
+          timeoutSeconds: 1
+          periodSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health/status
+            port: 80
+            scheme: HTTP
+          initialDelaySeconds: 5
+          timeoutSeconds: 1
+          periodSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: Always
+      - name: aws-otel-collector
+        image: public.ecr.aws/aws-observability/aws-otel-collector:v0.47.0
+        env:
+        - name: AOT_CONFIG_CONTENT
+          value: "receivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n      http:\n        endpoint: 0.0.0.0:4318\nprocessors:\n  batch/traces:\n    timeout: 1s\n    send_batch_size:\
+            \ 50\nexporters:\n  awsxray:\n    region: ap-northeast-1\nservice:\n  pipelines:\n    traces:\n      receivers: [otlp]\n      processors: [batch/traces]\n      exporters: [awsxray]"
+        resources:
+          limits:
+            cpu: 256m
+            memory: 256Mi
+          requests:
+            cpu: 32m
+            memory: 256Mi
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+        imagePullPolicy: IfNotPresent
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+      dnsPolicy: ClusterFirst
+      serviceAccountName: pay-for-adoption-sa
+      securityContext: {}
+      schedulerName: default-scheduler
+      enableServiceLinks: false
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: pay-for-adoption
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: pay-for-adoption
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pay-for-adoption
+  namespace: petadoptions
+  labels:
+    aws.cdk.eks/prune-c818bdb2d9a860da9f05b752b371ace215e02e00fd: ''
+  annotations:
+    service.kubernetes.io/topology-mode: auto
+spec:
+  type: ClusterIP
+  selector:
+    app: pay-for-adoption
+  ports:
+  - port: 80
+    protocol: TCP
+    targetPort: 80
+

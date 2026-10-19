@@ -242,6 +242,19 @@ def plan_wait_summary(state: str, idle_hours: int) -> str:
 def _awaiting_block(s: Step, awaiting: dict[str, Any], wid: str) -> list[str]:
     t = awaiting.get("type")
     n = f"`{s.id}`"
+    if t == "confirm" and awaiting.get("check"):
+        rows = ["| 探针与参数 | 结论 | 测到的值 |", "|---|---|---|"]
+        for r in awaiting.get("results", []):
+            ps = ", ".join(f"{k}={v}" for k, v in (r.get("params") or {}).items())
+            obs = ", ".join(f"{k}={v}" for k, v in (r.get("observed") or {}).items())
+            rows.append(f"| `{_cell(r.get('probe', '') + ('(' + ps + ')' if ps else ''))}` | "
+                        f"{_VERDICT.get(r.get('verdict'), r.get('verdict'))} | {_cell(obs) or '—'} |")
+        return [
+            f"### 🙋 现在等你：确认核查结果 · {s.title}",
+            "这一步只读，不改任何东西。看过下面的结论再放行：", "", *rows, "",
+            f"```bash\n/opt/dr-worker/venv/bin/python /opt/dr-worker/app/probe_cli.py update {wid} confirm_step "
+            f"'{{\"step_id\":\"{s.id}\",\"operator\":\"<你的名字>\"}}'\n```",
+        ]
     if t == "confirm":
         return [
             f"### 🙋 现在等你：执行 {s.title}",
@@ -331,6 +344,8 @@ def human_wait_summary(rb: Runbook | None, awaiting: dict[str, Any], hours: floa
     s = next((x for x in (rb.steps if rb else []) if x.id == sid), None)
     t = awaiting.get("type")
     what = {"confirm": "等人执行并确认", "decision": "等人裁决", "gate": "闸门没过，等人处理"}.get(t, "等人")
+    if t == "confirm" and awaiting.get("check"):
+        what = "等人确认核查结果"
     detail = ""
     if s is not None and t == "confirm" and s.command:
         detail = "：" + clip(s.command, 90)

@@ -1,0 +1,48 @@
+# 共享对象（先于各服务部署） —— 由 scripts/split_korea_workloads.py 从 15-korea-workloads.yaml **逐字**切出。
+# ⚠️ 不要手改：改 15 号文件（它本身由 scripts/gen_korea_workloads.py 生成），然后重跑拆分脚本。
+# 切换计划里每个服务一步：单独 apply、单独核实、单独 delete 回滚。
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: petsite-sa
+  namespace: petadoptions
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::926093770964:role/Applications-PetSiteServiceAccount6A1851C9-y5J6EGm1X5bM
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alb-ingress-controller
+  namespace: kube-system
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::926093770964:role/ServicesEks2-LoadBalancerServiceAccountB6807779-QEjXooFf4b6b
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-config
+  namespace: petadoptions
+  labels:
+    aws.cdk.eks/prune-c82dcb5cfb5800e1210fdafe45f96cbdf23d59792f: ''
+data:
+  otel-config.yaml: "extensions:\n  health_check:\n  sigv4auth:\n    service: \"aps\"\n    region: \"ap-northeast-1\"\n\nreceivers:\n  otlp:\n    protocols:\n      grpc:\n        endpoint: 0.0.0.0:4317\n\
+    \      http:\n        endpoint: 0.0.0.0:4318\n  prometheus:\n    config:\n      global:\n        scrape_interval: 20s\n        scrape_timeout: 10s\n      scrape_configs:\n        - job_name: \"otel-collector\"\
+    \n          kubernetes_sd_configs:\n            - role: pod\n          relabel_configs:\n            - source_labels: [__meta_kubernetes_pod_container_port_number]\n              action: keep\n    \
+    \          regex: '^8080$'\n            - source_labels: [ __meta_kubernetes_pod_container_name ]\n              action: keep\n              regex: '^pethistory$'\n            - source_labels: [ __meta_kubernetes_pod_name\
+    \ ]\n              action: replace\n              target_label: pod_name\n            - source_labels: [ __meta_kubernetes_pod_container_name ]\n              action: replace\n              target_label:\
+    \ container_name\n\nprocessors:\n  batch/metrics:\n    timeout: 60s\n\nexporters:\n  debug:\n    verbosity: detailed\n  awsxray:\n  awsemf:\n    namespace: \"PetAdoptionsHistory\"\n    resource_to_telemetry_conversion:\n\
+    \      enabled: true\n    dimension_rollup_option: NoDimensionRollup\n    metric_declarations:\n      - dimensions: [ [ pod_name, container_name ] ]\n        metric_name_selectors:\n          - \"^transactions_get_count_total$\"\
+    \n          - \"^transactions_history_count$\"\n          - \"^process_.*\"\n        label_matchers:\n          - label_names:\n              - container_name\n            regex: ^pethistory$\n    \
+    \  - dimensions: [ [ pod_name, container_name, generation ] ]\n        metric_name_selectors:\n          - \"^python_gc_objects_.*\"\n        label_matchers:\n          - label_names:\n            \
+    \  - container_name\n            regex: ^pethistory$\n      - dimensions: [ [ pod_name, container_name, endpoint, method, status ] ]\n        metric_name_selectors:\n          - \"^flask_http_request_duration_seconds_created$\"\
+    \n        label_matchers:\n          - label_names:\n              - container_name\n            regex: ^pethistory$\n      - dimensions: [ [ pod_name, container_name, method, status ] ]\n        metric_name_selectors:\n\
+    \          - \"^flask_http_request_total$\"\n          - \"^flask_http_request_created$\"\n        label_matchers:\n          - label_names:\n              - container_name\n            regex: ^pethistory$\n\
+    \      - dimensions: [ [ pod_name, container_name, implementation, major, minor, patchlegel, version ] ]\n        metric_name_selectors:\n          - \"^python_info$\"\n        label_matchers:\n   \
+    \       - label_names:\n              - container_name\n            regex: ^pethistory$\n      - dimensions: [ [ pod_name, container_name, version ] ]\n        metric_name_selectors:\n          - \"\
+    ^flask_exporter_info$\"\n        label_matchers:\n          - label_names:\n              - container_name\n            regex: ^pethistory$\n  # prometheusremotewrite:\n  #   endpoint: \"{{AMP_WORKSPACE_URL}}\"\
+    \n  #   auth:\n  #     authenticator: sigv4auth\n\nservice:\n  extensions: [sigv4auth, health_check]\n  pipelines:\n    traces:\n      receivers: [otlp]\n      exporters: [awsxray]\n    metrics:\n \
+    \     receivers: [prometheus]\n      processors: [batch/metrics]\n      exporters: [awsemf]\n"
+

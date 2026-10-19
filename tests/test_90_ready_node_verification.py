@@ -73,9 +73,12 @@ class TestVerificationUsesReadyNodes:
         assert "Unknown" in seg, "要说明 Unknown（kubelet 失联）不算可调度容量"
 
     def test_tls_is_verified(self, act: str):
-        i = act.index("def count_ready_nodes(")
-        seg = act[i : i + 4200]
+        # 2026-10-18 起 k8s 访问抽成 k8s_get（节点与 Deployment 探针共用）
+        i = act.index("def k8s_get(")
+        seg = act[i : act.index("def count_ready_nodes(")]
         assert "cafile=ca_path" in seg, "要用集群自己的 CA 校验 TLS"
+        j = act.index("def count_ready_nodes(")
+        assert 'k8s_get("/api/v1/nodes")' in act[j : j + 4200]
         assert "verify_mode" not in seg and "CERT_NONE" not in seg, (
             "不许跳过 TLS 校验"
         )
