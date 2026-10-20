@@ -132,7 +132,7 @@ DrRunbookWorkflow（执行层，每个获批版本一条）
 | worker / agent 的边界 | worker 角色只能对 `petsite-dr-poc` 发起执行和读取；不能 Approve / Cancel / UpdatePlanExecution(Step) | `simulate-principal-policy`：Start allowed，其余 implicitDeny，其他计划 implicitDeny |
 | 审批人身份记录 | 从**执行所在区域**的 CloudTrail 读取 `ApprovePlanExecutionStep`，记录主体、MFA 标记、来源 IP；被拒的尝试也记，但只有成功的那条才算「找到了」 | 执行记录 `plans/arc-petsite-dr-poc/executions/*.json` |
 | Temporal 内的人工动作 | Update + validator；人经 `probe_cli.py` → SSM 调用，CloudTrail 里是真实 IAM 身份。Update 里的 operator 字段是自报的，只记录、不当作授权依据 | `plan_workflow.py` 文件头 |
-| agent 通道 | temporal-mcp 只读（`TemporalDenyTools` 禁掉 start/signal/update/cancel/terminate/pause/schedule 写） | 10-06 真实调用核实 |
+| agent 通道 | temporal-mcp：**2026-10-20 起放开 `update_workflow`**（负责人决定），agent 可经 MCP 推进计划与执行，署名是自报的、CloudTrail 只见 AgentCore 角色；start/signal/cancel/terminate/pause/schedule 写仍禁用 | 10-20 真实调用核实：approve_plan 到达 validator 并被拒（前门未填），cancel 被拦 |
 | Temporal UI 写操作 | **待决**：`TEMPORAL_DISABLE_WRITE_ACTIONS` 已实测会在服务端拦截（405）；打开后人也不能在 UI 上点取消 | 10-06 临时容器实测 |
 
 **应急通道（审批人拿不到 MFA 时）**：
