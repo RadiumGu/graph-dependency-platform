@@ -56,7 +56,12 @@ Parameters:
     # TEMPORAL_DENY_TOOLS 出现 0 次 —— 只配环境变量就是假闸门。
     # 单行：折叠标量会在行间插空格。服务端会 trim 每一项所以不致命，
     # 但「看起来对、靠下游容错才对」不该出现在一个安全开关上。
-    Default: start_workflow,signal_workflow,signal_with_start_workflow,update_workflow,cancel_workflow,terminate_workflow,pause_workflow,unpause_workflow,create_schedule,delete_schedule
+    # ⚠️ 2026-10-20：负责人决定放开 update_workflow（agent 可经 MCP 推进计划/执行）。
+    #    代价：经 MCP 的 update 署名是调用方自报的（identity / approver / operator），
+    #    CloudTrail 只看得到 AgentCore 执行角色。validator 仍会拒绝不合规的请求。
+    #    signal / cancel / terminate / start / pause / schedule 写仍然禁用 ——
+    #    它们没有 validator，或会绕过审计链。回滚：把 update_workflow 加回下面这一行。
+    Default: start_workflow,signal_workflow,signal_with_start_workflow,cancel_workflow,terminate_workflow,pause_workflow,unpause_workflow,create_schedule,delete_schedule
     Description: >
       逗号分隔的禁用工具名（在 tools/list 与调用入口两处都生效）。
 

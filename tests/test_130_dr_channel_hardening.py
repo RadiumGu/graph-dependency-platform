@@ -25,7 +25,8 @@ RECORD = ROOT / "docs" / "runbooks" / "deployment-record.md"
 
 #: agent 通道上必须禁掉的：能推进、打断或伪造人工动作的全部写工具。
 MUST_DENY = {
-    "start_workflow", "signal_workflow", "signal_with_start_workflow", "update_workflow",
+    # update_workflow 于 2026-10-20 按负责人决定放开（见 06 模板注释与 test_138）
+    "start_workflow", "signal_workflow", "signal_with_start_workflow",
     "cancel_workflow", "terminate_workflow", "pause_workflow", "unpause_workflow",
     "create_schedule", "delete_schedule",
 }
