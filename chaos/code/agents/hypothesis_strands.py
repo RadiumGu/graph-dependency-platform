@@ -80,37 +80,27 @@ Operating procedure:
 """
 
 
-_JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.DOTALL)
+# `_extract_json_array` / `_JSON_BLOCK_RE` 已搬到 agents/llm_json.py。
+#
+# 2026-10-11：这两处（learning + hypothesis）原本各有一份**逐字相同**的实现，
+# 两份一样脆弱，而脆弱点实测可触发 —— fence 丢失且文本含别的 `[` 时，
+# `find("[")..rfind("]")` 会截出垃圾，解析失败后返回 []，于是
+# 「LLM 输出了建议但解析不出来」被当成「LLM 说没有建议」。
+#
+# 新实现从后往前扫平衡的 `[...]`，并在失败时**带回诊断文本** ——
+# 后者是 2026-10-11 l004 golden 失败查不出真因的直接原因（原始输出被丢弃）。
+# 判据见 tests/test_137_llm_json_extraction.py。
+from agents.llm_json import extract_json_array as _extract_json_array_diag
 
 
 def _extract_json_array(text: str) -> list:
-    """从 LLM 输出中提取 JSON 数组。
+    """兼容入口 —— 只要数组，丢掉诊断。
 
-    策略：
-    1. 优先找所有 ```json ... ``` 代码块，逐个试解析，返回第一个能 parse 成 list 的。
-    2. 如果代码块都 parse 不动，或根本没 code block，
-       fallback 到全文第一个 [ 到最后一个 ] 的最大范围。
+    ⚠️ 新代码不要用这个。要用 `extract_json_array`（返回 (list, diag)）并把
+    诊断带进返回值，否则解析失败会继续伪装成「LLM 没给结果」。
     """
-    # 1）遍历所有 ```json ... ``` 代码块
-    for m in _JSON_BLOCK_RE.finditer(text):
-        candidate = m.group(1).strip()
-        try:
-            data = json.loads(candidate)
-            if isinstance(data, list):
-                return data
-        except json.JSONDecodeError:
-            continue
-    # 2）全文 [ ... ] 截取
-    lo = text.find("[")
-    hi = text.rfind("]")
-    if lo >= 0 and hi > lo:
-        try:
-            data = json.loads(text[lo : hi + 1])
-            if isinstance(data, list):
-                return data
-        except json.JSONDecodeError:
-            pass
-    return []
+    data, _diag = _extract_json_array_diag(text)
+    return data
 
 
 class StrandsHypothesisAgent(HypothesisBase):

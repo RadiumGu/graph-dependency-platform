@@ -172,28 +172,27 @@ def _assert_cacheable(system_prompt: str, min_tokens: int = 1024):
     logger.info("System prompt: %d tokens (min=%d) ✓", token_count, min_tokens)
 
 
-_JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*\n(.*?)```", re.DOTALL)
+# `_extract_json_array` / `_JSON_BLOCK_RE` 已搬到 agents/llm_json.py。
+#
+# 2026-10-11：这两处（learning + hypothesis）原本各有一份**逐字相同**的实现，
+# 两份一样脆弱，而脆弱点实测可触发 —— fence 丢失且文本含别的 `[` 时，
+# `find("[")..rfind("]")` 会截出垃圾，解析失败后返回 []，于是
+# 「LLM 输出了建议但解析不出来」被当成「LLM 说没有建议」。
+#
+# 新实现从后往前扫平衡的 `[...]`，并在失败时**带回诊断文本** ——
+# 后者是 2026-10-11 l004 golden 失败查不出真因的直接原因（原始输出被丢弃）。
+# 判据见 tests/test_137_llm_json_extraction.py。
+from agents.llm_json import extract_json_array as _extract_json_array_diag
 
 
 def _extract_json_array(text: str) -> list:
-    for m in _JSON_BLOCK_RE.finditer(text):
-        candidate = m.group(1).strip()
-        try:
-            data = json.loads(candidate)
-            if isinstance(data, list):
-                return data
-        except json.JSONDecodeError:
-            continue
-    lo = text.find("[")
-    hi = text.rfind("]")
-    if lo >= 0 and hi > lo:
-        try:
-            data = json.loads(text[lo: hi + 1])
-            if isinstance(data, list):
-                return data
-        except json.JSONDecodeError:
-            pass
-    return []
+    """兼容入口 —— 只要数组，丢掉诊断。
+
+    ⚠️ 新代码不要用这个。要用 `extract_json_array`（返回 (list, diag)）并把
+    诊断带进返回值，否则解析失败会继续伪装成「LLM 没给结果」。
+    """
+    data, _diag = _extract_json_array_diag(text)
+    return data
 
 
 class StrandsLearningAgent(LearningCommonMixin, LearningBase):
@@ -328,7 +327,7 @@ class StrandsLearningAgent(LearningCommonMixin, LearningBase):
             }
 
         text = self._extract_text(resp)
-        raw_list = _extract_json_array(text)
+        raw_list, parse_diag = _extract_json_array_diag(text)
 
         recommendations = [
             {
@@ -341,6 +340,21 @@ class StrandsLearningAgent(LearningCommonMixin, LearningBase):
             for r in raw_list
         ]
 
+        # 解析失败必须说出来。
+        #
+        # 2026-10-11 的 l004 golden 失败卡在这里：整套跑两次都返回 0 条、
+        # 单跑和按序跑前四个都正常产出 5 条，而因为原始输出被丢弃，
+        # 无法判断 LLM 到底输出了什么 —— 失败信息只有一句
+        # `got 0 recs, expected >= 1`，而那同一句覆盖三种完全不同的原因：
+        #
+        #   ① 调用失败（节流/超时）  → error 非空
+        #   ② 输出了但解析不出来     → 此前是盲区，现在由 parse_error 说明
+        #   ③ LLM 真的说没有建议     → recommendations 为空且两个字段都空
+        #
+        # 一次要 6.7 分钟复现、复现了还查不出真因的失败，等于没有判据。
+        if parse_diag:
+            logger.warning("generate_recommendations 解析失败: %s", parse_diag)
+
         token_usage = self._extract_token_usage(resp)
         trace = lt.get_trace()
 
@@ -352,4 +366,6 @@ class StrandsLearningAgent(LearningCommonMixin, LearningBase):
             "token_usage": token_usage,
             "trace": trace,
             "error": None,
+            "parse_error": parse_diag,
+            "raw_text_len": len(text),
         }
